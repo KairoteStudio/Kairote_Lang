@@ -36,6 +36,8 @@ static Keyword keywords[] = {
     {"async", TOKEN_ASYNC},
     {"await", TOKEN_AWAIT},
     {"unsafe", TOKEN_UNSAFE},
+    {"Point", TOKEN_POINT},
+    {"point", TOKEN_POINT},
     {"class", TOKEN_CLASS},
     {"struct", TOKEN_STRUCT},
     {"interface", TOKEN_INTERFACE},
@@ -134,6 +136,8 @@ static Keyword keywords[] = {
     {"op_False", TOKEN_OP_FALSE},
     {"op_Implicit", TOKEN_OP_IMPLICIT},
     {"op_Explicit", TOKEN_OP_EXPLICIT},
+    {"const", TOKEN_CONST},
+    {"extern", TOKEN_EXTERN},
     {NULL, 0}
 };
 
@@ -882,6 +886,8 @@ const char* token_type_to_string(KrtTokenType type) {
             return "NOT";
         case TOKEN_UNSAFE:
             return "UNSAFE";
+        case TOKEN_POINT:
+            return "POINT";
         case TOKEN_CLASS:
             return "CLASS";
         case TOKEN_NEW:
@@ -1013,6 +1019,10 @@ const char* token_type_to_string(KrtTokenType type) {
             return "IS";
         case TOKEN_AS:
             return "AS";
+        case TOKEN_CONST:
+            return "CONST";
+        case TOKEN_EXTERN:
+            return "EXTERN";
         case TOKEN_YIELD:
             return "YIELD";
         case TOKEN_LOCK:

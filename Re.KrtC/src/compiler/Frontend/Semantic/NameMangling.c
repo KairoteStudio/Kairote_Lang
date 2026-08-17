@@ -28,7 +28,8 @@ static char mangle_param_type_char(KrtTokenType type) {
         case TOKEN_FLOAT32: return 'f';
         case TOKEN_FLOAT64: return 'd';
         case TOKEN_BOOL:   return 'b';
-        case TOKEN_STRING: return 'r';
+        case TOKEN_STRING:
+        case TOKEN_TYPE_STRING: return 'r';
         case TOKEN_VOID:   return 'v';
         default:           return 'x';
     }

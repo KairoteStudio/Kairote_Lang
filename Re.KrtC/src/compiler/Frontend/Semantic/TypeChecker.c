@@ -18,7 +18,7 @@ static const struct {
     {TOKEN_UINT8, TYPE_UINT8}, {TOKEN_UINT16, TYPE_UINT16},
     {TOKEN_UINT32, TYPE_UINT32}, {TOKEN_UINT64, TYPE_UINT64},
     {TOKEN_FLOAT32, TYPE_FLOAT32}, {TOKEN_FLOAT64, TYPE_FLOAT64},
-    {TOKEN_BOOL, TYPE_BOOL}, {TOKEN_STRING, TYPE_STRING},
+    {TOKEN_BOOL, TYPE_BOOL}, {TOKEN_CHAR, TYPE_INT8}, {TOKEN_STRING, TYPE_STRING},
     {TOKEN_VOID, TYPE_VOID},
     {0, TYPE_UNKNOWN}
 };
@@ -1490,6 +1490,9 @@ int type_check_statement(TypeCheckContext* context, ASTNode* statement) {
         case AST_BLOCK:
             return check_block(context, statement);
 
+        case AST_POINT_BLOCK:
+            return check_block(context, statement->data.point_block.body);
+
         case AST_PRINT_STATEMENT:
             return check_print_statement(context, statement);
 
@@ -2765,7 +2768,7 @@ void type_check_init_builtin_functions(TypeCheckContext* context) {
     Type** free_params = (Type**)KRT_MALLOC(sizeof(Type*) * 1);
     free_params[0] = type_copy(pointer_to_void);
     Type* free_type = type_create_function(type_copy(void_type), free_params, 1);
-    TypeCheckSymbol free_symbol = {"KRT_FREE", free_type, 1, 0, 0};
+    TypeCheckSymbol free_symbol = {"KrtFree", free_type, 1, 0, 0};
     type_check_symbol_table_add(context->current_scope, free_symbol);
     KRT_FREE(free_params);
 
@@ -2882,6 +2885,9 @@ Type* infer_return_type_from_statement(TypeCheckContext* context, ASTNode* state
                 }
             }
             return NULL;
+
+        case AST_POINT_BLOCK:
+            return infer_return_type_from_statement(context, statement->data.point_block.body);
 
         default:
 
@@ -3062,6 +3068,9 @@ static int type_check_add_class_member(TypeCheckContext* context, ClassInfo* cla
             KrtTokenType* param_types = member->type == AST_FUNCTION_DECLARATION
                 ? member->data.function_decl.parameter_types
                 : member->data.static_function_decl.parameter_types;
+            int* param_is_array = member->type == AST_FUNCTION_DECLARATION
+                ? member->data.function_decl.parameter_is_array
+                : member->data.static_function_decl.parameter_is_array;
 
             for (int i = 0; i < param_count; i++) {
                 Type* param_type = NULL;
@@ -3079,6 +3088,11 @@ static int type_check_add_class_member(TypeCheckContext* context, ClassInfo* cla
                     case TOKEN_BOOL: param_type = type_create_basic(TYPE_BOOL); break;
                     case TOKEN_STRING: param_type = type_create_basic(TYPE_STRING); break;
                     default: param_type = type_create_basic(TYPE_UNKNOWN); break;
+                }
+                if (param_type && param_is_array && param_is_array[i]) {
+                    Type* array_type = type_create_array(param_type, 0);
+                    type_destroy(param_type);
+                    param_type = array_type;
                 }
                 type_function_add_parameter(method_type, param_type);
             }

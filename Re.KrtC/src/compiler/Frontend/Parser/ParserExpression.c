@@ -210,6 +210,33 @@ ASTNode* parser_parse_primary(Parser* parser) {
         }
         case TOKEN_LEFT_PAREN: {
             parser_advance(parser);
+
+            if (parser_is_type_keyword(parser->current_token.type)) {
+                KrtTokenType target_type = parser->current_token.type;
+                parser_advance(parser);
+
+                if (parser->current_token.type == TOKEN_LEFT_BRACKET) {
+                    parser_advance(parser);
+                    if (parser->current_token.type != TOKEN_RIGHT_BRACKET) return NULL;
+                    parser_advance(parser);
+                }
+
+                if (parser->current_token.type == TOKEN_RIGHT_PAREN) {
+                    parser_advance(parser);
+                    ASTNode* operand = parser_parse_expression(parser);
+                    if (!operand) return NULL;
+
+                    ASTNode* cast = ast_create_node(AST_CAST_EXPRESSION, token.line, token.column);
+                    if (!cast) {
+                        ast_destroy_node(operand);
+                        return NULL;
+                    }
+                    cast->data.cast_expr.target_type = target_type;
+                    cast->data.cast_expr.expression = operand;
+                    return cast;
+                }
+            }
+
             ASTNode* expr = parser_parse_expression(parser);
             if (!expr) return NULL;
             if (parser->current_token.type != TOKEN_RIGHT_PAREN) {
@@ -269,6 +296,12 @@ array_cleanup:
         case TOKEN_CHAR: case TOKEN_BOOL: case TOKEN_VOID: {
             KrtTokenType type = token.type;
             parser_advance(parser);
+
+            if (parser->current_token.type == TOKEN_LEFT_BRACKET) {
+                parser_advance(parser);
+                if (parser->current_token.type != TOKEN_RIGHT_BRACKET) return NULL;
+                parser_advance(parser);
+            }
 
             if (parser->current_token.type == TOKEN_LEFT_PAREN) {
                 parser_advance(parser);
