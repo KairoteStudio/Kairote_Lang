@@ -1490,6 +1490,9 @@ int type_check_statement(TypeCheckContext* context, ASTNode* statement) {
         case AST_BLOCK:
             return check_block(context, statement);
 
+        case AST_POINT_BLOCK:
+            return check_block(context, statement->data.point_block.body);
+
         case AST_PRINT_STATEMENT:
             return check_print_statement(context, statement);
 
@@ -2765,7 +2768,7 @@ void type_check_init_builtin_functions(TypeCheckContext* context) {
     Type** free_params = (Type**)KRT_MALLOC(sizeof(Type*) * 1);
     free_params[0] = type_copy(pointer_to_void);
     Type* free_type = type_create_function(type_copy(void_type), free_params, 1);
-    TypeCheckSymbol free_symbol = {"KRT_FREE", free_type, 1, 0, 0};
+    TypeCheckSymbol free_symbol = {"KrtFree", free_type, 1, 0, 0};
     type_check_symbol_table_add(context->current_scope, free_symbol);
     KRT_FREE(free_params);
 
@@ -2882,6 +2885,9 @@ Type* infer_return_type_from_statement(TypeCheckContext* context, ASTNode* state
                 }
             }
             return NULL;
+
+        case AST_POINT_BLOCK:
+            return infer_return_type_from_statement(context, statement->data.point_block.body);
 
         default:
 

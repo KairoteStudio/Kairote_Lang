@@ -1,0 +1,17 @@
+using System.Console;
+
+void main()
+{
+    Point
+    {
+        void* ptr = KrtMalloc(64);
+        char[] bytes = (char[])ptr;
+        bytes[0] = 'O';
+        bytes[1] = 'K';
+        bytes[2] = '\0';
+
+        Console.WriteLine((string)ptr);
+        KrtFree(ptr);
+        KrtFree(null);
+    }
+}

@@ -855,6 +855,23 @@ ASTNode* parser_parse_statement(Parser* parser) {
     Token token = parser->current_token;
 
     switch (token.type) {
+        case TOKEN_POINT: {
+            int line = token.line;
+            int col = token.column;
+            parser_advance(parser);
+
+            ASTNode* body = parser_parse_block(parser);
+            if (!body) return NULL;
+
+            ASTNode* node = ast_create_node(AST_POINT_BLOCK, line, col);
+            if (!node) {
+                ast_destroy_node(body);
+                return NULL;
+            }
+            node->data.point_block.body = body;
+            return node;
+        }
+
         case TOKEN_VAR:
         case TOKEN_LET:
             return parser_parse_variable_declaration(parser);

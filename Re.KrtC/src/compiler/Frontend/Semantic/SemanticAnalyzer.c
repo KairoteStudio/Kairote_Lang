@@ -61,6 +61,7 @@ SemanticAnalyzer* semantic_analyzer_create(void) {
     }
     analyzer->generic_registry_shared = false;
     analyzer->is_unsafe_mode = 0;
+    analyzer->point_depth = 0;
     
     analyzer->using_count = 0;
     analyzer->using_capacity = 16;
@@ -945,6 +946,15 @@ bool semantic_analyzer_analyze_function_call(SemanticAnalyzer* analyzer, ASTNode
         return false;
     }
 
+    if (!call_expr->data.call.object &&
+        (strcmp(call_expr->data.call.name, "KrtMalloc") == 0 ||
+         strcmp(call_expr->data.call.name, "KrtFree") == 0) &&
+        analyzer->point_depth == 0) {
+        semantic_analyzer_add_error_at(analyzer, call_expr,
+            "%s can only be used inside a Point block", call_expr->data.call.name);
+        return false;
+    }
+
     char* func_name = NULL;
 
     if (!call_expr->data.call.object) {
@@ -1130,6 +1140,12 @@ bool semantic_analyzer_analyze_variable_decl(SemanticAnalyzer* analyzer, ASTNode
 
     const char* var_name = var_decl->data.variable_decl.name;
     int is_let = var_decl->data.variable_decl.is_let;
+
+    if (var_decl->data.variable_decl.pointer_depth > 0 && analyzer->point_depth == 0) {
+        semantic_analyzer_add_error_at(analyzer, var_decl,
+            "Pointer variable '%s' can only be declared inside a Point block", var_name);
+        return false;
+    }
 
     if (is_let) {
         
@@ -1843,6 +1859,14 @@ bool semantic_analyzer_analyze_statement(SemanticAnalyzer* analyzer, ASTNode* st
             }
             symbol_table_pop_scope(analyzer->symbol_table);
             return overall_result;
+        }
+
+        case AST_POINT_BLOCK: {
+            analyzer->point_depth++;
+            bool result = semantic_analyzer_analyze_statement(
+                analyzer, stmt->data.point_block.body);
+            analyzer->point_depth--;
+            return result;
         }
 
         case AST_BINARY_OPERATION:

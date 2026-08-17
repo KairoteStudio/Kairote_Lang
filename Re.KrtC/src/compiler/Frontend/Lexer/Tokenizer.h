@@ -108,6 +108,7 @@ typedef enum {
     TOKEN_LSHIFT,
     TOKEN_RSHIFT,
     TOKEN_UNSAFE,
+    TOKEN_POINT,
     TOKEN_POWER,
 
     TOKEN_TRY,

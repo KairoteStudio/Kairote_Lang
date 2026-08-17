@@ -296,6 +296,13 @@ foreach (string item in list) { }
 // 实现栈展开
 ```
 
+### 8.5 `Point` / `Unsafe` / `Safe` 与静态生命周期管理
+
+- `Point { ... }`：裸指针声明、`KrtMalloc`、`KrtFree` 和指针运算的唯一合法区域
+- `Unsafe(Z.A.b.*) { ... }`：按参数导入标准库或外部库能力；无重名时允许省略限定名调用
+- `Safe { ... }`：编译期验证分配的内存不能逃逸或泄漏
+- 静态生命周期分析：定位最后一次使用和作用域出口，自动插入释放操作，实现与 GC 等价的效果
+
 ---
 
 ## 测试策略
@@ -338,6 +345,7 @@ stdlib_tests/
 
 ## 已完成 ✅
 
+- [x] `KrtMalloc` / `KrtFree` 内建函数（`mmap` / `munmap`）
 - [x] `syscall` 内建函数
 - [x] `internal_string_ptr` / `internal_string_len` 内建函数
 - [x] 类型转换表达式 `(int64)expr`

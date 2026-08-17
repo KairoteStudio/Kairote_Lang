@@ -210,11 +210,81 @@ static KrtIRValue irgen_call_builtin_4args(KrtIRBuilder* builder, IrGenBuiltinFu
 }
 
 static KrtIRValue irgen_allocate_memory(KrtIRBuilder* builder, KrtIRValue size_val) {
-    return irgen_call_builtin_1arg(builder, IRGEN_FUNC_MALLOC, size_val);
+    const int header_size = IRGEN_POINTER_SIZE;
+    char result_name[64];
+    char success_label[64];
+    char failure_label[64];
+    char end_label[64];
+    int label_id = builder->label_counter++;
+    snprintf(result_name, sizeof(result_name), "__krt_malloc_result_%d", label_id);
+    snprintf(success_label, sizeof(success_label), "malloc_success_%d", label_id);
+    snprintf(failure_label, sizeof(failure_label), "malloc_failure_%d", label_id);
+    snprintf(end_label, sizeof(end_label), "malloc_end_%d", label_id);
+
+    KrtIrAlloc(builder, result_name);
+    KrtIrStore(builder, result_name, KrtIrImm(builder, 0));
+
+    KrtIRValue total_size = KrtIrAdd(builder, size_val, KrtIrImm(builder, header_size));
+    KrtIRValue mmap_args[6] = {
+        KrtIrImm(builder, 0),
+        total_size,
+        KrtIrImm(builder, 3),
+        KrtIrImm(builder, 0x22),
+        KrtIrImm(builder, -1),
+        KrtIrImm(builder, 0)
+    };
+    KrtIRValue allocation = KrtIrSyscall(builder, KrtIrImm(builder, 9), mmap_args, 6);
+
+    KrtIRBasicBlock* source_block = builder->current_block;
+    KrtIRBasicBlock* success_block = KrtIrBlockCreate(builder, success_label);
+    KrtIRBasicBlock* failure_block = KrtIrBlockCreate(builder, failure_label);
+    KrtIRBasicBlock* end_block = KrtIrBlockCreate(builder, end_label);
+    KrtIrBranch(builder,
+                KrtIrCompare(builder, KRT_IR_LT, allocation, KrtIrImm(builder, 0)),
+                failure_block, success_block);
+    if (source_block) source_block->next = failure_block;
+    failure_block->next = success_block;
+    success_block->next = end_block;
+
+    KrtIrBlockSetCurrent(builder, failure_block);
+    KrtIrJump(builder, end_block);
+
+    KrtIrBlockSetCurrent(builder, success_block);
+    KrtIrStorePtr(builder, allocation, 0, total_size);
+    KrtIrStore(builder, result_name,
+               KrtIrAdd(builder, allocation, KrtIrImm(builder, header_size)));
+    KrtIrJump(builder, end_block);
+
+    KrtIrBlockSetCurrent(builder, end_block);
+    return KrtIrLoad(builder, result_name);
 }
 
 static void irgen_free_memory(KrtIRBuilder* builder, KrtIRValue ptr_val) {
-    irgen_call_builtin_1arg(builder, IRGEN_FUNC_FREE, ptr_val);
+    const int header_size = IRGEN_POINTER_SIZE;
+
+    char free_label[64];
+    char end_label[64];
+    int label_id = builder->label_counter++;
+    snprintf(free_label, sizeof(free_label), "free_release_%d", label_id);
+    snprintf(end_label, sizeof(end_label), "free_end_%d", label_id);
+
+    KrtIRBasicBlock* source_block = builder->current_block;
+    KrtIRBasicBlock* free_block = KrtIrBlockCreate(builder, free_label);
+    KrtIRBasicBlock* end_block = KrtIrBlockCreate(builder, end_label);
+    KrtIrBranch(builder,
+                KrtIrCompare(builder, KRT_IR_EQ, ptr_val, KrtIrImm(builder, 0)),
+                end_block, free_block);
+    if (source_block) source_block->next = free_block;
+    free_block->next = end_block;
+
+    KrtIrBlockSetCurrent(builder, free_block);
+    KrtIRValue allocation = KrtIrSub(builder, ptr_val, KrtIrImm(builder, header_size));
+    KrtIRValue total_size = KrtIrLoadPtr(builder, allocation, 0);
+    KrtIRValue munmap_args[2] = { allocation, total_size };
+    KrtIrSyscall(builder, KrtIrImm(builder, 11), munmap_args, 2);
+    KrtIrJump(builder, end_block);
+
+    KrtIrBlockSetCurrent(builder, end_block);
 }
 
 static KrtIRValue irgen_store_pointer(KrtIRBuilder* builder, KrtIRValue ptr, 
@@ -922,6 +992,21 @@ static KrtIRValue KrtIrGenerateExpression(KrtIRBuilder* builder, ASTNode* expr) 
                     (void*)expr->data.call.object,
                     expr->data.call.object ? (int)expr->data.call.object->type : -1);
 
+            if (!expr->data.call.object &&
+                strcmp(func_name, irgen_get_builtin_func(IRGEN_FUNC_MALLOC)) == 0 &&
+                expr->data.call.argument_count == 1) {
+                KrtIRValue size = KrtIrGenerateExpression(builder, expr->data.call.arguments[0]);
+                return irgen_allocate_memory(builder, size);
+            }
+
+            if (!expr->data.call.object &&
+                strcmp(func_name, irgen_get_builtin_func(IRGEN_FUNC_FREE)) == 0 &&
+                expr->data.call.argument_count == 1) {
+                KrtIRValue ptr = KrtIrGenerateExpression(builder, expr->data.call.arguments[0]);
+                irgen_free_memory(builder, ptr);
+                return void_val_return();
+            }
+
             if (expr->data.call.object) {
                 if (expr->data.call.object->type == AST_IDENTIFIER) {
                     const char* class_name = expr->data.call.object->data.identifier_name;
@@ -1571,6 +1656,10 @@ static void KrtIrGenerateStatement(KrtIRBuilder* builder, ASTNode* stmt) {
 
         case AST_BLOCK:
             KrtIrGenerateBlock(builder, stmt);
+            break;
+
+        case AST_POINT_BLOCK:
+            KrtIrGenerateBlock(builder, stmt->data.point_block.body);
             break;
 
         case AST_SWITCH_STATEMENT: {
@@ -2261,6 +2350,8 @@ static int KrtIrCheckHasReturn(ASTNode* node) {
             for (int i = 0; i < node->data.block.statement_count; i++)
                 if (KrtIrCheckHasReturn(node->data.block.statements[i])) return 1;
             return 0;
+        case AST_POINT_BLOCK:
+            return KrtIrCheckHasReturn(node->data.point_block.body);
         case AST_IF_STATEMENT:
             return KrtIrCheckHasReturn(node->data.if_stmt.then_branch) &&
                    (!node->data.if_stmt.else_branch || KrtIrCheckHasReturn(node->data.if_stmt.else_branch));

@@ -30,6 +30,7 @@ typedef struct SemanticAnalyzer {
     GenericRegistry* generic_registry;
     bool generic_registry_shared;
     int is_unsafe_mode;
+    int point_depth;
     
     UsingDirective** using_directives;
     int using_count;
