@@ -7,6 +7,7 @@
 
 #define KRO_MAX_LOCAL_VARS 256
 #define KRO_MAX_TEMP_REGS 256
+#define KRO_MAX_ARGS 16
 
 typedef struct {
     char name[64];
@@ -33,6 +34,11 @@ typedef struct {
     int current_stack_offset;
     KROTempSlot temp_slots[KRO_MAX_TEMP_REGS];
     int temp_slot_count;
+    int arg_stack_offsets[KRO_MAX_ARGS];
+    int current_param_count;
+    int current_function_id;
+    const char* current_function_name;
+    KrtIRBasicBlock* current_block;
     
     /* PHI node tracking for SSA */
     KrtIRInst* current_phi_inst;

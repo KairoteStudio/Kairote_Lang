@@ -330,13 +330,10 @@ static KrtIRValue ir_add_operand(KrtIRInst* inst, KrtIRValue val) {
 void KrtIrStore(KrtIRBuilder* builder, const char* name, KrtIRValue value) {
     if (!builder || !name || !builder->current_block) return;
 
-    int new_ver = var_table_next_version((KrtIRVarTable*)builder->extensions, name, builder->arena);
-    char* versioned = make_versioned_name(builder->arena, name, new_ver);
-
     KrtIRInst* inst = ir_create_inst(builder, KRT_IR_COPY);
     if (inst) {
         inst->result.type = KRT_IR_VALUE_VAR;
-        inst->result.data.name = versioned;
+        inst->result.data.name = KrtIrArenaStrdup(builder->arena, name);
         ir_add_operand(inst, value);
     }
 }
@@ -348,11 +345,8 @@ KrtIRValue KrtIrLoad(KrtIRBuilder* builder, const char* name) {
 
     if (!builder || !name) return result;
 
-    int ver = var_table_get_version((KrtIRVarTable*)builder->extensions, name);
-    char* versioned = make_versioned_name(builder->arena, name, ver);
-
     result.type = KRT_IR_VALUE_VAR;
-    result.data.name = versioned;
+    result.data.name = KrtIrArenaStrdup(builder->arena, name);
     return result;
 }
 
@@ -738,6 +732,10 @@ KrtIRValue KrtIrStringConst(KrtIRBuilder* builder, const char* str) {
 }
 
 KrtIRValue KrtIrLoadPtr(KrtIRBuilder* builder, KrtIRValue base, int offset) {
+    return KrtIrLoadPtrSized(builder, base, offset, 8);
+}
+
+KrtIRValue KrtIrLoadPtrSized(KrtIRBuilder* builder, KrtIRValue base, int offset, int size) {
     KrtIRValue result = {0};
     result.type = KRT_IR_VALUE_TEMP;
     result.data.index = builder ? builder->temp_counter++ : 0;
@@ -751,12 +749,20 @@ KrtIRValue KrtIrLoadPtr(KrtIRBuilder* builder, KrtIRValue base, int offset) {
         offset_val.type = KRT_IR_VALUE_IMM;
         offset_val.data.imm = (double)offset;
         ir_add_operand(inst, offset_val);
+        KrtIRValue size_val;
+        size_val.type = KRT_IR_VALUE_IMM;
+        size_val.data.imm = (double)size;
+        ir_add_operand(inst, size_val);
         result.data.index = inst->result.data.index;
     }
     return result;
 }
 
 void KrtIrStorePtr(KrtIRBuilder* builder, KrtIRValue base, int offset, KrtIRValue value) {
+    KrtIrStorePtrSized(builder, base, offset, value, 8);
+}
+
+void KrtIrStorePtrSized(KrtIRBuilder* builder, KrtIRValue base, int offset, KrtIRValue value, int size) {
     if (!builder || !builder->current_block) return;
     
     KrtIRInst* inst = ir_create_inst(builder, KRT_IR_STOREPTR);
@@ -767,10 +773,18 @@ void KrtIrStorePtr(KrtIRBuilder* builder, KrtIRValue base, int offset, KrtIRValu
         offset_val.data.imm = (double)offset;
         ir_add_operand(inst, offset_val);
         ir_add_operand(inst, value);
+        KrtIRValue size_val;
+        size_val.type = KRT_IR_VALUE_IMM;
+        size_val.data.imm = (double)size;
+        ir_add_operand(inst, size_val);
     }
 }
 
 void KrtIrArrayStore(KrtIRBuilder* builder, KrtIRValue array, KrtIRValue index, KrtIRValue value) {
+    KrtIrArrayStoreSized(builder, array, index, value, 8);
+}
+
+void KrtIrArrayStoreSized(KrtIRBuilder* builder, KrtIRValue array, KrtIRValue index, KrtIRValue value, int element_size) {
     if (!builder || !builder->current_block) return;
     
     KrtIRInst* inst = ir_create_inst(builder, KRT_IR_ARRAY_STORE);
@@ -778,6 +792,10 @@ void KrtIrArrayStore(KrtIRBuilder* builder, KrtIRValue array, KrtIRValue index, 
         ir_add_operand(inst, array);
         ir_add_operand(inst, index);
         ir_add_operand(inst, value);
+        KrtIRValue size_val;
+        size_val.type = KRT_IR_VALUE_IMM;
+        size_val.data.imm = (double)element_size;
+        ir_add_operand(inst, size_val);
     }
 }
 

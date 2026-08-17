@@ -13,7 +13,10 @@ public static class Console
 
     public static void Write(string value)
     {
-        if (value == null) return;
+        if (value == null)
+        {
+            return;
+        }
         int64 len = Runtime.Sys.InternalStringLength(value);
         int64 ptr = Runtime.Sys.InternalStringPtr(value);
         WriteRaw(STDOUT, ptr, (int32)len);

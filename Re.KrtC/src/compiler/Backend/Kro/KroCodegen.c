@@ -63,6 +63,7 @@ static bool is_entry_point_function(const char* name) {
 
 static void emit_byte(KROCodegenContext* ctx, uint8_t byte);
 static void emit_u32(KROCodegenContext* ctx, uint32_t value);
+static int alloc_temp_slot(KROCodegenContext* ctx, int temp_index);
 
 static KROLocalVar* find_or_alloc_local_var(KROCodegenContext* ctx, const char* name) {
     if (!ctx || !name) return NULL;
@@ -174,6 +175,82 @@ static void emit_move_reg_to_reg(KROCodegenContext* ctx, int src_reg, int dst_re
     emit_byte(ctx, 0xC0 | ((src_reg & 0x7) << 3) | (dst_reg & 0x7));
 }
 
+static void emit_store_temp_result(KROCodegenContext* ctx, KrtIRInst* inst, int reg) {
+    if (!ctx || !inst || inst->result.type != KRT_IR_VALUE_TEMP) return;
+    int slot = alloc_temp_slot(ctx, inst->result.data.index);
+    if (slot > 0) emit_store_to_stack(ctx, slot, reg);
+}
+
+static void make_block_symbol_name(KROCodegenContext* ctx, KrtIRBasicBlock* block,
+                                   char* buffer, size_t buffer_size) {
+    uint32_t function_hash = 2166136261u;
+    const char* function_name = ctx ? ctx->current_function_name : NULL;
+    while (function_name && *function_name) {
+        function_hash ^= (uint8_t)*function_name++;
+        function_hash *= 16777619u;
+    }
+    snprintf(buffer, buffer_size, "__krt_bb_%08x_%d",
+             function_hash, block ? block->id : -1);
+}
+
+static int find_block_symbol(KROCodegenContext* ctx, KrtIRBasicBlock* block) {
+    char name[64];
+    make_block_symbol_name(ctx, block, name, sizeof(name));
+    return kro_find_symbol(ctx->writer, name);
+}
+
+static void emit_jump_to_block(KROCodegenContext* ctx, KrtIRBasicBlock* target) {
+    int sym_idx = find_block_symbol(ctx, target);
+    if (sym_idx < 0) return;
+    emit_byte(ctx, 0xE9);
+    uint32_t reloc_offset = kro_get_code_offset(ctx->writer);
+    emit_u32(ctx, 0);
+    kro_add_reloc(ctx->writer, KRO_SEC_TEXT, reloc_offset, sym_idx, KRO_RELOC_PC32, 0);
+}
+
+static void emit_cond_jump_to_block(KROCodegenContext* ctx, uint8_t condition,
+                                    KrtIRBasicBlock* target) {
+    int sym_idx = find_block_symbol(ctx, target);
+    if (sym_idx < 0) return;
+    emit_byte(ctx, 0x0F);
+    emit_byte(ctx, condition);
+    uint32_t reloc_offset = kro_get_code_offset(ctx->writer);
+    emit_u32(ctx, 0);
+    kro_add_reloc(ctx->writer, KRO_SEC_TEXT, reloc_offset, sym_idx, KRO_RELOC_PC32, 0);
+}
+
+static int instruction_value_size(KrtIRInst* inst, int operand_index, int default_size) {
+    if (!inst || operand_index < 0 || operand_index >= inst->operand_count) return default_size;
+    KrtIRValue* size = &inst->operands[operand_index];
+    if (size->type != KRT_IR_VALUE_IMM) return default_size;
+    int value = (int)size->data.imm;
+    return value == 1 || value == 2 || value == 4 || value == 8 ? value : default_size;
+}
+
+static void emit_load_indirect(KROCodegenContext* ctx, int address_reg, int target_reg, int size) {
+    if (address_reg != REG_RAX || target_reg != REG_RAX) {
+        emit_move_reg_to_reg(ctx, address_reg, REG_RAX);
+    }
+    switch (size) {
+        case 1: emit_bytes(ctx, (const uint8_t*)"\x0F\xB6\x00", 3); break;
+        case 2: emit_bytes(ctx, (const uint8_t*)"\x0F\xB7\x00", 3); break;
+        case 4: emit_bytes(ctx, (const uint8_t*)"\x8B\x00", 2); break;
+        default: emit_bytes(ctx, (const uint8_t*)"\x48\x8B\x00", 3); break;
+    }
+    if (target_reg != REG_RAX) emit_move_reg_to_reg(ctx, REG_RAX, target_reg);
+}
+
+static void emit_store_indirect(KROCodegenContext* ctx, int address_reg, int value_reg, int size) {
+    if (address_reg != REG_RAX) emit_move_reg_to_reg(ctx, address_reg, REG_RAX);
+    if (value_reg != REG_RDX) emit_move_reg_to_reg(ctx, value_reg, REG_RDX);
+    switch (size) {
+        case 1: emit_bytes(ctx, (const uint8_t*)"\x88\x10", 2); break;
+        case 2: emit_bytes(ctx, (const uint8_t*)"\x66\x89\x10", 3); break;
+        case 4: emit_bytes(ctx, (const uint8_t*)"\x89\x10", 2); break;
+        default: emit_bytes(ctx, (const uint8_t*)"\x48\x89\x10", 3); break;
+    }
+}
+
 static void emit_function_prologue(KROCodegenContext* ctx, int stack_size) {
     
     emit_byte(ctx, 0x55);
@@ -223,6 +300,13 @@ static void emit_load_imm64(KROCodegenContext* ctx, uint64_t value) {
     emit_byte(ctx, 0x48);
     emit_byte(ctx, 0xB8);
     emit_u64(ctx, value);
+}
+
+static uint64_t encode_integer_immediate(double value) {
+    int64_t signed_value = (int64_t)value;
+    uint64_t encoded = 0;
+    memcpy(&encoded, &signed_value, sizeof(encoded));
+    return encoded;
 }
 
 static void emit_call_external(KROCodegenContext* ctx, const char* func_name) {
@@ -369,14 +453,14 @@ static void emit_load_value_to_reg(KROCodegenContext* ctx, KrtIRValue* value, in
     if (!ctx || !value) return;
 
     switch (value->type) {
+        case KRT_IR_VALUE_VOID:
+            emit_load_imm64_to_reg(ctx, 0, target_reg);
+            break;
         case KRT_IR_VALUE_IMM:
-            emit_load_imm64_to_reg(ctx, (uint64_t)value->data.imm, target_reg);
+            emit_load_imm64_to_reg(ctx, encode_integer_immediate(value->data.imm), target_reg);
             break;
         case KRT_IR_VALUE_VAR: {
             KROLocalVar* local_var = find_local_var(ctx, value->data.name);
-            if (!local_var) {
-                local_var = find_or_alloc_local_var(ctx, value->data.name);
-            }
             if (local_var && local_var->allocated) {
                 emit_load_from_stack(ctx, local_var->stack_offset, target_reg);
             } else {
@@ -388,6 +472,11 @@ static void emit_load_value_to_reg(KROCodegenContext* ctx, KrtIRValue* value, in
                     uint32_t reloc_offset = kro_get_code_offset(ctx->writer);
                     emit_u32(ctx, 0);
                     kro_add_reloc(ctx->writer, KRO_SEC_TEXT, reloc_offset, sym_idx, KRO_RELOC_PC32, 0);
+                } else {
+                    local_var = find_or_alloc_local_var(ctx, value->data.name);
+                    if (local_var) {
+                        emit_load_from_stack(ctx, local_var->stack_offset, target_reg);
+                    }
                 }
             }
             break;
@@ -401,7 +490,10 @@ static void emit_load_value_to_reg(KROCodegenContext* ctx, KrtIRValue* value, in
         }
         case KRT_IR_VALUE_ARG: {
             int arg_idx = value->data.index;
-            if (arg_idx >= 0 && arg_idx < g_arg_reg_count) {
+            if (arg_idx >= 0 && arg_idx < ctx->current_param_count &&
+                ctx->arg_stack_offsets[arg_idx] > 0) {
+                emit_load_from_stack(ctx, ctx->arg_stack_offsets[arg_idx], target_reg);
+            } else if (arg_idx >= 0 && arg_idx < g_arg_reg_count) {
                 emit_move_reg_to_reg(ctx, g_arg_regs[arg_idx], target_reg);
             }
             break;
@@ -433,8 +525,9 @@ static void KroGenerateInstruction(KROCodegenContext* ctx, KrtIRInst* inst) {
     switch (inst->opcode) {
         case KRT_IR_IMM: {
             if (inst->operand_count >= 1 && inst->operands[0].type == KRT_IR_VALUE_IMM) {
-                uint64_t value = (uint64_t)inst->operands[0].data.imm;
+                uint64_t value = encode_integer_immediate(inst->operands[0].data.imm);
                 emit_load_imm64(ctx, value);
+                emit_store_temp_result(ctx, inst, REG_RAX);
             }
             break;
         }
@@ -442,27 +535,88 @@ static void KroGenerateInstruction(KROCodegenContext* ctx, KrtIRInst* inst) {
         case KRT_IR_ADD:
         case KRT_IR_SUB:
         case KRT_IR_MUL:
-        case KRT_IR_DIV: {
+        case KRT_IR_DIV:
+        case KRT_IR_MOD:
+        case KRT_IR_AND:
+        case KRT_IR_OR:
+        case KRT_IR_XOR:
+        case KRT_IR_LSHIFT:
+        case KRT_IR_RSHIFT: {
             if (inst->operand_count < 2) break;
 
             KrtIRValue* lhs = &inst->operands[0];
             KrtIRValue* rhs = &inst->operands[1];
 
             emit_load_value_to_reg(ctx, lhs, REG_RAX);
-            emit_load_value_to_reg(ctx, rhs, REG_RBX);
+            emit_load_value_to_reg(ctx, rhs, REG_RCX);
 
-            int op = inst->opcode - KRT_IR_ADD;
-            emit_binary_op(ctx, op);
-            // 将ADD结果（临时变量）存储到栈槽
-            if (inst->result.type == KRT_IR_VALUE_TEMP) {
-                int slot = alloc_temp_slot(ctx, inst->result.data.index);
-                if (slot > 0) {
-                    emit_store_to_stack(ctx, slot, REG_RAX);
-#ifdef KRO_DEBUG
-                    fprintf(stderr, "[KroCodegen] ADD result temp_%d stored to stack offset -%d\n", inst->result.data.index, slot);
-#endif
-                }
+            switch (inst->opcode) {
+                case KRT_IR_ADD: emit_bytes(ctx, (const uint8_t*)"\x48\x01\xC8", 3); break;
+                case KRT_IR_SUB: emit_bytes(ctx, (const uint8_t*)"\x48\x29\xC8", 3); break;
+                case KRT_IR_MUL: emit_bytes(ctx, (const uint8_t*)"\x48\x0F\xAF\xC1", 4); break;
+                case KRT_IR_DIV:
+                case KRT_IR_MOD:
+                    emit_bytes(ctx, (const uint8_t*)"\x48\x99\x48\xF7\xF9", 5);
+                    if (inst->opcode == KRT_IR_MOD) emit_move_reg_to_reg(ctx, REG_RDX, REG_RAX);
+                    break;
+                case KRT_IR_AND: emit_bytes(ctx, (const uint8_t*)"\x48\x21\xC8", 3); break;
+                case KRT_IR_OR: emit_bytes(ctx, (const uint8_t*)"\x48\x09\xC8", 3); break;
+                case KRT_IR_XOR: emit_bytes(ctx, (const uint8_t*)"\x48\x31\xC8", 3); break;
+                case KRT_IR_LSHIFT: emit_bytes(ctx, (const uint8_t*)"\x48\xD3\xE0", 3); break;
+                case KRT_IR_RSHIFT: emit_bytes(ctx, (const uint8_t*)"\x48\xD3\xF8", 3); break;
+                default: break;
             }
+            emit_store_temp_result(ctx, inst, REG_RAX);
+            break;
+        }
+
+        case KRT_IR_LT:
+        case KRT_IR_GT:
+        case KRT_IR_EQ:
+        case KRT_IR_LE:
+        case KRT_IR_GE:
+        case KRT_IR_NE: {
+            if (inst->operand_count < 2) break;
+            emit_load_value_to_reg(ctx, &inst->operands[0], REG_RAX);
+            emit_load_value_to_reg(ctx, &inst->operands[1], REG_RCX);
+            emit_bytes(ctx, (const uint8_t*)"\x48\x39\xC8", 3);
+            emit_byte(ctx, 0x0F);
+            switch (inst->opcode) {
+                case KRT_IR_LT: emit_byte(ctx, 0x9C); break;
+                case KRT_IR_GT: emit_byte(ctx, 0x9F); break;
+                case KRT_IR_EQ: emit_byte(ctx, 0x94); break;
+                case KRT_IR_LE: emit_byte(ctx, 0x9E); break;
+                case KRT_IR_GE: emit_byte(ctx, 0x9D); break;
+                case KRT_IR_NE: emit_byte(ctx, 0x95); break;
+                default: break;
+            }
+            emit_byte(ctx, 0xC0);
+            emit_bytes(ctx, (const uint8_t*)"\x48\x0F\xB6\xC0", 4);
+            emit_store_temp_result(ctx, inst, REG_RAX);
+            break;
+        }
+
+        case KRT_IR_CAST: {
+            if (inst->operand_count < 1) break;
+            emit_load_value_to_reg(ctx, &inst->operands[0], REG_RAX);
+            emit_store_temp_result(ctx, inst, REG_RAX);
+            break;
+        }
+
+        case KRT_IR_JUMP: {
+            if (ctx->current_block && ctx->current_block->succ_count > 0) {
+                emit_jump_to_block(ctx, ctx->current_block->succs[0]);
+            }
+            break;
+        }
+
+        case KRT_IR_BRANCH: {
+            if (inst->operand_count < 1 || !ctx->current_block ||
+                ctx->current_block->succ_count < 2) break;
+            emit_load_value_to_reg(ctx, &inst->operands[0], REG_RAX);
+            emit_bytes(ctx, (const uint8_t*)"\x48\x85\xC0", 3);
+            emit_cond_jump_to_block(ctx, 0x85, ctx->current_block->succs[0]);
+            emit_jump_to_block(ctx, ctx->current_block->succs[1]);
             break;
         }
 
@@ -502,47 +656,16 @@ static void KroGenerateInstruction(KROCodegenContext* ctx, KrtIRInst* inst) {
             fprintf(stderr, "[KroCodegen] Processing RETURN instruction, operand_count=%d\n",
                     inst->operand_count);
 #endif
-            if (inst->operand_count >= 1) {
+            if (inst->operand_count >= 1 && inst->operands[0].type != KRT_IR_VALUE_VOID) {
                 KrtIRValue* ret_val = &inst->operands[0];
 #ifdef KRO_DEBUG
                 fprintf(stderr, "[KroCodegen]   Return value type=%d", ret_val->type);
 #endif
-                if (ret_val->type == KRT_IR_VALUE_IMM) {
-                    uint64_t value = (uint64_t)ret_val->data.imm;
-                    emit_load_imm64(ctx, value);
-#ifdef KRO_DEBUG
-                    fprintf(stderr, ", imm=%lu (0x%lx)\n",
-                            (unsigned long)value,
-                            (unsigned long)value);
-#endif
-                } else if (ret_val->type == KRT_IR_VALUE_VAR) {
-#ifdef KRO_DEBUG
-                    fprintf(stderr, " (variable: %s)\n", ret_val->data.name);
-#endif
-                    KROLocalVar* local_var = find_local_var(ctx, ret_val->data.name);
-                    if (local_var && local_var->allocated) {
-                        emit_load_from_stack(ctx, local_var->stack_offset, REG_RAX);
-                    } else {
-                        int sym_idx = kro_find_symbol(ctx->writer, ret_val->data.name);
-                        if (sym_idx >= 0) {
-                            emit_byte(ctx, 0x48);
-                            emit_byte(ctx, 0x8B);
-                            emit_byte(ctx, 0x05);
-                            uint32_t reloc_offset = kro_get_code_offset(ctx->writer);
-                            emit_u32(ctx, 0);
-                            kro_add_reloc(ctx->writer, KRO_SEC_TEXT, reloc_offset, sym_idx, KRO_RELOC_PC32, 0);
-                        }
-                    }
-                } else {
-#ifdef KRO_DEBUG
-                    fprintf(stderr, " (not immediate)\n");
-#endif
-                }
+                emit_load_value_to_reg(ctx, ret_val, REG_RAX);
             } else {
-#ifdef KRO_DEBUG
-                fprintf(stderr, "[KroCodegen]   No operands (void return)\n");
-#endif
+                emit_load_imm64(ctx, 0);
             }
+            emit_function_epilogue(ctx);
             break;
         }
 
@@ -575,28 +698,15 @@ static void KroGenerateInstruction(KROCodegenContext* ctx, KrtIRInst* inst) {
                     fprintf(stderr, "[KroCodegen] STORE to local variable: %s at offset -%d\n",
                             dest->data.name, local_var->stack_offset);
 #endif
-                    int src_reg = REG_RAX;
-                    if (value->type == KRT_IR_VALUE_IMM) {
-#ifdef KRO_DEBUG
-                        fprintf(stderr, "[KroCodegen]   Loading immediate value %ld into RAX\n", (long)value->data.imm);
-#endif
-                        emit_load_imm64_to_reg(ctx, (uint64_t)value->data.imm, REG_RAX);
-                    } else if (value->type == KRT_IR_VALUE_VAR) {
-                        KROLocalVar* src_var = find_local_var(ctx, value->data.name);
-                        if (src_var && src_var->allocated) {
-                            emit_load_from_stack(ctx, src_var->stack_offset, REG_RAX);
-                        }
-                    }
+                    emit_load_value_to_reg(ctx, value, REG_RAX);
 #ifdef KRO_DEBUG
                     fprintf(stderr, "[KroCodegen]   Storing RAX to stack at offset -%d\n", local_var->stack_offset);
 #endif
-                    emit_store_to_stack(ctx, local_var->stack_offset, src_reg);
+                    emit_store_to_stack(ctx, local_var->stack_offset, REG_RAX);
                 } else {
                     int sym_idx = kro_find_symbol(ctx->writer, dest->data.name);
                     if (sym_idx >= 0) {
-                        if (value->type == KRT_IR_VALUE_IMM) {
-                            emit_load_imm64_to_reg(ctx, (uint64_t)value->data.imm, REG_RAX);
-                        }
+                        emit_load_value_to_reg(ctx, value, REG_RAX);
                         emit_byte(ctx, 0x48);
                         emit_byte(ctx, 0x89);
                         emit_byte(ctx, 0x05);
@@ -606,6 +716,45 @@ static void KroGenerateInstruction(KROCodegenContext* ctx, KrtIRInst* inst) {
                     }
                 }
             }
+            break;
+        }
+
+        case KRT_IR_LOADPTR: {
+            if (inst->operand_count < 1) break;
+            emit_load_value_to_reg(ctx, &inst->operands[0], REG_RAX);
+            if (inst->operand_count >= 2) {
+                emit_load_value_to_reg(ctx, &inst->operands[1], REG_RCX);
+                emit_bytes(ctx, (const uint8_t*)"\x48\x01\xC8", 3);
+            }
+            int size = instruction_value_size(inst, 2, 8);
+            emit_load_indirect(ctx, REG_RAX, REG_RAX, size);
+            emit_store_temp_result(ctx, inst, REG_RAX);
+            break;
+        }
+
+        case KRT_IR_STOREPTR: {
+            if (inst->operand_count < 3) break;
+            emit_load_value_to_reg(ctx, &inst->operands[0], REG_RAX);
+            emit_load_value_to_reg(ctx, &inst->operands[1], REG_RCX);
+            emit_bytes(ctx, (const uint8_t*)"\x48\x01\xC8", 3);
+            emit_load_value_to_reg(ctx, &inst->operands[2], REG_RDX);
+            emit_store_indirect(ctx, REG_RAX, REG_RDX,
+                                instruction_value_size(inst, 3, 8));
+            break;
+        }
+
+        case KRT_IR_ARRAY_STORE: {
+            if (inst->operand_count < 3) break;
+            int size = instruction_value_size(inst, 3, 8);
+            emit_load_value_to_reg(ctx, &inst->operands[0], REG_RAX);
+            emit_load_value_to_reg(ctx, &inst->operands[1], REG_RCX);
+            if (size != 1) {
+                emit_bytes(ctx, (const uint8_t*)"\x48\x6B\xC9", 3);
+                emit_byte(ctx, (uint8_t)size);
+            }
+            emit_bytes(ctx, (const uint8_t*)"\x48\x01\xC8", 3);
+            emit_load_value_to_reg(ctx, &inst->operands[2], REG_RDX);
+            emit_store_indirect(ctx, REG_RAX, REG_RDX, size);
             break;
         }
 
@@ -780,6 +929,12 @@ static void KroGenerateInstruction(KROCodegenContext* ctx, KrtIRInst* inst) {
 static void KroGenerateBlock(KROCodegenContext* ctx, KrtIRBasicBlock* block) {
     if (!block) return;
 
+    ctx->current_block = block;
+    int block_sym_idx = find_block_symbol(ctx, block);
+    if (block_sym_idx >= 0) {
+        kro_update_symbol_value(ctx->writer, block_sym_idx, kro_get_code_offset(ctx->writer));
+    }
+
     int count = 0;
     KrtIRInst* inst = block->first_inst;
     while (inst) {
@@ -794,10 +949,10 @@ static void KroGenerateBlock(KROCodegenContext* ctx, KrtIRBasicBlock* block) {
 }
 
 static int calculate_function_stack_size(KrtIRFunction* func) {
-    int stack_size = KRO_SHADOW_SPACE_SIZE + 8;
+    int slot_count = 8;
 
     if (func) {
-        int local_var_count = 0;
+        slot_count += func->param_count;
         KrtIRBasicBlock* block = func->entry_block;
 
 #ifdef KRO_DEBUG
@@ -821,28 +976,14 @@ static int calculate_function_stack_size(KrtIRFunction* func) {
                 fprintf(stderr, "\n");
 #endif
 
-                // 只统计ALLOC指令，避免与STORE重复计数
-                if (inst->opcode == KRT_IR_ALLOC && inst->operand_count >= 1 &&
-                    inst->operands[0].type == KRT_IR_VALUE_VAR) {
-                    local_var_count++;
-#ifdef KRO_DEBUG
-                    fprintf(stderr, "   -> Counting ALLOC variable, total=%d\n", local_var_count);
-#endif
-                }
+                slot_count++;
             }
             block = block->next;
         }
-        stack_size += local_var_count * 8;
-
-#ifdef KRO_DEBUG
-        fprintf(stderr, "[KroCodegen] Total local vars: %d, stack size: %d\n", local_var_count, stack_size);
-#endif
     }
 
+    int stack_size = KRO_SHADOW_SPACE_SIZE + slot_count * 8;
     stack_size = (stack_size + 15) & ~15;
-    if (stack_size % 16 == 0) {
-        stack_size += 8;
-    }
     if (stack_size < KRO_MIN_STACK_SIZE) stack_size = KRO_MIN_STACK_SIZE;
     return stack_size;
 }
@@ -893,10 +1034,32 @@ static void KroGenerateFunction(KROCodegenContext* ctx, KrtIRFunction* func, Krt
     memset(ctx->temp_slots, 0, sizeof(ctx->temp_slots));
     ctx->temp_slot_count = 0;
     ctx->func_index++;
+    ctx->current_function_id = ctx->func_index;
+    ctx->current_function_name = func->name;
+    ctx->current_block = NULL;
+    ctx->current_param_count = func->param_count < KRO_MAX_ARGS ? func->param_count : KRO_MAX_ARGS;
+    memset(ctx->arg_stack_offsets, 0, sizeof(ctx->arg_stack_offsets));
 
     int stack_size = calculate_function_stack_size(func);
 
     emit_function_prologue(ctx, stack_size);
+
+    for (int i = 0; i < ctx->current_param_count && i < g_arg_reg_count; i++) {
+        ctx->arg_stack_offsets[i] = ctx->current_stack_offset;
+        ctx->current_stack_offset += 8;
+        emit_store_to_stack(ctx, ctx->arg_stack_offsets[i], g_arg_regs[i]);
+    }
+
+    KrtIRBasicBlock* symbol_block = func->entry_block;
+    while (symbol_block) {
+        char block_symbol[64];
+        make_block_symbol_name(ctx, symbol_block, block_symbol, sizeof(block_symbol));
+        if (kro_find_symbol(ctx->writer, block_symbol) < 0) {
+            kro_add_symbol(ctx->writer, block_symbol, KRO_SYM_NOTYPE, KRO_BIND_LOCAL,
+                           KRO_SEC_TEXT, 0);
+        }
+        symbol_block = symbol_block->next;
+    }
 
     bool has_explicit_return = false;
     KrtIRBasicBlock* block = func->entry_block;

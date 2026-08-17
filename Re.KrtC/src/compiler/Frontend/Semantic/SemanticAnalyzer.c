@@ -1244,23 +1244,8 @@ bool semantic_analyzer_analyze_static_variable_decl(SemanticAnalyzer* analyzer, 
     }
 
     const char* var_name = var_decl->data.static_variable_decl.name;
-    const char* current_class = semantic_analyzer_get_current_class_context(analyzer);
-
-    const char* symbol_name = var_name;
-    char* mangled_name = NULL;
-    if (current_class) {
-        mangled_name = name_mangle_simple(current_class, var_name);
-        if (mangled_name) {
-            symbol_name = mangled_name;
-        }
-    }
-
-    SymbolEntry* symbol = symbol_table_define(analyzer->symbol_table, symbol_name,
+    SymbolEntry* symbol = symbol_table_define(analyzer->symbol_table, var_name,
                                               SYMBOL_STATIC_FIELD, 0, NULL);
-
-    if (mangled_name) {
-        KRT_FREE(mangled_name);
-    }
 
     if (!symbol) {
         semantic_analyzer_add_error(analyzer, "Failed to declare static variable %s", var_name);

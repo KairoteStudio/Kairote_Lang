@@ -1,9 +1,4 @@
 using System.Runtime;
-using System.Memory;
-using System.String;
-using System.Convert;
-using System.Math;
-using System.StringBuilder;
 
 namespace System;
 
@@ -20,7 +15,10 @@ public static class Console
 
     public static void Write(string value)
     {
-        if (value == null) return;
+        if (value == null)
+        {
+            return;
+        }
         int64 len = Sys.InternalStringLength(value);
         int64 ptr = Sys.InternalStringPtr(value);
         WriteRaw(STDOUT, ptr, (int32)len);

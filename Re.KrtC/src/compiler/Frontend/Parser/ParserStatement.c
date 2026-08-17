@@ -187,6 +187,7 @@ static ASTNode* parser_parse_function_declaration(Parser* parser) {
 
 static ASTNode* parser_parse_declaration_with_modifiers(Parser* parser) {
     int is_static = 0;
+    int is_const = 0;
     while (parser->current_token.type == TOKEN_PUBLIC ||
            parser->current_token.type == TOKEN_PRIVATE ||
            parser->current_token.type == TOKEN_PROTECTED ||
@@ -195,6 +196,8 @@ static ASTNode* parser_parse_declaration_with_modifiers(Parser* parser) {
            parser->current_token.type == TOKEN_EXTERN) {
         if (parser->current_token.type == TOKEN_STATIC) {
             is_static = 1;
+        } else if (parser->current_token.type == TOKEN_CONST) {
+            is_const = 1;
         }
         parser_advance(parser);
     }
@@ -206,6 +209,9 @@ static ASTNode* parser_parse_declaration_with_modifiers(Parser* parser) {
     ASTNode* declaration = parser_parse_statement(parser);
     if (is_static && declaration && declaration->type == AST_FUNCTION_DECLARATION) {
         declaration->type = AST_STATIC_FUNCTION_DECLARATION;
+    } else if ((is_static || is_const) && declaration &&
+               declaration->type == AST_VARIABLE_DECLARATION) {
+        declaration->type = AST_STATIC_VARIABLE_DECLARATION;
     }
     return declaration;
 }
@@ -1010,8 +1016,24 @@ ASTNode* parser_parse_statement(Parser* parser) {
                     return parser_parse_variable_declaration_with_type(parser);
                 }
             } else if (next_token.type == TOKEN_LEFT_BRACKET) {
+                Token bracket_token = lexer_peek_nth_token(parser->lexer, 2);
+                bool is_array_type_declaration = token.type != TOKEN_IDENTIFIER ||
+                                                 bracket_token.type == TOKEN_RIGHT_BRACKET;
                 token_free(&next_token);
-                return parser_parse_variable_declaration_with_type(parser);
+                token_free(&bracket_token);
+                if (is_array_type_declaration) {
+                    return parser_parse_variable_declaration_with_type(parser);
+                }
+
+                ASTNode* expr = parser_parse_expression(parser);
+                if (!expr) return NULL;
+                ASTNode* stmt = parser_parse_assignment_from_left(parser, expr);
+                if (parser->current_token.type != TOKEN_SEMICOLON) {
+                    ast_destroy_node(stmt);
+                    return NULL;
+                }
+                parser_advance(parser);
+                return stmt;
             } else if (next_token.type == TOKEN_MULTIPLY) {
                 Token name_token = lexer_peek_nth_token(parser->lexer, 2);
                 Token after_name = lexer_peek_nth_token(parser->lexer, 3);

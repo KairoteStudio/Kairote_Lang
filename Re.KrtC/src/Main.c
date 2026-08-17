@@ -285,11 +285,15 @@ static int KrtLinkKroExecutable(KrtConfig* config, KrtPlatform* platform,
     }
 
     int import_kro_count = 0;
+    int import_kro_capacity = config->imported_file_count > 0
+        ? config->imported_file_count
+        : 8;
     char** import_kro_files = NULL;
+    int imports_ok = 1;
 
     if (config->imported_file_count > 0)
     {
-        import_kro_files = (char**)malloc(config->imported_file_count * sizeof(char*));
+        import_kro_files = (char**)malloc(import_kro_capacity * sizeof(char*));
         if (import_kro_files)
         {
             for (int i = 0; i < config->imported_file_count; i++)
@@ -308,16 +312,43 @@ static int KrtLinkKroExecutable(KrtConfig* config, KrtPlatform* platform,
                     int import_result = KrtCompilePipelineExecute(import_pipeline, src_path, kro_path);
                     if (import_result && import_pipeline->compiler)
                     {
+                        if (import_kro_count >= import_kro_capacity) {
+                            import_kro_capacity *= 2;
+                            char** expanded = (char**)realloc(import_kro_files,
+                                import_kro_capacity * sizeof(char*));
+                            if (!expanded) {
+                                imports_ok = 0;
+                                KrtCompilePipelineDestroy(import_pipeline);
+                                break;
+                            }
+                            import_kro_files = expanded;
+                        }
                         import_kro_files[import_kro_count++] = strdup(kro_path);
                         fprintf(stderr, "[Link] Compiled OK: %s\n", kro_path);
+
+                        int nested_count = 0;
+                        char** nested_files = KrtCompilePipelineGetImportedFiles(import_pipeline,
+                                                                                  &nested_count);
+                        for (int j = 0; j < nested_count; j++) {
+                            KrtConfigAddImportedFile(config, nested_files[j]);
+                        }
                     }
                     else
                     {
                         fprintf(stderr, "[Link] Warning: Failed to compile %s: %s\n", src_path, import_pipeline->error_message);
+                        imports_ok = 0;
                     }
                     KrtCompilePipelineDestroy(import_pipeline);
                 }
+                else
+                {
+                    imports_ok = 0;
+                }
             }
+        }
+        else
+        {
+            imports_ok = 0;
         }
     }
 
@@ -342,7 +373,11 @@ static int KrtLinkKroExecutable(KrtConfig* config, KrtPlatform* platform,
             }
         }
 
-        if (KrtArkLinkLinkObjects(obj_files, obj_count, exe_output, config) == 0) {
+        if (!imports_ok) {
+            KrtError("依赖编译失败");
+            KrtTaskReport("link", kro_file, KRT_TASK_RESULT_FAILED, 0.0, KrtGetGlobalTaskStats());
+            result = 0;
+        } else if (KrtArkLinkLinkObjects(obj_files, obj_count, exe_output, config) == 0) {
             KrtTaskReport("link", kro_file, KRT_TASK_RESULT_EXECUTED, 0.0, KrtGetGlobalTaskStats());
             result = 1;
         } else {

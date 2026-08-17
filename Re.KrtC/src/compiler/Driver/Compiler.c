@@ -71,20 +71,9 @@ void KrtCompilerCompile(KrtCompiler* compiler, ASTNode* ast, TypeCheckContext* t
         }
     }
 
-    KrtIRSSABuilder* ssa_builder = KrtIrSsaBuilderCreate(ir_builder);
-    if (ssa_builder) {
-        KrtIRFunction* func = ir_builder->module->functions;
-        while (func) {
-            if (func->entry_block) {
-                KrtIrSsaConstruct(ssa_builder, func);
-                KrtIrSsaOptimize(func);
-                KrtIrSsaLowerPhis(func, ir_builder->arena);
-            }
-            func = func->next;
-        }
-
-        KrtIrSsaBuilderDestroy(ssa_builder);
-    }
+    /* The current SSA renamer does not preserve loop-exit versions correctly.
+       Keep mutable IR variables until the SSA pass is replaced with a
+       dominance-tree implementation. */
 
     IROptimizer* optimizer = ir_optimizer_create();
     if (optimizer) {
