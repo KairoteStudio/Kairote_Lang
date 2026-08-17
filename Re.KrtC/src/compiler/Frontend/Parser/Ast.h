@@ -122,6 +122,7 @@ typedef struct ASTNode {
     ASTNodeType type;
     int line;
     int col;
+    KrtTokenType inferred_type;
     union {
         double number_value;
         char* string_value;

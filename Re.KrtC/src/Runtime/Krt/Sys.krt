@@ -83,6 +83,56 @@ public static class Sys
         return (string)(buffer + (int64)index);
     }
 
+    public static void InternalStrCpy(string destination, string source)
+    {
+        if (destination == null)
+        {
+            return;
+        }
+
+        Point
+        {
+            char[] dest = (char[])destination;
+            if (source == null)
+            {
+                dest[0] = '\0';
+                return;
+            }
+
+            char[] src = (char[])source;
+            int32 length = (int32)InternalStringLength(source);
+            int32 index = 0;
+            while (index < length)
+            {
+                dest[index] = src[index];
+                index = index + 1;
+            }
+            dest[length] = '\0';
+        }
+    }
+
+    public static string InternalStrDup(string source)
+    {
+        if (source == null)
+        {
+            return null;
+        }
+
+        int32 length = (int32)InternalStringLength(source);
+        Point
+        {
+            void* allocation = KrtMalloc(length + 1);
+            if (allocation == null)
+            {
+                return null;
+            }
+
+            string duplicate = (string)allocation;
+            InternalStrCpy(duplicate, source);
+            return duplicate;
+        }
+    }
+
     // 退出进程
     public static void Exit(int32 code)
     {

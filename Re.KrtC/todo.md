@@ -348,6 +348,7 @@ stdlib_tests/
 
 - [x] `KrtMalloc` / `KrtFree` 内建函数（`mmap` / `munmap`）
 - [x] `internal_int32_to_string` 纯 KRT 实现
+- [x] `internal_strdup` / `internal_strcpy` 纯 KRT 实现
 - [x] `syscall` 内建函数
 - [x] `internal_string_ptr` / `internal_string_len` 内建函数
 - [x] 类型转换表达式 `(int64)expr`

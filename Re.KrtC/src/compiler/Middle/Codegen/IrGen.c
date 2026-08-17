@@ -411,6 +411,10 @@ static KrtIRValue irgen_array_size(KrtIRBuilder* builder, KrtIRValue array) {
 static KrtTokenType KrtIrInferMangleType(KrtIRBuilder* builder, ASTNode* arg) {
     if (!arg) return TOKEN_INT32;
 
+    if (arg->inferred_type != TOKEN_EOF) {
+        return arg->inferred_type;
+    }
+
     switch (arg->type) {
         case AST_STRING:
             return TOKEN_TYPE_STRING;
@@ -425,6 +429,27 @@ static KrtTokenType KrtIrInferMangleType(KrtIRBuilder* builder, ASTNode* arg) {
         case AST_UNARY_OPERATION:
             return KrtIrInferMangleType(builder, arg->data.unary_op.operand);
         case AST_IDENTIFIER:
+            if (builder && builder->type_context && builder->type_context->current_scope) {
+                TypeCheckSymbol* symbol = type_check_symbol_table_lookup(
+                    builder->type_context->current_scope, arg->data.identifier_name);
+                if (symbol && symbol->type) {
+                    switch (symbol->type->kind) {
+                        case TYPE_INT8: return TOKEN_INT8;
+                        case TYPE_INT16: return TOKEN_INT16;
+                        case TYPE_INT32: return TOKEN_INT32;
+                        case TYPE_INT64: return TOKEN_INT64;
+                        case TYPE_UINT8: return TOKEN_UINT8;
+                        case TYPE_UINT16: return TOKEN_UINT16;
+                        case TYPE_UINT32: return TOKEN_UINT32;
+                        case TYPE_UINT64: return TOKEN_UINT64;
+                        case TYPE_FLOAT32: return TOKEN_FLOAT32;
+                        case TYPE_FLOAT64: return TOKEN_FLOAT64;
+                        case TYPE_BOOL: return TOKEN_BOOL;
+                        case TYPE_STRING: return TOKEN_TYPE_STRING;
+                        default: break;
+                    }
+                }
+            }
             if (builder && builder->current_function) {
                 for (int i = 0; i < builder->current_function->param_count; i++) {
                     if (strcmp(builder->current_function->params[i].name,

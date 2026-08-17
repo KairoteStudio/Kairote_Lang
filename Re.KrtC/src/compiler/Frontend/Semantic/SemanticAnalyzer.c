@@ -493,6 +493,9 @@ static KrtTokenType semantic_analyzer_infer_expression_type(SemanticAnalyzer* an
         case AST_BOOLEAN:
             return TOKEN_BOOL;
         case AST_IDENTIFIER: {
+            if (expr->inferred_type != TOKEN_EOF) {
+                return expr->inferred_type;
+            }
             SymbolEntry* sym = symbol_table_lookup_scope_chain(analyzer->symbol_table, expr->data.identifier_name);
             if (sym && sym->value_type != TOKEN_EOF) {
                 return sym->value_type;
@@ -623,6 +626,8 @@ bool semantic_analyzer_analyze_expression(SemanticAnalyzer* analyzer, ASTNode* e
                     "Undefined identifier: %s", var_name);
                 return false;
             }
+
+            expr->inferred_type = symbol->value_type;
             
             return true;
         }

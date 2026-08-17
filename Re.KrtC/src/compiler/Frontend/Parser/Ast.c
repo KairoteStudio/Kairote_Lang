@@ -23,6 +23,7 @@ ASTNode* ast_create_node_arena(ASTNodeType type, int line, int col, KrtArena* ar
     node->type = type;
     node->line = line;
     node->col = col;
+    node->inferred_type = TOKEN_EOF;
     node->is_arena_allocated = (arena != NULL) ? 1 : 0;
     memset(&node->data, 0, sizeof(node->data));
 

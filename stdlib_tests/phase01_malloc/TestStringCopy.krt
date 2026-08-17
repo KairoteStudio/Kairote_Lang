@@ -1,0 +1,17 @@
+using System.Console;
+using System.Runtime;
+
+void main()
+{
+    string original = "Kairote";
+    string copy = Sys.InternalStrDup(original);
+
+    Point
+    {
+        char[] bytes = (char[])copy;
+        bytes[0] = 'k';
+    }
+
+    Console.WriteLine(original);
+    Console.WriteLine(copy);
+}

@@ -88,6 +88,15 @@ static bool is_entry_point_function(const char* name, bool has_mangled_main) {
     return false;
 }
 
+static uint32_t kro_hash_module_name(const char* name) {
+    uint32_t hash = 2166136261u;
+    while (name && *name) {
+        hash ^= (uint8_t)*name++;
+        hash *= 16777619u;
+    }
+    return hash;
+}
+
 static void emit_byte(KROCodegenContext* ctx, uint8_t byte);
 static void emit_u32(KROCodegenContext* ctx, uint32_t value);
 static int alloc_temp_slot(KROCodegenContext* ctx, int temp_index);
@@ -1144,6 +1153,7 @@ static void KroGenerateDataSection(KROCodegenContext* ctx, KrtIRModule* module) 
         ctx->string_const_sym_indices = (int32_t*)KRT_MALLOC(module->string_const_count * sizeof(int32_t));
         if (!ctx->string_const_sym_indices) return;
         ctx->string_const_count = module->string_const_count;
+        uint32_t module_hash = kro_hash_module_name(ctx->output_filename);
 
         for (int i = 0; i < module->string_const_count; i++) {
             const char* str = module->string_constants[i];
@@ -1179,7 +1189,7 @@ static void KroGenerateDataSection(KROCodegenContext* ctx, KrtIRModule* module) 
             kro_write_rodata(ctx->writer, escaped, escaped_len);
 
             char sym_name[64];
-            snprintf(sym_name, sizeof(sym_name), "str_const_%d", i);
+            snprintf(sym_name, sizeof(sym_name), "str_const_%08x_%d", module_hash, i);
             ctx->string_const_sym_indices[i] = kro_add_symbol(ctx->writer, sym_name, KRO_SYM_OBJECT, KRO_BIND_LOCAL, KRO_SEC_RODATA, rodata_offset);
         }
     }
