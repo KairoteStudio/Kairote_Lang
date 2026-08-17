@@ -480,6 +480,7 @@ static SymbolEntry* semantic_analyzer_lookup_class(SemanticAnalyzer* analyzer, c
 
 static KrtTokenType semantic_analyzer_infer_expression_type(SemanticAnalyzer* analyzer, ASTNode* expr) {
     if (!expr) return TOKEN_INT32;
+    if (expr->inferred_type != TOKEN_EOF) return expr->inferred_type;
 
     switch (expr->type) {
         case AST_NUMBER: {
@@ -490,12 +491,11 @@ static KrtTokenType semantic_analyzer_infer_expression_type(SemanticAnalyzer* an
         }
         case AST_STRING:
             return TOKEN_STRING;
+        case AST_CHAR_LITERAL:
+            return TOKEN_CHAR;
         case AST_BOOLEAN:
             return TOKEN_BOOL;
         case AST_IDENTIFIER: {
-            if (expr->inferred_type != TOKEN_EOF) {
-                return expr->inferred_type;
-            }
             SymbolEntry* sym = symbol_table_lookup_scope_chain(analyzer->symbol_table, expr->data.identifier_name);
             if (sym && sym->value_type != TOKEN_EOF) {
                 return sym->value_type;
@@ -808,6 +808,7 @@ bool semantic_analyzer_analyze_expression(SemanticAnalyzer* analyzer, ASTNode* e
                 }
                 expr->data.static_call.resolved_mangled_name = mangled_name;
             }
+            expr->inferred_type = method_symbol->value_type;
 
             return true;
         }
@@ -1001,6 +1002,11 @@ bool semantic_analyzer_analyze_function_call(SemanticAnalyzer* analyzer, ASTNode
                truly missing implementation. */
             KRT_FREE(call_expr->data.call.resolved_mangled_name);
             call_expr->data.call.resolved_mangled_name = mangled_name;
+            SymbolEntry* method_symbol = symbol_table_lookup_scope_chain(
+                analyzer->symbol_table, mangled_name);
+            if (method_symbol && method_symbol->type == SYMBOL_FUNCTION) {
+                call_expr->inferred_type = method_symbol->value_type;
+            }
             return true;
         }
     }
@@ -1052,6 +1058,7 @@ bool semantic_analyzer_analyze_function_call(SemanticAnalyzer* analyzer, ASTNode
             KRT_FREE(call_expr->data.call.resolved_mangled_name);
             call_expr->data.call.resolved_class_name = KRT_STRDUP(class_name);
             call_expr->data.call.resolved_mangled_name = mangled_name;
+            call_expr->inferred_type = method_symbol->value_type;
             return true;
         }
         
@@ -1715,6 +1722,7 @@ bool semantic_analyzer_analyze_statement(SemanticAnalyzer* analyzer, ASTNode* st
                 return false;
             }
             func_sym->state = SYMBOL_DEFINED;
+            func_sym->value_type = stmt->data.function_decl.return_type;
 
             if (!current_class && strcmp(func_name, "main") == 0) {
                 analyzer->has_entry_point = true;
@@ -1779,6 +1787,7 @@ bool semantic_analyzer_analyze_statement(SemanticAnalyzer* analyzer, ASTNode* st
                 return false;
             }
             func_sym->state = SYMBOL_DEFINED;
+            func_sym->value_type = stmt->data.static_function_decl.return_type;
 
             symbol_table_push_scope(analyzer->symbol_table);
             
@@ -2497,7 +2506,11 @@ static void import_krt_file(SemanticAnalyzer* analyzer, const char* file_path, c
                     SymbolEntry* existing = symbol_table_lookup(analyzer->global_symbol_table, func_name);
                     if (!existing)
                     {
-                        symbol_table_define(analyzer->global_symbol_table, func_name, SYMBOL_FUNCTION, 0, NULL);
+                        existing = symbol_table_define(analyzer->global_symbol_table, func_name, SYMBOL_FUNCTION, 0, NULL);
+                    }
+                    if (existing)
+                    {
+                        existing->value_type = stmt->data.function_decl.return_type;
                     }
                 }
             }
@@ -2509,7 +2522,15 @@ static void import_krt_file(SemanticAnalyzer* analyzer, const char* file_path, c
                     SymbolEntry* existing = symbol_table_lookup(analyzer->global_symbol_table, class_name);
                     if (!existing)
                     {
-                        symbol_table_define(analyzer->global_symbol_table, class_name, SYMBOL_CLASS, 0, NULL);
+                        existing = symbol_table_define(analyzer->global_symbol_table, class_name, SYMBOL_CLASS, 0, NULL);
+                    }
+                    if (existing && !existing->nested_table)
+                    {
+                        existing->nested_table = symbol_table_create();
+                        if (existing->nested_table)
+                        {
+                            existing->nested_table->parent_table = analyzer->global_symbol_table;
+                        }
                     }
 
                     ASTNode* body = stmt->data.class_decl.body;
@@ -2518,9 +2539,25 @@ static void import_krt_file(SemanticAnalyzer* analyzer, const char* file_path, c
                         for (int k = 0; k < body->data.block.statement_count; k++)
                         {
                             ASTNode* member = body->data.block.statements[k];
-                            if (member && member->type == AST_FUNCTION_DECLARATION)
+                            if (member && member->type == AST_ACCESS_MODIFIER)
                             {
-                                const char* method_name = member->data.function_decl.name;
+                                member = member->data.access_modifier.member;
+                            }
+                            if (member && (member->type == AST_FUNCTION_DECLARATION ||
+                                           member->type == AST_STATIC_FUNCTION_DECLARATION))
+                            {
+                                const char* method_name = member->type == AST_FUNCTION_DECLARATION
+                                    ? member->data.function_decl.name
+                                    : member->data.static_function_decl.name;
+                                KrtTokenType* parameter_types = member->type == AST_FUNCTION_DECLARATION
+                                    ? member->data.function_decl.parameter_types
+                                    : member->data.static_function_decl.parameter_types;
+                                int parameter_count = member->type == AST_FUNCTION_DECLARATION
+                                    ? member->data.function_decl.parameter_count
+                                    : member->data.static_function_decl.parameter_count;
+                                KrtTokenType return_type = member->type == AST_FUNCTION_DECLARATION
+                                    ? member->data.function_decl.return_type
+                                    : member->data.static_function_decl.return_type;
                                 if (method_name)
                                 {
                                     char full_name[256];
@@ -2528,7 +2565,34 @@ static void import_krt_file(SemanticAnalyzer* analyzer, const char* file_path, c
                                     SymbolEntry* existing_method = symbol_table_lookup(analyzer->global_symbol_table, full_name);
                                     if (!existing_method)
                                     {
-                                        symbol_table_define(analyzer->global_symbol_table, full_name, SYMBOL_FUNCTION, 0, NULL);
+                                        existing_method = symbol_table_define(analyzer->global_symbol_table, full_name, SYMBOL_FUNCTION, 0, NULL);
+                                    }
+                                    if (existing_method)
+                                    {
+                                        existing_method->value_type = return_type;
+                                    }
+
+                                    if (existing && existing->nested_table)
+                                    {
+                                        const char* namespace_path[2] = { class_name, NULL };
+                                        char* mangled_name = name_mangle_function(
+                                            namespace_path, method_name, parameter_types, parameter_count);
+                                        if (mangled_name)
+                                        {
+                                            SymbolEntry* method_symbol = symbol_table_lookup(
+                                                existing->nested_table, mangled_name);
+                                            if (!method_symbol)
+                                            {
+                                                method_symbol = symbol_table_define(
+                                                    existing->nested_table, mangled_name,
+                                                    SYMBOL_FUNCTION, 0, NULL);
+                                            }
+                                            if (method_symbol)
+                                            {
+                                                method_symbol->value_type = return_type;
+                                            }
+                                            KRT_FREE(mangled_name);
+                                        }
                                     }
                                 }
                             }
