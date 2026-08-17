@@ -1,0 +1,9 @@
+using System.Console;
+
+void main()
+{
+    Console.WriteLine(-123);
+    Console.WriteLine(0);
+    Console.WriteLine(2147483647);
+    Console.WriteLine(-2147483648);
+}

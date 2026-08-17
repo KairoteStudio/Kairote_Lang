@@ -54,7 +54,10 @@ public static class Sys
         }
 
         bool negative = number < 0;
-        if (negative) number = 0 - number;
+        if (negative)
+        {
+            number = 0 - number;
+        }
 
         while (number > 0)
         {
