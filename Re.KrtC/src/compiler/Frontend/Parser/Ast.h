@@ -83,7 +83,6 @@ typedef enum {
     AST_ATTRIBUTE,               
     AST_ATTRIBUTE_LIST,
     AST_UNSAFE_CALL,
-    AST_POINT_BLOCK,
     AST_DEFAULT_EXPRESSION,
     AST_IS_EXPRESSION,
     AST_AS_EXPRESSION,
@@ -485,9 +484,6 @@ typedef struct ASTNode {
             int permission_count;
             int is_block;             
         } unsafe_call;
-        struct {
-            struct ASTNode* body;
-        } point_block;
         struct {
             char* type_name;
             struct ASTNode* type_expr;

@@ -56,9 +56,36 @@ static const int g_syscall_arg_reg_count = 4;
 #define KRO_SHADOW_SPACE_SIZE 32
 #endif
 
-static bool is_entry_point_function(const char* name) {
+static void sanitize_label_name(const char* name, char* out, size_t out_size) {
+    if (!name || !out || out_size == 0) return;
+    size_t j = 0;
+    for (size_t i = 0; name[i] && j < out_size - 1; i++) {
+        char c = name[i];
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || c == '_' || c == '$' || c == '.') {
+            out[j++] = c;
+        } else {
+            out[j++] = '_';
+        }
+    }
+    out[j] = '\0';
+}
+
+static bool kro_module_has_mangled_main(KrtIRModule* module) {
+    if (!module) return false;
+    KrtIRFunction* f = module->functions;
+    while (f) {
+        if (f->name && strcmp(f->name, "_KrtMainEntry") == 0) return true;
+        f = f->next;
+    }
+    return false;
+}
+
+static bool is_entry_point_function(const char* name, bool has_mangled_main) {
     if (!name) return false;
-    return (strcmp(name, "main") == 0 || strcmp(name, "_KrtMainEntry") == 0);
+    if (strcmp(name, "_KrtMainEntry") == 0) return true;
+    if (strcmp(name, "main") == 0 && !has_mangled_main) return true;
+    return false;
 }
 
 static void emit_byte(KROCodegenContext* ctx, uint8_t byte);
@@ -1024,10 +1051,11 @@ static void KroGenerateFunction(KROCodegenContext* ctx, KrtIRFunction* func, Krt
         }
     }
 
-    int is_entry_point = is_entry_point_function(func->name);
+    bool has_mangled_main = kro_module_has_mangled_main(module);
+    int is_entry_point = is_entry_point_function(func->name, has_mangled_main);
     int is_main = (strcmp(func->name, "main") == 0);
 
-    ctx->is_main_func = is_main;
+    ctx->is_main_func = is_entry_point;
     ctx->local_var_count = 0;
     ctx->current_stack_offset = 8;
     memset(ctx->local_vars, 0, sizeof(ctx->local_vars));
@@ -1063,16 +1091,14 @@ static void KroGenerateFunction(KROCodegenContext* ctx, KrtIRFunction* func, Krt
 
     bool has_explicit_return = false;
     KrtIRBasicBlock* block = func->entry_block;
-    fprintf(stderr, "[KroCodegen] Scanning function '%s' for RETURN instructions...\n",
-            func->name ? func->name : "(null)");
     while (block) {
-        fprintf(stderr, "[KroCodegen]   Block has %d instructions\n", block->inst_count);
-        for (int i = 0; i < block->inst_count; i++) {
-            KrtIRInst* inst = block->insts[i];
-            if (!inst) continue;
-            if (inst->opcode == KRT_IR_RETURN) {
+        KrtIRInst* scan_inst = block->first_inst;
+        while (scan_inst) {
+            if (scan_inst->opcode == KRT_IR_RETURN) {
                 has_explicit_return = true;
+                break;
             }
+            scan_inst = scan_inst->next;
         }
         KroGenerateBlock(ctx, block);
         block = block->next;
@@ -1124,7 +1150,33 @@ static void KroGenerateDataSection(KROCodegenContext* ctx, KrtIRModule* module) 
             if (!str) continue;
             uint32_t rodata_offset = kro_get_rodata_offset(ctx->writer);
 
-            kro_write_rodata(ctx->writer, str, (uint32_t)strlen(str) + 1);
+            char escaped[4096];
+            uint32_t escaped_len = 0;
+            if (str) {
+                size_t len = strlen(str);
+                for (size_t s = 0; s < len && escaped_len < sizeof(escaped) - 1; s++) {
+                    if (str[s] == '\\' && s + 1 < len) {
+                        s++;
+                        switch (str[s]) {
+                            case 'n':  escaped[escaped_len++] = '\n'; break;
+                            case 'r':  escaped[escaped_len++] = '\r'; break;
+                            case 't':  escaped[escaped_len++] = '\t'; break;
+                            case '\\': escaped[escaped_len++] = '\\'; break;
+                            case '"':  escaped[escaped_len++] = '"';  break;
+                            case '0':  escaped[escaped_len++] = '\0'; break;
+                            default:   escaped[escaped_len++] = '\\';
+                                       if (escaped_len < sizeof(escaped) - 1)
+                                           escaped[escaped_len++] = str[s];
+                                       break;
+                        }
+                    } else {
+                        escaped[escaped_len++] = str[s];
+                    }
+                }
+            }
+            escaped[escaped_len] = '\0';
+            escaped_len++;
+            kro_write_rodata(ctx->writer, escaped, escaped_len);
 
             char sym_name[64];
             snprintf(sym_name, sizeof(sym_name), "str_const_%d", i);
@@ -1236,13 +1288,15 @@ void KrtKrtGenerate(FILE* output_file, const char* output_filename, KrtIRModule*
          dbg_func = dbg_func->next;
      }
 
+     bool has_mangled_main = kro_module_has_mangled_main(module);
+
      KrtIRFunction* func = module->functions;
      while (func) {
          uint32_t func_offset = kro_get_code_offset(ctx.writer);
         int sym_idx = kro_add_symbol(ctx.writer, func->name, KRO_SYM_FUNC, KRO_BIND_GLOBAL, KRO_SEC_TEXT, func_offset);
         sym_indices[func_idx] = sym_idx;
 
-        if (is_entry_point_function(func->name)) {
+        if (is_entry_point_function(func->name, has_mangled_main)) {
             kro_set_entry_point(ctx.writer, func_offset);
         }
 
@@ -1271,7 +1325,7 @@ void KrtKrtGenerate(FILE* output_file, const char* output_filename, KrtIRModule*
 #endif
         }
 
-        if (is_entry_point_function(func->name)) {
+        if (is_entry_point_function(func->name, has_mangled_main)) {
             kro_set_entry_point(ctx.writer, actual_offset);
         }
 

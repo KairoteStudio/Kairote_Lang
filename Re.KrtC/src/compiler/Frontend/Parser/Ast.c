@@ -329,9 +329,6 @@ void ast_destroy_node(ASTNode* node) {
                 KRT_FREE(node->data.unsafe_call.permissions);
             }
             break;
-        case AST_POINT_BLOCK:
-            if (node->data.point_block.body) ast_destroy_node(node->data.point_block.body);
-            break;
         case AST_DEFAULT_EXPRESSION:
             if (node->data.default_expr.type_name) KRT_FREE(node->data.default_expr.type_name);
             if (node->data.default_expr.type_expr) ast_destroy_node(node->data.default_expr.type_expr);

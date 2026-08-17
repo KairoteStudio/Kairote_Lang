@@ -30,9 +30,3 @@ lsp/build/
 KrtC/version.json
 *.log
 *.tmp
-
-# Zig 构建产物
-.zig-cache/
-zig-out/
-.zig-out/
-Re.KrtC/build/

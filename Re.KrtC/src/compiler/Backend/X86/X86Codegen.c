@@ -289,6 +289,24 @@ typedef struct {
     CodegenContext* ctx;
 } Emitter;
 
+static int spill_rcx_if_used(Emitter* em) {
+    if (!em || !em->ctx) return 0;
+
+    for (int i = 0; i < em->ctx->temp_locations.capacity; i++) {
+        TempLocation* loc = &em->ctx->temp_locations.locations[i];
+        if (loc->type == TEMP_LOC_REGISTER && loc->reg && strcmp(loc->reg, "rcx") == 0) {
+            fprintf(em->output, "    push rcx\n");
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void restore_rcx_if_needed(Emitter* em, int was_spilled) {
+    if (!em || !was_spilled) return;
+    fprintf(em->output, "    pop rcx\n");
+}
+
 static void emit_load_value(Emitter* em, KrtIRValue* value, const char* target_reg) {
     switch (value->type) {
         case KRT_IR_VALUE_IMM: {
@@ -341,11 +359,32 @@ static void emit_store_result(Emitter* em, KrtIRValue* result, const char* sourc
     }
 }
 
+static void sanitize_label_name(const char* name, char* out, size_t out_size) {
+    if (!name || !out || out_size == 0) return;
+
+    size_t j = 0;
+    for (size_t i = 0; name[i] && j < out_size - 1; i++) {
+        char c = name[i];
+        if ((c >= 'a' && c <= 'z') ||
+            (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') ||
+            c == '_' || c == '$' || c == '.') {
+            out[j++] = c;
+        } else {
+            out[j++] = '_';
+        }
+    }
+    out[j] = '\0';
+}
+
 static void emit_binary_op(Emitter* em, KrtIROpcode op, KrtIRValue* lhs, KrtIRValue* rhs, KrtIRValue* result) {
     if (!em || !lhs || !rhs || !result) return;
 
     emit_load_value(em, lhs, "rax");
     emit_load_value(em, rhs, "r8");
+
+    char safe_name[256];
+    sanitize_label_name(em->ctx->current_func->name, safe_name, sizeof(safe_name));
 
     switch (op) {
         case KRT_IR_ADD: fprintf(em->output, "    add rax, r8\n"); break;
@@ -353,13 +392,13 @@ static void emit_binary_op(Emitter* em, KrtIROpcode op, KrtIRValue* lhs, KrtIRVa
         case KRT_IR_MUL: fprintf(em->output, "    imul rax, r8\n"); break;
         case KRT_IR_DIV:
             fprintf(em->output, "    test r8, r8\n");
-            fprintf(em->output, "    jz .Ldiv_by_zero_%s\n", em->ctx->current_func->name);
+            fprintf(em->output, "    jz .Ldiv_by_zero_%s\n", safe_name);
             fprintf(em->output, "    xor rdx, rdx\n");
             fprintf(em->output, "    idiv r8\n");
             break;
         case KRT_IR_MOD:
             fprintf(em->output, "    test r8, r8\n");
-            fprintf(em->output, "    jz .Ldiv_by_zero_%s\n", em->ctx->current_func->name);
+            fprintf(em->output, "    jz .Ldiv_by_zero_%s\n", safe_name);
             fprintf(em->output, "    xor rdx, rdx\n");
             fprintf(em->output, "    idiv r8\n");
             fprintf(em->output, "    mov rax, rdx\n");
@@ -515,7 +554,10 @@ static void emit_return(Emitter* em, KrtIRValue* value) {
     if (value && value->type != KRT_IR_VALUE_VOID) {
         emit_load_value(em, value, "rax");
     }
-    fprintf(em->output, "    jmp %s_epilogue\n", em->ctx->current_func->name);
+
+    char safe_name[256];
+    sanitize_label_name(em->ctx->current_func->name, safe_name, sizeof(safe_name));
+    fprintf(em->output, "    jmp %s_epilogue\n", safe_name);
 }
 
 static void emit_array_store(Emitter* em, KrtIRInst* inst) {
@@ -574,22 +616,26 @@ static void emit_instruction(Emitter* em, KrtIRInst* inst) {
             
         case KRT_IR_BRANCH:
             if (inst->operand_count >= 3) {
+                char safe_name[256];
+                sanitize_label_name(em->ctx->current_func->name, safe_name, sizeof(safe_name));
                 char true_label[X86_MAX_LABEL_LEN], false_label[X86_MAX_LABEL_LEN];
                 snprintf(true_label, sizeof(true_label), "%s_%s",
-                         em->ctx->current_func->name, inst->operands[1].data.name);
+                         safe_name, inst->operands[1].data.name);
                 true_label[sizeof(true_label) - 1] = '\0';
                 snprintf(false_label, sizeof(false_label), "%s_%s",
-                         em->ctx->current_func->name, inst->operands[2].data.name);
+                         safe_name, inst->operands[2].data.name);
                 false_label[sizeof(false_label) - 1] = '\0';
                 emit_branch(em, &inst->operands[0], true_label, false_label);
             }
             break;
-            
+
         case KRT_IR_JUMP:
             if (inst->operand_count >= 1) {
+                char safe_name[256];
+                sanitize_label_name(em->ctx->current_func->name, safe_name, sizeof(safe_name));
                 char label[X86_MAX_LABEL_LEN];
                 snprintf(label, sizeof(label), "%s_%s",
-                         em->ctx->current_func->name, inst->operands[0].data.name);
+                         safe_name, inst->operands[0].data.name);
                 label[sizeof(label) - 1] = '\0';
                 emit_jump(em, label);
             }
@@ -689,22 +735,26 @@ static void emit_instruction(Emitter* em, KrtIRInst* inst) {
             break;
             
         case KRT_IR_LSHIFT:
-            
+
             if (inst->operand_count >= 2) {
+                int rcx_spilled = spill_rcx_if_used(em);
                 emit_load_value(em, &inst->operands[0], "rax");
                 emit_load_value(em, &inst->operands[1], "rcx");
                 fprintf(em->output, "    shl rax, cl\n");
                 emit_store_result(em, &inst->result, "rax");
+                restore_rcx_if_needed(em, rcx_spilled);
             }
             break;
-            
+
         case KRT_IR_RSHIFT:
-            
+
             if (inst->operand_count >= 2) {
+                int rcx_spilled = spill_rcx_if_used(em);
                 emit_load_value(em, &inst->operands[0], "rax");
                 emit_load_value(em, &inst->operands[1], "rcx");
                 fprintf(em->output, "    sar rax, cl\n");
                 emit_store_result(em, &inst->result, "rax");
+                restore_rcx_if_needed(em, rcx_spilled);
             }
             break;
             
@@ -742,9 +792,12 @@ static void emit_instruction(Emitter* em, KrtIRInst* inst) {
 
 static void emit_basic_block(Emitter* em, KrtIRBasicBlock* block) {
     if (!block) return;
-    
-    fprintf(em->output, "%s_%s:\n", em->ctx->current_func->name, block->label);
-    
+
+    char safe_name[256];
+    sanitize_label_name(em->ctx->current_func->name, safe_name, sizeof(safe_name));
+
+    fprintf(em->output, "%s_%s:\n", safe_name, block->label);
+
     KrtIRInst* inst = block->first_inst;
     while (inst) {
         emit_instruction(em, inst);
@@ -757,25 +810,12 @@ static const char* callee_saved_regs[] = {"rbx", "r12", "r13", "r14", "r15"};
 
 static int collect_used_callee_saved_regs(CodegenContext* ctx, const char** used_regs) {
     int count = 0;
-    for (int i = 0; i < ctx->temp_locations.capacity && count < NUM_CALLEE_SAVED_REGS; i++) {
-        TempLocation* loc = &ctx->temp_locations.locations[i];
-        if (loc->type == TEMP_LOC_REGISTER) {
-            
-            for (int j = 0; j < NUM_CALLEE_SAVED_REGS; j++) {
-                if (strcmp(loc->reg, callee_saved_regs[j]) == 0) {
-                    
-                    int already_added = 0;
-                    for (int k = 0; k < count; k++) {
-                        if (strcmp(used_regs[k], loc->reg) == 0) {
-                            already_added = 1;
-                            break;
-                        }
-                    }
-                    if (!already_added) {
-                        used_regs[count++] = loc->reg;
-                    }
-                    break;
-                }
+    for (int j = 0; j < NUM_CALLEE_SAVED_REGS; j++) {
+        for (int i = 0; i < ctx->temp_locations.capacity; i++) {
+            TempLocation* loc = &ctx->temp_locations.locations[i];
+            if (loc->type == TEMP_LOC_REGISTER && strcmp(loc->reg, callee_saved_regs[j]) == 0) {
+                used_regs[count++] = callee_saved_regs[j];
+                break;
             }
         }
     }
@@ -817,11 +857,14 @@ static void emit_function_prologue(FILE* output, CodegenContext* ctx) {
 
 static void emit_function_epilogue(FILE* output, CodegenContext* ctx) {
     if (!output || !ctx) return;
-    
+
     const char* used_callee_saved[NUM_CALLEE_SAVED_REGS];
     int num_used = collect_used_callee_saved_regs(ctx, used_callee_saved);
 
-    fprintf(output, "%s_epilogue:\n", ctx->current_func->name);
+    char safe_name[256];
+    sanitize_label_name(ctx->current_func->name, safe_name, sizeof(safe_name));
+
+    fprintf(output, "%s_epilogue:\n", safe_name);
     fprintf(output, "    mov rsp, rbp\n");
 
     for (int i = num_used - 1; i >= 0; i--) {
@@ -860,10 +903,13 @@ static void emit_function(FILE* output, KrtIRFunction* func, KrtIRModule* module
 
     emit_function_epilogue(output, &ctx);
 
+    char safe_name[256];
+    sanitize_label_name(func->name, safe_name, sizeof(safe_name));
+
     if (func->uses_division || func->uses_modulo) {
-        fprintf(output, ".Ldiv_by_zero_%s:\n", func->name);
+        fprintf(output, ".Ldiv_by_zero_%s:\n", safe_name);
         fprintf(output, "    mov rax, -1\n");
-        fprintf(output, "    jmp %s_epilogue\n", func->name);
+        fprintf(output, "    jmp %s_epilogue\n", safe_name);
     }
 
     codegen_context_destroy(&ctx);
@@ -1003,8 +1049,8 @@ void KrtX86Generate(FILE* output, KrtIRModule* module) {
         fprintf(output, "    push rbp\n");
         fprintf(output, "    mov rbp, rsp\n");
         fprintf(output, "    call %s\n", module->main_function->name);
-        fprintf(output, "    mov rsp, rbp\n");
-        fprintf(output, "    pop rbp\n");
-        fprintf(output, "    ret\n");
+        fprintf(output, "    mov rdi, rax\n");
+        fprintf(output, "    mov rax, 60\n");
+        fprintf(output, "    syscall\n");
     }
 }

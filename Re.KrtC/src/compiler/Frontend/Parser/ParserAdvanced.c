@@ -107,6 +107,7 @@ ASTNode* parser_parse_class_declaration(Parser* parser) {
         for (int i=0; i<template_param_count; i++) ast_destroy_node(template_params[i]);
         return NULL;
     }
+    parser_advance(parser);
 
     char* saved_class = parser->current_class;
     parser->current_class = name;
@@ -121,6 +122,15 @@ ASTNode* parser_parse_class_declaration(Parser* parser) {
     }
 
     parser->current_class = saved_class;
+
+    if (parser->current_token.type != TOKEN_RIGHT_BRACE) {
+        ast_destroy_node(body);
+        KRT_FREE(name);
+        if (base_class) ast_destroy_node(base_class);
+        for (int i=0; i<template_param_count; i++) ast_destroy_node(template_params[i]);
+        return NULL;
+    }
+    parser_advance(parser);
 
     ASTNode* node = ast_create_node(AST_CLASS_DECLARATION, line, col);
     if (!node) {
