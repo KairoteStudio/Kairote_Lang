@@ -1,0 +1,263 @@
+
+
+// ============================================
+// String — 核心字符串操作
+// 纯 .krt 实现, 不依赖 C 运行时库
+// ============================================
+
+public static class StringOps
+{
+    // ========== 基础操作 ==========
+
+    // 获取字符串长度 (公开接口)
+    public static int32 Length(string s)
+    {
+        return (int32)Sys.InternalStringLength(s);
+    }
+
+    // 字符串拼接: a + b
+    public static string Concat(string a, string b)
+    {
+        if (a == null) a = "";
+        if (b == null) b = "";
+
+        int32 lenA = Length(a);
+        int32 lenB = Length(b);
+        int32 totalLen = lenA + lenB;
+
+        // 分配新缓冲区 (+1 for null terminator)
+        int64 buf = (int64)Memory.Allocate((int64)(totalLen + 1));
+
+        // 复制 a
+        Memory.Copy((void*)buf, (void*)Sys.InternalStringPtr(a), lenA);
+
+        // 复制 b
+        Memory.Copy((void*)(buf + (int64)lenA), (void*)Sys.InternalStringPtr(b), lenB);
+
+        // 添加 null terminator
+        char[] arr = (char[])buf;
+        arr[totalLen] = '\0';
+
+        return (string)buf;
+    }
+
+
+    // ========== 转换操作 ==========
+
+    // int32 转字符串
+    public static string FromInt32(int32 value)
+    {
+        return Sys.InternalInt32ToString(value);
+    }
+
+    // int64 转字符串
+    public static string FromInt64(int64 value)
+    {
+        if (value == 0) return "0";
+
+        int64 v = value;
+        int32 negative = 0;
+        if (v < 0)
+        {
+            negative = 1;
+            v = -v;
+        }
+
+        // 计算位数
+        int64 temp = v;
+        int32 digits = 0;
+        while (temp > 0)
+        {
+            digits = digits + 1;
+            temp = temp / 10;
+        }
+
+        int32 totalLen = digits + negative;
+        int64 buf = (int64)Memory.Allocate((int64)(totalLen + 1));
+        char[] arr = (char[])buf;
+
+        // 从后往前填充数字
+        int32 pos = totalLen - 1;
+        temp = v;
+        while (temp > 0)
+        {
+            int32 digit = (int32)(temp % 10);
+            arr[pos] = (char)((int32)'0' + digit);
+            pos = pos - 1;
+            temp = temp / 10;
+        }
+
+        // 添加负号
+        if (negative == 1)
+        {
+            arr[0] = '-';
+        }
+
+        // null terminator
+        arr[totalLen] = '\0';
+
+        return (string)buf;
+    }
+
+    // ========== 比较操作 ==========
+
+    // 快速字符串比较
+    // 返回: 0 = 相等, <0 = s1 < s2, >0 = s1 > s2
+    public static int32 Compare(string s1, string s2)
+    {
+        if (s1 == s2) return 0;
+        if (s1 == null) return -1;
+        if (s2 == null) return 1;
+
+        int32 len1 = Length(s1);
+        int32 len2 = Length(s2);
+        int32 minLen = len1 < len2 ? len1 : len2;
+
+        int64 ptr1 = Sys.InternalStringPtr(s1);
+        int64 ptr2 = Sys.InternalStringPtr(s2);
+        char[] arr1 = (char[])ptr1;
+        char[] arr2 = (char[])ptr2;
+
+        int32 i = 0;
+        while (i < minLen)
+        {
+            if (arr1[i] != arr2[i])
+            {
+                return (int32)arr1[i] - (int32)arr2[i];
+            }
+            i = i + 1;
+        }
+
+        return len1 - len2;
+    }
+
+    // 判断字符串是否相等
+    public static bool Equals(string s1, string s2)
+    {
+        return Compare(s1, s2) == 0;
+    }
+
+    // ========== 查找操作 ==========
+
+    // 查找字符首次出现的位置
+    public static int32 IndexOf(string s, char c)
+    {
+        if (s == null) return -1;
+
+        int32 len = Length(s);
+        int64 ptr = Sys.InternalStringPtr(s);
+        char[] arr = (char[])ptr;
+
+        int32 i = 0;
+        while (i < len)
+        {
+            if (arr[i] == c) return i;
+            i = i + 1;
+        }
+
+        return -1;
+    }
+
+    // 查找字符最后一次出现的位置
+    public static int32 LastIndexOf(string s, char c)
+    {
+        if (s == null) return -1;
+
+        int32 len = Length(s);
+        int64 ptr = Sys.InternalStringPtr(s);
+        char[] arr = (char[])ptr;
+
+        int32 i = len - 1;
+        while (i >= 0)
+        {
+            if (arr[i] == c) return i;
+            i = i - 1;
+        }
+
+        return -1;
+    }
+
+    // ========== 子串操作 ==========
+
+    // 提取子串
+    public static string Substring(string s, int32 start)
+    {
+        if (s == null) return null;
+        int32 len = Length(s);
+        if (start < 0) start = 0;
+        if (start >= len) return "";
+        return Substring(s, start, len - start);
+    }
+
+    public static string Substring(string s, int32 start, int32 length)
+    {
+        if (s == null) return null;
+
+        int32 len = Length(s);
+        if (start < 0) start = 0;
+        if (start >= len) return "";
+        if (length < 0) length = 0;
+        if (start + length > len) length = len - start;
+
+        int64 buf = (int64)Memory.Allocate((int64)(length + 1));
+        Memory.Copy((void*)buf, (void*)(Sys.InternalStringPtr(s) + (int64)start), length);
+
+        char[] arr = (char[])buf;
+        arr[length] = '\0';
+
+        return (string)buf;
+    }
+
+
+
+    // ========== 判断操作 ==========
+
+    // 判断是否以指定前缀开头
+    public static bool StartsWith(string s, string prefix)
+    {
+        if (s == null || prefix == null) return false;
+
+        int32 lenS = Length(s);
+        int32 lenP = Length(prefix);
+        if (lenP > lenS) return false;
+
+        int64 ptrS = Sys.InternalStringPtr(s);
+        int64 ptrP = Sys.InternalStringPtr(prefix);
+        char[] arrS = (char[])ptrS;
+        char[] arrP = (char[])ptrP;
+
+        int32 i = 0;
+        while (i < lenP)
+        {
+            if (arrS[i] != arrP[i]) return false;
+            i = i + 1;
+        }
+
+        return true;
+    }
+
+    // 判断是否以指定后缀结尾
+    public static bool EndsWith(string s, string suffix)
+    {
+        if (s == null || suffix == null) return false;
+
+        int32 lenS = Length(s);
+        int32 lenSu = Length(suffix);
+        if (lenSu > lenS) return false;
+
+        int32 offset = lenS - lenSu;
+        int64 ptrS = Sys.InternalStringPtr(s);
+        int64 ptrSu = Sys.InternalStringPtr(suffix);
+        char[] arrS = (char[])ptrS;
+        char[] arrSu = (char[])ptrSu;
+
+        int32 i = 0;
+        while (i < lenSu)
+        {
+            if (arrS[offset + i] != arrSu[i]) return false;
+            i = i + 1;
+        }
+
+        return true;
+    }
+}

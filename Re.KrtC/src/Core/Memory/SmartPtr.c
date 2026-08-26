@@ -1,6 +1,4 @@
-#include "SmartPtr.h"
 #include "../Utils/KrtCommon.h"
-#include "../Utils/Logger.h"
 #include <string.h>
 #include <assert.h>
 #include <stdlib.h>

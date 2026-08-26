@@ -1,0 +1,4 @@
+
+function main()
+  entry:
+    t0 = return 0

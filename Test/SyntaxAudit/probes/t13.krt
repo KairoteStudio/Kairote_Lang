@@ -1,0 +1,23 @@
+public static extern int64 syscall(int64 n, int64 a1, int64 a2, int64 a3, int64 a4, int64 a5, int64 a6);
+class T {
+    public static int64 Probe(int32 value) {
+        int64 buffer = syscall(9, 0, 12, 3, 34, -1, 0);
+        if (buffer < 0) { return 0; }
+        char[] chars = (char[])buffer;
+        int32 index = 11;
+        if (value == 0) { chars[10] = 48; return buffer + 10; }
+        int64 number = value;
+        while (number > 0) {
+            int32 digit = number % 10;
+            index = index - 1;
+            chars[index] = 48 + digit;
+            number = number / 10;
+        }
+        return buffer + index;
+    }
+}
+function main() {
+    int64 p = T.Probe(42);
+    syscall(1, 1, p, 2, 0, 0, 0);
+    Console.Write("\n");
+}

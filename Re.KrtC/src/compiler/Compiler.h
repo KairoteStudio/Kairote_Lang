@@ -7,7 +7,6 @@
 #include "Frontend/Semantic/SemanticAnalyzer.h"
 #include "Frontend/Semantic/SymbolTable.h"
 #include "Frontend/Semantic/Generics.h"
-#include "Frontend/Semantic/TypeChecker.h"
 #include "Frontend/Semantic/NameMangling.h"
 #include "Middle/Ir/Ir.h"
 #include "Backend/X86/X86Codegen.h"

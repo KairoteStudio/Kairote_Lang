@@ -1,0 +1,586 @@
+str0 = ""
+str1 = ""
+str2 = ""
+str3 = "0"
+str4 = ""
+str5 = ""
+
+function _ZN9StringOps6LengthEr(s)
+  entry:
+    t1 = call _ZN3Sys20InternalStringLengthEr arg0
+    t3 = cast t1 80
+    t4 = return t3
+
+function _ZN9StringOps6ConcatErr(a, b)
+  entry:
+    t6 = eq arg0 void
+    t7 = branch t6
+  if_true_0:
+    a = copy str0
+    t9 = jump
+  if_false_1:
+    t10 = jump
+  if_end_2:
+    t12 = eq arg1 void
+    t13 = branch t12
+  if_true_3:
+    b = copy str1
+    t15 = jump
+  if_false_4:
+    t16 = jump
+  if_end_5:
+    t18 = call _ZN9StringOps6LengthEr arg0
+    lenA = copy t18
+    t21 = call _ZN9StringOps6LengthEr arg1
+    lenB = copy t21
+    t24 = add lenA lenB
+    totalLen = copy t24
+    t27 = add totalLen 1
+    t29 = cast t27 81
+    t31 = call _ZN6Memory8AllocateEl t29
+    t33 = cast t31 81
+    buf = copy t33
+    t36 = call _ZN3Sys17InternalStringPtrEr arg0
+    t38 = call _ZN6Memory4CopyEvvi buf t36 lenA
+    t40 = cast lenA 81
+    t42 = add buf t40
+    t44 = call _ZN3Sys17InternalStringPtrEr arg1
+    t46 = call _ZN6Memory4CopyEvvi t42 t44 lenB
+    arr = copy buf
+    t48 = array_store arr totalLen 0 1
+    t50 = cast buf 5
+    t51 = return t50
+
+function _ZN9StringOps14ConcatMultipleEr(parts)
+  entry:
+    t53 = eq arg0 void
+    t54 = branch t53
+    __log_0 = copy 1
+  or_rhs_0:
+    t57 = call _ZN5parts6LengthEv
+    t59 = eq t57 0
+    __log_0 = copy t59
+    t61 = jump
+  or_short_0:
+    t62 = jump
+  or_end_0:
+    t63 = branch __log_0
+  if_true_6:
+    t64 = return str2
+  if_false_7:
+    t65 = jump
+  if_end_8:
+    totalLen = copy 0
+    i = copy 0
+    t68 = jump
+  while_cond_9:
+    t70 = call _ZN5parts6LengthEv
+    t72 = lt i t70
+    t73 = branch t72
+  while_body_10:
+    t75 = mul i 8
+    t77 = add arg0 t75
+    t79 = loadptr t77 0 8
+    t81 = ne t79 void
+    t82 = branch t81
+  while_end_11:
+    t101 = add totalLen 1
+    t103 = cast t101 81
+    t105 = call _ZN6Memory8AllocateEl t103
+    t107 = cast t105 81
+    buf = copy t107
+    offset = copy 0
+    i = copy 0
+    t111 = jump
+  if_true_12:
+    t84 = mul i 8
+    t86 = add arg0 t84
+    t88 = loadptr t86 0 8
+    t90 = call _ZN9StringOps6LengthEr t88
+    t92 = add totalLen t90
+    totalLen = copy t92
+    t94 = jump
+  if_false_13:
+    t95 = jump
+  if_end_14:
+    t97 = add i 1
+    i = copy t97
+    t99 = jump
+  while_cond_15:
+    t113 = call _ZN5parts6LengthEv
+    t115 = lt i t113
+    t116 = branch t115
+  while_body_16:
+    t118 = mul i 8
+    t120 = add arg0 t118
+    t122 = loadptr t120 0 8
+    t124 = ne t122 void
+    t125 = branch t124
+  while_end_17:
+    arr = copy buf
+    t159 = array_store arr totalLen 0 1
+    t161 = cast buf 5
+    t162 = return t161
+  if_true_18:
+    t127 = mul i 8
+    t129 = add arg0 t127
+    t131 = loadptr t129 0 8
+    t133 = call _ZN9StringOps6LengthEr t131
+    len = copy t133
+    t136 = cast offset 81
+    t138 = add buf t136
+    t140 = mul i 8
+    t142 = add arg0 t140
+    t144 = loadptr t142 0 8
+    t146 = call _ZN3Sys17InternalStringPtrEr t144
+    t148 = call _ZN6Memory4CopyEvvi t138 t146 len
+    t150 = add offset len
+    offset = copy t150
+    t152 = jump
+  if_false_19:
+    t153 = jump
+  if_end_20:
+    t155 = add i 1
+    i = copy t155
+    t157 = jump
+
+function _ZN9StringOps9FromInt32Ei(value)
+  entry:
+    t164 = call _ZN3Sys21InternalInt32ToStringEi arg0
+    t165 = return t164
+
+function _ZN9StringOps9FromInt64El(value)
+  entry:
+    t167 = eq arg0 0
+    t168 = branch t167
+  if_true_21:
+    t169 = return str3
+  if_false_22:
+    t170 = jump
+  if_end_23:
+    v = copy arg0
+    negative = copy 0
+    t174 = lt v 0
+    t175 = branch t174
+  if_true_24:
+    negative = copy 1
+    t178 = sub 0 v
+    v = copy t178
+    t180 = jump
+  if_false_25:
+    t181 = jump
+  if_end_26:
+    temp = copy v
+    digits = copy 0
+    t184 = jump
+  while_cond_27:
+    t186 = gt temp 0
+    t187 = branch t186
+  while_body_28:
+    t189 = add digits 1
+    digits = copy t189
+    t192 = div temp 10
+    temp = copy t192
+    t194 = jump
+  while_end_29:
+    t196 = add digits negative
+    totalLen = copy t196
+    t199 = add totalLen 1
+    t201 = cast t199 81
+    t203 = call _ZN6Memory8AllocateEl t201
+    t205 = cast t203 81
+    buf = copy t205
+    arr = copy buf
+    t209 = sub totalLen 1
+    pos = copy t209
+    temp = copy v
+    t212 = jump
+  while_cond_30:
+    t214 = gt temp 0
+    t215 = branch t214
+  while_body_31:
+    t217 = mod temp 10
+    t219 = cast t217 80
+    digit = copy t219
+    t222 = add 48 digit
+    t224 = cast t222 80
+    t225 = array_store arr pos t224 1
+    t227 = sub pos 1
+    pos = copy t227
+    t230 = div temp 10
+    temp = copy t230
+    t232 = jump
+  while_end_32:
+    t234 = eq negative 1
+    t235 = branch t234
+  if_true_33:
+    t236 = array_store arr 0 45 1
+    t237 = jump
+  if_false_34:
+    t238 = jump
+  if_end_35:
+    t239 = array_store arr totalLen 0 1
+    t241 = cast buf 5
+    t242 = return t241
+
+function _ZN9StringOps7CompareErr(s1, s2)
+  entry:
+    t244 = eq arg0 arg1
+    t245 = branch t244
+  if_true_36:
+    t246 = return 0
+  if_false_37:
+    t247 = jump
+  if_end_38:
+    t249 = eq arg0 void
+    t250 = branch t249
+  if_true_39:
+    t252 = imm -1
+    t253 = return t252
+  if_false_40:
+    t254 = jump
+  if_end_41:
+    t256 = eq arg1 void
+    t257 = branch t256
+  if_true_42:
+    t258 = return 1
+  if_false_43:
+    t259 = jump
+  if_end_44:
+    t261 = call _ZN9StringOps6LengthEr arg0
+    len1 = copy t261
+    t264 = call _ZN9StringOps6LengthEr arg1
+    len2 = copy t264
+    t267 = lt len1 len2
+    t268 = branch t267
+  ternary_true_45:
+    t269 = jump
+  ternary_false_46:
+    t270 = jump
+  ternary_end_47:
+    t272 = phi len1 len2
+    minLen = copy t272
+    t275 = call _ZN3Sys17InternalStringPtrEr arg0
+    ptr1 = copy t275
+    t278 = call _ZN3Sys17InternalStringPtrEr arg1
+    ptr2 = copy t278
+    arr1 = copy ptr1
+    arr2 = copy ptr2
+    i = copy 0
+    t283 = jump
+  while_cond_48:
+    t285 = lt i minLen
+    t286 = branch t285
+  while_body_49:
+    t288 = add arr1 i
+    t290 = loadptr t288 0 1
+    t292 = add arr2 i
+    t294 = loadptr t292 0 1
+    t296 = ne t290 t294
+    t297 = branch t296
+  while_end_50:
+    t319 = sub len1 len2
+    t320 = return t319
+  if_true_51:
+    t299 = add arr1 i
+    t301 = loadptr t299 0 1
+    t303 = add arr2 i
+    t305 = loadptr t303 0 1
+    t307 = cast t305 80
+    t309 = sub t301 t307
+    t311 = cast t309 80
+    t312 = return t311
+  if_false_52:
+    t313 = jump
+  if_end_53:
+    t315 = add i 1
+    i = copy t315
+    t317 = jump
+
+function _ZN9StringOps6EqualsErr(s1, s2)
+  entry:
+    t322 = call _ZN9StringOps7CompareErr arg0 arg1
+    t324 = eq t322 0
+    t325 = return t324
+
+function _ZN9StringOps7IndexOfErx(s, c)
+  entry:
+    t327 = eq arg0 void
+    t328 = branch t327
+  if_true_54:
+    t330 = imm -1
+    t331 = return t330
+  if_false_55:
+    t332 = jump
+  if_end_56:
+    t334 = call _ZN9StringOps6LengthEr arg0
+    len = copy t334
+    t337 = call _ZN3Sys17InternalStringPtrEr arg0
+    ptr = copy t337
+    arr = copy ptr
+    i = copy 0
+    t341 = jump
+  while_cond_57:
+    t343 = lt i len
+    t344 = branch t343
+  while_body_58:
+    t346 = add arr i
+    t348 = loadptr t346 0 1
+    t350 = eq t348 arg1
+    t351 = branch t350
+  while_end_59:
+    t359 = imm -1
+    t360 = return t359
+  if_true_60:
+    t352 = return i
+  if_false_61:
+    t353 = jump
+  if_end_62:
+    t355 = add i 1
+    i = copy t355
+    t357 = jump
+
+function _ZN9StringOps11LastIndexOfErx(s, c)
+  entry:
+    t362 = eq arg0 void
+    t363 = branch t362
+  if_true_63:
+    t365 = imm -1
+    t366 = return t365
+  if_false_64:
+    t367 = jump
+  if_end_65:
+    t369 = call _ZN9StringOps6LengthEr arg0
+    len = copy t369
+    t372 = call _ZN3Sys17InternalStringPtrEr arg0
+    ptr = copy t372
+    arr = copy ptr
+    t376 = sub len 1
+    i = copy t376
+    t378 = jump
+  while_cond_66:
+    t380 = ge i 0
+    t381 = branch t380
+  while_body_67:
+    t383 = add arr i
+    t385 = loadptr t383 0 1
+    t387 = eq t385 arg1
+    t388 = branch t387
+  while_end_68:
+    t396 = imm -1
+    t397 = return t396
+  if_true_69:
+    t389 = return i
+  if_false_70:
+    t390 = jump
+  if_end_71:
+    t392 = sub i 1
+    i = copy t392
+    t394 = jump
+
+function _ZN9StringOps9SubstringEri(s, start)
+  entry:
+    t399 = eq arg0 void
+    t400 = branch t399
+  if_true_72:
+    t401 = return void
+  if_false_73:
+    t402 = jump
+  if_end_74:
+    t404 = call _ZN9StringOps6LengthEr arg0
+    len = copy t404
+    t407 = lt arg1 0
+    t408 = branch t407
+  if_true_75:
+    start = copy 0
+    t410 = jump
+  if_false_76:
+    t411 = jump
+  if_end_77:
+    t413 = ge arg1 len
+    t414 = branch t413
+  if_true_78:
+    t415 = return str4
+  if_false_79:
+    t416 = jump
+  if_end_80:
+    t418 = sub len arg1
+    t420 = call _ZN9StringOps9SubstringErii arg0 arg1 t418
+    t421 = return t420
+
+function _ZN9StringOps9SubstringErii(s, start, length)
+  entry:
+    t423 = eq arg0 void
+    t424 = branch t423
+  if_true_81:
+    t425 = return void
+  if_false_82:
+    t426 = jump
+  if_end_83:
+    t428 = call _ZN9StringOps6LengthEr arg0
+    len = copy t428
+    t431 = lt arg1 0
+    t432 = branch t431
+  if_true_84:
+    start = copy 0
+    t434 = jump
+  if_false_85:
+    t435 = jump
+  if_end_86:
+    t437 = ge arg1 len
+    t438 = branch t437
+  if_true_87:
+    t439 = return str5
+  if_false_88:
+    t440 = jump
+  if_end_89:
+    t442 = lt arg2 0
+    t443 = branch t442
+  if_true_90:
+    length = copy 0
+    t445 = jump
+  if_false_91:
+    t446 = jump
+  if_end_92:
+    t448 = add arg1 arg2
+    t450 = gt t448 len
+    t451 = branch t450
+  if_true_93:
+    t453 = sub len arg1
+    length = copy t453
+    t455 = jump
+  if_false_94:
+    t456 = jump
+  if_end_95:
+    t458 = add arg2 1
+    t460 = cast t458 81
+    t462 = call _ZN6Memory8AllocateEl t460
+    t464 = cast t462 81
+    buf = copy t464
+    t467 = call _ZN3Sys17InternalStringPtrEr arg0
+    t469 = cast arg1 81
+    t471 = add t467 t469
+    t473 = call _ZN6Memory4CopyEvvi buf t471 arg2
+    arr = copy buf
+    t475 = array_store arr arg2 0 1
+    t477 = cast buf 5
+    t478 = return t477
+
+function _ZN9StringOps10StartsWithErr(s, prefix)
+  entry:
+    t480 = eq arg0 void
+    t481 = branch t480
+    __log_1 = copy 1
+  or_rhs_1:
+    t484 = eq arg1 void
+    __log_1 = copy t484
+    t486 = jump
+  or_short_1:
+    t487 = jump
+  or_end_1:
+    t488 = branch __log_1
+  if_true_96:
+    t489 = return 0
+  if_false_97:
+    t490 = jump
+  if_end_98:
+    t492 = call _ZN9StringOps6LengthEr arg0
+    lenS = copy t492
+    t495 = call _ZN9StringOps6LengthEr arg1
+    lenP = copy t495
+    t498 = gt lenP lenS
+    t499 = branch t498
+  if_true_99:
+    t500 = return 0
+  if_false_100:
+    t501 = jump
+  if_end_101:
+    t503 = call _ZN3Sys17InternalStringPtrEr arg0
+    ptrS = copy t503
+    t506 = call _ZN3Sys17InternalStringPtrEr arg1
+    ptrP = copy t506
+    arrS = copy ptrS
+    arrP = copy ptrP
+    i = copy 0
+    t511 = jump
+  while_cond_102:
+    t513 = lt i lenP
+    t514 = branch t513
+  while_body_103:
+    t516 = add arrS i
+    t518 = loadptr t516 0 1
+    t520 = add arrP i
+    t522 = loadptr t520 0 1
+    t524 = ne t518 t522
+    t525 = branch t524
+  while_end_104:
+    t532 = return 1
+  if_true_105:
+    t526 = return 0
+  if_false_106:
+    t527 = jump
+  if_end_107:
+    t529 = add i 1
+    i = copy t529
+    t531 = jump
+
+function _ZN9StringOps8EndsWithErr(s, suffix)
+  entry:
+    t534 = eq arg0 void
+    t535 = branch t534
+    __log_2 = copy 1
+  or_rhs_2:
+    t538 = eq arg1 void
+    __log_2 = copy t538
+    t540 = jump
+  or_short_2:
+    t541 = jump
+  or_end_2:
+    t542 = branch __log_2
+  if_true_108:
+    t543 = return 0
+  if_false_109:
+    t544 = jump
+  if_end_110:
+    t546 = call _ZN9StringOps6LengthEr arg0
+    lenS = copy t546
+    t549 = call _ZN9StringOps6LengthEr arg1
+    lenSu = copy t549
+    t552 = gt lenSu lenS
+    t553 = branch t552
+  if_true_111:
+    t554 = return 0
+  if_false_112:
+    t555 = jump
+  if_end_113:
+    t557 = sub lenS lenSu
+    offset = copy t557
+    t560 = call _ZN3Sys17InternalStringPtrEr arg0
+    ptrS = copy t560
+    t563 = call _ZN3Sys17InternalStringPtrEr arg1
+    ptrSu = copy t563
+    arrS = copy ptrS
+    arrSu = copy ptrSu
+    i = copy 0
+    t568 = jump
+  while_cond_114:
+    t570 = lt i lenSu
+    t571 = branch t570
+  while_body_115:
+    t573 = add offset i
+    t575 = add arrS t573
+    t577 = loadptr t575 0 1
+    t579 = add arrSu i
+    t581 = loadptr t579 0 1
+    t583 = ne t577 t581
+    t584 = branch t583
+  while_end_116:
+    t591 = return 1
+  if_true_117:
+    t585 = return 0
+  if_false_118:
+    t586 = jump
+  if_end_119:
+    t588 = add i 1
+    i = copy t588
+    t590 = jump

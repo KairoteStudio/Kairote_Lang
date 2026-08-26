@@ -5,40 +5,30 @@
 #include <stdbool.h>
 #include <stdio.h>
 
-#define KRO_MAGIC    0x4F524B41u
-#define KRO_VERSION  1
-
+#define KRO_MAGIC       0x004F524B
+#define KRO_VERSION     2
 #define KRO_ARCH_X86_64  0x8664
 #define KRO_ARCH_ARM64   0xAA64
-
-#define KRO_SEC_COUNT    4
 
 typedef enum {
     KRO_SEC_UNDEF  = 0,
     KRO_SEC_TEXT   = 1,
-    KRO_SEC_DATA   = 2,
-    KRO_SEC_RODATA = 3,
+    KRO_SEC_RODATA = 2,
+    KRO_SEC_DATA   = 3,
     KRO_SEC_BSS    = 4,
 } KROSectionIndex;
-
-#define KRO_SECF_READ    0x01
-#define KRO_SECF_WRITE   0x02
-#define KRO_SECF_EXEC    0x04
-#define KRO_SECF_BSS     0x08
-
-#define KRO_SYM_NOTYPE   0
-#define KRO_SYM_FUNC     1
-#define KRO_SYM_OBJECT   2
 
 #define KRO_BIND_LOCAL   0
 #define KRO_BIND_GLOBAL  1
 #define KRO_BIND_WEAK    2
 
+#define KRO_SYM_NOTYPE   0
+#define KRO_SYM_FUNC     1
+#define KRO_SYM_OBJECT   2
+
 #define KRO_RELOC_ABS64  1
 #define KRO_RELOC_ADDR32 2
 #define KRO_RELOC_PC32   3
-
-#define KRO_FLAG_IMPORT  0x8000
 
 #pragma pack(push, 1)
 
@@ -47,29 +37,36 @@ typedef struct {
     uint32_t version;
     uint32_t flags;
     uint32_t entry_point;
-    uint64_t code_size;
-    uint64_t data_size;
-    uint64_t rodata_size;
-    uint64_t symbol_count;
-    uint64_t reloc_count;
+    uint32_t text_size;
+    uint32_t rodata_size;
+    uint32_t data_size;
+    uint32_t bss_size;
+    uint32_t text_reloc_count;
+    uint32_t rodata_reloc_count;
+    uint32_t data_reloc_count;
+    uint32_t bss_align;
+    uint32_t sym_count;
+    uint32_t strtab_size;
+    uint32_t total_reloc_count;
+    uint32_t reserved;
 } KROHeader;
 
 typedef struct {
     uint32_t name_offset;
+    uint32_t value;
+    uint32_t size;
     uint32_t section;
-    uint64_t value;
-    uint64_t size;
     uint32_t binding;
-    uint32_t visibility;
-    uint32_t import_module_offset;
+    uint32_t type;
+    uint32_t flags;
+    uint32_t reserved;
 } KROSymbol;
 
 typedef struct {
     uint32_t offset;
-    uint32_t type;
     uint32_t sym_idx;
-    int32_t addend;
-    uint32_t section_index;
+    uint32_t type;
+    int32_t  addend;
 } KRORelocation;
 
 #pragma pack(pop)
@@ -96,7 +93,7 @@ int kro_find_symbol(KROWriter* writer, const char* name);
 void kro_update_symbol_value(KROWriter* writer, int sym_idx, uint64_t value);
 
 void kro_add_reloc(KROWriter* writer, uint32_t sec_idx, uint64_t offset,
-                  uint32_t sym_idx, uint16_t type, int16_t addend);
+                   uint32_t sym_idx, uint16_t type, int16_t addend);
 
 bool kro_set_entry_point(KROWriter* writer, uint64_t offset);
 

@@ -3,13 +3,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include "Accelerator.h"
-#include "Core/Utils/KrtCommon.h"
-#include "Core/Memory/Arena.h"
-#include "Parser.h"
 #include "ParserBase.h"
 #include "ParserExpression.h"
 #include "ParserStatement.h"
-#include "../Lexer/Tokenizer.h"
 
 #define PARSER_MALLOC(size) KRT_MALLOC(size)
 #define PARSER_REALLOC(ptr, size) KRT_REALLOC(ptr, size)
@@ -19,9 +15,6 @@
 
 #define PARSER_CREATE_NODE(type, line, col) ast_create_node_arena(type, line, col, parser->arena)
 #define PARSER_STRDUP(s) arena_strdup(parser->arena, s)
-
-#undef ast_create_node
-#define ast_create_node(type, line, col) ast_create_node_arena(type, line, col, parser->arena)
 
 static __attribute__((unused)) char* arena_strdup(KrtArena* arena, const char* str) {
     if (!str) return NULL;

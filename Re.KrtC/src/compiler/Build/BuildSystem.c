@@ -1,6 +1,5 @@
 #include "BuildSystem.h"
 #include "../Driver/ArkLinkIntegration.h"
-#include "../../Core/Utils/KrtCommon.h"
 #include <string.h>
 #include <stdio.h>
 

@@ -6,9 +6,6 @@ extern void* memset(void* s, int c, size_t n);
 
 #include <string.h>
 #include "CompilerPipeline.h"
-#include "../../Core/Utils/Logger.h"
-#include "../../Core/Utils/KrtCommon.h"
-#include "../Frontend/Semantic/Generics.h"
 #include "../Frontend/Semantic/NameMangling.h"
 #include "../Driver/ConsoleUtils.h"
 #include <stdlib.h>
@@ -47,11 +44,7 @@ static const char* KrtCompileStageNamesEnglish[] = {
     "Complete"
 };
 
-struct TypeCheckContext;
-typedef struct TypeCheckContext TypeCheckContext;
-TypeCheckContext* type_check_context_create(void* semantic_analyzer);
-void type_check_context_destroy(TypeCheckContext* context);
-int type_check_program(TypeCheckContext* context, ASTNode* ast);
+
 
 static void load_standard_macros(Preprocessor* preprocessor) {
     if (!preprocessor) return;
@@ -329,9 +322,6 @@ void KrtCompilePipelineDestroy(KrtCompilePipeline* pipeline) {
     if (pipeline->compiler) {
         KrtCompilerDestroy(pipeline->compiler);
     }
-    if (pipeline->type_context) {
-        type_check_context_destroy(pipeline->type_context);
-    }
     if (pipeline->semantic_analyzer) {
         semantic_analyzer_destroy(pipeline->semantic_analyzer);
         pipeline->semantic_analyzer = NULL;
@@ -477,6 +467,16 @@ int KrtCompilePipelineLex(KrtCompilePipeline* pipeline) {
         return 0;
     }
     
+    if (pipeline->lexer->error_count > 0) {
+        snprintf(pipeline->error_message, sizeof(pipeline->error_message),
+                "unterminated string or character literal near line %d",
+                pipeline->lexer->error_line);
+        pipeline->success = 0;
+        record_stage_result(pipeline, KRT_STAGE_LEX, KRT_RESULT_FAILED,
+                           (double)(clock() - start) / CLOCKS_PER_SEC, pipeline->input_file);
+        return 0;
+    }
+
     record_stage_result(pipeline, KRT_STAGE_LEX, KRT_RESULT_SUCCESS, 
                        (double)(clock() - start) / CLOCKS_PER_SEC, pipeline->input_file);
     return 1;
@@ -497,7 +497,17 @@ int KrtCompilePipelineParse(KrtCompilePipeline* pipeline) {
         return 0;
     }
     
+    pipeline->parser->source_name = pipeline->input_file ? pipeline->input_file : NULL;
     pipeline->ast = parser_parse(pipeline->parser);
+
+    if (pipeline->ast && pipeline->parser->error_count > 0) {
+        snprintf(pipeline->error_message, sizeof(pipeline->error_message),
+                "语法错误 %d 处: %s", pipeline->parser->error_count, pipeline->input_file);
+        pipeline->success = 0;
+        record_stage_result(pipeline, KRT_STAGE_PARSE, KRT_RESULT_FAILED,
+                           (double)(clock() - start) / CLOCKS_PER_SEC, pipeline->input_file);
+        return 0;
+    }
     
     if (!pipeline->ast) {
         snprintf(pipeline->error_message, sizeof(pipeline->error_message), 
@@ -529,6 +539,13 @@ int KrtCompilePipelineSemantic(KrtCompilePipeline* pipeline) {
     }
 
     semantic_analyzer_set_input_file(pipeline->semantic_analyzer, pipeline->input_file);
+    {
+        const char* of = pipeline->output_file;
+        size_t ol = of ? strlen(of) : 0;
+        if (ol >= 4 && strcmp(of + ol - 4, ".kro") == 0) {
+            pipeline->semantic_analyzer->require_entry_point = false;
+        }
+    }
     semantic_analyzer_set_pipeline(pipeline->semantic_analyzer, pipeline);
 
     pipeline->semantic_result = semantic_analyzer_analyze(pipeline->semantic_analyzer, pipeline->ast);
@@ -555,39 +572,9 @@ int KrtCompilePipelineSemantic(KrtCompilePipeline* pipeline) {
     return 1;
 }
 
-int KrtCompilePipelineTypeCheck(KrtCompilePipeline* pipeline) {
-    if (!pipeline || !pipeline->ast) {
-        return 0;
-    }
-
-    clock_t start = clock();
-
-    pipeline->type_context = type_check_context_create(pipeline->semantic_analyzer);
-    if (!pipeline->type_context) {
-        snprintf(pipeline->error_message, sizeof(pipeline->error_message),
-                "类型检查上下文创建失败: %s", pipeline->input_file);
-        pipeline->success = 0;
-        record_stage_result(pipeline, KRT_STAGE_TYPE_CHECK, KRT_RESULT_FAILED,
-                           (double)(clock() - start) / CLOCKS_PER_SEC, pipeline->input_file);
-        return 0;
-    }
-
-    if (type_check_program(pipeline->type_context, pipeline->ast) == 0) {
-        snprintf(pipeline->error_message, sizeof(pipeline->error_message),
-                "类型检查失败: %s", pipeline->input_file);
-        pipeline->success = 0;
-        record_stage_result(pipeline, KRT_STAGE_TYPE_CHECK, KRT_RESULT_FAILED,
-                           (double)(clock() - start) / CLOCKS_PER_SEC, pipeline->input_file);
-        return 0;
-    }
-
-    record_stage_result(pipeline, KRT_STAGE_TYPE_CHECK, KRT_RESULT_SUCCESS,
-                       (double)(clock() - start) / CLOCKS_PER_SEC, pipeline->input_file);
-    return 1;
-}
 
 int KrtCompilePipelineCodegen(KrtCompilePipeline* pipeline) {
-    if (!pipeline || !pipeline->ast || !pipeline->type_context) return 0;
+    if (!pipeline || !pipeline->ast || !pipeline->semantic_analyzer) return 0;
     
     clock_t start = clock();
     
@@ -621,7 +608,8 @@ int KrtCompilePipelineCodegen(KrtCompilePipeline* pipeline) {
         return 0;
     }
     
-    KrtCompilerCompile(pipeline->compiler, pipeline->ast, pipeline->type_context);
+    KrtCompilerCompile(pipeline->compiler, pipeline->ast,
+                       semantic_analyzer_get_symbol_table(pipeline->semantic_analyzer));
     
     record_stage_result(pipeline, KRT_STAGE_CODEGEN, KRT_RESULT_SUCCESS, 
                        (double)(clock() - start) / CLOCKS_PER_SEC, pipeline->input_file);
@@ -651,9 +639,7 @@ int KrtCompilePipelineExecute(KrtCompilePipeline* pipeline, const char* input_fi
             return 0;
         }
         
-        if (!KrtCompilePipelineTypeCheck(pipeline)) {
-            return 0;
-        }
+
         
         if (!KrtCompilePipelineCodegen(pipeline)) {
             return 0;
@@ -718,10 +704,6 @@ int KrtCompilePipelineExecute(KrtCompilePipeline* pipeline, const char* input_fi
     }
     
     if (!KrtCompilePipelineSemantic(pipeline)) {
-        return 0;
-    }
-    
-    if (!KrtCompilePipelineTypeCheck(pipeline)) {
         return 0;
     }
     

@@ -1,5 +1,4 @@
 #include "NameMangling.h"
-#include "Core/Utils/KrtCommon.h"
 #include "Accelerator.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,8 +16,7 @@ static int digit_count(int n) {
 
 static char mangle_param_type_char(KrtTokenType type) {
     switch (type) {
-        case TOKEN_INT8:
-        case TOKEN_CHAR:  return 'c';
+        case TOKEN_INT8:  return 'c';
         case TOKEN_INT16: return 's';
         case TOKEN_INT32: return 'i';
         case TOKEN_INT64: return 'l';

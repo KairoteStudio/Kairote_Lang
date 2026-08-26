@@ -1,5 +1,4 @@
 #include "SymbolTable.h"
-#include "Core/Utils/KrtCommon.h"
 #include "Core/Utils/OutputCache.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -267,6 +266,15 @@ SymbolEntry* symbol_table_lookup_scope_chain(SymbolTable* table, const char* nam
     }
     
     return symbol_table_lookup(table, name);
+}
+
+bool symbol_table_query_var_type(SymbolTable* table, const char* name,
+                                 KrtTokenType* out_value_type, bool* out_is_array) {
+    SymbolEntry* e = table ? symbol_table_lookup_scope_chain(table, name) : NULL;
+    if (!e) return false;
+    if (out_value_type) *out_value_type = e->value_type;
+    if (out_is_array)   *out_is_array   = e->is_array;
+    return true;
 }
 
 void symbol_table_mark_defined(SymbolTable* table, const char* name, int line) {

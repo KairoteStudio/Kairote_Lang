@@ -1,0 +1,38 @@
+str0 = "N"
+
+function _ZN1PEri(s, l)
+  entry:
+    t1 = cast arg0 82
+    t3 = cast arg1 82
+    t5 = syscall 1 1 t1 t3 0 0 0
+    t6 = return 0
+
+function main()
+  entry:
+    i = copy 0
+    t8 = jump
+  while_cond_0:
+    t10 = lt i 5
+    t11 = branch t10
+  while_body_1:
+    t13 = add i 1
+    i = copy t13
+    t16 = eq i 2
+    t17 = branch t16
+  or_rhs_0:
+    t19 = eq i 4
+    __log_0 = copy t19
+    t21 = jump
+  or_short_0:
+    __log_0 = copy 1
+    t23 = jump
+  or_end_0:
+    t24 = branch __log_0
+  if_true_3:
+    t25 = jump
+    t26 = jump
+  if_false_4:
+    t27 = jump
+  if_end_5:
+    t29 = call _ZN1PEri str0 1
+    t30 = jump

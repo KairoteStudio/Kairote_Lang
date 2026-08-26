@@ -108,6 +108,17 @@ namespace MyNamespace {
     }
 }
 ```
+或:
+```KrtL
+namespace MyNamespace;
+class MyClass {
+    // 类成员
+}
+
+function MyFunction() {
+    // 函数体
+}
+```
 
 ### 声明
 
@@ -169,9 +180,9 @@ int32[][] matrix;       // 二维数组
 ```KrtL
 class Person {
     var name;
-    var age: int32;
+    int32 age;
     
-    function Person(name, age: int32) {
+    function Person(name, int32 age) {
         this.name = name;
         this.age = age;
     }
@@ -182,8 +193,9 @@ class Person {
 
 ```KrtL
 struct Point {
-    var x: float32;
-    var y: float32;
+    float32 x;
+    float32 y;
+    var z;
 }
 ```
 
@@ -332,7 +344,7 @@ for (var i = 0; i < 10; i = i + 1) {
 ### 函数声明
 
 ```KrtL
-function Add(a: int32, b: int32): int32 {
+int32 Add(int32 a, int32 b) {
     return a + b;
 }
 ```
@@ -348,7 +360,7 @@ var result = Add(5, 3);
 #### 值传递
 
 ```KrtL
-function Increment(x: int32): int32 {
+int32 Increment(int32 x) {
     x = x + 1;
     return x;
 }
@@ -360,7 +372,7 @@ var b = Increment(a);  // a 仍然是 5
 #### 引用传递
 
 ```KrtL
-function Swap(ref a: int32, ref b: int32) {
+function Swap(ref int32 a, ref int32 b) {
     var temp = a;
     a = b;
     b = temp;
@@ -373,7 +385,7 @@ Swap(ref x, ref y);     // x = 10, y = 5
 ### 递归函数
 
 ```KrtL
-function Factorial(n: int32): int32 {
+int32 Factorial(int32 n) {
     if (n <= 1) {
         return 1;
     }
@@ -384,9 +396,8 @@ function Factorial(n: int32): int32 {
 ### 匿名函数
 
 ```KrtL
-var add = function(a: int32, b: int32): int32 {
-    return a + b;
-};
+// 匿名函数支持返回类型推导，返回类型可省略
+var add = function (int32 a, int32 b) => a + b;
 
 var result = add(5, 3);
 ```
@@ -399,10 +410,10 @@ var result = add(5, 3);
 class Person {
     // 私有字段
     private var name;
-    private var age: int32;
+    private int32 age;
     
     // 构造函数
-    function Person(name, age: int32) {
+    function Person(name, int32 age) {
         this.name = name;
         this.age = age;
     }
@@ -412,11 +423,11 @@ class Person {
         return this.name;
     }
     
-    public function GetAge(): int32 {
+    public int32 GetAge() {
         return this.age;
     }
     
-    public function SetAge(age: int32) {
+    public function SetAge(int32 age) {
         if (age >= 0) {
             this.age = age;
         }
@@ -468,9 +479,9 @@ interface IDrawable {
 }
 
 class Circle : IDrawable {
-    private var radius: float32;
+    private float32 radius;
     
-    function Circle(radius: float32) {
+    function Circle(float32 radius) {
         this.radius = radius;
     }
     
@@ -490,7 +501,7 @@ abstract class Shape {
         this.name = name;
     }
     
-    public abstract function GetArea(): float32;
+    public abstract float32 GetArea();
     
     public function GetName() {
         return this.name;
@@ -498,15 +509,15 @@ abstract class Shape {
 }
 
 class Rectangle : Shape {
-    private var width: float32;
-    private var height: float32;
+    private float32 width;
+    private float32 height;
     
-    function Rectangle(width: float32, height: float32): base("Rectangle") {
+    function Rectangle(float32 width, float32 height): base("Rectangle") {
         this.width = width;
         this.height = height;
     }
     
-    public override function GetArea(): float32 {
+    public override float32 GetArea() {
         return this.width * this.height;
     }
 }
@@ -550,17 +561,17 @@ function Main() {
 
 ```KrtL
 class Box<T> {
-    private var value: T;
+    private T value;
     
-    function Box(value: T) {
+    function Box(T value) {
         this.value = value;
     }
     
-    public function GetValue(): T {
+    public T GetValue() {
         return this.value;
     }
     
-    public function SetValue(value: T) {
+    public function SetValue(T value) {
         this.value = value;
     }
 }
@@ -572,7 +583,7 @@ var stringBox = new Box<string>("Hello");
 ### 泛型函数
 
 ```KrtL
-function Swap<T>(ref a: T, ref b: T) {
+function Swap<T>(ref T a, ref T b) {
     var temp = a;
     a = b;
     b = temp;
@@ -586,10 +597,10 @@ Swap<int32>(ref x, ref y);
 
 ```KrtL
 interface IComparable<T> {
-    function CompareTo(other: T): int32;
+    int32 CompareTo(T other);
 }
 
-function Max<T where T: IComparable<T>>(a: T, b: T): T {
+T Max<T where T: IComparable<T>>(T a, T b) {
     if (a.CompareTo(b) > 0) {
         return a;
     }
@@ -602,7 +613,7 @@ function Max<T where T: IComparable<T>>(a: T, b: T): T {
 ### 异常抛出
 
 ```KrtL
-function Divide(a: float64, b: float64): float64 {
+float64 Divide(float64 a, float64 b) {
     if (b == 0.0) {
         throw new Exception("Division by zero");
     }
@@ -631,7 +642,7 @@ class InvalidArgumentException : Exception {
     }
 }
 
-function ProcessAge(age: int32) {
+function ProcessAge(int32 age) {
     if (age < 0 || age > 150) {
         throw new InvalidArgumentException("Invalid age: " + age);
     }
@@ -661,7 +672,7 @@ thread.Start();
 
 ```KrtL
 class Counter {
-    private var count: int32 = 0;
+    private int32 count = 0;
     private var lock = new Object();
     
     public function Increment() {
@@ -670,7 +681,7 @@ class Counter {
         }
     }
     
-    public function GetCount(): int32 {
+    public int32 GetCount() {
         lock (this.lock) {
             return this.count;
         }
@@ -680,41 +691,36 @@ class Counter {
 
 ## 内存管理
 
-### 垃圾回收
+> 权威设计文档:`Doc/Spec/Memory_Model.md`(三块制 safe / scope / unsafe)。
+> 本节为摘要;两处不一致时以 Memory_Model.md 为准。
 
-Kairote Lang 使用自动垃圾回收机制管理内存，但开发者也可以手动控制内存：
+Kairote Lang **不设后台 GC 线程**。自动内存管理由编译期完成:
+`scope` 块经静态活性扫描后在恰当位置自动插入释放命令,
+运行时行为与手写释放完全一致。
+
+### 三块总览
+
+| 块 | 机制 | 强度 |
+|---|---|---|
+| `unsafe(using ...)` | 指针操作与 `_` 前缀底层函数调用,命名空间白名单放行 | 硬边界(越界即编译错误) |
+| `scope` | 编译期活性扫描 + 自动插释放 | 效果等同 GC |
+| `safe` | 泄漏风险静态检查(循环引用、事件未解绑等) | 仅警告 |
+
+三块互不嵌套,亦不自嵌套。
 
 ```KrtL
-// 自动内存管理
-var obj = new MyClass();
-// obj 在不再被引用时会被自动回收
+scope {
+    var obj = new MyClass();
+}   // 编译器在此自动插入 obj 的释放
 
-// 手动内存管理
-var ptr = malloc(1024);
-// 使用内存
-free(ptr);
-```
-
-### 资源管理
-
-```KrtL
-function ProcessFile(filename) {
-    var file = new File(filename);
-    try {
-        // 使用文件
-    } finally {
-        file.Close();
-    }
-}
-
-// 使用 using 语句自动管理资源
-function ProcessFileWithUsing(filename) {
-    using (var file = new File(filename)) {
-        // 使用文件
-        // 文件会在作用域结束时自动关闭
-    }
+unsafe(using 公司名.产品名.功能模块) {
+    // 仅白名单命名空间的 _ 前缀内部函数可调用
+    // 指针不得触及块外内存 —— 违反即硬错误
 }
 ```
+
+> 注:本节旧版描述的"自动垃圾回收 + malloc/free 函数 + using 资源管理语句"
+> 与实现不符,已按三块制裁决重写;旧语义不再有效。
 
 ---
 

@@ -631,7 +631,7 @@ static uint8_t* generate_export_table(ArkBackendInput* input, uint32_t edata_rva
         ent[i] = export_builder_get_rva(builder, name_offsets[i]);
         eot[i] = (uint16_t)(exp->ordinal - input->export_ordinal_base);
 
-        if (exp->section_index > 0 && exp->section_index <= input->section_count) {
+        if (exp->section_index >= 0 && exp->section_index <= input->section_count) {
             eat[exp->ordinal - input->export_ordinal_base] =
                 section_maps[exp->section_index].rva + exp->offset;
         } else {
@@ -785,8 +785,8 @@ ArkLinkResult ark_backend_pe_link(ArkLinkContext* ctx, ArkBackendInput* input, A
     write_dos_header(output->data);
 
     uint32_t entry_point_rva = section_alignment;
-    if (input->entry_section > 0 && input->entry_section <= input->section_count) {
-        const ArkSectionLayout* sec = ark_layout_get_section(layout, input->entry_section - 1);
+    if (input->entry_section >= 0 && input->entry_section <= input->section_count) {
+        const ArkSectionLayout* sec = ark_layout_get_section(layout, input->entry_section);
         if (sec) {
             entry_point_rva = (uint32_t)(sec->virtual_address - layout->image_base) + input->entry_offset;
         }

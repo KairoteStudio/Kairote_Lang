@@ -1,0 +1,7 @@
+public static extern int64 syscall(int64 n, int64 a1, int64 a2, int64 a3, int64 a4, int64 a5, int64 a6);
+function main()
+{
+    int32[] arr = new int32[3];
+    int64[] raw = (int64[])arr;
+    syscall(60, raw[-1], 0, 0, 0, 0, 0);
+}

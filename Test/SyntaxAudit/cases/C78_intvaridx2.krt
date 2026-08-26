@@ -1,0 +1,10 @@
+public static extern int64 syscall(int64 n, int64 a1, int64 a2, int64 a3, int64 a4, int64 a5, int64 a6);
+function P(string s, int32 len) { syscall(1, 1, (int64)s, (int64)len, 0, 0, 0); }
+function main() {
+    // int32[] 变量索引写入+读出
+    int64 buf = syscall(9, 0, 4096, 3, 34, -1, 0);
+    int32[] arr = (int32[])buf;
+    int32 i = 2;
+    arr[i] = 44;
+    if (arr[2] == 44) { P("Y", 1); } else { P("N", 1); }
+}

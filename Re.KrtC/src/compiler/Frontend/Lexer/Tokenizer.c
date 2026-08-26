@@ -1,5 +1,3 @@
-#include "Core/Utils/KrtCommon.h"
-#include "Core/Memory/Arena.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +21,7 @@ static Keyword keywords[] = {
     {"if", TOKEN_IF},
     {"else", TOKEN_ELSE},
     {"while", TOKEN_WHILE},
+    {"do", TOKEN_DO},
     {"for", TOKEN_FOR},
     {"foreach", TOKEN_FOREACH},
     {"in", TOKEN_IN},
@@ -36,7 +35,6 @@ static Keyword keywords[] = {
     {"async", TOKEN_ASYNC},
     {"await", TOKEN_AWAIT},
     {"unsafe", TOKEN_UNSAFE},
-    {"Point", TOKEN_POINT},
     {"point", TOKEN_POINT},
     {"class", TOKEN_CLASS},
     {"struct", TOKEN_STRUCT},
@@ -379,6 +377,8 @@ static Token lexer_read_char(Lexer* lexer) {
     }
 
     if (lexer->source[lexer->position] != '\'') {
+        lexer->error_count++;
+        lexer->error_line = line;
         return lexer_create_token(TOKEN_EOF, "", line, column);
     }
     lexer_advance(lexer);
@@ -469,6 +469,8 @@ static Token lexer_read_string(Lexer* lexer) {
     }
 
     if (lexer->source[lexer->position] == '\0') {
+        lexer->error_count++;
+        lexer->error_line = line;
         return lexer_create_token(TOKEN_EOF, "", line, column);
     }
 
@@ -492,6 +494,8 @@ Lexer* lexer_create(const char* source) {
 
     lexer->source = lexer->source_owned;
     lexer->position = 0;
+    lexer->error_count = 0;
+    lexer->error_line = 0;
     lexer->line = 1;
     lexer->column = 1;
     lexer->arena = KrtArenaCreate(64 * 1024);  
@@ -779,7 +783,7 @@ Token lexer_peek_nth_token(Lexer* lexer, int n) {
     int saved_column = lexer->column;
 
     Token token = {0};
-    token.type = -1;  // 🔧 修复：初始化为 -1 而不是 0 (TOKEN_EOF)，确保循环能执行
+    token.type = -1;
 
     for (int i = 0; i < n && token.type != TOKEN_EOF; i++) {
         if (i > 0) token_free(&token);

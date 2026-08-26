@@ -5,7 +5,6 @@
 
 #define KRT_ERROR_INITIAL_CAPACITY 16
 
-/* 颜色代码 */
 #define KRT_COL_RED     "\033[31m"
 #define KRT_COL_GREEN   "\033[32m"
 #define KRT_COL_YELLOW  "\033[33m"
@@ -120,7 +119,6 @@ void KrtErrorReportAddEx(KrtErrorReport* report, KrtErrorSeverity severity,
                           const char* hint) {
     if (!report || !message) return;
     
-    /* 扩展数组容量 */
     if (report->error_count >= report->error_capacity) {
         int new_capacity = report->error_capacity * 2;
         KrtCompileError* new_errors = (KrtCompileError*)realloc(report->errors, new_capacity * sizeof(KrtCompileError));
@@ -152,7 +150,6 @@ void KrtErrorReportAddEx(KrtErrorReport* report, KrtErrorSeverity severity,
         error->error_code[sizeof(error->error_code) - 1] = '\0';
     }
     
-    /* 复制文件路径 */
     if (report->file_path[0] != '\0') {
         strncpy(error->file_path, report->file_path, sizeof(error->file_path) - 1);
         error->file_path[sizeof(error->file_path) - 1] = '\0';
@@ -163,7 +160,6 @@ void KrtErrorReportAddEx(KrtErrorReport* report, KrtErrorSeverity severity,
     }
 }
 
-/* 从源代码中提取指定行的内容 */
 static const char* get_source_line(KrtErrorReport* report, int line, char* buf, int buf_size) {
     if (!report || !report->source_code || line <= 0) return NULL;
     
@@ -189,7 +185,6 @@ static const char* get_source_line(KrtErrorReport* report, int line, char* buf, 
     return buf;
 }
 
-/* 获取文件名（从路径中提取） */
 static const char* get_filename(const char* path) {
     if (!path) return "unknown";
     
@@ -223,16 +218,13 @@ void KrtErrorReportPrint(KrtErrorReport* report) {
             KRT_COL_YELLOW, warning_count, KRT_COL_RESET,
             warning_count == 1 ? "warning" : "warnings");
     
-    /* 打印每个错误 - C# 风格 */
     for (int i = 0; i < report->error_count; i++) {
         KrtCompileError* error = &report->errors[i];
         const char* sev_color = get_severity_color(error->severity);
         const char* sev_name = KrtErrorSeverityName(error->severity);
         
-        /* 获取文件名 */
         const char* filename = get_filename(error->file_path[0] ? error->file_path : report->file_path);
         
-        /* 打印错误头：FileName(line,col,endLine,endColumn): error: message */
         if (error->line > 0) {
             if (error->end_line > 0 && error->end_column > 0 && 
                 (error->end_line != error->line || error->end_column != error->column)) {
@@ -256,12 +248,10 @@ void KrtErrorReportPrint(KrtErrorReport* report) {
                     error->message, KRT_COL_RESET);
         }
         
-        /* 打印修复建议 */
         if (error->hint[0] != '\0') {
             fprintf(stderr, "    %s->%s %s\n", KRT_COL_CYAN, KRT_COL_RESET, error->hint);
         }
         
-        /* 打印源代码上下文 */
         char line_buf[256] = {0};
         const char* source_line = error->source_line;
         

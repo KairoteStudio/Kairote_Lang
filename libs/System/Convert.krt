@@ -12,7 +12,7 @@ public static class Convert
     {
         if (s == null) return 0;
 
-        int32 len = StringOps.Length(s);
+        int32 len = Sys.InternalStringLength(s);
         int64 ptr = Sys.InternalStringPtr(s);
         char[] arr = (char[])ptr;
 
@@ -43,7 +43,7 @@ public static class Convert
     {
         if (s == null) return 0;
 
-        int32 len = StringOps.Length(s);
+        int32 len = Sys.InternalStringLength(s);
         int64 ptr = Sys.InternalStringPtr(s);
         char[] arr = (char[])ptr;
 
@@ -72,13 +72,7 @@ public static class Convert
     // int32 转 string
     public static string ToString(int32 value)
     {
-        return StringOps.FromInt32(value);
-    }
-
-    // int64 转 string
-    public static string ToString(int64 value)
-    {
-        return StringOps.FromInt64(value);
+        return Sys.InternalInt32ToString(value);
     }
 
     // bool 转 string

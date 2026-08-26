@@ -1,0 +1,6 @@
+public static extern int64 syscall(int64 n, int64 a1, int64 a2, int64 a3, int64 a4, int64 a5, int64 a6);
+function main() {
+    int64 buf = syscall(9, 0, 12, 3, 34, -1, 0);
+    Memory.Copy((void*)buf, (void*)(Sys.InternalStringPtr("ab") + 1), 2);
+    Console.Write("done\n");
+}

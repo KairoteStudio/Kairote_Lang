@@ -1,7 +1,5 @@
 #include "VmCodegen.h"
 #include "../../Middle/Ir/IrSsa.h"
-#include "../../../Core/Utils/KrtCommon.h"
-#include "BytecodeGenerator.h"
 #include <string.h>
 #include <stdio.h>
 

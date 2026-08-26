@@ -1,8 +1,6 @@
 #include "Ast.h"
 #include "Accelerator.h"
-#include "Core/Utils/KrtCommon.h"
 #include "Core/Utils/OutputCache.h"
-#include "Core/Memory/Arena.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -23,7 +21,6 @@ ASTNode* ast_create_node_arena(ASTNodeType type, int line, int col, KrtArena* ar
     node->type = type;
     node->line = line;
     node->col = col;
-    node->inferred_type = TOKEN_EOF;
     node->is_arena_allocated = (arena != NULL) ? 1 : 0;
     memset(&node->data, 0, sizeof(node->data));
 
@@ -126,6 +123,25 @@ void ast_destroy_node(ASTNode* node) {
         case AST_WHILE_STATEMENT:
             ast_destroy_node(node->data.while_stmt.condition);
             ast_destroy_node(node->data.while_stmt.body);
+            break;
+        case AST_DO_WHILE_STATEMENT:
+            ast_destroy_node(node->data.do_while_stmt.body);
+            ast_destroy_node(node->data.do_while_stmt.condition);
+            break;
+        case AST_SWITCH_STATEMENT:
+            ast_destroy_node(node->data.switch_stmt.expression);
+            for (int sci = 0; sci < node->data.switch_stmt.case_count; sci++) {
+                ast_destroy_node(node->data.switch_stmt.cases[sci]);
+            }
+            if (node->data.switch_stmt.cases) KRT_FREE(node->data.switch_stmt.cases);
+            ast_destroy_node(node->data.switch_stmt.default_case);
+            break;
+        case AST_CASE_CLAUSE:
+            ast_destroy_node(node->data.case_clause.value);
+            for (int cci = 0; cci < node->data.case_clause.statement_count; cci++) {
+                ast_destroy_node(node->data.case_clause.statements[cci]);
+            }
+            if (node->data.case_clause.statements) KRT_FREE(node->data.case_clause.statements);
             break;
         case AST_FOR_STATEMENT:
             ast_destroy_node(node->data.for_stmt.init);

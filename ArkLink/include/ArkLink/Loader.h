@@ -69,9 +69,9 @@ typedef struct ArkSectionRange {
 typedef struct ArkRelocationDesc {
     uint64_t offset;
     uint32_t sym_idx;
-    uint32_t section_index;  
+    uint32_t section_index;
     uint16_t type;
-    int64_t addend;          
+    int64_t addend;
 } ArkRelocationDesc;
 
 typedef struct ArkSymbolDesc {
@@ -79,10 +79,10 @@ typedef struct ArkSymbolDesc {
     uint64_t value;
     uint32_t size;
     uint16_t section_index;
-    uint8_t type;        
-    uint8_t binding;     
-    uint8_t visibility;  
-    const char* import_module;  
+    uint8_t type;
+    uint8_t binding;
+    uint8_t visibility;
+    const char* import_module;
 } ArkSymbolDesc;
 
 typedef struct ArkLinkSectionDesc {
@@ -110,7 +110,7 @@ typedef struct ArkLinkSection {
     size_t reloc_count;
     size_t reloc_capacity;
 
-    struct ArkSectionBuffer* buffer;  
+    struct ArkSectionBuffer* buffer;
 } ArkLinkSection;
 
 typedef struct ArkSectionDesc {

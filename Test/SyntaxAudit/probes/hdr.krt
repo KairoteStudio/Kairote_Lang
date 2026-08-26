@@ -1,0 +1,9 @@
+public static extern int64 syscall(int64 n, int64 a1, int64 a2, int64 a3, int64 a4, int64 a5, int64 a6);
+function P(string s, int32 len) { syscall(1, 1, (int64)s, (int64)len, 0, 0, 0); }
+function D(int32 d) { if(d==0){P("0",1);} else if(d==12){P("T",1);} else {P("+",1);} }
+function main()
+{
+    int32[] arr = new int32[3];
+    int64[] raw = (int64[])arr;
+    D((int32)raw[-1]);
+}

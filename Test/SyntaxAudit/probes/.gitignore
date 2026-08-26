@@ -1,0 +1,4 @@
+
+# 探针目录: 特性角落回归, 用 run_probes.sh 跑
+probes/*.bin
+probes/*.kro

@@ -13,7 +13,7 @@ extern char *strstr(const char *haystack, const char *needle);
 #include "../../Compiler.h"
 #include "../../../Core/Utils/OutputCache.h"
 #include "../../../Core/Utils/KrtCommon.h"
-#include "../../Frontend/Semantic/TypeChecker.h"
+#include "../../Frontend/Semantic/SymbolTable.h"
 #include "../../Frontend/Semantic/NameMangling.h"
 
 static KrtIRValue KrtIrGenerateExpression(KrtIRBuilder* builder, ASTNode* expr);
@@ -27,7 +27,6 @@ static int KrtIrCheckHasReturn(ASTNode* node);
 static void KrtIrEnsureMainEntry(KrtIRBuilder* builder);
 static void KrtIrPushClassContext(KrtIRBuilder* builder, const char* class_name);
 static void KrtIrPopClassContext(KrtIRBuilder* builder);
-
 KrtIRValue KrtIrSyscall(KrtIRBuilder* builder, KrtIRValue syscall_num, KrtIRValue* args, int arg_count);
 static const char* KrtIrCurrentClassContext(KrtIRBuilder* builder);
 static char* KrtIrMangleStaticMember(const char* class_name, const char* member_name);
@@ -38,18 +37,14 @@ static void KrtIrPushNamespaceContext(KrtIRBuilder* builder, const char* namespa
 static void KrtIrPopNamespaceContext(KrtIRBuilder* builder);
 static const char** KrtIrGetNamespacePath(KrtIRBuilder* builder, int* out_count);
 
-static int irgen_type_size(TypeKind kind) {
-    switch (kind) {
-        case TYPE_INT8:
-        case TYPE_UINT8:
-        case TYPE_BOOL:
+
+static int irgen_size_from_token(KrtTokenType t) {
+    switch (t) {
+        case TOKEN_INT8: case TOKEN_UINT8: case TOKEN_CHAR: case TOKEN_BOOL:
             return 1;
-        case TYPE_INT16:
-        case TYPE_UINT16:
+        case TOKEN_INT16: case TOKEN_UINT16:
             return 2;
-        case TYPE_INT32:
-        case TYPE_UINT32:
-        case TYPE_FLOAT32:
+        case TOKEN_INT32: case TOKEN_UINT32: case TOKEN_FLOAT32:
             return 4;
         default:
             return 8;
@@ -57,17 +52,31 @@ static int irgen_type_size(TypeKind kind) {
 }
 
 static int irgen_array_element_size(KrtIRBuilder* builder, ASTNode* array_expr) {
-    if (!builder || !builder->type_context || !array_expr) return 8;
+    if (!array_expr) return 8;
+    (void)0;
 
-    Type* array_type = type_check_expression(builder->type_context, array_expr);
-    if (!array_type) return 8;
-
-    int size = 8;
-    if (array_type->kind == TYPE_ARRAY && array_type->data.array.element_type) {
-        size = irgen_type_size(array_type->data.array.element_type->kind);
+    if (array_expr->type == AST_NEW_ARRAY_EXPRESSION) {
+        return irgen_size_from_token(array_expr->data.new_array_expr.type_token);
     }
-    type_destroy(array_type);
-    return size;
+
+    if (array_expr->type == AST_IDENTIFIER && builder) {
+        int tok = 0, is_arr = 0;
+        if (KrtIrVarTypeFind(builder, array_expr->data.identifier_name, &tok, &is_arr)) {
+            return is_arr ? irgen_size_from_token((KrtTokenType)tok) : 8;
+        }
+        if (builder->semantic_analyzer) {
+            KrtTokenType vt = 0;
+            bool is_array = false;
+            if (symbol_table_query_var_type((SymbolTable*)builder->semantic_analyzer,
+                                            array_expr->data.identifier_name, &vt, &is_array)
+                && is_array) {
+                return irgen_size_from_token(vt);
+            }
+        }
+        return 8;
+    }
+
+    return 8;
 }
 
 static int irgen_is_syscall_method(const char* class_name, const char* method_name) {
@@ -89,17 +98,14 @@ static KrtGenericContext g_generic_context = {NULL, 0};
 #define IRGEN_DEFAULT_ARRAY_CAPACITY 10
 #define IRGEN_NAMESPACE_STACK_INIT 8
 #define IRGEN_CLASS_STACK_INIT 8
-
 #define KRT_IMM_ZERO(builder) KrtIrImm(builder, 0)
 #define KRT_IMM_ONE(builder) KrtIrImm(builder, 1)
 #define KRT_IMM_PTR_SIZE(builder) KrtIrImm(builder, IRGEN_POINTER_SIZE)
 #define KRT_IMM_FALSE(builder) KRT_IMM_ZERO(builder)
 #define KRT_IMM_TRUE(builder) KRT_IMM_ONE(builder)
-
 #define IRGEN_ALLOC_ARGS(count) ((KrtIRValue*)KRT_MALLOC((count) * sizeof(KrtIRValue)))
 #define IRGEN_SAFE_FREE(ptr) do { if (ptr) { KRT_FREE(ptr); ptr = NULL; } } while(0)
 #define IRGEN_FREE(ptr) IRGEN_SAFE_FREE(ptr)
-
 #define IRGEN_SET_ARG(args, index, value) do { \
     if (args && (index) >= 0) { \
         args[(index)] = (value); \
@@ -209,6 +215,31 @@ static KrtIRValue irgen_call_builtin_4args(KrtIRBuilder* builder, IrGenBuiltinFu
     return KrtIrCall(builder, irgen_get_builtin_func(func_id), args, 4);
 }
 
+static KrtIRValue irgen_allocate_memory(KrtIRBuilder* builder, KrtIRValue size_val);
+
+static KrtIRValue irgen_expr_NewArrayExpression(KrtIRBuilder* builder, ASTNode* expr) {
+            if (!expr || !expr->data.new_array_expr.size) return KRT_IMM_ZERO(builder);
+            KrtIRValue count = KrtIrGenerateExpression(builder, expr->data.new_array_expr.size);
+            int element_size = 8;
+            switch (expr->data.new_array_expr.type_token) {
+                case TOKEN_INT8: case TOKEN_UINT8:
+                case TOKEN_CHAR: case TOKEN_BOOL:
+                    element_size = 1; break;
+                case TOKEN_INT16: case TOKEN_UINT16:
+                    element_size = 2; break;
+                case TOKEN_INT32: case TOKEN_UINT32:
+                case TOKEN_FLOAT32:
+                    element_size = 4; break;
+                default:
+                    element_size = 8; break;
+            }
+
+            KrtIRValue total = (element_size == 1)
+                ? count
+                : KrtIrMul(builder, count, KrtIrImm(builder, element_size));
+            return irgen_allocate_memory(builder, total);
+}
+
 static KrtIRValue irgen_allocate_memory(KrtIRBuilder* builder, KrtIRValue size_val) {
     const int header_size = IRGEN_POINTER_SIZE;
     char result_name[64];
@@ -242,9 +273,6 @@ static KrtIRValue irgen_allocate_memory(KrtIRBuilder* builder, KrtIRValue size_v
     KrtIrBranch(builder,
                 KrtIrCompare(builder, KRT_IR_LT, allocation, KrtIrImm(builder, 0)),
                 failure_block, success_block);
-    if (source_block) source_block->next = failure_block;
-    failure_block->next = success_block;
-    success_block->next = end_block;
 
     KrtIrBlockSetCurrent(builder, failure_block);
     KrtIrJump(builder, end_block);
@@ -274,8 +302,6 @@ static void irgen_free_memory(KrtIRBuilder* builder, KrtIRValue ptr_val) {
     KrtIrBranch(builder,
                 KrtIrCompare(builder, KRT_IR_EQ, ptr_val, KrtIrImm(builder, 0)),
                 end_block, free_block);
-    if (source_block) source_block->next = free_block;
-    free_block->next = end_block;
 
     KrtIrBlockSetCurrent(builder, free_block);
     KrtIRValue allocation = KrtIrSub(builder, ptr_val, KrtIrImm(builder, header_size));
@@ -343,7 +369,7 @@ static KrtIRValue irgen_linq_select(KrtIRBuilder* builder, KrtIRValue source, Kr
 }
 
 static KrtIRValue irgen_stack_alloc(KrtIRBuilder* builder, KrtIRValue size_val) {
-    return irgen_call_builtin_1arg(builder, IRGEN_FUNC_STACK_ALLOC, size_val);
+    return irgen_allocate_memory(builder, size_val);
 }
 
 static KrtIRValue irgen_await_task(KrtIRBuilder* builder, KrtIRValue task) {
@@ -400,20 +426,8 @@ static KrtIRValue irgen_size_of_pointer(KrtIRBuilder* builder) {
     return irgen_call_builtin_0args(builder, IRGEN_FUNC_SIZE_OF_POINTER);
 }
 
-static KrtIRValue irgen_array_get(KrtIRBuilder* builder, KrtIRValue array, KrtIRValue index) {
-    return irgen_call_builtin_2args(builder, IRGEN_FUNC_ARRAY_GET, array, index);
-}
-
-static KrtIRValue irgen_array_size(KrtIRBuilder* builder, KrtIRValue array) {
-    return irgen_call_builtin_1arg(builder, IRGEN_FUNC_ARRAY_SIZE, array);
-}
-
 static KrtTokenType KrtIrInferMangleType(KrtIRBuilder* builder, ASTNode* arg) {
     if (!arg) return TOKEN_INT32;
-
-    if (arg->inferred_type != TOKEN_EOF) {
-        return arg->inferred_type;
-    }
 
     switch (arg->type) {
         case AST_STRING:
@@ -429,33 +443,25 @@ static KrtTokenType KrtIrInferMangleType(KrtIRBuilder* builder, ASTNode* arg) {
         case AST_UNARY_OPERATION:
             return KrtIrInferMangleType(builder, arg->data.unary_op.operand);
         case AST_IDENTIFIER:
-            if (builder && builder->type_context && builder->type_context->current_scope) {
-                TypeCheckSymbol* symbol = type_check_symbol_table_lookup(
-                    builder->type_context->current_scope, arg->data.identifier_name);
-                if (symbol && symbol->type) {
-                    switch (symbol->type->kind) {
-                        case TYPE_INT8: return TOKEN_INT8;
-                        case TYPE_INT16: return TOKEN_INT16;
-                        case TYPE_INT32: return TOKEN_INT32;
-                        case TYPE_INT64: return TOKEN_INT64;
-                        case TYPE_UINT8: return TOKEN_UINT8;
-                        case TYPE_UINT16: return TOKEN_UINT16;
-                        case TYPE_UINT32: return TOKEN_UINT32;
-                        case TYPE_UINT64: return TOKEN_UINT64;
-                        case TYPE_FLOAT32: return TOKEN_FLOAT32;
-                        case TYPE_FLOAT64: return TOKEN_FLOAT64;
-                        case TYPE_BOOL: return TOKEN_BOOL;
-                        case TYPE_STRING: return TOKEN_TYPE_STRING;
-                        default: break;
-                    }
-                }
-            }
             if (builder && builder->current_function) {
                 for (int i = 0; i < builder->current_function->param_count; i++) {
                     if (strcmp(builder->current_function->params[i].name,
                                arg->data.identifier_name) == 0) {
                         return builder->current_function->params[i].type;
                     }
+                }
+            }
+            if (builder) {
+                int vtok = 0, vis_arr = 0;
+                if (KrtIrVarTypeFind(builder, arg->data.identifier_name, &vtok, &vis_arr)
+                    && !vis_arr && vtok != TOKEN_EOF)
+                    return (KrtTokenType)vtok;
+                if (builder->semantic_analyzer) {
+                    KrtTokenType vt = 0; bool varr = false;
+                    if (symbol_table_query_var_type((SymbolTable*)builder->semantic_analyzer,
+                                                    arg->data.identifier_name, &vt, &varr)
+                        && !varr && vt != TOKEN_EOF)
+                        return vt;
                 }
             }
             return TOKEN_INT32;
@@ -604,15 +610,16 @@ static bool is_string_expression(KrtIRBuilder* builder, ASTNode* expr) {
     if (expr->type == AST_STRING) {
         return true;
     }
-    if (expr->type == AST_IDENTIFIER) {
-        if (builder->type_context && builder->type_context->current_scope) {
-            TypeCheckSymbolTable* scope = builder->type_context->current_scope;
-            while (scope) {
-                TypeCheckSymbol* symbol = type_check_symbol_table_lookup(scope, expr->data.identifier_name);
-                if (symbol && symbol->type) {
-                    return symbol->type->kind == TYPE_STRING;
-                }
-                scope = scope->parent;
+    if (expr->type == AST_IDENTIFIER && builder) {
+        int tok = 0, is_arr = 0;
+        if (KrtIrVarTypeFind(builder, expr->data.identifier_name, &tok, &is_arr))
+            return (!is_arr) && tok == TOKEN_TYPE_STRING;
+        if (builder->semantic_analyzer) {
+            KrtTokenType vt = 0;
+            bool is_array = false;
+            if (symbol_table_query_var_type((SymbolTable*)builder->semantic_analyzer,
+                                            expr->data.identifier_name, &vt, &is_array)) {
+                return (!is_array) && vt == TOKEN_TYPE_STRING;
             }
         }
         return false;
@@ -622,6 +629,135 @@ static bool is_string_expression(KrtIRBuilder* builder, ASTNode* expr) {
                is_string_expression(builder, expr->data.binary_op.right);
     }
     return false;
+}
+
+static KrtIRValue irgen_synth_strlen(KrtIRBuilder* builder, KrtIRValue s) {
+            char nname[64], llabel[64], elabel[64];
+            int id = builder->label_counter++;
+            snprintf(nname, sizeof(nname), "__slen_%d", id);
+            snprintf(llabel, sizeof(llabel), "strlen_check_%d", id);
+            snprintf(elabel, sizeof(elabel), "strlen_end_%d", id);
+
+            KrtIrAlloc(builder, nname);
+            KrtIrStore(builder, nname, KRT_IMM_ZERO(builder));
+
+            KrtIRBasicBlock* check = KrtIrBlockCreate(builder, llabel);
+            KrtIRBasicBlock* body = KrtIrBlockCreate(builder, "strlen_body_x");
+            KrtIRBasicBlock* end = KrtIrBlockCreate(builder, elabel);
+            KrtIrJump(builder, check);
+
+            KrtIrBlockSetCurrent(builder, check);
+            KrtIRValue i = KrtIrLoad(builder, nname);
+            KrtIRValue addr = KrtIrAdd(builder, s, i);
+            KrtIRValue c = KrtIrLoadPtrSized(builder, addr, 0, 1);
+            KrtIrBranch(builder, KrtIrCompare(builder, KRT_IR_NE, c, KRT_IMM_ZERO(builder)), body, end);
+
+            KrtIrBlockSetCurrent(builder, body);
+            KrtIrStore(builder, nname, KrtIrAdd(builder, i, KrtIrImm(builder, 1)));
+            KrtIrJump(builder, check);
+
+            KrtIrBlockSetCurrent(builder, end);
+            return KrtIrLoad(builder, nname);
+}
+
+static KrtIRValue irgen_synth_strcat(KrtIRBuilder* builder, KrtIRValue a, KrtIRValue b) {
+            KrtIRValue la = irgen_synth_strlen(builder, a);
+            KrtIRValue lb = irgen_synth_strlen(builder, b);
+            KrtIRValue total = KrtIrAdd(builder, KrtIrAdd(builder, la, lb), KrtIrImm(builder, 1));
+            KrtIRValue buf = irgen_allocate_memory(builder, total);
+
+            {
+                char kn[64], cl[64], bl[64], el[64];
+                int id = builder->label_counter++;
+                snprintf(kn, sizeof(kn), "__cpa_%d", id);
+                snprintf(cl, sizeof(cl), "cpa_chk_%d", id);
+                snprintf(bl, sizeof(bl), "cpa_body_%d", id);
+                snprintf(el, sizeof(el), "cpa_end_%d", id);
+                KrtIrAlloc(builder, kn);
+                KrtIrStore(builder, kn, KRT_IMM_ZERO(builder));
+                KrtIRBasicBlock* chk = KrtIrBlockCreate(builder, cl);
+                KrtIRBasicBlock* bod = KrtIrBlockCreate(builder, bl);
+                KrtIRBasicBlock* fin = KrtIrBlockCreate(builder, el);
+                KrtIrJump(builder, chk);
+                KrtIrBlockSetCurrent(builder, chk);
+                KrtIRValue k = KrtIrLoad(builder, kn);
+                KrtIrBranch(builder, KrtIrCompare(builder, KRT_IR_LT, k, la), bod, fin);
+                KrtIrBlockSetCurrent(builder, bod);
+                KrtIRValue ca = KrtIrLoadPtrSized(builder, KrtIrAdd(builder, a, k), 0, 1);
+                KrtIrArrayStoreSized(builder, buf, k, ca, 1);
+                KrtIrStore(builder, kn, KrtIrAdd(builder, k, KrtIrImm(builder, 1)));
+                KrtIrJump(builder, chk);
+                KrtIrBlockSetCurrent(builder, fin);
+            }
+            {
+                char kn[64], cl[64], bl[64], el[64];
+                int id = builder->label_counter++;
+                snprintf(kn, sizeof(kn), "__cpb_%d", id);
+                snprintf(cl, sizeof(cl), "cpb_chk_%d", id);
+                snprintf(bl, sizeof(bl), "cpb_body_%d", id);
+                snprintf(el, sizeof(el), "cpb_end_%d", id);
+                KrtIrAlloc(builder, kn);
+                KrtIrStore(builder, kn, KRT_IMM_ZERO(builder));
+                KrtIRBasicBlock* chk = KrtIrBlockCreate(builder, cl);
+                KrtIRBasicBlock* bod = KrtIrBlockCreate(builder, bl);
+                KrtIRBasicBlock* fin = KrtIrBlockCreate(builder, el);
+                KrtIrJump(builder, chk);
+                KrtIrBlockSetCurrent(builder, chk);
+                KrtIRValue k = KrtIrLoad(builder, kn);
+                KrtIrBranch(builder, KrtIrCompare(builder, KRT_IR_LT, k, lb), bod, fin);
+                KrtIrBlockSetCurrent(builder, bod);
+                KrtIRValue cb = KrtIrLoadPtrSized(builder, KrtIrAdd(builder, b, k), 0, 1);
+                KrtIrArrayStoreSized(builder, buf, KrtIrAdd(builder, la, k), cb, 1);
+                KrtIrStore(builder, kn, KrtIrAdd(builder, k, KrtIrImm(builder, 1)));
+                KrtIrJump(builder, chk);
+                KrtIrBlockSetCurrent(builder, fin);
+            }
+            KrtIrArrayStoreSized(builder, buf, KrtIrAdd(builder, la, lb), KRT_IMM_ZERO(builder), 1);
+            return buf;
+}
+
+static KrtIRValue irgen_synth_streq(KrtIRBuilder* builder, KrtIRValue a, KrtIRValue b) {
+            char rn[64], in[64];
+            char c1[64], c2[64], nb[64], eb[64];
+            int id = builder->label_counter++;
+            snprintf(rn, sizeof(rn), "__seq_r_%d", id);
+            snprintf(in, sizeof(in), "__seq_i_%d", id);
+            snprintf(c1, sizeof(c1), "seq_chk_%d", id);
+            snprintf(c2, sizeof(c2), "seq_nul_%d", id);
+            snprintf(nb, sizeof(nb), "seq_step_%d", id);
+            snprintf(eb, sizeof(eb), "seq_end_%d", id);
+
+            KrtIrAlloc(builder, rn);
+            KrtIrStore(builder, rn, KrtIrImm(builder, 1));
+            KrtIrAlloc(builder, in);
+            KrtIrStore(builder, in, KRT_IMM_ZERO(builder));
+
+            KrtIRBasicBlock* chk = KrtIrBlockCreate(builder, c1);
+            KrtIRBasicBlock* nulchk = KrtIrBlockCreate(builder, c2);
+            KrtIRBasicBlock* step = KrtIrBlockCreate(builder, nb);
+            KrtIRBasicBlock* neq = KrtIrBlockCreate(builder, "seq_diff_x");
+            KrtIRBasicBlock* end = KrtIrBlockCreate(builder, eb);
+            KrtIrJump(builder, chk);
+
+            KrtIrBlockSetCurrent(builder, chk);
+            KrtIRValue i0 = KrtIrLoad(builder, in);
+            KrtIRValue ca = KrtIrLoadPtrSized(builder, KrtIrAdd(builder, a, i0), 0, 1);
+            KrtIRValue cb = KrtIrLoadPtrSized(builder, KrtIrAdd(builder, b, i0), 0, 1);
+            KrtIrBranch(builder, KrtIrCompare(builder, KRT_IR_NE, ca, cb), neq, nulchk);
+
+            KrtIrBlockSetCurrent(builder, neq);
+            KrtIrStore(builder, rn, KRT_IMM_ZERO(builder));
+            KrtIrJump(builder, end);
+
+            KrtIrBlockSetCurrent(builder, nulchk);
+            KrtIrBranch(builder, KrtIrCompare(builder, KRT_IR_EQ, ca, KRT_IMM_ZERO(builder)), end, step);
+
+            KrtIrBlockSetCurrent(builder, step);
+            KrtIrStore(builder, in, KrtIrAdd(builder, i0, KrtIrImm(builder, 1)));
+            KrtIrJump(builder, chk);
+
+            KrtIrBlockSetCurrent(builder, end);
+            return KrtIrLoad(builder, rn);
 }
 
 static void KrtIrEnsureMainEntry(KrtIRBuilder* builder) {
@@ -717,14 +853,8 @@ static __attribute__((unused)) int KrtIrEvaluateNumericConstant(ASTNode* expr, d
     }
 }
 
-static KrtIRValue KrtIrGenerateExpression(KrtIRBuilder* builder, ASTNode* expr) {
-    if (!builder || !expr) {
-        fprintf(stderr, "[IrGenExpr] NULL builder or expr (type=%d)\n", expr ? (int)expr->type : -1);
-        return KRT_IMM_ZERO(builder);
-    }
 
-    switch (expr->type) {
-        case AST_IDENTIFIER: {
+static KrtIRValue irgen_expr_Identifier(KrtIRBuilder* builder, ASTNode* expr) {
             const char* var_name = expr->data.identifier_name;
 
             if (builder->current_function && builder->current_function->params) {
@@ -754,26 +884,21 @@ static KrtIRValue KrtIrGenerateExpression(KrtIRBuilder* builder, ASTNode* expr) 
                 }
             }
 
-            return KrtIrLoad(builder, var_name);
-        }
-
-        case AST_NUMBER: {
+            return KrtIrLoad(builder, KrtIrVarTypeResolveIRName(builder, var_name));
+}
+static KrtIRValue irgen_expr_Number(KrtIRBuilder* builder, ASTNode* expr) {
             return KrtIrImm(builder, expr->data.number_value);
-        }
-
-        case AST_BOOLEAN: {
+}
+static KrtIRValue irgen_expr_Boolean(KrtIRBuilder* builder, ASTNode* expr) {
             return KrtIrImm(builder, expr->data.boolean_value ? 1 : 0);
-        }
-
-        case AST_STRING: {
+}
+static KrtIRValue irgen_expr_String(KrtIRBuilder* builder, ASTNode* expr) {
             return KrtIrStringConst(builder, expr->data.string_value);
-        }
-
-        case AST_CHAR_LITERAL: {
+}
+static KrtIRValue irgen_expr_CharLiteral(KrtIRBuilder* builder, ASTNode* expr) {
             return KrtIrImm(builder, (double)(unsigned char)expr->data.char_value);
-        }
-
-        case AST_NEW_EXPRESSION: {
+}
+static KrtIRValue irgen_expr_NewExpression(KrtIRBuilder* builder, ASTNode* expr) {
             const char* class_name = expr->data.new_expr.class_name;
             int layout_size = KrtIrLayoutGetSize(builder, class_name);
             double alloc_size = (double)layout_size;
@@ -808,9 +933,52 @@ static KrtIRValue KrtIrGenerateExpression(KrtIRBuilder* builder, ASTNode* expr) 
                 IRGEN_FREE(ctor_name);
             }
             return obj;
-        }
+}
 
-        case AST_BINARY_OPERATION: {
+static KrtIRValue irgen_expr_LogicalOperation(KrtIRBuilder* builder, ASTNode* left, ASTNode* right, bool is_or) {
+            static int logical_id = 0;
+            int id = logical_id++;
+            char res_name[64];
+            snprintf(res_name, sizeof(res_name), "__log_%d", id);
+
+            char lbl_rhs[64], lbl_false[64], lbl_end[64];
+            snprintf(lbl_rhs, sizeof(lbl_rhs), "%s_rhs_%d", is_or ? "or" : "and", id);
+            snprintf(lbl_false, sizeof(lbl_false), "%s_short_%d", is_or ? "or" : "and", id);
+            snprintf(lbl_end, sizeof(lbl_end), "%s_end_%d", is_or ? "or" : "and", id);
+
+            KrtIRBasicBlock* rhs_block = KrtIrBlockCreate(builder, lbl_rhs);
+            KrtIRBasicBlock* short_block = KrtIrBlockCreate(builder, lbl_false);
+            KrtIRBasicBlock* end_block = KrtIrBlockCreate(builder, lbl_end);
+            KrtIRBasicBlock* entry_block = builder->current_block;
+
+            KrtIrAlloc(builder, res_name);
+
+            KrtIRValue lhs = KrtIrGenerateExpression(builder, left);
+            if (is_or) {
+                KrtIrBranch(builder, lhs, short_block, rhs_block);
+            } else {
+                KrtIrBranch(builder, lhs, rhs_block, short_block);
+            }
+            KrtIrBlockSetCurrent(builder, rhs_block);
+            KrtIRValue rhs = KrtIrGenerateExpression(builder, right);
+            KrtIrStore(builder, res_name, rhs);
+            KrtIrJump(builder, end_block);
+
+            KrtIrBlockSetCurrent(builder, short_block);
+            KrtIrStore(builder, res_name, is_or ? KRT_IMM_TRUE(builder) : KRT_IMM_FALSE(builder));
+            KrtIrJump(builder, end_block);
+
+            KrtIrBlockSetCurrent(builder, end_block);
+            return KrtIrLoad(builder, res_name);
+}
+
+static KrtIRValue irgen_expr_BinaryOperation(KrtIRBuilder* builder, ASTNode* expr) {
+            if (expr->data.binary_op.operator == TOKEN_AND ||
+                expr->data.binary_op.operator == TOKEN_OR) {
+                return irgen_expr_LogicalOperation(builder,
+                    expr->data.binary_op.left, expr->data.binary_op.right,
+                    expr->data.binary_op.operator == TOKEN_OR);
+            }
             KrtIRValue lhs = KrtIrGenerateExpression(builder, expr->data.binary_op.left);
             KrtIRValue rhs = KrtIrGenerateExpression(builder, expr->data.binary_op.right);
             switch (expr->data.binary_op.operator) {
@@ -863,7 +1031,7 @@ static KrtIRValue KrtIrGenerateExpression(KrtIRBuilder* builder, ASTNode* expr) 
                     if (left_is_string || right_is_string) {
                         KrtIRValue string_lhs = convert_to_string_if_needed(builder, expr->data.binary_op.left, lhs);
                         KrtIRValue string_rhs = convert_to_string_if_needed(builder, expr->data.binary_op.right, rhs);
-                        return KrtIrStrcat(builder, string_lhs, string_rhs);
+                        return irgen_synth_strcat(builder, string_lhs, string_rhs);
                     }
                     return KrtIrAdd(builder, lhs, rhs);
                 }
@@ -878,6 +1046,7 @@ static KrtIRValue KrtIrGenerateExpression(KrtIRBuilder* builder, ASTNode* expr) 
                 case TOKEN_BITWISE_AND:
                     return KrtIrAnd(builder, lhs, rhs);
                 case TOKEN_BITWISE_OR:
+                case TOKEN_PIPE:
                     return KrtIrOr(builder, lhs, rhs);
                 case TOKEN_BITWISE_XOR:
                     return KrtIrXor(builder, lhs, rhs);
@@ -892,81 +1061,37 @@ static KrtIRValue KrtIrGenerateExpression(KrtIRBuilder* builder, ASTNode* expr) 
                 case TOKEN_GREATER:
                     return KrtIrCompare(builder, KRT_IR_GT, lhs, rhs);
                 case TOKEN_EQUAL:
+                    if (is_string_expression(builder, expr->data.binary_op.left) ||
+                        is_string_expression(builder, expr->data.binary_op.right)) {
+                        return irgen_synth_streq(builder, lhs, rhs);
+                    }
                     return KrtIrCompare(builder, KRT_IR_EQ, lhs, rhs);
                 case TOKEN_LESS_EQUAL:
                     return KrtIrCompare(builder, KRT_IR_LE, lhs, rhs);
                 case TOKEN_GREATER_EQUAL:
                     return KrtIrCompare(builder, KRT_IR_GE, lhs, rhs);
                 case TOKEN_NOT_EQUAL:
+                    if (is_string_expression(builder, expr->data.binary_op.left) ||
+                        is_string_expression(builder, expr->data.binary_op.right)) {
+                        KrtIRValue eq = irgen_synth_streq(builder, lhs, rhs);
+                        return KrtIrCompare(builder, KRT_IR_EQ, eq, KRT_IMM_ZERO(builder));
+                    }
                     return KrtIrCompare(builder, KRT_IR_NE, lhs, rhs);
-                case TOKEN_AND: {
-                    static int and_label_id = 0;
-                    char rhs_label[IRGEN_LABEL_BUFFER_SIZE], end_label[IRGEN_LABEL_BUFFER_SIZE];
-                    snprintf(rhs_label, sizeof(rhs_label), "and_rhs_%d", and_label_id);
-                    snprintf(end_label, sizeof(end_label), "and_end_%d", and_label_id++);
-                    
-                    KrtIRBasicBlock* rhs_block = KrtIrBlockCreate(builder, rhs_label);
-                    KrtIRBasicBlock* end_block = KrtIrBlockCreate(builder, end_label);
-                    KrtIRBasicBlock* current_block = builder->current_block;
-                    
-                    if (current_block) {
-                        KrtIrBranch(builder, lhs, rhs_block, end_block);
-                        current_block->next = rhs_block;
-                    }
-                    rhs_block->next = end_block;
-                    
-                    KrtIrBlockSetCurrent(builder, rhs_block);
-                    KrtIrJump(builder, end_block);
-                    
-                    KrtIrBlockSetCurrent(builder, end_block);
-                    KrtIRValue phi_values[2] = { KRT_IMM_FALSE(builder), rhs };
-                    KrtIRBasicBlock* phi_blocks[2] = { current_block, rhs_block };
-                    return KrtIrPhi(builder, phi_values, phi_blocks, 2);
-                }
-                case TOKEN_OR: {
-                    static int or_label_id = 0;
-                    char rhs_label[IRGEN_LABEL_BUFFER_SIZE], end_label[IRGEN_LABEL_BUFFER_SIZE];
-                    snprintf(rhs_label, sizeof(rhs_label), "or_rhs_%d", or_label_id);
-                    snprintf(end_label, sizeof(end_label), "or_end_%d", or_label_id++);
-                    
-                    KrtIRBasicBlock* rhs_block = KrtIrBlockCreate(builder, rhs_label);
-                    KrtIRBasicBlock* end_block = KrtIrBlockCreate(builder, end_label);
-                    KrtIRBasicBlock* current_block = builder->current_block;
-                    
-                    if (current_block) {
-                        KrtIrBranch(builder, lhs, end_block, rhs_block);
-                        current_block->next = rhs_block;
-                    }
-                    rhs_block->next = end_block;
-                    
-                    KrtIrBlockSetCurrent(builder, rhs_block);
-                    KrtIrJump(builder, end_block);
-                    
-                    KrtIrBlockSetCurrent(builder, end_block);
-                    KrtIRValue phi_values[2] = { KRT_IMM_TRUE(builder), rhs };
-                    KrtIRBasicBlock* phi_blocks[2] = { current_block, rhs_block };
-                    return KrtIrPhi(builder, phi_values, phi_blocks, 2);
-                }
                 case TOKEN_NULL_COALESCING:
                     return irgen_null_coalesce(builder, lhs, rhs);
                 default:
                     return lhs;
             }
-        }
-
-        case AST_UNARY_OPERATION: {
+}
+static KrtIRValue irgen_expr_UnaryOperation(KrtIRBuilder* builder, ASTNode* expr) {
             KrtIRValue operand = KrtIrGenerateExpression(builder, expr->data.unary_op.operand);
             switch (expr->data.unary_op.operator) {
                 case TOKEN_MINUS: return KrtIrSub(builder, KRT_IMM_ZERO(builder), operand);
                 case TOKEN_NOT: return KrtIrCompare(builder, KRT_IR_EQ, operand, KRT_IMM_ZERO(builder));
                 default: return operand;
             }
-        }
-
-        case AST_MEMBER_ACCESS: {
-            fprintf(stderr, "[IrGen] MEMBER_ACCESS: object_type=%d, member=%s\n",
-                    expr->data.member_access.object ? (int)expr->data.member_access.object->type : -1,
-                    expr->data.member_access.member_name);
+}
+static KrtIRValue irgen_expr_MemberAccess(KrtIRBuilder* builder, ASTNode* expr) {
             if (expr->data.member_access.object &&
                 expr->data.member_access.object->type == AST_IDENTIFIER) {
                 const char* class_name = expr->data.member_access.object->data.identifier_name;
@@ -976,6 +1101,14 @@ static KrtIRValue KrtIrGenerateExpression(KrtIRBuilder* builder, ASTNode* expr) 
                     KrtIRGlobal* global = KrtIrModuleFindGlobal(builder->module, mangled_name);
                     if (global) {
                         return KrtIrLoad(builder, mangled_name);
+                    }
+                }
+                if (!expr->data.member_access.resolved_class_name) {
+                    char* flat = KrtIrMangleStaticMember(class_name, member_name);
+                    if (flat) {
+                        KrtIRValue value = KrtIrLoad(builder, flat);
+                        IRGEN_FREE(flat);
+                        return value;
                     }
                 }
                 char* fallback_mangled = KrtIrMangleStaticMember(class_name, member_name);
@@ -1007,15 +1140,9 @@ static KrtIRValue KrtIrGenerateExpression(KrtIRBuilder* builder, ASTNode* expr) 
             }
 
             return void_val_return();
-        }
-
-        case AST_CALL: {
+}
+static KrtIRValue irgen_expr_Call(KrtIRBuilder* builder, ASTNode* expr) {
             const char* func_name = expr->data.call.name;
-
-            fprintf(stderr, "[IrGen] AST_CALL: func_name=%s, object=%p, object_type=%d\n",
-                    func_name,
-                    (void*)expr->data.call.object,
-                    expr->data.call.object ? (int)expr->data.call.object->type : -1);
 
             if (!expr->data.call.object &&
                 strcmp(func_name, irgen_get_builtin_func(IRGEN_FUNC_MALLOC)) == 0 &&
@@ -1036,15 +1163,6 @@ static KrtIRValue KrtIrGenerateExpression(KrtIRBuilder* builder, ASTNode* expr) 
                 if (expr->data.call.object->type == AST_IDENTIFIER) {
                     const char* class_name = expr->data.call.object->data.identifier_name;
 
-                    KrtIRValue* args = NULL;
-                    if (expr->data.call.argument_count > 0) {
-                        args = IRGEN_ALLOC_ARGS(expr->data.call.argument_count);
-                        IRGEN_CHECK_ALLOC(args, void_val_return());
-                        for (int i = 0; i < expr->data.call.argument_count; i++) {
-                            IRGEN_SET_ARG(args, i, KrtIrGenerateExpression(builder, expr->data.call.arguments[i]));
-                        }
-                    }
-
                     char* fallback_mangled = NULL;
                     const char* call_func_name = expr->data.call.resolved_mangled_name;
                     if (!call_func_name) {
@@ -1055,7 +1173,29 @@ static KrtIRValue KrtIrGenerateExpression(KrtIRBuilder* builder, ASTNode* expr) 
                         call_func_name = fallback_mangled ? fallback_mangled : func_name;
                     }
 
-                    fprintf(stderr, "[IrGen] Static call: %s -> %s\n", func_name, call_func_name);
+                    if (expr->data.call.is_instance_call) {
+                        KrtIRValue this_val = KrtIrGenerateExpression(builder, expr->data.call.object);
+                        int ac = expr->data.call.argument_count;
+                        KrtIRValue* iargs = IRGEN_ALLOC_ARGS(ac + 1);
+                        IRGEN_CHECK_ALLOC(iargs, void_val_return());
+                        IRGEN_SET_ARG(iargs, 0, this_val);
+                        for (int i = 0; i < ac; i++) {
+                            IRGEN_SET_ARG(iargs, i + 1, KrtIrGenerateExpression(builder, expr->data.call.arguments[i]));
+                        }
+                        KrtIRValue iresult = KrtIrCall(builder, call_func_name, iargs, ac + 1);
+                        IRGEN_SAFE_FREE(iargs);
+                        IRGEN_SAFE_FREE(fallback_mangled);
+                        return iresult;
+                    }
+
+                    KrtIRValue* args = NULL;
+                    if (expr->data.call.argument_count > 0) {
+                        args = IRGEN_ALLOC_ARGS(expr->data.call.argument_count);
+                        IRGEN_CHECK_ALLOC(args, void_val_return());
+                        for (int i = 0; i < expr->data.call.argument_count; i++) {
+                            IRGEN_SET_ARG(args, i, KrtIrGenerateExpression(builder, expr->data.call.arguments[i]));
+                        }
+                    }
                     KrtIRValue result;
                     if (irgen_is_syscall_method(class_name, func_name) &&
                         expr->data.call.argument_count > 0) {
@@ -1122,13 +1262,10 @@ static KrtIRValue KrtIrGenerateExpression(KrtIRBuilder* builder, ASTNode* expr) 
             IRGEN_SAFE_FREE(args);
             IRGEN_SAFE_FREE(call_mangled);
             return result;
-        }
-
-        case AST_STATIC_METHOD_CALL: {
+}
+static KrtIRValue irgen_expr_StaticMethodCall(KrtIRBuilder* builder, ASTNode* expr) {
             const char* class_name = expr->data.static_call.class_name;
             const char* method_name = expr->data.static_call.method_name;
-
-            fprintf(stderr, "[IrGen] AST_STATIC_METHOD_CALL expr: %s.%s\n", class_name, method_name);
 
             char* mangled = NULL;
             const char* call_func_name = expr->data.static_call.resolved_mangled_name;
@@ -1161,9 +1298,8 @@ static KrtIRValue KrtIrGenerateExpression(KrtIRBuilder* builder, ASTNode* expr) 
             IRGEN_SAFE_FREE(args);
             IRGEN_SAFE_FREE(mangled);
             return result;
-        }
-
-        case AST_TERNARY_OPERATION: {
+}
+static KrtIRValue irgen_expr_TernaryOperation(KrtIRBuilder* builder, ASTNode* expr) {
             KrtIRValue cond = KrtIrGenerateExpression(builder, expr->data.ternary_op.condition);
 
             char true_label[32], false_label[32], end_label[32];
@@ -1177,25 +1313,24 @@ static KrtIRValue KrtIrGenerateExpression(KrtIRBuilder* builder, ASTNode* expr) 
             KrtIRBasicBlock* saved_current_block = builder->current_block;
 
             KrtIrBranch(builder, cond, true_block, false_block);
-            if (saved_current_block) saved_current_block->next = true_block;
-            true_block->next = false_block;
-            false_block->next = end_block;
+            char res_name[64];
+            snprintf(res_name, sizeof(res_name), "__ter_%d", builder->label_counter++);
+            KrtIrAlloc(builder, res_name);
 
             KrtIrBlockSetCurrent(builder, true_block);
             KrtIRValue true_value = KrtIrGenerateExpression(builder, expr->data.ternary_op.true_value);
+            KrtIrStore(builder, res_name, true_value);
             KrtIrJump(builder, end_block);
 
             KrtIrBlockSetCurrent(builder, false_block);
             KrtIRValue false_value = KrtIrGenerateExpression(builder, expr->data.ternary_op.false_value);
+            KrtIrStore(builder, res_name, false_value);
             KrtIrJump(builder, end_block);
 
             KrtIrBlockSetCurrent(builder, end_block);
-            KrtIRValue phi_values[2] = { true_value, false_value };
-            KrtIRBasicBlock* phi_blocks[2] = { true_block, false_block };
-            return KrtIrPhi(builder, phi_values, phi_blocks, 2);
-        }
-
-        case AST_ARRAY_LITERAL: {
+            return KrtIrLoad(builder, res_name);
+}
+static KrtIRValue irgen_expr_ArrayLiteral(KrtIRBuilder* builder, ASTNode* expr) {
             int element_count = expr->data.array_literal.element_count;
             if (element_count == 0) return irgen_allocate_memory(builder, KRT_IMM_PTR_SIZE(builder));
 
@@ -1207,9 +1342,8 @@ static KrtIRValue KrtIrGenerateExpression(KrtIRBuilder* builder, ASTNode* expr) 
                 KrtIrArrayStore(builder, array_ptr, KrtIrImm(builder, i), elem_val);
             }
             return array_ptr;
-        }
-
-        case AST_ARRAY_ACCESS: {
+}
+static KrtIRValue irgen_expr_ArrayAccess(KrtIRBuilder* builder, ASTNode* expr) {
             int element_size = irgen_array_element_size(builder, expr->data.array_access.array);
             KrtIRValue base = KrtIrGenerateExpression(builder, expr->data.array_access.array);
             KrtIRValue index = KrtIrGenerateExpression(builder, expr->data.array_access.index);
@@ -1219,9 +1353,8 @@ static KrtIRValue KrtIrGenerateExpression(KrtIRBuilder* builder, ASTNode* expr) 
             }
             KrtIRValue address = KrtIrAdd(builder, base, offset);
             return KrtIrLoadPtrSized(builder, address, 0, element_size);
-        }
-
-        case AST_LAMBDA_EXPRESSION: {
+}
+static KrtIRValue irgen_expr_LambdaExpression(KrtIRBuilder* builder, ASTNode* expr) {
             static int lambda_counter = 0;
             char lambda_name[256];
             snprintf(lambda_name, sizeof(lambda_name), "__lambda_%d", lambda_counter++);
@@ -1257,9 +1390,8 @@ static KrtIRValue KrtIrGenerateExpression(KrtIRBuilder* builder, ASTNode* expr) 
             builder->current_function = saved_func;
             builder->current_block = saved_block;
             return KRT_IMM_ZERO(builder);
-        }
-
-        case AST_LINQ_QUERY: {
+}
+static KrtIRValue irgen_expr_LinqQuery(KrtIRBuilder* builder, ASTNode* expr) {
             ASTNode* from_clause = expr->data.linq_query.from_clause;
             if (!from_clause || from_clause->type != AST_LINQ_FROM) return void_val_return();
             
@@ -1297,32 +1429,15 @@ static KrtIRValue KrtIrGenerateExpression(KrtIRBuilder* builder, ASTNode* expr) 
                 source = irgen_linq_select(builder, source, sel);
             }
             return source;
-        }
-
-        case AST_UNSAFE_CALL: {
+}
+static KrtIRValue irgen_expr_UnsafeCall(KrtIRBuilder* builder, ASTNode* expr) {
             if (expr->data.unsafe_call.is_block) {
                 KrtIrGenerateStatement(builder, expr->data.unsafe_call.expression);
                 return void_val_return();
             }
             return KrtIrGenerateExpression(builder, expr->data.unsafe_call.expression);
-        }
-
-        case AST_DEFAULT_EXPRESSION: return KRT_IMM_ZERO(builder);
-
-        case AST_IS_EXPRESSION:
-            return irgen_is_instance(builder,
-                KrtIrGenerateExpression(builder, expr->data.is_expr.expression),
-                expr->data.is_expr.type_name);
-
-        case AST_AS_EXPRESSION:
-            return irgen_as_instance(builder,
-                KrtIrGenerateExpression(builder, expr->data.as_expr.expression),
-                expr->data.as_expr.type_name);
-
-        case AST_SIZEOF_EXPRESSION:
-            return irgen_size_of_pointer(builder);
-
-        case AST_INTERPOLATED_STRING: {
+}
+static KrtIRValue irgen_expr_InterpolatedString(KrtIRBuilder* builder, ASTNode* expr) {
             int part_count = expr->data.interpolated_string.part_count;
             int expr_count = expr->data.interpolated_string.expression_count;
             if (part_count == 0 && expr_count == 0) return KrtIrStringConst(builder, "");
@@ -1345,9 +1460,8 @@ static KrtIRValue KrtIrGenerateExpression(KrtIRBuilder* builder, ASTNode* expr) 
                 }
             }
             return result;
-        }
-
-        case AST_TUPLE_EXPRESSION: {
+}
+static KrtIRValue irgen_expr_TupleExpression(KrtIRBuilder* builder, ASTNode* expr) {
             int count = expr->data.tuple_expr.element_count;
             KrtIRValue tuple_ptr = irgen_allocate_memory(builder, KrtIrImm(builder, count * IRGEN_POINTER_SIZE));
             for (int i = 0; i < count; i++) {
@@ -1355,14 +1469,8 @@ static KrtIRValue KrtIrGenerateExpression(KrtIRBuilder* builder, ASTNode* expr) 
                     KrtIrGenerateExpression(builder, expr->data.tuple_expr.elements[i]));
             }
             return tuple_ptr;
-        }
-
-        case AST_TUPLE_ELEMENT_ACCESS:
-            return irgen_load_pointer(builder,
-                KrtIrGenerateExpression(builder, expr->data.tuple_element_access.tuple),
-                KrtIrImm(builder, expr->data.tuple_element_access.index * IRGEN_POINTER_SIZE));
-
-        case AST_CAST_EXPRESSION: {
+}
+static KrtIRValue irgen_expr_CastExpression(KrtIRBuilder* builder, ASTNode* expr) {
             KrtIRValue val = KrtIrGenerateExpression(builder, expr->data.cast_expr.expression);
             switch (expr->data.cast_expr.target_type) {
                 case TOKEN_INT32: case TOKEN_INT64: case TOKEN_FLOAT32:
@@ -1370,8 +1478,114 @@ static KrtIRValue KrtIrGenerateExpression(KrtIRBuilder* builder, ASTNode* expr) 
                     return KrtIrCast(builder, val, expr->data.cast_expr.target_type);
                 default: return val;
             }
-        }
+}
+static KrtIRValue irgen_expr_AddressOf(KrtIRBuilder* builder, ASTNode* expr) {
+            if (expr->data.address_of.operand && expr->data.address_of.operand->type == AST_IDENTIFIER)
+                return irgen_get_variable_address(builder, expr->data.address_of.operand->data.identifier_name);
+            return KRT_IMM_ZERO(builder);
+}
+static KrtIRValue irgen_expr_StackallocExpression(KrtIRBuilder* builder, ASTNode* expr) {
+            int elem_size = IRGEN_POINTER_SIZE;
+            switch (expr->data.stackalloc_expr.type_token) {
+                case TOKEN_INT8: case TOKEN_UINT8: elem_size = 1; break;
+                case TOKEN_INT16: case TOKEN_UINT16: elem_size = 2; break;
+                case TOKEN_INT32: case TOKEN_UINT32: case TOKEN_FLOAT32: elem_size = 4; break;
+                default: break;
+            }
+            return irgen_stack_alloc(builder,
+                KrtIrMul(builder, KrtIrGenerateExpression(builder, expr->data.stackalloc_expr.count_expr),
+                          KrtIrImm(builder, elem_size)));
+}
 
+static KrtIRValue KrtIrGenerateExpression(KrtIRBuilder* builder, ASTNode* expr) {
+    if (!builder || !expr) {
+        return KRT_IMM_ZERO(builder);
+    }
+
+    switch (expr->type) {
+        case AST_IDENTIFIER:
+            return irgen_expr_Identifier(builder, expr);
+            break;
+        case AST_NUMBER:
+            return irgen_expr_Number(builder, expr);
+            break;
+        case AST_BOOLEAN:
+            return irgen_expr_Boolean(builder, expr);
+            break;
+        case AST_STRING:
+            return irgen_expr_String(builder, expr);
+            break;
+        case AST_CHAR_LITERAL:
+            return irgen_expr_CharLiteral(builder, expr);
+            break;
+        case AST_NEW_EXPRESSION:
+            return irgen_expr_NewExpression(builder, expr);
+            break;
+        case AST_NEW_ARRAY_EXPRESSION:
+            return irgen_expr_NewArrayExpression(builder, expr);
+            break;
+        case AST_BINARY_OPERATION:
+            return irgen_expr_BinaryOperation(builder, expr);
+            break;
+        case AST_UNARY_OPERATION:
+            return irgen_expr_UnaryOperation(builder, expr);
+            break;
+        case AST_MEMBER_ACCESS:
+            return irgen_expr_MemberAccess(builder, expr);
+            break;
+        case AST_CALL:
+            return irgen_expr_Call(builder, expr);
+            break;
+        case AST_STATIC_METHOD_CALL:
+            return irgen_expr_StaticMethodCall(builder, expr);
+            break;
+        case AST_TERNARY_OPERATION:
+            return irgen_expr_TernaryOperation(builder, expr);
+            break;
+        case AST_ARRAY_LITERAL:
+            return irgen_expr_ArrayLiteral(builder, expr);
+            break;
+        case AST_ARRAY_ACCESS:
+            return irgen_expr_ArrayAccess(builder, expr);
+            break;
+        case AST_LAMBDA_EXPRESSION:
+            return irgen_expr_LambdaExpression(builder, expr);
+            break;
+        case AST_LINQ_QUERY:
+            return irgen_expr_LinqQuery(builder, expr);
+            break;
+        case AST_UNSAFE_CALL:
+            return irgen_expr_UnsafeCall(builder, expr);
+            break;
+        case AST_DEFAULT_EXPRESSION: return KRT_IMM_ZERO(builder);
+
+        case AST_IS_EXPRESSION:
+            return irgen_is_instance(builder,
+                KrtIrGenerateExpression(builder, expr->data.is_expr.expression),
+                expr->data.is_expr.type_name);
+
+        case AST_AS_EXPRESSION:
+            return irgen_as_instance(builder,
+                KrtIrGenerateExpression(builder, expr->data.as_expr.expression),
+                expr->data.as_expr.type_name);
+
+        case AST_SIZEOF_EXPRESSION:
+            return irgen_size_of_pointer(builder);
+
+        case AST_INTERPOLATED_STRING:
+            return irgen_expr_InterpolatedString(builder, expr);
+            break;
+        case AST_TUPLE_EXPRESSION:
+            return irgen_expr_TupleExpression(builder, expr);
+            break;
+        case AST_TUPLE_ELEMENT_ACCESS:
+            return irgen_load_pointer(builder,
+                KrtIrGenerateExpression(builder, expr->data.tuple_element_access.tuple),
+                KrtIrImm(builder, expr->data.tuple_element_access.index * IRGEN_POINTER_SIZE));
+
+        case AST_CAST_EXPRESSION:
+            return irgen_expr_CastExpression(builder, expr);
+            break;
         case AST_DELEGATE_DECLARATION:
         case AST_DELEGATE_TYPE:
             return KRT_IMM_ZERO(builder);
@@ -1383,25 +1597,12 @@ static KrtIRValue KrtIrGenerateExpression(KrtIRBuilder* builder, ASTNode* expr) 
                 KrtIrGenerateExpression(builder, expr->data.pointer_deref.pointer),
                 KRT_IMM_ZERO(builder));
 
-        case AST_ADDRESS_OF: {
-            if (expr->data.address_of.operand && expr->data.address_of.operand->type == AST_IDENTIFIER)
-                return irgen_get_variable_address(builder, expr->data.address_of.operand->data.identifier_name);
-            return KRT_IMM_ZERO(builder);
-        }
-
-        case AST_STACKALLOC_EXPRESSION: {
-            int elem_size = IRGEN_POINTER_SIZE;
-            switch (expr->data.stackalloc_expr.type_token) {
-                case TOKEN_INT8: case TOKEN_UINT8: elem_size = 1; break;
-                case TOKEN_INT16: case TOKEN_UINT16: elem_size = 2; break;
-                case TOKEN_INT32: case TOKEN_UINT32: case TOKEN_FLOAT32: elem_size = 4; break;
-                default: break;
-            }
-            return irgen_stack_alloc(builder,
-                KrtIrMul(builder, KrtIrGenerateExpression(builder, expr->data.stackalloc_expr.count_expr),
-                          KrtIrImm(builder, elem_size)));
-        }
-
+        case AST_ADDRESS_OF:
+            return irgen_expr_AddressOf(builder, expr);
+            break;
+        case AST_STACKALLOC_EXPRESSION:
+            return irgen_expr_StackallocExpression(builder, expr);
+            break;
         case AST_AWAIT_EXPRESSION:
             return irgen_await_task(builder, KrtIrGenerateExpression(builder, expr->data.await_expr.expression));
 
@@ -1426,11 +1627,7 @@ static KrtIRValue void_val_return(void) {
     return v;
 }
 
-static void KrtIrGenerateStatement(KrtIRBuilder* builder, ASTNode* stmt) {
-    if (!stmt) return;
-
-    switch (stmt->type) {
-        case AST_ASSIGNMENT: {
+static void irgen_stmt_Assignment(KrtIRBuilder* builder, ASTNode* stmt) {
             KrtIRValue value = KrtIrGenerateExpression(builder, stmt->data.assignment.value);
             const char* target_name = stmt->data.assignment.name;
             const char* current_class = KrtIrCurrentClassContext(builder);
@@ -1453,12 +1650,11 @@ static void KrtIrGenerateStatement(KrtIRBuilder* builder, ASTNode* stmt) {
                 }
             }
             
-            if (!stored) KrtIrStore(builder, target_name, value);
-            break;
-        }
-
-        case AST_COMPOUND_ASSIGNMENT: {
-            KrtIRValue current_val = KrtIrLoad(builder, stmt->data.compound_assignment.name);
+            if (!stored) KrtIrStore(builder, KrtIrVarTypeResolveIRName(builder, target_name), value);
+            return;
+}
+static void irgen_stmt_CompoundAssignment(KrtIRBuilder* builder, ASTNode* stmt) {
+            KrtIRValue current_val = KrtIrLoad(builder, KrtIrVarTypeResolveIRName(builder, stmt->data.compound_assignment.name));
             KrtIRValue rhs = KrtIrGenerateExpression(builder, stmt->data.compound_assignment.value);
             KrtIRValue result;
             
@@ -1469,25 +1665,19 @@ static void KrtIrGenerateStatement(KrtIRBuilder* builder, ASTNode* stmt) {
                 case TOKEN_DIV_ASSIGN: result = KrtIrDiv(builder, current_val, rhs); break;
                 default: result = rhs; break;
             }
-            KrtIrStore(builder, stmt->data.compound_assignment.name, result);
-            break;
-        }
-
-        case AST_ARRAY_ASSIGNMENT: {
+            KrtIrStore(builder, KrtIrVarTypeResolveIRName(builder, stmt->data.compound_assignment.name), result);
+            return;
+}
+static void irgen_stmt_ArrayAssignment(KrtIRBuilder* builder, ASTNode* stmt) {
             int element_size = irgen_array_element_size(builder, stmt->data.array_assignment.array);
             KrtIrArrayStoreSized(builder,
                 KrtIrGenerateExpression(builder, stmt->data.array_assignment.array),
                 KrtIrGenerateExpression(builder, stmt->data.array_assignment.index),
                 KrtIrGenerateExpression(builder, stmt->data.array_assignment.value),
                 element_size);
-            break;
-        }
-
-        case AST_RETURN_STATEMENT:
-            KrtIrReturn(builder, KrtIrGenerateExpression(builder, stmt->data.return_stmt.value));
-            break;
-
-        case AST_IF_STATEMENT: {
+            return;
+}
+static void irgen_stmt_IfStatement(KrtIRBuilder* builder, ASTNode* stmt) {
             KrtIRValue cond = KrtIrGenerateExpression(builder, stmt->data.if_stmt.condition);
             char labels[3][32];
             for (int i = 0; i < 3; i++) snprintf(labels[i], sizeof(labels[i]), "%s_%d",
@@ -1514,10 +1704,9 @@ static void KrtIrGenerateStatement(KrtIRBuilder* builder, ASTNode* stmt) {
             }
 
             KrtIrBlockSetCurrent(builder, blocks[2]);
-            break;
-        }
-
-        case AST_WHILE_STATEMENT: {
+            return;
+}
+static void irgen_stmt_WhileStatement(KrtIRBuilder* builder, ASTNode* stmt) {
             char labels[3][32];
             for (int i = 0; i < 3; i++) snprintf(labels[i], sizeof(labels[i]), "while_%s_%d",
                 i == 0 ? "cond" : i == 1 ? "body" : "end", builder->label_counter++);
@@ -1540,10 +1729,30 @@ static void KrtIrGenerateStatement(KrtIRBuilder* builder, ASTNode* stmt) {
 
             KrtIrBlockSetCurrent(builder, blocks[2]);
             KrtIrPopLoopContext(builder);
-            break;
-        }
+            return;
+}
+static void irgen_stmt_DoWhileStatement(KrtIRBuilder* builder, ASTNode* stmt) {
+            char labels[3][32];
+            for (int i = 0; i < 3; i++) snprintf(labels[i], sizeof(labels[i]), "dowhile_%s_%d",
+                i == 0 ? "body" : i == 1 ? "cond" : "end", builder->label_counter++);
 
-        case AST_FOR_STATEMENT: {
+            KrtIRBasicBlock* blocks[3] = {
+                KrtIrBlockCreate(builder, labels[0]),
+                KrtIrBlockCreate(builder, labels[1]),
+                KrtIrBlockCreate(builder, labels[2])
+            };
+
+            KrtIrPushLoopContext(builder, blocks[1], blocks[2]);
+            KrtIrBlockSetCurrent(builder, blocks[0]);
+            KrtIrGenerateStatement(builder, stmt->data.do_while_stmt.body);
+            KrtIrJump(builder, blocks[1]);
+            KrtIrBlockSetCurrent(builder, blocks[1]);
+            KrtIrBranch(builder, KrtIrGenerateExpression(builder, stmt->data.do_while_stmt.condition), blocks[0], blocks[2]);
+            KrtIrBlockSetCurrent(builder, blocks[2]);
+            KrtIrPopLoopContext(builder);
+            return;
+}
+static void irgen_stmt_ForStatement(KrtIRBuilder* builder, ASTNode* stmt) {
             if (stmt->data.for_stmt.init) {
                 switch (stmt->data.for_stmt.init->type) {
                     case AST_ASSIGNMENT: case AST_COMPOUND_ASSIGNMENT: case AST_ARRAY_ASSIGNMENT:
@@ -1596,98 +1805,62 @@ static void KrtIrGenerateStatement(KrtIRBuilder* builder, ASTNode* stmt) {
 
             KrtIrBlockSetCurrent(builder, blocks[3]);
             KrtIrPopLoopContext(builder);
-            break;
-        }
-
-        case AST_FOREACH_STATEMENT: {
+            return;
+}
+static void irgen_stmt_ForeachStatement(KrtIRBuilder* builder, ASTNode* stmt) {
             char* var_name = stmt->data.foreach_stmt.var_name;
+            int element_size = irgen_array_element_size(builder, stmt->data.foreach_stmt.iterable);
             KrtIRValue iterable_value = KrtIrGenerateExpression(builder, stmt->data.foreach_stmt.iterable);
+            KrtIRValue byte_len = KrtIrLoadPtrSized(builder, iterable_value, -IRGEN_POINTER_SIZE, IRGEN_POINTER_SIZE);
+            KrtIRValue data_len = KrtIrSub(builder, byte_len, KrtIrImm(builder, IRGEN_POINTER_SIZE));
+            KrtIRValue array_len = (element_size <= 1)
+                ? data_len
+                : KrtIrDiv(builder, data_len, KrtIrImm(builder, element_size));
 
             char index_var[256];
             snprintf(index_var, sizeof(index_var), "%s__idx", var_name);
             KrtIrAlloc(builder, index_var);
             KrtIrStore(builder, index_var, KRT_IMM_ZERO(builder));
 
-            char loop_labels[3][32];
-            for (int i = 0; i < 3; i++) snprintf(loop_labels[i], sizeof(loop_labels[i]), "foreach_%s_%d",
-                i == 0 ? "cond" : i == 1 ? "body" : "end", builder->label_counter++);
+            char loop_labels[4][32];
+            for (int i = 0; i < 4; i++) snprintf(loop_labels[i], sizeof(loop_labels[i]), "foreach_%s_%d",
+                i == 0 ? "cond" : i == 1 ? "body" : i == 2 ? "latch" : "end", builder->label_counter++);
 
-            KrtIRBasicBlock* loop_blocks[3] = {
-                KrtIrBlockCreate(builder, loop_labels[0]),
-                KrtIrBlockCreate(builder, loop_labels[1]),
-                KrtIrBlockCreate(builder, loop_labels[2])
-            };
+            KrtIRBasicBlock* cond_block = KrtIrBlockCreate(builder, loop_labels[0]);
+            KrtIRBasicBlock* body_block = KrtIrBlockCreate(builder, loop_labels[1]);
+            KrtIRBasicBlock* latch_block = KrtIrBlockCreate(builder, loop_labels[2]);
+            KrtIRBasicBlock* end_block = KrtIrBlockCreate(builder, loop_labels[3]);
 
-            KrtIrPushLoopContext(builder, loop_blocks[2], loop_blocks[2]);
-            KrtIrJump(builder, loop_blocks[0]);
+            KrtIrPushLoopContext(builder, end_block, latch_block);
+            KrtIrJump(builder, cond_block);
 
-            KrtIrBlockSetCurrent(builder, loop_blocks[0]);
+            KrtIrBlockSetCurrent(builder, cond_block);
             KrtIRValue index_value = KrtIrLoad(builder, index_var);
-            KrtIRValue array_len = irgen_array_size(builder, iterable_value);
             KrtIRValue cond = KrtIrCompare(builder, KRT_IR_LT, index_value, array_len);
-            KrtIrBranch(builder, cond, loop_blocks[1], loop_blocks[2]);
+            KrtIrBranch(builder, cond, body_block, end_block);
 
-            KrtIrBlockSetCurrent(builder, loop_blocks[1]);
+            KrtIrBlockSetCurrent(builder, body_block);
             KrtIRValue current_index = KrtIrLoad(builder, index_var);
-            KrtIRValue element_ptr = irgen_array_get(builder, iterable_value, current_index);
-            KrtIRValue element_value = KrtIrLoadPtr(builder, element_ptr, 0);
+            KrtIRValue offset = (element_size <= 1)
+                ? current_index
+                : KrtIrMul(builder, current_index, KrtIrImm(builder, element_size));
+            KrtIRValue element_addr = KrtIrAdd(builder, iterable_value, offset);
+            KrtIRValue element_value = KrtIrLoadPtrSized(builder, element_addr, 0, element_size);
 
             KrtIrAlloc(builder, var_name);
             KrtIrStore(builder, var_name, element_value);
 
-            TypeCheckSymbolTable* foreach_scope = NULL;
-            TypeCheckSymbolTable* saved_scope = NULL;
-            if (builder->type_context) {
-                saved_scope = builder->type_context->current_scope;
-                foreach_scope = type_check_symbol_table_create(saved_scope);
-                builder->type_context->current_scope = foreach_scope;
-                
-                TypeCheckSymbol symbol = {0};
-                symbol.name = var_name;
-                symbol.type = type_create_basic(TYPE_INT64);
-                type_check_symbol_table_add(builder->type_context->current_scope, symbol);
-            }
-
             KrtIrGenerateStatement(builder, stmt->data.foreach_stmt.body);
 
+            KrtIrJump(builder, latch_block);
+
+            KrtIrBlockSetCurrent(builder, latch_block);
             KrtIrStore(builder, index_var, KrtIrAdd(builder, KrtIrLoad(builder, index_var), KRT_IMM_ONE(builder)));
-            KrtIrJump(builder, loop_blocks[0]);
+            KrtIrJump(builder, cond_block);
 
-            KrtIrBlockSetCurrent(builder, loop_blocks[2]);
-
-            if (builder->type_context) {
-                builder->type_context->current_scope = saved_scope;
-                type_check_symbol_table_unref(foreach_scope);
-            }
-
-            KrtIrPopLoopContext(builder);
-            break;
-        }
-
-        case AST_PRINT_STATEMENT:
-            KrtIrGeneratePrint(builder, stmt->data.print_stmt.values, stmt->data.print_stmt.value_count, stmt->data.print_stmt.has_newline);
-            break;
-
-        case AST_CALL:
-            KrtIrGenerateExpression(builder, stmt);
-            break;
-
-        case AST_STATIC_METHOD_CALL:
-            fprintf(stderr, "[IrGen] Processing AST_STATIC_METHOD_CALL statement\n");
-            KrtIrGenerateExpression(builder, stmt);
-            fprintf(stderr, "[IrGen] After AST_STATIC_METHOD_CALL: main block first_inst=%p\n",
-                    builder->current_block ? (void*)builder->current_block->first_inst : NULL);
-            break;
-
-        case AST_BLOCK:
-            KrtIrGenerateBlock(builder, stmt);
-            break;
-
-        case AST_POINT_BLOCK:
-            KrtIrGenerateBlock(builder, stmt->data.point_block.body);
-            break;
-
-        case AST_SWITCH_STATEMENT: {
+            KrtIrBlockSetCurrent(builder, end_block);
+}
+static void irgen_stmt_SwitchStatement(KrtIRBuilder* builder, ASTNode* stmt) {
             KrtIRValue cond = KrtIrGenerateExpression(builder, stmt->data.switch_stmt.expression);
             char end_label[32];
             int end_label_id = builder->label_counter++;
@@ -1757,22 +1930,19 @@ static void KrtIrGenerateStatement(KrtIRBuilder* builder, ASTNode* stmt) {
             }
             IRGEN_FREE(case_blocks);
             IRGEN_FREE(default_label);
-            break;
-        }
-
-        case AST_BREAK_STATEMENT: {
+            return;
+}
+static void irgen_stmt_BreakStatement(KrtIRBuilder* builder, ASTNode* stmt) {
             KrtIRBasicBlock* break_block = KrtIrGetCurrentBreakBlock(builder);
             if (break_block) KrtIrJump(builder, break_block);
-            break;
-        }
-
-        case AST_CONTINUE_STATEMENT: {
+            return;
+}
+static void irgen_stmt_ContinueStatement(KrtIRBuilder* builder, ASTNode* stmt) {
             KrtIRBasicBlock* continue_block = KrtIrGetCurrentContinueBlock(builder);
             if (continue_block) KrtIrJump(builder, continue_block);
-            break;
-        }
-
-        case AST_DELETE_STATEMENT: {
+            return;
+}
+static void irgen_stmt_DeleteStatement(KrtIRBuilder* builder, ASTNode* stmt) {
             KrtIRValue obj = KrtIrGenerateExpression(builder, stmt->data.delete_stmt.value);
             const char* class_name = stmt->data.delete_stmt.resolved_class_name;
             if (class_name) {
@@ -1796,18 +1966,16 @@ static void KrtIrGenerateStatement(KrtIRBuilder* builder, ASTNode* stmt) {
                     IRGEN_FREE(dtor_name);
                 }
             }
-            break;
-        }
-
-        case AST_LOCK_STATEMENT: {
+            return;
+}
+static void irgen_stmt_LockStatement(KrtIRBuilder* builder, ASTNode* stmt) {
             KrtIRValue lock_obj = KrtIrGenerateExpression(builder, stmt->data.lock_stmt.lock_object);
             irgen_monitor_enter(builder, lock_obj);
             KrtIrGenerateStatement(builder, stmt->data.lock_stmt.body);
             irgen_monitor_exit(builder, lock_obj);
-            break;
-        }
-
-        case AST_FIXED_STATEMENT: {
+            return;
+}
+static void irgen_stmt_FixedStatement(KrtIRBuilder* builder, ASTNode* stmt) {
             KrtIRValue fixed_expr = KrtIrGenerateExpression(builder, stmt->data.fixed_statement.expression);
             const char* var_name = stmt->data.fixed_statement.variable_name;
             if (var_name) { KrtIrAlloc(builder, var_name); KrtIrStore(builder, var_name, fixed_expr); }
@@ -1815,26 +1983,23 @@ static void KrtIrGenerateStatement(KrtIRBuilder* builder, ASTNode* stmt) {
             irgen_pin_object(builder, fixed_expr);
             KrtIrGenerateStatement(builder, stmt->data.fixed_statement.body);
             irgen_unpin_object(builder, fixed_expr);
-            break;
-        }
-
-        case AST_USING_STATEMENT: {
+            return;
+}
+static void irgen_stmt_UsingStatement(KrtIRBuilder* builder, ASTNode* stmt) {
             KrtIRValue resource = KrtIrGenerateExpression(builder, stmt->data.using_stmt.resource);
             KrtIrGenerateStatement(builder, stmt->data.using_stmt.body);
             irgen_dispose(builder, resource);
-            break;
-        }
-
-        case AST_THROW_STATEMENT: {
+            return;
+}
+static void irgen_stmt_ThrowStatement(KrtIRBuilder* builder, ASTNode* stmt) {
             if (stmt->data.throw_stmt.is_rethrow) {
                 irgen_rethrow_exception(builder);
             } else {
                 irgen_throw_exception(builder);
             }
-            break;
-        }
-
-        case AST_TRY_STATEMENT: {
+            return;
+}
+static void irgen_stmt_TryStatement(KrtIRBuilder* builder, ASTNode* stmt) {
             if (stmt->data.try_stmt.try_block) KrtIrGenerateBlock(builder, stmt->data.try_stmt.try_block);
             if (stmt->data.try_stmt.catch_clauses) {
                 for (int i = 0; i < stmt->data.try_stmt.catch_clause_count; i++) {
@@ -1843,20 +2008,14 @@ static void KrtIrGenerateStatement(KrtIRBuilder* builder, ASTNode* stmt) {
                 }
             }
             if (stmt->data.try_stmt.finally_clause) KrtIrGenerateBlock(builder, stmt->data.try_stmt.finally_clause);
-            break;
-        }
+            return;
+}
+static void irgen_stmt_VariableDeclaration(KrtIRBuilder* builder, ASTNode* stmt) {
+            KrtIrVarTypePush(builder, stmt->data.variable_decl.name,
+                             (int)stmt->data.variable_decl.type,
+                             stmt->data.variable_decl.is_array ? 1 : 0);
 
-        case AST_VARIABLE_DECLARATION: {
-            if (builder->type_context && builder->type_context->current_scope) {
-                TypeCheckSymbol symbol = {0};
-                symbol.name = (char*)stmt->data.variable_decl.name;
-                Type* element_type = type_create_from_token(stmt->data.variable_decl.type);
-                symbol.type = stmt->data.variable_decl.is_array
-                    ? type_create_array(element_type, 0)
-                    : element_type;
-                if (symbol.type) type_check_symbol_table_add(builder->type_context->current_scope, symbol);
-            }
-
+            const char* ir_slot = KrtIrVarTypeResolveIRName(builder, stmt->data.variable_decl.name);
             bool is_c_style_array = (stmt->data.variable_decl.array_size != NULL);
             bool is_array_literal = (stmt->data.variable_decl.value &&
                                       stmt->data.variable_decl.value->type == AST_ARRAY_LITERAL);
@@ -1868,25 +2027,22 @@ static void KrtIrGenerateStatement(KrtIRBuilder* builder, ASTNode* stmt) {
                 if (try_extract_constant(stmt->data.variable_decl.array_size, &size_value))
                     array_size = (size_value > 0) ? (int)size_value : 10;
 
-                Type* element_type = type_create_from_token(stmt->data.variable_decl.type);
-                int element_size = element_type ? irgen_type_size(element_type->kind) : IRGEN_POINTER_SIZE;
-                type_destroy(element_type);
+                int element_size = irgen_size_from_token(stmt->data.variable_decl.type);
                 int total_bytes = array_size * element_size;
-                KrtIrAlloc(builder, stmt->data.variable_decl.name);
+                KrtIrAlloc(builder, ir_slot);
                 KrtIRValue ptr = irgen_allocate_memory(builder, KrtIrImm(builder, total_bytes));
-                KrtIrStore(builder, stmt->data.variable_decl.name, ptr);
+                KrtIrStore(builder, ir_slot, ptr);
             } else {
-                KrtIrAlloc(builder, stmt->data.variable_decl.name);
+                KrtIrAlloc(builder, ir_slot);
 
                 if (stmt->data.variable_decl.value) {
                     KrtIRValue init_val = KrtIrGenerateExpression(builder, stmt->data.variable_decl.value);
-                    KrtIrStore(builder, stmt->data.variable_decl.name, init_val);
+                    KrtIrStore(builder, ir_slot, init_val);
                 }
             }
-            break;
-        }
-
-        case AST_STATIC_VARIABLE_DECLARATION: {
+            return;
+}
+static void irgen_stmt_StaticVariableDeclaration(KrtIRBuilder* builder, ASTNode* stmt) {
             const char* name = stmt->data.static_variable_decl.name;
             const char* current_class = KrtIrCurrentClassContext(builder);
             char* mangled_name = current_class
@@ -1908,11 +2064,10 @@ static void KrtIrGenerateStatement(KrtIRBuilder* builder, ASTNode* stmt) {
             }
 
             IRGEN_SAFE_FREE(mangled_name);
-            break;
-        }
-
-        case AST_FUNCTION_DECLARATION: {
-            if (!stmt->data.function_decl.body) break;
+            return;
+}
+static void irgen_stmt_FunctionDeclaration(KrtIRBuilder* builder, ASTNode* stmt) {
+            if (!stmt->data.function_decl.body) return;
             
             KrtIRParam* params = NULL;
             int pc = stmt->data.function_decl.parameter_count;
@@ -1953,13 +2108,12 @@ static void KrtIrGenerateStatement(KrtIRBuilder* builder, ASTNode* stmt) {
             KrtIRFunction* saved_func = builder->current_function;
             builder->current_function = func;
 
-            TypeCheckSymbolTable* saved_scope = NULL;
-            if (builder->type_context) {
-                saved_scope = builder->type_context->current_scope;
-                TypeCheckSymbol* func_sym = type_check_symbol_table_lookup(saved_scope, stmt->data.function_decl.name);
-                if (func_sym && func_sym->type && func_sym->type->kind == TYPE_FUNCTION &&
-                    func_sym->type->data.function.function_scope)
-                    builder->type_context->current_scope = func_sym->type->data.function.function_scope;
+            int vt_saved = builder->var_type_count;
+            for (int pi = 0; pi < stmt->data.function_decl.parameter_count; pi++) {
+                KrtIrVarTypePush(builder,
+                                 stmt->data.function_decl.parameters[pi],
+                                 (int)(stmt->data.function_decl.parameter_types ? stmt->data.function_decl.parameter_types[pi] : 0),
+                                 stmt->data.function_decl.parameter_is_array ? stmt->data.function_decl.parameter_is_array[pi] : 0);
             }
 
             KrtIrFunctionSetEntry(builder, func);
@@ -1978,13 +2132,12 @@ static void KrtIrGenerateStatement(KrtIRBuilder* builder, ASTNode* stmt) {
                 KrtIrReturn(builder, KRT_IMM_ZERO(builder));
 
             builder->current_function = saved_func;
-            if (builder->type_context) builder->type_context->current_scope = saved_scope;
+            KrtIrVarTypeTruncate(builder, vt_saved);
             IRGEN_SAFE_FREE(mangled_name);
-            break;
-        }
-
-        case AST_CLASS_DECLARATION: {
-            if (!stmt->data.class_decl.name) break;
+            return;
+}
+static void irgen_stmt_ClassDeclaration(KrtIRBuilder* builder, ASTNode* stmt) {
+            if (!stmt->data.class_decl.name) return;
 
             ASTNode** constraints = stmt->data.class_decl.constraints;
             int constraint_count = stmt->data.class_decl.constraint_count;
@@ -2116,8 +2269,15 @@ static void KrtIrGenerateStatement(KrtIRBuilder* builder, ASTNode* stmt) {
                                 }
                             }
                             const char* base_name = member->data.function_decl.name;
-                            char* mangled = KrtIrMangleClassMethodName(stmt->data.class_decl.name, base_name,
-                                                                       member->data.function_decl.parameter_types, pc);
+                            int is_ctor = (base_name && strcmp(base_name, stmt->data.class_decl.name) == 0);
+                            char* mangled = NULL;
+                            if (is_ctor) {
+                                mangled = name_mangle_constructor(stmt->data.class_decl.name, pc);
+                            } else {
+                                mangled = KrtIrMangleClassMethodName(stmt->data.class_decl.name, base_name,
+                                                                           member->data.function_decl.parameter_types, pc);
+                            }
+                            if (!mangled) { IRGEN_FREE(params); break; }
                             KrtIRFunction* func = KrtIrFunctionCreate(builder, mangled, params, pc + 1, member->data.function_decl.return_type);
                             KrtIrFunctionSetEntry(builder, func);
                             IRGEN_FREE(params);
@@ -2278,10 +2438,9 @@ static void KrtIrGenerateStatement(KrtIRBuilder* builder, ASTNode* stmt) {
             }
 
             KrtIrPopClassContext(builder);
-            break;
-        }
-
-        case AST_NAMESPACE_DECLARATION: {
+            return;
+}
+static void irgen_stmt_NamespaceDeclaration(KrtIRBuilder* builder, ASTNode* stmt) {
             const char* namespace_name = stmt->data.namespace_decl.name;
             if (namespace_name) {
                 KrtIrPushNamespaceContext(builder, namespace_name);
@@ -2297,10 +2456,9 @@ static void KrtIrGenerateStatement(KrtIRBuilder* builder, ASTNode* stmt) {
                 }
                 KrtIrPopNamespaceContext(builder);
             }
-            break;
-        }
-
-        case AST_STATIC_FUNCTION_DECLARATION: {
+            return;
+}
+static void irgen_stmt_StaticFunctionDeclaration(KrtIRBuilder* builder, ASTNode* stmt) {
             KrtIRParam* params = NULL;
             int pc = stmt->data.static_function_decl.parameter_count;
             if (pc > 0) {
@@ -2357,9 +2515,112 @@ static void KrtIrGenerateStatement(KrtIRBuilder* builder, ASTNode* stmt) {
                 KrtIrReturn(builder, KRT_IMM_ZERO(builder));
             
             IRGEN_SAFE_FREE(mangled_name);
-            break;
-        }
+            return;
+}
 
+static void KrtIrGenerateStatement(KrtIRBuilder* builder, ASTNode* stmt) {
+    if (!stmt) return;
+
+    switch (stmt->type) {
+        case AST_ASSIGNMENT:
+            return irgen_stmt_Assignment(builder, stmt);
+            break;
+        case AST_COMPOUND_ASSIGNMENT:
+            return irgen_stmt_CompoundAssignment(builder, stmt);
+            break;
+        case AST_ARRAY_ASSIGNMENT:
+            return irgen_stmt_ArrayAssignment(builder, stmt);
+            break;
+        case AST_RETURN_STATEMENT:
+            KrtIrReturn(builder, KrtIrGenerateExpression(builder, stmt->data.return_stmt.value));
+            break;
+
+        case AST_IF_STATEMENT:
+            return irgen_stmt_IfStatement(builder, stmt);
+            break;
+        case AST_CASE_CLAUSE: {
+            for (int ci = 0; ci < stmt->data.case_clause.statement_count; ci++) {
+                KrtIrGenerateStatement(builder, stmt->data.case_clause.statements[ci]);
+            }
+            return;
+        }
+        case AST_WHILE_STATEMENT:
+            return irgen_stmt_WhileStatement(builder, stmt);
+
+        case AST_DO_WHILE_STATEMENT:
+            return irgen_stmt_DoWhileStatement(builder, stmt);
+            break;
+        case AST_FOR_STATEMENT:
+            return irgen_stmt_ForStatement(builder, stmt);
+            break;
+        case AST_FOREACH_STATEMENT:
+            return irgen_stmt_ForeachStatement(builder, stmt);
+            break;
+        case AST_PRINT_STATEMENT:
+            KrtIrGeneratePrint(builder, stmt->data.print_stmt.values, stmt->data.print_stmt.value_count, stmt->data.print_stmt.has_newline);
+            break;
+
+        case AST_CALL:
+            KrtIrGenerateExpression(builder, stmt);
+            break;
+
+        case AST_STATIC_METHOD_CALL:
+            KrtIrGenerateExpression(builder, stmt);
+            break;
+
+        case AST_BLOCK:
+            KrtIrGenerateBlock(builder, stmt);
+            break;
+
+        case AST_POINT_BLOCK:
+            KrtIrGenerateBlock(builder, stmt->data.point_block.body);
+            break;
+
+        case AST_SWITCH_STATEMENT:
+            return irgen_stmt_SwitchStatement(builder, stmt);
+            break;
+        case AST_BREAK_STATEMENT:
+            return irgen_stmt_BreakStatement(builder, stmt);
+            break;
+        case AST_CONTINUE_STATEMENT:
+            return irgen_stmt_ContinueStatement(builder, stmt);
+            break;
+        case AST_DELETE_STATEMENT:
+            return irgen_stmt_DeleteStatement(builder, stmt);
+            break;
+        case AST_LOCK_STATEMENT:
+            return irgen_stmt_LockStatement(builder, stmt);
+            break;
+        case AST_FIXED_STATEMENT:
+            return irgen_stmt_FixedStatement(builder, stmt);
+            break;
+        case AST_USING_STATEMENT:
+            return irgen_stmt_UsingStatement(builder, stmt);
+            break;
+        case AST_THROW_STATEMENT:
+            return irgen_stmt_ThrowStatement(builder, stmt);
+            break;
+        case AST_TRY_STATEMENT:
+            return irgen_stmt_TryStatement(builder, stmt);
+            break;
+        case AST_VARIABLE_DECLARATION:
+            return irgen_stmt_VariableDeclaration(builder, stmt);
+            break;
+        case AST_STATIC_VARIABLE_DECLARATION:
+            return irgen_stmt_StaticVariableDeclaration(builder, stmt);
+            break;
+        case AST_FUNCTION_DECLARATION:
+            return irgen_stmt_FunctionDeclaration(builder, stmt);
+            break;
+        case AST_CLASS_DECLARATION:
+            return irgen_stmt_ClassDeclaration(builder, stmt);
+            break;
+        case AST_NAMESPACE_DECLARATION:
+            return irgen_stmt_NamespaceDeclaration(builder, stmt);
+            break;
+        case AST_STATIC_FUNCTION_DECLARATION:
+            return irgen_stmt_StaticFunctionDeclaration(builder, stmt);
+            break;
         default:
             KrtIrGenerateExpression(builder, stmt);
             return;
@@ -2381,7 +2642,8 @@ static int KrtIrCheckHasReturn(ASTNode* node) {
             return KrtIrCheckHasReturn(node->data.if_stmt.then_branch) &&
                    (!node->data.if_stmt.else_branch || KrtIrCheckHasReturn(node->data.if_stmt.else_branch));
         case AST_WHILE_STATEMENT:
-        case AST_FOR_STATEMENT:
+        case AST_DO_WHILE_STATEMENT:
+AST_FOR_STATEMENT:
         case AST_FOREACH_STATEMENT:
             return 0;
         default:
@@ -2391,27 +2653,36 @@ static int KrtIrCheckHasReturn(ASTNode* node) {
 
 static void KrtIrGenerateBlock(KrtIRBuilder* builder, ASTNode* block) {
     if (!block || block->type != AST_BLOCK) return;
-    fprintf(stderr, "[IrGen] Block: %d statements\n", block->data.block.statement_count);
+    int vt_saved = builder->var_type_count;
     for (int i = 0; i < block->data.block.statement_count; i++) {
         ASTNode* stmt = block->data.block.statements[i];
         if (stmt) {
-            fprintf(stderr, "[IrGen]   Statement[%d]: type=%d\n", i, (int)stmt->type);
             KrtIrGenerateStatement(builder, stmt);
         }
     }
+    KrtIrVarTypeTruncate(builder, vt_saved);
 }
 
-void KrtIrGenerateFromAst(KrtIRBuilder* builder, ASTNode* ast, TypeCheckContext* type_context) {
+void KrtIrGenerateFromAst(KrtIRBuilder* builder, ASTNode* ast, void* semantic_analyzer) {
     if (!builder || !ast) return;
-    
-    builder->type_context = type_context;
+
+    builder->semantic_analyzer = semantic_analyzer;
     
     if (ast->type == AST_BLOCK || ast->type == AST_PROGRAM) {
+        int is_program = (ast->type == AST_PROGRAM);
+        for (int i = 0; is_program && i < ast->data.block.statement_count; i++) {
+            ASTNode* stmt = ast->data.block.statements ? ast->data.block.statements[i] : NULL;
+            if (!stmt) continue;
+            if (stmt->type == AST_STATIC_VARIABLE_DECLARATION) {
+                KrtIrGenerateStatement(builder, stmt);
+            }
+        }
+
         for (int i = 0; i < ast->data.block.statement_count; i++) {
             ASTNode* stmt = ast->data.block.statements ? ast->data.block.statements[i] : NULL;
             if (!stmt) continue;
             if (stmt->type == AST_BLOCK) {
-                KrtIrGenerateFromAst(builder, stmt, type_context);
+                KrtIrGenerateFromAst(builder, stmt, semantic_analyzer);
             } else if (stmt->type == AST_NAMESPACE_DECLARATION) {
                 KrtIrGenerateStatement(builder, stmt);
             }
@@ -2432,6 +2703,8 @@ void KrtIrGenerateFromAst(KrtIRBuilder* builder, ASTNode* ast, TypeCheckContext*
             if (stmt->type != AST_FUNCTION_DECLARATION &&
                 stmt->type != AST_STATIC_FUNCTION_DECLARATION &&
                 stmt->type != AST_CLASS_DECLARATION &&
+                stmt->type != AST_VARIABLE_DECLARATION &&
+                stmt->type != AST_STATIC_VARIABLE_DECLARATION &&
                 stmt->type != AST_NAMESPACE_DECLARATION) {
                 KrtIrEnsureMainEntry(builder);
                 KrtIrGenerateStatement(builder, stmt);

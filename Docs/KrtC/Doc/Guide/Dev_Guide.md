@@ -147,20 +147,17 @@ Kairote Lang 是一个现代的、高性能的编程语言，本指南面向希�
 
 ### 构建脚本
 
-主构建脚本：`build.py`
+主构建工具：`zig`（作为 C 编译器和构建系统）
 
-```python
+```bash
 # 基本构建命令
-python build.py
-
-# 清理构建
-python build.py --clean
-
-# 调试构建
-python build.py --debug
+cd Re.KrtC && zig build
 
 # 发布构建
-python build.py --release
+zig build -Doptimize=ReleaseSafe
+
+# 运行编译器
+zig build run --
 ```
 
 ### 构建配置

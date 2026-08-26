@@ -1,0 +1,4 @@
+function main() {
+    int32 i = 0;
+    while (i < 3) { i = i + 1; }
+}

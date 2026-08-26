@@ -5,51 +5,13 @@
 #define INITIAL_CAPACITY 1024
 #define STRING_INITIAL_CAPACITY 256
 
-#define DEFAULT_CODE_ALIGN 4
-#define DEFAULT_DATA_ALIGN 3
-#define DEFAULT_RODATA_ALIGN 3
-#define DEFAULT_BSS_ALIGN 3
-
-#define KRO_DEBUG  // 调试输出开关
-
-#pragma pack(push, 1)
+#define DEFAULT_CODE_ALIGN 16
+#define DEFAULT_DATA_ALIGN 8
+#define DEFAULT_RODATA_ALIGN 8
+#define DEFAULT_BSS_ALIGN 8
 
 typedef struct {
-    uint32_t magic;
-    uint32_t version;
-    uint32_t flags;
-    uint32_t entry_point;
-    uint64_t code_size;
-    uint64_t data_size;
-    uint64_t rodata_size;
-    uint64_t symbol_count;
-    uint64_t reloc_count;
-} ArkKroHeader;
-
-typedef struct {
-    uint32_t name_offset;
-    uint32_t section;
-    uint64_t value;
-    uint64_t size;
-    uint32_t binding;
-    uint32_t visibility;
-    uint32_t import_module_offset;
-} ArkKroSymbol;
-
-typedef struct {
-    uint32_t offset;
-    uint32_t type;
-    uint32_t sym_idx;
-    int32_t addend;
-    uint32_t section_index;
-} ArkKroReloc;
-
-#pragma pack(pop)
-
-#define ARK_KRO_MAGIC KRO_MAGIC
-
-typedef struct {
-    ArkKroReloc* relocs;
+    KRORelocation* relocs;
     uint32_t count;
     uint32_t capacity;
 } RelocList;
@@ -73,9 +35,8 @@ typedef struct KROWriter {
     uint8_t bss_align;
 
     uint32_t bss_size;
-    uint32_t bss_mem_size;
 
-    ArkKroSymbol* symbols;
+    KROSymbol* symbols;
     uint32_t sym_capacity;
     uint32_t sym_count;
 
@@ -91,7 +52,7 @@ typedef struct KROWriter {
     uint64_t entry_point;
     bool has_entry;
 
-    uint16_t flags;
+    uint32_t flags;
 } KROWriter;
 
 static bool allocate_writer_buffers(KROWriter* writer) {
@@ -108,23 +69,23 @@ static bool allocate_writer_buffers(KROWriter* writer) {
     if (!writer->rodata) return false;
 
     writer->sym_capacity = 64;
-    writer->symbols = (ArkKroSymbol*)calloc(writer->sym_capacity, sizeof(ArkKroSymbol));
+    writer->symbols = (KROSymbol*)calloc(writer->sym_capacity, sizeof(KROSymbol));
     if (!writer->symbols) return false;
 
     writer->text_relocs.capacity = 16;
-    writer->text_relocs.relocs = (ArkKroReloc*)calloc(writer->text_relocs.capacity, sizeof(ArkKroReloc));
+    writer->text_relocs.relocs = (KRORelocation*)calloc(writer->text_relocs.capacity, sizeof(KRORelocation));
     if (!writer->text_relocs.relocs) return false;
 
     writer->data_relocs.capacity = 16;
-    writer->data_relocs.relocs = (ArkKroReloc*)calloc(writer->data_relocs.capacity, sizeof(ArkKroReloc));
+    writer->data_relocs.relocs = (KRORelocation*)calloc(writer->data_relocs.capacity, sizeof(KRORelocation));
     if (!writer->data_relocs.relocs) return false;
 
     writer->rodata_relocs.capacity = 16;
-    writer->rodata_relocs.relocs = (ArkKroReloc*)calloc(writer->rodata_relocs.capacity, sizeof(ArkKroReloc));
+    writer->rodata_relocs.relocs = (KRORelocation*)calloc(writer->rodata_relocs.capacity, sizeof(KRORelocation));
     if (!writer->rodata_relocs.relocs) return false;
 
     writer->bss_relocs.capacity = 16;
-    writer->bss_relocs.relocs = (ArkKroReloc*)calloc(writer->bss_relocs.capacity, sizeof(ArkKroReloc));
+    writer->bss_relocs.relocs = (KRORelocation*)calloc(writer->bss_relocs.capacity, sizeof(KRORelocation));
     if (!writer->bss_relocs.relocs) return false;
 
     writer->string_capacity = STRING_INITIAL_CAPACITY;
@@ -230,6 +191,7 @@ uint32_t kro_write_rodata(KROWriter* writer, const void* data, uint32_t size) {
 }
 
 static uint32_t align_up(uint32_t value, uint32_t alignment) {
+    if (alignment == 0) return value;
     return (value + alignment - 1) & ~(alignment - 1);
 }
 
@@ -295,13 +257,12 @@ static uint32_t add_string(KROWriter* writer, const char* str) {
 
 int kro_add_symbol(KROWriter* writer, const char* name, uint8_t type, uint8_t bind,
                   uint32_t sec_idx, uint64_t value) {
-    (void)type;  
     if (!writer || !name) return -1;
 
     if (writer->sym_count >= writer->sym_capacity) {
         uint32_t new_capacity = writer->sym_capacity * 2;
-        ArkKroSymbol* new_symbols = (ArkKroSymbol*)realloc(writer->symbols,
-                                                    new_capacity * sizeof(ArkKroSymbol));
+        KROSymbol* new_symbols = (KROSymbol*)realloc(writer->symbols,
+                                                    new_capacity * sizeof(KROSymbol));
         if (!new_symbols) return -1;
 
         writer->symbols = new_symbols;
@@ -309,16 +270,16 @@ int kro_add_symbol(KROWriter* writer, const char* name, uint8_t type, uint8_t bi
     }
 
     uint32_t index = writer->sym_count++;
-    ArkKroSymbol* sym = &writer->symbols[index];
+    KROSymbol* sym = &writer->symbols[index];
 
-    memset(sym, 0, sizeof(ArkKroSymbol));
+    memset(sym, 0, sizeof(KROSymbol));
 
-    uint32_t name_offset = add_string(writer, name);
-    sym->name_offset = name_offset;
+    sym->name_offset = add_string(writer, name);
     sym->binding = bind;
     sym->section = sec_idx;
-    sym->value = value;
-    sym->size = 0;  
+    sym->value = (uint32_t)value;
+    sym->size = 0;
+    sym->type = type;
 
     return (int)index;
 }
@@ -332,8 +293,8 @@ int kro_add_import_symbol(KROWriter* writer, const char* name, const char* modul
 
     if (writer->sym_count >= writer->sym_capacity) {
         uint32_t new_capacity = writer->sym_capacity * 2;
-        ArkKroSymbol* new_symbols = (ArkKroSymbol*)realloc(writer->symbols,
-                                                    new_capacity * sizeof(ArkKroSymbol));
+        KROSymbol* new_symbols = (KROSymbol*)realloc(writer->symbols,
+                                                    new_capacity * sizeof(KROSymbol));
         if (!new_symbols) return -1;
 
         writer->symbols = new_symbols;
@@ -341,18 +302,15 @@ int kro_add_import_symbol(KROWriter* writer, const char* name, const char* modul
     }
 
     uint32_t index = writer->sym_count++;
-    ArkKroSymbol* sym = &writer->symbols[index];
+    KROSymbol* sym = &writer->symbols[index];
 
-    memset(sym, 0, sizeof(ArkKroSymbol));
+    memset(sym, 0, sizeof(KROSymbol));
 
-    uint32_t name_offset = add_string(writer, name);
-    sym->name_offset = name_offset;
+    sym->name_offset = add_string(writer, name);
     sym->binding = KRO_BIND_GLOBAL;
     sym->section = 0;
     sym->value = 0;
-
-    uint32_t module_offset = add_string(writer, module);
-    sym->import_module_offset = module_offset;
+    sym->flags = add_string(writer, module);
 
     return (int)index;
 }
@@ -361,9 +319,11 @@ int kro_find_symbol(KROWriter* writer, const char* name) {
     if (!writer || !name) return -1;
 
     for (uint32_t i = 0; i < writer->sym_count; i++) {
-        const char* sym_name = writer->strings + writer->symbols[i].name_offset;
-        if (strcmp(sym_name, name) == 0) {
-            return (int)i;
+        if (writer->symbols[i].name_offset < writer->string_size) {
+            const char* sym_name = writer->strings + writer->symbols[i].name_offset;
+            if (strcmp(sym_name, name) == 0) {
+                return (int)i;
+            }
         }
     }
 
@@ -372,14 +332,14 @@ int kro_find_symbol(KROWriter* writer, const char* name) {
 
 void kro_update_symbol_value(KROWriter* writer, int sym_idx, uint64_t value) {
     if (!writer || sym_idx < 0 || sym_idx >= (int)writer->sym_count) return;
-    writer->symbols[sym_idx].value = value;
+    writer->symbols[sym_idx].value = (uint32_t)value;
 }
 
-static bool add_reloc_to_list(RelocList* list, const ArkKroReloc* reloc) {
+static bool add_reloc_to_list(RelocList* list, const KRORelocation* reloc) {
     if (list->count >= list->capacity) {
         uint32_t new_capacity = list->capacity * 2;
-        ArkKroReloc* new_relocs = (ArkKroReloc*)realloc(list->relocs,
-                                                           new_capacity * sizeof(ArkKroReloc));
+        KRORelocation* new_relocs = (KRORelocation*)realloc(list->relocs,
+                                                            new_capacity * sizeof(KRORelocation));
         if (!new_relocs) return false;
 
         list->relocs = new_relocs;
@@ -390,26 +350,16 @@ static bool add_reloc_to_list(RelocList* list, const ArkKroReloc* reloc) {
     return true;
 }
 
-static uint16_t map_reloc_type(uint16_t type) {
-    
-    return type;
-}
-
 void kro_add_reloc(KROWriter* writer, uint32_t sec_idx, uint64_t offset,
-                  uint32_t sym_idx, uint16_t type, int16_t addend) {
+                   uint32_t sym_idx, uint16_t type, int16_t addend) {
     if (!writer) return;
 
-#ifdef KRO_DEBUG
-    fprintf(stderr, "[KroWriter] kro_add_reloc: sec_idx=%u, offset=%lu, sym_idx=%u, type=%u\n",
-            sec_idx, (unsigned long)offset, sym_idx, type);
-#endif
 
-    ArkKroReloc reloc = {
-        .offset = (uint32_t)offset,
-        .sym_idx = sym_idx,
-        .type = map_reloc_type(type),
-        .addend = addend,
-        .section_index = sec_idx
+    KRORelocation reloc = {
+        .offset    = (uint32_t)offset,
+        .sym_idx   = sym_idx,
+        .type      = type,
+        .addend    = addend,
     };
 
     RelocList* list = NULL;
@@ -418,20 +368,10 @@ void kro_add_reloc(KROWriter* writer, uint32_t sec_idx, uint64_t offset,
         case KRO_SEC_DATA:   list = &writer->data_relocs; break;
         case KRO_SEC_RODATA: list = &writer->rodata_relocs; break;
         case KRO_SEC_BSS:    list = &writer->bss_relocs; break;
-        default:
-#ifdef KRO_DEBUG
-            fprintf(stderr, "[KroWriter] Unknown section index %u\n", sec_idx);
-#endif
-            return;
+        default: return;
     }
 
-#ifdef KRO_DEBUG
-    fprintf(stderr, "[KroWriter] Adding reloc to list (current count=%u)\n", list->count);
-#endif
     add_reloc_to_list(list, &reloc);
-#ifdef KRO_DEBUG
-    fprintf(stderr, "[KroWriter] Reloc added (new count=%u)\n", list->count);
-#endif
 }
 
 bool kro_set_entry_point(KROWriter* writer, uint64_t offset) {
@@ -446,9 +386,6 @@ bool kro_reserve_bss(KROWriter* writer, uint32_t size, uint8_t align_log2) {
     (void)align_log2;
 
     writer->bss_size += size;
-    if (size > writer->bss_mem_size) {
-        writer->bss_mem_size = size;
-    }
     return true;
 }
 
@@ -475,21 +412,26 @@ bool kro_write_file(KROWriter* writer, const char* filename) {
 
     FILE* fp = fopen(filename, "wb");
     if (!fp) return false;
-
-    uint64_t total_reloc_count = writer->text_relocs.count + writer->data_relocs.count +
-                                  writer->rodata_relocs.count + writer->bss_relocs.count;
-
-    ArkKroHeader header;
+    uint32_t total_reloc_count = writer->text_relocs.count +
+                                  writer->rodata_relocs.count +
+                                  writer->data_relocs.count;
+    KROHeader header;
     memset(&header, 0, sizeof(header));
-    header.magic = ARK_KRO_MAGIC;
-    header.version = 1;
+    header.magic = KRO_MAGIC;
+    header.version = KRO_VERSION;
     header.flags = writer->flags;
     header.entry_point = writer->has_entry ? (uint32_t)writer->entry_point : 0;
-    header.code_size = writer->text_offset;
-    header.data_size = writer->data_offset;
+    header.text_size = writer->text_offset;
     header.rodata_size = writer->rodata_offset;
-    header.symbol_count = writer->sym_count;
-    header.reloc_count = total_reloc_count;
+    header.data_size = writer->data_offset;
+    header.bss_size = writer->bss_size;
+    header.text_reloc_count = writer->text_relocs.count;
+    header.rodata_reloc_count = writer->rodata_relocs.count;
+    header.data_reloc_count = writer->data_relocs.count;
+    header.bss_align = 8;
+    header.sym_count = writer->sym_count;
+    header.strtab_size = writer->string_size;
+    header.total_reloc_count = total_reloc_count;
 
     if (fwrite(&header, sizeof(header), 1, fp) != 1) {
         fclose(fp);
@@ -503,12 +445,6 @@ bool kro_write_file(KROWriter* writer, const char* filename) {
         }
     }
 
-    if (writer->data_offset > 0) {
-        if (fwrite(writer->data, 1, writer->data_offset, fp) != writer->data_offset) {
-            fclose(fp);
-            return false;
-        }
-    }
     if (writer->rodata_offset > 0) {
         if (fwrite(writer->rodata, 1, writer->rodata_offset, fp) != writer->rodata_offset) {
             fclose(fp);
@@ -516,37 +452,37 @@ bool kro_write_file(KROWriter* writer, const char* filename) {
         }
     }
 
+    if (writer->data_offset > 0) {
+        if (fwrite(writer->data, 1, writer->data_offset, fp) != writer->data_offset) {
+            fclose(fp);
+            return false;
+        }
+    }
+
     if (writer->sym_count > 0) {
-        if (fwrite(writer->symbols, sizeof(ArkKroSymbol), writer->sym_count, fp) != writer->sym_count) {
+        if (fwrite(writer->symbols, sizeof(KROSymbol), writer->sym_count, fp) != writer->sym_count) {
             fclose(fp);
             return false;
         }
     }
 
     if (writer->text_relocs.count > 0) {
-        if (fwrite(writer->text_relocs.relocs, sizeof(ArkKroReloc),
+        if (fwrite(writer->text_relocs.relocs, sizeof(KRORelocation),
                    writer->text_relocs.count, fp) != writer->text_relocs.count) {
             fclose(fp);
             return false;
         }
     }
-    if (writer->data_relocs.count > 0) {
-        if (fwrite(writer->data_relocs.relocs, sizeof(ArkKroReloc),
-                   writer->data_relocs.count, fp) != writer->data_relocs.count) {
-            fclose(fp);
-            return false;
-        }
-    }
     if (writer->rodata_relocs.count > 0) {
-        if (fwrite(writer->rodata_relocs.relocs, sizeof(ArkKroReloc),
+        if (fwrite(writer->rodata_relocs.relocs, sizeof(KRORelocation),
                    writer->rodata_relocs.count, fp) != writer->rodata_relocs.count) {
             fclose(fp);
             return false;
         }
     }
-    if (writer->bss_relocs.count > 0) {
-        if (fwrite(writer->bss_relocs.relocs, sizeof(ArkKroReloc),
-                   writer->bss_relocs.count, fp) != writer->bss_relocs.count) {
+    if (writer->data_relocs.count > 0) {
+        if (fwrite(writer->data_relocs.relocs, sizeof(KRORelocation),
+                   writer->data_relocs.count, fp) != writer->data_relocs.count) {
             fclose(fp);
             return false;
         }

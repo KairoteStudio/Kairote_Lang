@@ -14,6 +14,7 @@ typedef enum {
     AST_ARRAY_ASSIGNMENT,
     AST_IF_STATEMENT,
     AST_WHILE_STATEMENT,
+    AST_DO_WHILE_STATEMENT,
     AST_FOR_STATEMENT,
     AST_FOREACH_STATEMENT,
     AST_RETURN_STATEMENT,
@@ -122,7 +123,6 @@ typedef struct ASTNode {
     ASTNodeType type;
     int line;
     int col;
-    KrtTokenType inferred_type;
     union {
         double number_value;
         char* string_value;
@@ -200,6 +200,10 @@ typedef struct ASTNode {
             struct ASTNode* body;
         } while_stmt;
         struct {
+            struct ASTNode* body;
+            struct ASTNode* condition;
+        } do_while_stmt;
+        struct {
             struct ASTNode* init;
             struct ASTNode* condition;
             struct ASTNode* increment;
@@ -241,6 +245,8 @@ typedef struct ASTNode {
             struct ASTNode* object;
             char* resolved_class_name;
             char* resolved_mangled_name;
+            int is_instance_call;
+            int is_global_scope;
         } call;
         struct {
             struct ASTNode** statements;

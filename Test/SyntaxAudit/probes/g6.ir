@@ -1,0 +1,7 @@
+str0 = "hello"
+
+function main()
+  entry:
+    t1 = call _ZN3Sys20InternalStringLengthEr str0
+    t3 = call _ZN7Console9WriteLineEi t1
+    t4 = return 0

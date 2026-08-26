@@ -1,9 +1,7 @@
 #include "ParallelCompiler.h"
-#include "../../Core/Utils/KrtCommon.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-#include "../../Core/Utils/KrtString.h"
 #include "../../Core/Utils/Path.h"
 #include "ArkLinkIntegration.h"
 

@@ -1,5 +1,7 @@
 const std = @import("std");
 
+pub const minimum_zig_version = "0.17.0";
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -55,7 +57,7 @@ pub fn build(b: *std.Build) void {
             "src/compiler/Driver/ParallelCompilerLink.c",
             "src/compiler/Driver/Preprocessor.c",
             "src/compiler/Driver/Project.c",
-            "src/compiler/Driver/ProjectParser.c",
+            "src/compiler/Driver/ProjectKrt.c",
             "src/compiler/Driver/TaskManager.c",
             "src/compiler/Frontend/Lexer/Tokenizer.c",
             "src/compiler/Frontend/Parser/Ast.c",
@@ -69,7 +71,6 @@ pub fn build(b: *std.Build) void {
             "src/compiler/Frontend/Semantic/NameMangling.c",
             "src/compiler/Frontend/Semantic/SemanticAnalyzer.c",
             "src/compiler/Frontend/Semantic/SymbolTable.c",
-            "src/compiler/Frontend/Semantic/TypeChecker.c",
             "src/compiler/Middle/Codegen/IrGen.c",
             "src/compiler/Middle/Ir/Ir.c",
             "src/compiler/Middle/Ir/IrMemory.c",

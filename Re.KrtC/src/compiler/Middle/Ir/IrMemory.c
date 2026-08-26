@@ -1,6 +1,3 @@
-#include "IrMemory.h"
-#include "Ir.h"
-#include "IrType.h"
 #include "IrSsa.h"
 #include <string.h>
 #include <stdio.h>

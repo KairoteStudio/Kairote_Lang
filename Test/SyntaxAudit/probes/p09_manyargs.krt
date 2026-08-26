@@ -1,0 +1,12 @@
+public static extern int64 syscall(int64 n, int64 a1, int64 a2, int64 a3, int64 a4, int64 a5, int64 a6);
+function P(string s, int32 len) { syscall(1, 1, (int64)s, (int64)len, 0, 0, 0); }
+function main()
+{
+    int32 s = add7(1, 2, 3, 4, 5, 6, 7);
+    if (s == 28) P("Y", 1);
+    else P("N", 1);
+}
+function add7(int32 a, int32 b, int32 c, int32 d, int32 e, int32 f, int32 g)
+{
+    return a + b + c + d + e + f + g;
+}

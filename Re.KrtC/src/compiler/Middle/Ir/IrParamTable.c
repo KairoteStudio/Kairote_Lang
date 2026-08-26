@@ -1,6 +1,4 @@
-#include "IrParamTable.h"
 #include "Ir.h"
-#include "../../../Core/Utils/KrtCommon.h"
 #include <string.h>
 
 static size_t hash_string(const char* str) {

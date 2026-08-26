@@ -1,0 +1,4 @@
+function main() {
+    Console.Write(Sys.InternalInt32ToString(42));
+    Console.Write("|");
+}

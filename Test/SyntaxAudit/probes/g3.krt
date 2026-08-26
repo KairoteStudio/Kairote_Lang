@@ -1,0 +1,12 @@
+public static extern int64 syscall(int64 n, int64 a1, int64 a2, int64 a3, int64 a4, int64 a5, int64 a6);
+function D(int32 d) { if (d == 5) { syscall(1,1,(int64)"5",(int64)1,0,0,0); } else { syscall(1,1,(int64)"n",(int64)1,0,0,0); } }
+class Box<T> {
+    T value;
+    public function Set(T v) { value = v; }
+    public T Get() { return value; }
+}
+function main() {
+    Box<int32> b = new Box<int32>();
+    b.Set(5);
+    D(b.Get());
+}

@@ -1,0 +1,36 @@
+str0 = "5"
+str1 = "n"
+
+function _ZN1DEi(d)
+  entry:
+    t1 = eq arg0 5
+    t2 = branch t1
+  if_true_0:
+    t4 = cast str0 82
+    t6 = cast 1 82
+    t8 = syscall 1 1 t4 t6 0 0 0
+    t9 = jump
+  if_false_1:
+    t11 = cast str1 82
+    t13 = cast 1 82
+    t15 = syscall 1 1 t11 t13 0 0 0
+    t16 = jump
+  if_end_2:
+    t17 = return 0
+
+function _ZN3Box3SetEx(this, v)
+  entry:
+    t19 = call KrtStorePtr arg0 0 arg1
+    t20 = return 0
+
+function _ZN3Box3GetEv(this)
+  entry:
+    t22 = loadptr arg0 0 8
+    t23 = return t22
+
+function main()
+  entry:
+    t25 = call _ZN3SetEi 5
+    t27 = call _ZN1b3GetEv
+    t29 = call _ZN1DEi t27
+    t30 = return 0

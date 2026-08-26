@@ -286,7 +286,6 @@ bool ir_optimize_dead_code_elimination(KrtIRModule* module, IROptimizer* stats) 
                 if (inst->opcode == KRT_IR_CALL)
                 {
                     const char* fn = inst->operand_count > 0 ? inst->operands[0].data.function_name : "(null)";
-                    fprintf(stderr, "[DCE] Found CALL: %s, result.type=%d\n", fn, inst->result.type);
                 }
 
                 if (is_side_effect_free(inst->opcode) && inst->result.type == KRT_IR_VALUE_VOID) {

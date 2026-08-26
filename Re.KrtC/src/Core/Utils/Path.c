@@ -1,5 +1,4 @@
 #include "KrtCommon.h"
-#include "KrtString.h"
 #include <sys/stat.h>
 #include <errno.h>
 #include <string.h>
@@ -74,6 +73,32 @@ int KrtPathGetFilename(const char* path, char* filename, size_t size) {
 
     KRT_STRCPY_S(filename, size, basename);
     return 0;
+}
+
+char* KrtGetDirectory(const char* path) {
+    if (!path || path[0] == '\0') return KRT_STRDUP(".");
+
+    const char* last = NULL;
+    for (const char* p = path; *p; p++) {
+        if (*p == '/' || *p == '\\') {
+            last = p;
+        }
+    }
+
+    if (!last) {
+        return KRT_STRDUP(".");
+    }
+
+    if (last == path) {
+        return KRT_STRDUP("/");
+    }
+
+    size_t len = (size_t)(last - path);
+    char* dir = (char*)KRT_MALLOC(len + 1);
+    if (!dir) return NULL;
+    memcpy(dir, path, len);
+    dir[len] = '\0';
+    return dir;
 }
 
 int KrtGetExecutableDirectory(char* result, size_t size) {

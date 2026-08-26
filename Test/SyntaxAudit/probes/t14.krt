@@ -1,0 +1,104 @@
+// Sys.krt - 系统调用和内建函数
+// 纯 .krt 实现, 是整个运行时的基础层
+
+public static class Sys
+{
+    // Linux x86_64 syscall 编号
+    public const int64 SYS_read = 0;
+    public const int64 SYS_write = 1;
+    public const int64 SYS_open = 2;
+    public const int64 SYS_close = 3;
+    public const int64 SYS_mmap = 9;
+    public const int64 SYS_munmap = 11;
+    public const int64 SYS_brk = 12;
+    public const int64 SYS_exit = 60;
+
+    // 内建函数: 直接发出 syscall 指令 (编译器内建, 非 extern)
+    public static int64 Syscall(int64 number, int64 arg1, int64 arg2, int64 arg3, int64 arg4, int64 arg5, int64 arg6)
+    {
+        return syscall(number, arg1, arg2, arg3, arg4, arg5, arg6);
+    }
+
+    public static int64 InternalStringPtr(string s)
+    {
+        return (int64)s;
+    }
+
+    public static int64 InternalStringLength(string s)
+    {
+        if (s == null)
+        {
+            return 0;
+        }
+
+        char[] chars = (char[])s;
+        int64 length = 0;
+        while (chars[(int32)length] != '\0')
+        {
+            length = length + 1;
+        }
+        return length;
+    }
+
+    public static string InternalInt32ToString(int32 value)
+    {
+        int64 buffer = syscall(SYS_mmap, 0, 12, 3, 0x22, -1, 0);
+        if (buffer < 0)
+        {
+            return null;
+        }
+
+        // Store number and index in local variables BEFORE the if block
+        // to avoid the compiler bug with type casts after if blocks
+        int64 number = (int64)value;
+        int32 index = 11;
+        char[] chars;
+
+        // Use a scope block to isolate the type cast
+        // This avoids the compiler's variable registration bug
+        {
+            int64 ptr = buffer;
+            chars = (char[])ptr;
+        }
+
+        chars[index] = '\0';
+
+        if (number == 0)
+        {
+            chars[index - 1] = '0';
+            return (string)(buffer + 10);
+        }
+
+        bool negative = number < 0;
+        if (negative) number = 0 - number;
+
+        while (number > 0)
+        {
+            int32 digit = (int32)(number % 10);
+            index = index - 1;
+            chars[index] = (char)(48 + digit);
+            number = number / 10;
+        }
+
+        if (negative)
+        {
+            index = index - 1;
+            chars[index] = '-';
+        }
+
+        return (string)(buffer + (int64)index);
+    }
+
+    // 退出进程
+    public static void Exit(int32 code)
+    {
+        syscall(SYS_exit, (int64)code, 0, 0, 0, 0, 0);
+    }
+}
+
+function main() {
+    Console.Write(Sys.InternalInt32ToString(42));
+    Console.Write("|");
+    Console.Write(Sys.InternalInt32ToString(7));
+    Console.Write("\n");
+}

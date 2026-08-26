@@ -1,0 +1,5 @@
+function main() {
+    Console.Write(Sys.InternalInt32ToString(42));
+    Console.Write(Sys.InternalInt32ToString(7));
+    Console.Write("\n");
+}

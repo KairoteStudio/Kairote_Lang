@@ -1,0 +1,10 @@
+public static extern int64 syscall(int64 n, int64 a1, int64 a2, int64 a3, int64 a4, int64 a5, int64 a6);
+function P(string s, int32 l) { syscall(1,1,(int64)s,(int64)l,0,0,0); }
+function main() {
+    bool u1 = 5 != 5;
+    if (!u1) { P("c",1); } else { P("n",1); }
+    bool u2 = 3 != 4;
+    if (u2) { P("d",1); } else { P("n",1); }
+    float64 x = 2.5;
+    if (x * 2.0 == 5.0) { P("e",1); } else { P("n",1); }
+}

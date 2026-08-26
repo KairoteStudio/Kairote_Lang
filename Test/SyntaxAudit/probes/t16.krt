@@ -1,0 +1,41 @@
+// Sys.krt - 系统调用和内建函数
+// 纯 .krt 实现, 是整个运行时的基础层
+
+public static class Sys
+{
+
+    public static int64 InternalStringLength(string s)
+    {
+        if (s == null) { return 0; }
+        char[] chars = (char[])s;
+        int64 length = 0;
+        while (chars[(int32)length] != '\0') { length = length + 1; }
+        return length;
+    }
+
+    public static int64 InternalStringPtr(string s) { return (int64)s; }
+
+    public static string InternalInt32ToString(int32 value)
+    {
+        int64 buffer = syscall(9, 0, 12, 3, 0x22, -1, 0);
+        if (buffer < 0) { return null; }
+        char[] chars = (char[])buffer;
+        int32 index = 11;
+        if (value == 0) { chars[10] = '0'; return (string)(buffer + 10); }
+        int64 number = value;
+        while (number > 0)
+        {
+            int32 digit = number % 10;
+            index = index - 1;
+            chars[index] = (char)(48 + digit);
+            number = number / 10;
+        }
+        return (string)(buffer + index);
+    }
+}
+function main() {
+    Console.Write(Sys.InternalInt32ToString(42));
+    Console.Write("|");
+    Console.Write(Sys.InternalInt32ToString(7));
+    Console.Write("\n");
+}

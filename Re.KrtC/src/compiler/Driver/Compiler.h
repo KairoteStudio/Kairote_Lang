@@ -29,6 +29,6 @@ typedef struct {
 KrtCompiler* KrtCompilerCreate(const char* output_filename, KrtTargetPlatform target);
 void KrtCompilerDestroy(KrtCompiler* compiler);
 
-void KrtCompilerCompile(KrtCompiler* compiler, ASTNode* ast, struct TypeCheckContext* type_context);
+void KrtCompilerCompile(KrtCompiler* compiler, ASTNode* ast, void* semantic_analyzer);
 
 #endif

@@ -1,6 +1,4 @@
 #include "Preprocessor.h"
-#include "../../Core/Utils/KrtCommon.h"
-#include "../../Core/Utils/KrtString.h"
 #include <string.h>
 #include <ctype.h>
 

@@ -1,7 +1,5 @@
 #include <string.h>
 
-#include "ConfigManager.h"
-#include "../../Core/Utils/Logger.h"
 #include "../../Core/Utils/Path.h"
 #include "../Platform/PlatformAbstraction.h"
 #include <stdlib.h>

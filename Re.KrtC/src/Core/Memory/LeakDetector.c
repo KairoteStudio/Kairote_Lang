@@ -1,8 +1,5 @@
 #include "LeakDetector.h"
 #include "../Utils/KrtCommon.h"
-#include "../Utils/KrtString.h"
-#include "../Utils/Logger.h"
-#include "Allocator.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

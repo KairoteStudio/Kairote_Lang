@@ -1,4 +1,3 @@
-#include "Logger.h"
 #include "OutputCache.h"
 #include "KrtCommon.h"
 #include <stdlib.h>

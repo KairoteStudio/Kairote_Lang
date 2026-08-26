@@ -3,13 +3,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include "Accelerator.h"
-#include "Core/Utils/KrtCommon.h"
-#include "Core/Memory/Arena.h"
-#include "Parser.h"
 #include "ParserBase.h"
 #include "ParserExpression.h"
 #include "ParserStatement.h"
-#include "../Lexer/Tokenizer.h"
 
 #define PARSER_LIKELY(x) (x)
 #define PARSER_UNLIKELY(x) (x)
@@ -22,9 +18,6 @@
 
 #define PARSER_CREATE_NODE(type, line, col) ast_create_node_arena(type, line, col, parser->arena)
 #define PARSER_STRDUP(s) arena_strdup(parser->arena, s)
-
-#undef ast_create_node
-#define ast_create_node(type, line, col) ast_create_node_arena(type, line, col, parser->arena)
 
 static __attribute__((unused)) char* arena_strdup(KrtArena* arena, const char* str) {
     if (!str) return NULL;
@@ -72,9 +65,9 @@ ASTNode* parser_parse_class_declaration(Parser* parser) {
 
             if (parser->current_token.type != TOKEN_IDENTIFIER) break;
 
-            ASTNode* param = ast_create_node(AST_TEMPLATE_PARAMETER,
+            ASTNode* param = ast_create_node_arena(AST_TEMPLATE_PARAMETER,
                                            parser->current_token.line,
-                                           parser->current_token.column);
+                                           parser->current_token.column, parser->arena);
             if (!param) { KRT_FREE(name); for (int i=0; i<template_param_count; i++) ast_destroy_node(template_params[i]); return NULL; }
             param->data.template_param.param_name = KRT_STRDUP(parser->current_token.value);
             template_params[template_param_count++] = param;
@@ -122,7 +115,7 @@ ASTNode* parser_parse_class_declaration(Parser* parser) {
 
     parser->current_class = saved_class;
 
-    ASTNode* node = ast_create_node(AST_CLASS_DECLARATION, line, col);
+    ASTNode* node = ast_create_node_arena(AST_CLASS_DECLARATION, line, col, parser->arena);
     if (!node) {
         ast_destroy_node(body);
         KRT_FREE(name);
@@ -178,7 +171,7 @@ ASTNode* parser_parse_namespace_declaration(Parser* parser) {
     if (parser->current_token.type == TOKEN_SEMICOLON) {
         parser_advance(parser);
 
-        ASTNode* node = ast_create_node(AST_NAMESPACE_DECLARATION, line, col);
+        ASTNode* node = ast_create_node_arena(AST_NAMESPACE_DECLARATION, line, col, parser->arena);
         if (!node) {
             for (int i=0; i<part_count; i++) KRT_FREE(parts[i]);
             KRT_FREE(parts);
@@ -207,7 +200,7 @@ ASTNode* parser_parse_namespace_declaration(Parser* parser) {
         return NULL;
     }
 
-    ASTNode* node = ast_create_node(AST_NAMESPACE_DECLARATION, line, col);
+    ASTNode* node = ast_create_node_arena(AST_NAMESPACE_DECLARATION, line, col, parser->arena);
     if (!node) {
         ast_destroy_node(body);
         for (int i=0; i<part_count; i++) KRT_FREE(parts[i]);

@@ -1,0 +1,7 @@
+public static extern int64 syscall(int64 n, int64 a1, int64 a2, int64 a3, int64 a4, int64 a5, int64 a6);
+function P(string s, int32 l) { syscall(1,1,(int64)s,(int64)l,0,0,0); }
+function main() {
+    string s = "x\ty";
+    P(s, 3);
+    P("Z",1);
+}

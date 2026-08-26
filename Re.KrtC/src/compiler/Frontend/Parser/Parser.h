@@ -13,7 +13,14 @@ typedef struct {
     int is_unsafe_mode;
     char* current_class;
     KrtArena* arena;  
+    int error_count;
+    const char* source_name;
+    int hist_type[8];
+    int hist_line[8];
+    int hist_len;
 } Parser;
+
+void parser_report_error(Parser* parser, int line, int col, const char* format, ...);
 
 Parser* parser_create(Lexer* lexer);
 Parser* parser_create_with_arena(Lexer* lexer, size_t arena_size);

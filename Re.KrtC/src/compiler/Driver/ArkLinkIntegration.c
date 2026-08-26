@@ -1,6 +1,5 @@
 #include "ArkLinkIntegration.h"
-#include "../../Core/Utils/KrtCommon.h"
-#include "../../Core/Utils/Logger.h"
+#include "ProjectKrt.h"
 #include "../../Core/Utils/Path.h"
 #include <stdlib.h>
 #include <string.h>
@@ -187,6 +186,60 @@ int KrtArkLinkLink(KrtArkLinkContext* ctx) {
     return 0;
 }
 
+int KrtArkLinkLoadProjectLibraries(KrtArkLinkContext* ctx, KrtConfig* config) {
+    if (!ctx) return -1;
+
+    char base_dir[KRT_MAX_PATH] = "";
+    if (config && config->input_file && config->input_file[0] != '\0') {
+        char* dir = KrtGetDirectory(config->input_file);
+        if (dir) {
+            if (strlen(dir) > 0 && strcmp(dir, ".") != 0) {
+                KRT_STRNCPY(base_dir, dir, sizeof(base_dir));
+            }
+            KRT_FREE(dir);
+        }
+    }
+
+    char* project_file = KrtProjectKrtResolveProjectFile(base_dir[0] ? base_dir : NULL);
+    if (!project_file) {
+        return 0;
+    }
+
+    KrtProjectKrtConfig* proj = KrtProjectKrtLoad(project_file);
+    KRT_FREE(project_file);
+    if (!proj) {
+        KrtError("无法加载 project.krt");
+        return -1;
+    }
+
+    fprintf(stderr, "[Project] Found project.krt: %s\n",
+            proj->project_name ? proj->project_name : "(unnamed)");
+
+    int base = (proj->base_dir && proj->base_dir[0] != '\0') ? 1 : 0;
+
+    for (int i = 0; i < proj->library_count; i++) {
+        char* lib_path = KrtProjectKrtFindLibrary(base ? proj->base_dir : NULL, proj->libraries[i]);
+        if (lib_path) {
+            fprintf(stderr, "[Project] Linking library: %s -> %s\n", proj->libraries[i], lib_path);
+            if (KrtArkLinkAddObjectFile(ctx, lib_path) != 0) {
+                KRT_FREE(lib_path);
+                KrtProjectKrtDestroy(proj);
+                return -1;
+            }
+            KRT_FREE(lib_path);
+        } else {
+            KrtError("Project dependency not found: %s", proj->libraries[i]);
+            KrtError("  Searched: ./%s.kro, ./libs/%s.kro, ./libs/System/%s.kro",
+                     proj->libraries[i], proj->libraries[i], proj->libraries[i]);
+            KrtProjectKrtDestroy(proj);
+            return -1;
+        }
+    }
+
+    KrtProjectKrtDestroy(proj);
+    return 0;
+}
+
 int KrtArkLinkLinkObjects(const char** obj_files, int obj_count,
                             const char* output_path, KrtConfig* config) {
     if (!obj_files || obj_count <= 0 || !output_path || !config) {
@@ -212,6 +265,11 @@ int KrtArkLinkLinkObjects(const char** obj_files, int obj_count,
                 KrtArkLinkAddRuntimeObjects(ctx, runtime_dir);
             }
         }
+    }
+
+    if (KrtArkLinkLoadProjectLibraries(ctx, config) != 0) {
+        KrtArkLinkContextDestroy(ctx);
+        return -1;
     }
 
     for (int i = 0; i < obj_count; i++) {
