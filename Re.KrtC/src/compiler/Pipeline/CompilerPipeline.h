@@ -57,6 +57,7 @@ typedef struct {
     int stage_count;
     double total_duration;
     int success;
+    int owns_semantic_analyzer; /* 非零=管线自建并负责销毁 */
     char error_message[1024];
     char failed_stage_name[64];
     int error_line;

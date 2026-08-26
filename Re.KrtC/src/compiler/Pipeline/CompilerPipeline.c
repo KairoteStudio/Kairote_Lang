@@ -323,7 +323,9 @@ void KrtCompilePipelineDestroy(KrtCompilePipeline* pipeline) {
         KrtCompilerDestroy(pipeline->compiler);
     }
     if (pipeline->semantic_analyzer) {
-        semantic_analyzer_destroy(pipeline->semantic_analyzer);
+        if (pipeline->owns_semantic_analyzer) {
+            semantic_analyzer_destroy(pipeline->semantic_analyzer);
+        }
         pipeline->semantic_analyzer = NULL;
     }
     if (pipeline->semantic_result) {
@@ -528,7 +530,12 @@ int KrtCompilePipelineSemantic(KrtCompilePipeline* pipeline) {
     
     clock_t start = clock();
     
-    pipeline->semantic_analyzer = semantic_analyzer_create();
+    /* M1 修复: 多文件模式由驱动层预设共享分析器(已 collect_exports),
+     * 此处不得无条件重建顶掉它 —— 否则跨文件符号全部失踪 */
+    if (!pipeline->semantic_analyzer) {
+        pipeline->semantic_analyzer = semantic_analyzer_create();
+        pipeline->owns_semantic_analyzer = 1;
+    }
     if (!pipeline->semantic_analyzer) {
         snprintf(pipeline->error_message, sizeof(pipeline->error_message),
                 "语义分析器创建失败: %s", pipeline->input_file);
@@ -624,6 +631,7 @@ void KrtCompilePipelineSetMergedAst(KrtCompilePipeline* pipeline, ASTNode* merge
 void KrtCompilePipelineSetSemanticAnalyzer(KrtCompilePipeline* pipeline, SemanticAnalyzer* analyzer) {
     if (!pipeline) return;
     pipeline->semantic_analyzer = analyzer;
+    pipeline->owns_semantic_analyzer = 0; /* 外部所有: 销毁责任在调用方 */
 }
 
 int KrtCompilePipelineExecute(KrtCompilePipeline* pipeline, const char* input_file, const char* output_file) {
