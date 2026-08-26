@@ -476,6 +476,13 @@ static void emit_load_value_to_reg(KROCodegenContext* ctx, KrtIRValue* value, in
         case KRT_IR_VALUE_IMM:
             emit_load_imm64_to_reg(ctx, encode_integer_immediate(value->data.imm), target_reg);
             break;
+        case KRT_IR_VALUE_IMM_F: {
+            /* 双精度立即数: 按 IEEE754 位型装入 GP 寄存器, 供 SSE 指令按 xmm 解释 */
+            uint64_t bits;
+            memcpy(&bits, &value->data.imm, sizeof(bits));
+            emit_load_imm64_to_reg(ctx, (int64_t)bits, target_reg);
+            break;
+        }
         case KRT_IR_VALUE_VAR: {
             KROLocalVar* local_var = find_local_var(ctx, value->data.name);
             if (local_var && local_var->allocated) {
@@ -608,6 +615,66 @@ static void KroGenerateInstruction(KROCodegenContext* ctx, KrtIRInst* inst) {
             }
             emit_byte(ctx, 0xC0);
             emit_bytes(ctx, (const uint8_t*)"\x48\x0F\xB6\xC0", 4);
+            emit_store_temp_result(ctx, inst, REG_RAX);
+            break;
+        }
+
+        /* ---- SSE2 双精度浮点(C24) ----
+         * 桥接策略: 操作数经既有机制装入 GP 寄存器, movq 进 xmm0/xmm1,
+         * 标量双精度运算后 movq 回 RAX 写结果槽 —— 无需完整 SSE 分配器 */
+        case KRT_IR_FADD:
+        case KRT_IR_FSUB:
+        case KRT_IR_FMUL:
+        case KRT_IR_FDIV: {
+            if (inst->operand_count < 2) break;
+            emit_load_value_to_reg(ctx, &inst->operands[0], REG_RAX);
+            emit_load_value_to_reg(ctx, &inst->operands[1], REG_RCX);
+            emit_bytes(ctx, (const uint8_t*)"\x66\x48\x0F\x6E\xC0", 5); /* movq xmm0,rax */
+            emit_bytes(ctx, (const uint8_t*)"\x66\x48\x0F\x6E\xC9", 5); /* movq xmm1,rcx */
+            switch (inst->opcode) {
+                case KRT_IR_FADD: emit_bytes(ctx, (const uint8_t*)"\xF2\x0F\x58\xC1", 4); break; /* addsd */
+                case KRT_IR_FSUB: emit_bytes(ctx, (const uint8_t*)"\xF2\x0F\x5C\xC1", 4); break; /* subsd */
+                case KRT_IR_FMUL: emit_bytes(ctx, (const uint8_t*)"\xF2\x0F\x59\xC1", 4); break; /* mulsd */
+                case KRT_IR_FDIV: emit_bytes(ctx, (const uint8_t*)"\xF2\x0F\x5E\xC1", 4); break; /* divsd */
+                default: break;
+            }
+            emit_bytes(ctx, (const uint8_t*)"\x66\x48\x0F\x7E\xC0", 5); /* movq rax,xmm0 */
+            emit_store_temp_result(ctx, inst, REG_RAX);
+            break;
+        }
+
+        case KRT_IR_FEQ:
+        case KRT_IR_FNE:
+        case KRT_IR_FLT:
+        case KRT_IR_FLE:
+        case KRT_IR_FGT:
+        case KRT_IR_FGE: {
+            if (inst->operand_count < 2) break;
+            emit_load_value_to_reg(ctx, &inst->operands[0], REG_RAX);
+            emit_load_value_to_reg(ctx, &inst->operands[1], REG_RCX);
+            emit_bytes(ctx, (const uint8_t*)"\x66\x48\x0F\x6E\xC0", 5); /* movq xmm0,rax */
+            emit_bytes(ctx, (const uint8_t*)"\x66\x48\x0F\x6E\xC9", 5); /* movq xmm1,rcx */
+            if (inst->opcode == KRT_IR_FGT || inst->opcode == KRT_IR_FGE) {
+                /* GT/GE 无直接 comisd 条件: 翻转操作数后按 LT/LE 取标志 */
+                emit_bytes(ctx, (const uint8_t*)"\x66\x0F\x2F\xC8", 4);   /* comisd xmm1,xmm0 */
+            } else {
+                emit_bytes(ctx, (const uint8_t*)"\x66\x0F\x2F\xC1", 4);   /* comisd xmm0,xmm1 */
+            }
+            /* 条件置字节 + 有序保护(NaN 时 PF=1 -> 强制假): 结果 = cc 且 !PF */
+            emit_byte(ctx, 0x0F);
+            switch (inst->opcode) {
+                case KRT_IR_FEQ: emit_byte(ctx, 0x94); break;              /* sete  (ZF)      */
+                case KRT_IR_FNE: emit_byte(ctx, 0x95); break;              /* setne (!ZF)     */
+                case KRT_IR_FLT: emit_byte(ctx, 0x92); break;              /* setb  (CF)      */
+                case KRT_IR_FLE: emit_byte(ctx, 0x96); break;              /* setbe (CF|ZF)   */
+                case KRT_IR_FGT: emit_byte(ctx, 0x92); break;              /* 翻转后 setb     */
+                case KRT_IR_FGE: emit_byte(ctx, 0x96); break;              /* 翻转后 setbe    */
+                default: break;
+            }
+            emit_byte(ctx, 0xC0);
+            emit_bytes(ctx, (const uint8_t*)"\x0F\x9B\xC2", 3);           /* setnp dl (9B; 9A=SETP 反义,首修教训) */
+            emit_bytes(ctx, (const uint8_t*)"\x22\xC2", 2);                /* and al,dl */
+            emit_bytes(ctx, (const uint8_t*)"\x48\x0F\xB6\xC0", 4);       /* movzx rax,al */
             emit_store_temp_result(ctx, inst, REG_RAX);
             break;
         }

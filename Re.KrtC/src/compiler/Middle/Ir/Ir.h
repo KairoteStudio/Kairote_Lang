@@ -186,6 +186,8 @@ typedef enum {
     KRT_IR_VALUE_ARG,
     KRT_IR_VALUE_STRING_CONST,
     KRT_IR_VALUE_FUNCTION,
+    /* 双精度立即数: 物化时按 IEEE754 位型装入, 不走整数编码 */
+    KRT_IR_VALUE_IMM_F,
 } KrtIRValueType;
 #define KRT_IR_TYPE_I64 KRT_IR_VALUE_IMM
 
@@ -238,6 +240,17 @@ typedef enum {
     KRT_IR_SYSCALL,
     KRT_IR_PHI,
     KRT_IR_NOP,
+    /* SSE2 双精度浮点(C24): 语义由 IrGen 按类型推断路由, Kro 后端发射 */
+    KRT_IR_FADD,
+    KRT_IR_FSUB,
+    KRT_IR_FMUL,
+    KRT_IR_FDIV,
+    KRT_IR_FEQ,
+    KRT_IR_FNE,
+    KRT_IR_FLT,
+    KRT_IR_FLE,
+    KRT_IR_FGT,
+    KRT_IR_FGE,
 } KrtIROpcode;
 
 #define KRT_IR_CACHE_LINE_SIZE 64
@@ -376,6 +389,8 @@ void KrtIrStorePtrSized(KrtIRBuilder* builder, KrtIRValue base, int offset, KrtI
 void KrtIrArrayStore(KrtIRBuilder* builder, KrtIRValue array, KrtIRValue index, KrtIRValue value);
 void KrtIrArrayStoreSized(KrtIRBuilder* builder, KrtIRValue array, KrtIRValue index, KrtIRValue value, int element_size);
 KrtIRValue KrtIrAdd(KrtIRBuilder* builder, KrtIRValue lhs, KrtIRValue rhs);
+KrtIRValue KrtIrImmF(KrtIRBuilder* builder, double value);
+KrtIRValue KrtIrFloatBinary(KrtIRBuilder* builder, KrtIROpcode op, KrtIRValue lhs, KrtIRValue rhs);
 KrtIRValue KrtIrSub(KrtIRBuilder* builder, KrtIRValue lhs, KrtIRValue rhs);
 KrtIRValue KrtIrMul(KrtIRBuilder* builder, KrtIRValue lhs, KrtIRValue rhs);
 KrtIRValue KrtIrDiv(KrtIRBuilder* builder, KrtIRValue lhs, KrtIRValue rhs);

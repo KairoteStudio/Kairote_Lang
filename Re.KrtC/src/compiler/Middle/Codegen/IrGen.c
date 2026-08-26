@@ -426,6 +426,46 @@ static KrtIRValue irgen_size_of_pointer(KrtIRBuilder* builder) {
     return irgen_call_builtin_0args(builder, IRGEN_FUNC_SIZE_OF_POINTER);
 }
 
+/* ---- C24 浮点类型推断 ---- */
+static int irgen_binop_is_float(KrtIRBuilder* builder, ASTNode* expr);
+static int irgen_is_float_token(int token) {
+    return token == TOKEN_FLOAT64 || token == TOKEN_FLOAT32;
+}
+
+/* 表达式是否浮点类型: 目前以"含浮点类型变量"为锚 —— 字面量单独不成浮点,
+ * 与 C# 的双字面量规则有偏差, 但足够支撑 x*2.0 / y+0.5 等常见形态 */
+static int irgen_expr_is_float(KrtIRBuilder* builder, ASTNode* node) {
+    if (!builder || !node) return 0;
+    if (node->type == AST_IDENTIFIER) {
+        int tok = 0, is_arr = 0;
+        if (KrtIrVarTypeFind(builder, node->data.identifier_name, &tok, &is_arr)) {
+            return irgen_is_float_token(tok);
+        }
+        return 0;
+    }
+    /* 二元子表达式按"任一侧浮点即浮点"向上传播 —— 否则 (x*2.0)==5.0 的
+     * 外层比较看不到左操作数的浮点性而回落整型路径(C24 首修教训) */
+    if (node->type == AST_BINARY_OPERATION) {
+        return irgen_binop_is_float(builder, node);
+    }
+    return 0;
+}
+
+static int irgen_binop_is_float(KrtIRBuilder* builder, ASTNode* expr) {
+    if (!expr || expr->type != AST_BINARY_OPERATION) return 0;
+    return irgen_expr_is_float(builder, expr->data.binary_op.left) ||
+           irgen_expr_is_float(builder, expr->data.binary_op.right);
+}
+
+/* 浮点运算的操作数取值: 数字字面量按双精度立即数生成(保位型),
+ * 其余照常求值。非字面量的整型子表达式暂不自动转换(记入台账限制) */
+static KrtIRValue irgen_float_operand(KrtIRBuilder* builder, ASTNode* node) {
+    if (node && node->type == AST_NUMBER) {
+        return KrtIrImmF(builder, node->data.number_value);
+    }
+    return KrtIrGenerateExpression(builder, node);
+}
+
 static KrtTokenType KrtIrInferMangleType(KrtIRBuilder* builder, ASTNode* arg) {
     if (!arg) return TOKEN_INT32;
 
@@ -1033,13 +1073,33 @@ static KrtIRValue irgen_expr_BinaryOperation(KrtIRBuilder* builder, ASTNode* exp
                         KrtIRValue string_rhs = convert_to_string_if_needed(builder, expr->data.binary_op.right, rhs);
                         return irgen_synth_strcat(builder, string_lhs, string_rhs);
                     }
+                    if (irgen_binop_is_float(builder, expr)) {
+                        return KrtIrFloatBinary(builder, KRT_IR_FADD,
+                            irgen_float_operand(builder, expr->data.binary_op.left),
+                            irgen_float_operand(builder, expr->data.binary_op.right));
+                    }
                     return KrtIrAdd(builder, lhs, rhs);
                 }
                 case TOKEN_MINUS:
+                    if (irgen_binop_is_float(builder, expr)) {
+                        return KrtIrFloatBinary(builder, KRT_IR_FSUB,
+                            irgen_float_operand(builder, expr->data.binary_op.left),
+                            irgen_float_operand(builder, expr->data.binary_op.right));
+                    }
                     return KrtIrSub(builder, lhs, rhs);
                 case TOKEN_MULTIPLY:
+                    if (irgen_binop_is_float(builder, expr)) {
+                        return KrtIrFloatBinary(builder, KRT_IR_FMUL,
+                            irgen_float_operand(builder, expr->data.binary_op.left),
+                            irgen_float_operand(builder, expr->data.binary_op.right));
+                    }
                     return KrtIrMul(builder, lhs, rhs);
                 case TOKEN_DIVIDE:
+                    if (irgen_binop_is_float(builder, expr)) {
+                        return KrtIrFloatBinary(builder, KRT_IR_FDIV,
+                            irgen_float_operand(builder, expr->data.binary_op.left),
+                            irgen_float_operand(builder, expr->data.binary_op.right));
+                    }
                     return KrtIrDiv(builder, lhs, rhs);
                 case TOKEN_MODULO:
                     return KrtIrMod(builder, lhs, rhs);
@@ -1057,24 +1117,54 @@ static KrtIRValue irgen_expr_BinaryOperation(KrtIRBuilder* builder, ASTNode* exp
                 case TOKEN_POWER:
                     return KrtIrPow(builder, lhs, rhs);
                 case TOKEN_LESS:
+                    if (irgen_binop_is_float(builder, expr)) {
+                        return KrtIrCompare(builder, KRT_IR_FLT,
+                            irgen_float_operand(builder, expr->data.binary_op.left),
+                            irgen_float_operand(builder, expr->data.binary_op.right));
+                    }
                     return KrtIrCompare(builder, KRT_IR_LT, lhs, rhs);
                 case TOKEN_GREATER:
+                    if (irgen_binop_is_float(builder, expr)) {
+                        return KrtIrCompare(builder, KRT_IR_FGT,
+                            irgen_float_operand(builder, expr->data.binary_op.left),
+                            irgen_float_operand(builder, expr->data.binary_op.right));
+                    }
                     return KrtIrCompare(builder, KRT_IR_GT, lhs, rhs);
                 case TOKEN_EQUAL:
                     if (is_string_expression(builder, expr->data.binary_op.left) ||
                         is_string_expression(builder, expr->data.binary_op.right)) {
                         return irgen_synth_streq(builder, lhs, rhs);
                     }
+                    if (irgen_binop_is_float(builder, expr)) {
+                        return KrtIrCompare(builder, KRT_IR_FEQ,
+                            irgen_float_operand(builder, expr->data.binary_op.left),
+                            irgen_float_operand(builder, expr->data.binary_op.right));
+                    }
                     return KrtIrCompare(builder, KRT_IR_EQ, lhs, rhs);
                 case TOKEN_LESS_EQUAL:
+                    if (irgen_binop_is_float(builder, expr)) {
+                        return KrtIrCompare(builder, KRT_IR_FLE,
+                            irgen_float_operand(builder, expr->data.binary_op.left),
+                            irgen_float_operand(builder, expr->data.binary_op.right));
+                    }
                     return KrtIrCompare(builder, KRT_IR_LE, lhs, rhs);
                 case TOKEN_GREATER_EQUAL:
+                    if (irgen_binop_is_float(builder, expr)) {
+                        return KrtIrCompare(builder, KRT_IR_FGE,
+                            irgen_float_operand(builder, expr->data.binary_op.left),
+                            irgen_float_operand(builder, expr->data.binary_op.right));
+                    }
                     return KrtIrCompare(builder, KRT_IR_GE, lhs, rhs);
                 case TOKEN_NOT_EQUAL:
                     if (is_string_expression(builder, expr->data.binary_op.left) ||
                         is_string_expression(builder, expr->data.binary_op.right)) {
                         KrtIRValue eq = irgen_synth_streq(builder, lhs, rhs);
                         return KrtIrCompare(builder, KRT_IR_EQ, eq, KRT_IMM_ZERO(builder));
+                    }
+                    if (irgen_binop_is_float(builder, expr)) {
+                        return KrtIrCompare(builder, KRT_IR_FNE,
+                            irgen_float_operand(builder, expr->data.binary_op.left),
+                            irgen_float_operand(builder, expr->data.binary_op.right));
                     }
                     return KrtIrCompare(builder, KRT_IR_NE, lhs, rhs);
                 case TOKEN_NULL_COALESCING:
@@ -1628,6 +1718,19 @@ static KrtIRValue void_val_return(void) {
 }
 
 static void irgen_stmt_Assignment(KrtIRBuilder* builder, ASTNode* stmt) {
+            /* C24: 浮点变量 = 数字字面量 -> 双精度立即数(在通用求值前拦截) */
+            if (stmt->data.assignment.name &&
+                stmt->data.assignment.value &&
+                stmt->data.assignment.value->type == AST_NUMBER) {
+                int tok = 0, is_arr = 0;
+                if (KrtIrVarTypeFind(builder, stmt->data.assignment.name, &tok, &is_arr) &&
+                    irgen_is_float_token(tok)) {
+                    KrtIRValue fval = KrtIrImmF(builder, stmt->data.assignment.value->data.number_value);
+                    const char* slot0 = KrtIrVarTypeResolveIRName(builder, stmt->data.assignment.name);
+                    KrtIrStore(builder, slot0, fval);
+                    return;
+                }
+            }
             KrtIRValue value = KrtIrGenerateExpression(builder, stmt->data.assignment.value);
             const char* target_name = stmt->data.assignment.name;
             const char* current_class = KrtIrCurrentClassContext(builder);
@@ -2036,8 +2139,15 @@ static void irgen_stmt_VariableDeclaration(KrtIRBuilder* builder, ASTNode* stmt)
                 KrtIrAlloc(builder, ir_slot);
 
                 if (stmt->data.variable_decl.value) {
-                    KrtIRValue init_val = KrtIrGenerateExpression(builder, stmt->data.variable_decl.value);
-                    KrtIrStore(builder, ir_slot, init_val);
+                    /* C24: 浮点声明 + 字面量初始化 -> 双精度立即数(保位型) */
+                    if (irgen_is_float_token((int)stmt->data.variable_decl.type) &&
+                        stmt->data.variable_decl.value->type == AST_NUMBER) {
+                        KrtIrStore(builder, ir_slot,
+                            KrtIrImmF(builder, stmt->data.variable_decl.value->data.number_value));
+                    } else {
+                        KrtIRValue init_val = KrtIrGenerateExpression(builder, stmt->data.variable_decl.value);
+                        KrtIrStore(builder, ir_slot, init_val);
+                    }
                 }
             }
             return;
