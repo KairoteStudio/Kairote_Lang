@@ -45,7 +45,7 @@ typedef struct SemanticAnalysisResult {
     int warning_count;
     SymbolTable* symbol_table;
     char* error_messages;
-    KrtErrorReport* error_report;`
+    KrtErrorReport* error_report;
 } SemanticAnalysisResult;
 
 SemanticAnalyzer* semantic_analyzer_create(void);
