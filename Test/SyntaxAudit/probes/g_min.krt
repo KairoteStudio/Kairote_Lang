@@ -1,0 +1,6 @@
+bool g_flag = false;
+int32 g_num = 7;
+function main() {
+    if (g_flag) { }
+    g_num = g_num + 1;
+}

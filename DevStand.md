@@ -19,9 +19,9 @@ Kairote编译器采用经典的三段式架构设计：
 
 ### 0.2 核心模块划分
 - **compiler/frontend/**: 前端处理模块
-  - `lexer/`: 词法分析器 (tokenizer.c)
-  - `parser/`: 语法分析器 (parser.c, ast.c)
-  - `semantic/`: 语义分析器 (semantic_analyzer.c, symbol_table.c, generics.c)
+  - `Lexer/`: 词法分析器 (Tokenizer.c)
+  - `Parser/`: 语法分析器 (Parser.c, Ast.c)
+  - `Semantic/`: 语义分析器 (SemanticAnalyzer.c, SymbolTable.c, Generics.c)
 - **compiler/middle/**: 中端处理模块
   - `ir/`: 中间表示定义与基础操作 (ir.c, ir_optimizer.c)
   - `codegen/`: IR生成与优化 (ir_gen.c, optimizer.c)
@@ -99,9 +99,9 @@ int function_name(int param)
 - **变量命名**: 使用下划线分隔的小写字母
   - 正确: `token_type`, `current_position`
   - 错误: `tokenType`, `currentPosition`
-- **类型命名**: 使用下划线分隔的小写字母，以 `_t` 后缀
-  - 正确: `ast_node_t`, `token_t`
-  - 错误: `AstNode`, `ast_node`
+- **类型命名**: 使用大驼峰命名法 (PascalCase)
+  - 正确: `KrtAstNode`, `KrtToken`
+  - 错误: `ast_node_t`, `token_t`
 
 #### 1.2.3 宏命名
 - **宏命名**: 使用全大写字母和下划线，以 `KRT_` 为前缀
@@ -115,7 +115,7 @@ int function_name(int param)
   - 错误: `FRONTEND/`, `PARSER/` (全大写)
 - **源文件命名**: **强制使用 PascalCase 命名法**，所有单词首字母大写
   - 正确: `Parser.c`, `Lexer.c`, `AstNode.c`, `SemanticAnalyzer.c`, `IrGenerator.c`
-  - 错误: `parser.c`, `lexer.c`, `ast_node.c`, `semantic_analyzer.c`, `ir_generator.c`
+  - 错误: `parser.c`, `lexer.c` (示例仅供参考，当前代码库使用 PascalCase)
 - **头文件命名**: **强制使用 PascalCase 命名法**，与对应源文件保持一致
   - 正确: `Parser.h`, `Lexer.h`, `AstNode.h`, `SemanticAnalyzer.h`
   - 错误: `parser.h`, `lexer.h`, `ast_node.h`, `semantic_analyzer.h`
@@ -305,7 +305,7 @@ typedef enum {
 
 #### 3.3.2 AST节点结构
 ```c
-typedef struct krt_ast_node_t {
+typedef struct KrtAstNode {
     KrtAstNodeType type;
     int line;
     int column;
@@ -315,10 +315,10 @@ typedef struct krt_ast_node_t {
         struct { /* 二元运算数据 */ } binary_op;
         // ... 其他节点数据
     } data;
-    struct krt_ast_node_t* parent;
-    struct krt_ast_node_t** children;
+    struct KrtAstNode* parent;
+    struct KrtAstNode** children;
     size_t child_count;
-} krt_ast_node_t;
+} KrtAstNode;
 ```
 
 #### 3.3.3 中间表示(IR)规范
@@ -394,7 +394,7 @@ typedef enum {
 - **代码生成**: 生成高效的机器码
 
 ### 4.4 编译器本体构建
-- **编译命令**: `python build.py`  
+- **编译命令**: `cd Re.KrtC && zig build`
 - **依赖库**: 无外部依赖，仅依赖标准库
 
 ## 5. 提交规范

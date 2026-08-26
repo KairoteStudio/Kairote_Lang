@@ -10,7 +10,7 @@
 #include <unistd.h>
 #endif
 
-// #define KRO_DEBUG  // 调试输出开关（已禁用）
+// #define KRO_DEBUG  //如果要调试一定要打开
 
 #define X86_MOV_R64_IMM64   0x48B8
 #define X86_MOV_R64_R64     0x4889
@@ -106,14 +106,12 @@ static KROLocalVar* find_or_alloc_local_var(KROCodegenContext* ctx, const char* 
     KROLocalVar* var = &ctx->local_vars[ctx->local_var_count];
     strncpy(var->name, name, sizeof(var->name) - 1);
     var->name[sizeof(var->name) - 1] = '\0';
+    ctx->current_stack_offset += 8;
     var->stack_offset = ctx->current_stack_offset;
     var->allocated = 1;
-    ctx->current_stack_offset += 8;
     ctx->local_var_count++;
 
 #ifdef KRO_DEBUG
-    fprintf(stderr, "[KroCodegen] Allocated local variable: %s at stack offset -%d\n",
-            name, var->stack_offset);
 #endif
 
     return var;
@@ -298,7 +296,6 @@ static void emit_function_epilogue(KROCodegenContext* ctx) {
 
     if (ctx && ctx->is_main_func) {
 #ifdef KRO_DEBUG
-        fprintf(stderr, "[KroCodegen] Generating exit for main function in epilogue\n");
 #endif
 
 #ifdef _WIN32
@@ -376,7 +373,6 @@ static void emit_call_external(KROCodegenContext* ctx, const char* func_name) {
             sym_idx = kro_add_import_symbol(ctx->writer, "memcpy", "libc.so.6");
         } else {
             sym_idx = kro_add_undefined_symbol(ctx->writer, func_name);
-            fprintf(stderr, "[KroCodegen] External call: %s, sym_idx=%d\n", func_name, sym_idx);
         }
 #endif
     }
@@ -397,23 +393,19 @@ static void emit_call_local(KROCodegenContext* ctx, const char* func_name) {
     if (!ctx || !func_name) return;
 
 #ifdef KRO_DEBUG
-    fprintf(stderr, "[KroCodegen] emit_call_local: looking for symbol '%s'\n", func_name);
 #endif
 
     int32_t sym_idx = kro_find_symbol(ctx->writer, func_name);
 
 #ifdef KRO_DEBUG
-    fprintf(stderr, "[KroCodegen]   kro_find_symbol returned: %d\n", sym_idx);
 #endif
 
     if (sym_idx < 0) {
 #ifdef KRO_DEBUG
-        fprintf(stderr, "[KroCodegen]   Symbol not found, creating undefined symbol\n");
 #endif
         sym_idx = kro_add_undefined_symbol(ctx->writer, func_name);
 
 #ifdef KRO_DEBUG
-        fprintf(stderr, "[KroCodegen]   Created undefined symbol with idx: %d\n", sym_idx);
 #endif
     }
 
@@ -461,13 +453,11 @@ static int find_temp_slot(KROCodegenContext* ctx, int temp_index) {
 
 static int alloc_temp_slot(KROCodegenContext* ctx, int temp_index) {
     if (!ctx || ctx->temp_slot_count >= KRO_MAX_TEMP_REGS) return -1;
-    // 如果已存在，返回现有位置
     for (int i = 0; i < ctx->temp_slot_count; i++) {
         if (ctx->temp_slots[i].valid && ctx->temp_slots[i].temp_index == temp_index) {
             return ctx->temp_slots[i].stack_offset;
         }
     }
-    // 分配新的栈位置
     ctx->current_stack_offset += 8;
     ctx->temp_slots[ctx->temp_slot_count].temp_index = temp_index;
     ctx->temp_slots[ctx->temp_slot_count].stack_offset = ctx->current_stack_offset;
@@ -546,7 +536,6 @@ static void KroGenerateInstruction(KROCodegenContext* ctx, KrtIRInst* inst) {
     if (!ctx || !inst) return;
 
 #ifdef KRO_DEBUG
-    fprintf(stderr, "[KroCodegen] Processing instruction: opcode=%d\n", inst->opcode);
 #endif
 
     switch (inst->opcode) {
@@ -663,12 +652,33 @@ static void KroGenerateInstruction(KROCodegenContext* ctx, KrtIRInst* inst) {
                 emit_load_value_to_reg(ctx, arg, target_reg);
             }
 
+            if (strcmp(func_name, "KrtStorePtr") == 0 && inst->operand_count >= 4) {
+                emit_load_value_to_reg(ctx, &inst->operands[1], REG_RAX); /* ptr */
+                emit_load_value_to_reg(ctx, &inst->operands[2], REG_RCX); /* offset */
+                if (!(inst->operands[2].type == KRT_IR_VALUE_IMM &&
+                      inst->operands[2].data.imm == 0)) {
+                    emit_bytes(ctx, (const uint8_t*)"\x48\x01\xC8", 3);   /* add rax, rcx */
+                }
+                emit_load_value_to_reg(ctx, &inst->operands[3], REG_RDX); /* value */
+                emit_bytes(ctx, (const uint8_t*)"\x48\x89\x10", 3);       /* mov [rax], rdx */
+                break;
+            }
+            if (strcmp(func_name, "KrtLoadPtr") == 0 && inst->operand_count >= 3) {
+                emit_load_value_to_reg(ctx, &inst->operands[1], REG_RAX); /* ptr */
+                emit_load_value_to_reg(ctx, &inst->operands[2], REG_RCX); /* offset */
+                if (!(inst->operands[2].type == KRT_IR_VALUE_IMM &&
+                      inst->operands[2].data.imm == 0)) {
+                    emit_bytes(ctx, (const uint8_t*)"\x48\x01\xC8", 3);   /* add rax, rcx */
+                }
+                emit_bytes(ctx, (const uint8_t*)"\x48\x8B\x00", 3);       /* mov rax, [rax] */
+                emit_store_temp_result(ctx, inst, REG_RAX);
+                break;
+            }
+
             int32_t local_sym_idx = kro_find_symbol(ctx->writer, func_name);
-            fprintf(stderr, "[KroCodegen] CALL: func_name=%s, local_sym_idx=%d\n", func_name, local_sym_idx);
             if (local_sym_idx >= 0) {
                 emit_call_local(ctx, func_name);
             } else {
-                fprintf(stderr, "[KroCodegen]   -> external call\n");
                 emit_call_external(ctx, func_name);
             }
             if (inst->result.type == KRT_IR_VALUE_TEMP) {
@@ -680,13 +690,10 @@ static void KroGenerateInstruction(KROCodegenContext* ctx, KrtIRInst* inst) {
 
         case KRT_IR_RETURN: {
 #ifdef KRO_DEBUG
-            fprintf(stderr, "[KroCodegen] Processing RETURN instruction, operand_count=%d\n",
-                    inst->operand_count);
 #endif
             if (inst->operand_count >= 1 && inst->operands[0].type != KRT_IR_VALUE_VOID) {
                 KrtIRValue* ret_val = &inst->operands[0];
 #ifdef KRO_DEBUG
-                fprintf(stderr, "[KroCodegen]   Return value type=%d", ret_val->type);
 #endif
                 emit_load_value_to_reg(ctx, ret_val, REG_RAX);
             } else {
@@ -703,7 +710,6 @@ static void KroGenerateInstruction(KROCodegenContext* ctx, KrtIRInst* inst) {
             KrtIRValue* value = &inst->operands[1];
 
 #ifdef KRO_DEBUG
-            fprintf(stderr, "[KroCodegen] STORE: dest.type=%d", dest->type);
             if (dest->type == KRT_IR_VALUE_VAR) fprintf(stderr, ", name=%s", dest->data.name);
             fprintf(stderr, ", value.type=%d", value->type);
             if (value->type == KRT_IR_VALUE_IMM) fprintf(stderr, ", imm=%ld", value->data.imm);
@@ -714,7 +720,6 @@ static void KroGenerateInstruction(KROCodegenContext* ctx, KrtIRInst* inst) {
                 KROLocalVar* local_var = find_local_var(ctx, dest->data.name);
 
 #ifdef KRO_DEBUG
-                fprintf(stderr, "[KroCodegen]   find_local_var returned: %p", (void*)local_var);
                 if (local_var) fprintf(stderr, ", allocated=%d, stack_offset=-%d",
                         local_var->allocated, local_var->stack_offset);
                 fprintf(stderr, "\n");
@@ -722,12 +727,9 @@ static void KroGenerateInstruction(KROCodegenContext* ctx, KrtIRInst* inst) {
 
                 if (local_var && local_var->allocated) {
 #ifdef KRO_DEBUG
-                    fprintf(stderr, "[KroCodegen] STORE to local variable: %s at offset -%d\n",
-                            dest->data.name, local_var->stack_offset);
 #endif
                     emit_load_value_to_reg(ctx, value, REG_RAX);
 #ifdef KRO_DEBUG
-                    fprintf(stderr, "[KroCodegen]   Storing RAX to stack at offset -%d\n", local_var->stack_offset);
 #endif
                     emit_store_to_stack(ctx, local_var->stack_offset, REG_RAX);
                 } else {
@@ -795,8 +797,6 @@ static void KroGenerateInstruction(KROCodegenContext* ctx, KrtIRInst* inst) {
 
                 if (local_var && local_var->allocated) {
 #ifdef KRO_DEBUG
-                    fprintf(stderr, "[KroCodegen] LOAD from local variable: %s at offset -%d\n",
-                            src->data.name, local_var->stack_offset);
 #endif
                     emit_load_from_stack(ctx, local_var->stack_offset, REG_RAX);
                 } else {
@@ -811,13 +811,11 @@ static void KroGenerateInstruction(KROCodegenContext* ctx, KrtIRInst* inst) {
                     }
                 }
             }
-            // 将LOAD结果（临时变量）存储到栈槽
             if (inst->result.type == KRT_IR_VALUE_TEMP) {
                 int slot = alloc_temp_slot(ctx, inst->result.data.index);
                 if (slot > 0) {
                     emit_store_to_stack(ctx, slot, REG_RAX);
 #ifdef KRO_DEBUG
-                    fprintf(stderr, "[KroCodegen] LOAD result temp_%d stored to stack offset -%d\n", inst->result.data.index, slot);
 #endif
                 }
             }
@@ -829,7 +827,6 @@ static void KroGenerateInstruction(KROCodegenContext* ctx, KrtIRInst* inst) {
 
             KrtIRValue* var = &inst->operands[0];
 #ifdef KRO_DEBUG
-            fprintf(stderr, "[KroCodegen] ALLOC: operand_count=%d, var.type=%d", inst->operand_count, var->type);
             if (var->type == KRT_IR_VALUE_VAR && var->data.name) {
                 fprintf(stderr, ", name=%s", var->data.name);
             }
@@ -837,12 +834,10 @@ static void KroGenerateInstruction(KROCodegenContext* ctx, KrtIRInst* inst) {
 #endif
             if (var->type == KRT_IR_VALUE_VAR) {
 #ifdef KRO_DEBUG
-                fprintf(stderr, "[KroCodegen] ALLOC local variable: %s\n", var->data.name ? var->data.name : "NULL");
 #endif
                 find_or_alloc_local_var(ctx, var->data.name);
 
 #ifdef KRO_DEBUG
-                fprintf(stderr, "[KroCodegen]   After ALLOC, local_var_count=%d\n", ctx->local_var_count);
                 for (int i = 0; i < ctx->local_var_count; i++) {
                     fprintf(stderr, "     [%d] name='%s', offset=-%d\n",
                             i, ctx->local_vars[i].name, ctx->local_vars[i].stack_offset);
@@ -853,71 +848,70 @@ static void KroGenerateInstruction(KROCodegenContext* ctx, KrtIRInst* inst) {
         }
 
         case KRT_IR_COPY: {
-            /* COPY instruction: load source value and store to result location */
             if (inst->operand_count < 1) break;
 
             KrtIRValue* src = &inst->operands[0];
             KrtIRValue* dst = &inst->result;
 
 #ifdef KRO_DEBUG
-            fprintf(stderr, "[KroCodegen] COPY: src.type=%d, dst.type=%d\n",
-                    src->type, dst->type);
             if (src->type == KRT_IR_VALUE_TEMP) {
-                fprintf(stderr, "[KroCodegen]   src temp_%d\n", src->data.index);
             }
             if (dst->type == KRT_IR_VALUE_TEMP) {
-                fprintf(stderr, "[KroCodegen]   dst temp_%d\n", dst->data.index);
             }
 #endif
 
-            /* Load source value into RAX */
             emit_load_value_to_reg(ctx, src, REG_RAX);
 
-            /* Store RAX to result location */
             if (dst->type == KRT_IR_VALUE_TEMP) {
                 int slot = alloc_temp_slot(ctx, dst->data.index);
                 if (slot > 0) {
                     emit_store_to_stack(ctx, slot, REG_RAX);
 #ifdef KRO_DEBUG
-                    fprintf(stderr, "[KroCodegen] COPY: stored to temp_%d at stack -%d\n",
-                            dst->data.index, slot);
 #endif
                 }
             } else if (dst->type == KRT_IR_VALUE_VAR) {
                 KROLocalVar* local_var = find_local_var(ctx, dst->data.name);
-                if (!local_var) {
-                    local_var = find_or_alloc_local_var(ctx, dst->data.name);
-                }
                 if (local_var && local_var->allocated) {
                     emit_store_to_stack(ctx, local_var->stack_offset, REG_RAX);
+                } else {
+                    int sym_idx = kro_find_symbol(ctx->writer, dst->data.name);
+                    if (sym_idx >= 0) {
+                        emit_byte(ctx, 0x48);
+                        emit_byte(ctx, 0x89);
+                        emit_byte(ctx, 0x05);
+                        uint32_t reloc_offset = kro_get_code_offset(ctx->writer);
+                        emit_u32(ctx, 0);
+                        kro_add_reloc(ctx->writer, KRO_SEC_TEXT, reloc_offset, sym_idx, KRO_RELOC_PC32, 0);
+                    } else {
+                        local_var = find_or_alloc_local_var(ctx, dst->data.name);
+                        if (local_var && local_var->allocated) {
+                            emit_store_to_stack(ctx, local_var->stack_offset, REG_RAX);
+                        }
+                    }
                 }
             }
             break;
         }
 
         case KRT_IR_PHI: {
-            /* PHI node: allocate a stack slot for the result */
             if (inst->result.type == KRT_IR_VALUE_TEMP) {
                 int slot = alloc_temp_slot(ctx, inst->result.data.index);
 #ifdef KRO_DEBUG
-                fprintf(stderr, "[KroCodegen] PHI: temp_%d allocated stack slot -%d\n",
-                        inst->result.data.index, slot);
 #endif
-                /* PHI will be resolved by inserting moves in predecessor blocks */
             }
             break;
         }
 
         case KRT_IR_SYSCALL: {
-            fprintf(stderr, "[KroCodegen] KRT_IR_SYSCALL: operand_count=%d\n", inst->operand_count);
+#ifdef KRO_DEBUG
             for (int i = 0; i < inst->operand_count && i < 7; i++) {
                 KrtIRValue* op = &inst->operands[i];
-                fprintf(stderr, "[KroCodegen]   operand[%d]: type=%d", i, op->type);
                 if (op->type == KRT_IR_VALUE_IMM) fprintf(stderr, ", imm=%f", op->data.imm);
                 if (op->type == KRT_IR_VALUE_TEMP) fprintf(stderr, ", temp_idx=%d", op->data.index);
                 if (op->type == KRT_IR_VALUE_VAR) fprintf(stderr, ", var=%s", op->data.name ? op->data.name : "(null)");
                 fprintf(stderr, "\n");
             }
+#endif
             if (inst->operand_count < 1) break;
             KrtIRValue* syscall_num = &inst->operands[0];
             int arg_count = inst->operand_count - 1;
@@ -931,10 +925,8 @@ static void KroGenerateInstruction(KROCodegenContext* ctx, KrtIRInst* inst) {
 
             emit_load_value_to_reg(ctx, syscall_num, REG_RAX);
 
-            fprintf(stderr, "[KroCodegen] Emitting syscall bytes at offset %u\n", kro_get_code_offset(ctx->writer));
             emit_byte(ctx, 0x0F);
             emit_byte(ctx, 0x05);
-            fprintf(stderr, "[KroCodegen] Syscall bytes emitted\n");
 
             if (inst->result.type == KRT_IR_VALUE_TEMP) {
                 int slot = alloc_temp_slot(ctx, inst->result.data.index);
@@ -947,7 +939,6 @@ static void KroGenerateInstruction(KROCodegenContext* ctx, KrtIRInst* inst) {
 
         default:
 #ifdef KRO_DEBUG
-            fprintf(stderr, "[KroCodegen] Unhandled opcode: %d\n", inst->opcode);
 #endif
             break;
     }
@@ -962,16 +953,10 @@ static void KroGenerateBlock(KROCodegenContext* ctx, KrtIRBasicBlock* block) {
         kro_update_symbol_value(ctx->writer, block_sym_idx, kro_get_code_offset(ctx->writer));
     }
 
-    int count = 0;
     KrtIRInst* inst = block->first_inst;
     while (inst) {
-        uint32_t before_offset = kro_get_code_offset(ctx->writer);
         KroGenerateInstruction(ctx, inst);
-        uint32_t after_offset = kro_get_code_offset(ctx->writer);
-        fprintf(stderr, "[KroCodegen]   Instruction[%d]: opcode=%d, bytes_emitted=%u\n",
-                count, inst->opcode, after_offset - before_offset);
         inst = inst->next;
-        count++;
     }
 }
 
@@ -983,7 +968,6 @@ static int calculate_function_stack_size(KrtIRFunction* func) {
         KrtIRBasicBlock* block = func->entry_block;
 
 #ifdef KRO_DEBUG
-        fprintf(stderr, "[KroCodegen] Calculating stack size for function\n");
 #endif
 
         while (block) {
@@ -1018,38 +1002,7 @@ static int calculate_function_stack_size(KrtIRFunction* func) {
 static void KroGenerateFunction(KROCodegenContext* ctx, KrtIRFunction* func, KrtIRModule* module) {
     if (!func) return;
 
-    // KrtIrSsaOptimize(func);  // 临时禁用SSA优化以调试变量声明
-
-    (void)kro_get_code_offset(ctx->writer);
-
-    fprintf(stderr, "[KroCodegen] KroGenerateFunction: name=%s, entry_block=%p\n",
-            func->name ? func->name : "(null)", (void*)func->entry_block);
-    if (func->entry_block) {
-        fprintf(stderr, "[KroCodegen]   Entry block details BEFORE generation:\n");
-        fprintf(stderr, "   - first_inst=%p\n", (void*)func->entry_block->first_inst);
-        fprintf(stderr, "   - inst_count=%d\n", func->entry_block->inst_count);
-
-        fprintf(stderr, "   - Linked list traversal:\n");
-        int count = 0;
-        KrtIRInst* inst = func->entry_block->first_inst;
-        while (inst) {
-            fprintf(stderr, "     [%d] opcode=%d, addr=%p, next=%p\n",
-                    count, inst->opcode, (void*)inst, (void*)inst->next);
-            count++;
-            inst = inst->next;
-        }
-        fprintf(stderr, "   - Total in linked list: %d\n", count);
-
-        if (func->entry_block->insts) {
-            fprintf(stderr, "   - Array contents:\n");
-            for (int i = 0; i < func->entry_block->inst_count; i++) {
-                KrtIRInst* arr_inst = func->entry_block->insts[i];
-                fprintf(stderr, "     [%d] opcode=%d, addr=%p\n", i,
-                        arr_inst ? arr_inst->opcode : -1,
-                        arr_inst ? (void*)arr_inst : NULL);
-            }
-        }
-    }
+    // KrtIrSsaOptimize(func);  //禁用SSA优化,除了Airs_td以外的人不要打开它,SSA不稳定
 
     bool has_mangled_main = kro_module_has_mangled_main(module);
     int is_entry_point = is_entry_point_function(func->name, has_mangled_main);
@@ -1103,9 +1056,6 @@ static void KroGenerateFunction(KROCodegenContext* ctx, KrtIRFunction* func, Krt
         KroGenerateBlock(ctx, block);
         block = block->next;
     }
-    fprintf(stderr, "[KroCodegen] has_explicit_return=%d for function '%s'\n",
-            (int)has_explicit_return,
-            func->name ? func->name : "(null)");
 
     if (is_entry_point) {
 
@@ -1200,7 +1150,6 @@ static void KroGenerateDataSection(KROCodegenContext* ctx, KrtIRModule* module) 
         int sym_idx = kro_add_symbol(ctx->writer, global->name, KRO_SYM_OBJECT, KRO_BIND_GLOBAL, KRO_SEC_DATA, data_offset);
         if (sym_idx < 0) {
 #ifdef KRO_DEBUG
-            fprintf(stderr, "[KroCodegen] Failed to register symbol for global: %s\n", global->name);
 #endif
         }
     }
@@ -1212,7 +1161,6 @@ void KrtKrtGenerate(FILE* output_file, const char* output_filename, KrtIRModule*
     }
 
 #ifdef KRO_DEBUG
-    fprintf(stderr, "[KroCodegen] KrtKrtGenerate: checking module functions BEFORE any processing\n");
     KrtIRFunction* check_func = module->functions;
     while (check_func) {
         fprintf(stderr, "  Function: %s, entry_block=%p\n", check_func->name, (void*)check_func->entry_block);
@@ -1281,10 +1229,8 @@ void KrtKrtGenerate(FILE* output_file, const char* output_filename, KrtIRModule*
     }
 
     int func_idx = 0;
-     fprintf(stderr, "[KroCodegen] Module functions:\n");
      KrtIRFunction* dbg_func = module->functions;
      while (dbg_func) {
-         fprintf(stderr, "[KroCodegen]   func: %s\n", dbg_func->name ? dbg_func->name : "(null)");
          dbg_func = dbg_func->next;
      }
 
@@ -1311,17 +1257,9 @@ void KrtKrtGenerate(FILE* output_file, const char* output_filename, KrtIRModule*
     while (func) {
         uint32_t actual_offset = kro_get_code_offset(ctx.writer);
 
-        fprintf(stderr, "[KroCodegen] Function '%s': actual_offset=0x%x, sym_idx=%d\n",
-                func->name ? func->name : "(null)",
-                actual_offset,
-                sym_indices[func_idx]);
-
         if (sym_indices[func_idx] >= 0) {
             kro_update_symbol_value(ctx.writer, sym_indices[func_idx], actual_offset);
 #ifdef KRO_DEBUG
-            fprintf(stderr, "[KroCodegen]   Updated symbol[%d] value to 0x%x\n",
-                    sym_indices[func_idx],
-                    actual_offset);
 #endif
         }
 
@@ -1336,9 +1274,43 @@ void KrtKrtGenerate(FILE* output_file, const char* output_filename, KrtIRModule*
 
     KRT_FREE(sym_indices);
 
+    {
+        const char* main_name = "_KrtMainEntry";
+        int main_sym = kro_find_symbol(ctx.writer, main_name);
+        if (main_sym < 0) {
+            main_name = "main";
+            main_sym = kro_find_symbol(ctx.writer, main_name);
+        }
+        if (main_sym < 0) {
+            main_name = "_ZN4MainEv";
+            main_sym = kro_find_symbol(ctx.writer, main_name);
+        }
+
+        if (main_sym >= 0) {
+            uint32_t start_offset = kro_get_code_offset(ctx.writer);
+            kro_add_symbol(ctx.writer, "_start", KRO_SYM_FUNC, KRO_BIND_GLOBAL, KRO_SEC_TEXT, start_offset);
+            kro_set_entry_point(ctx.writer, start_offset);
+
+            uint8_t call_op = 0xE8;
+            emit_byte(&ctx, call_op);
+            uint32_t reloc_offset = kro_get_code_offset(ctx.writer);
+            emit_u32(&ctx, 0);
+            kro_add_reloc(ctx.writer, KRO_SEC_TEXT, reloc_offset, main_sym, KRO_RELOC_PC32, 0);
+
+            /* mov rdi, rax */
+            emit_bytes(&ctx, (const uint8_t*)"\x48\x89\xc7", 3);
+
+            /* mov rax, 60 (sys_exit) */
+            emit_bytes(&ctx, (const uint8_t*)"\x48\xc7\xc0\x3c\x00\x00\x00", 7);
+
+            /* syscall */
+            emit_bytes(&ctx, (const uint8_t*)"\x0f\x05", 2);
+
+        }
+    }
+
     if (!kro_write_file(ctx.writer, ctx.output_filename)) {
 #ifdef KRO_DEBUG
-        fprintf(stderr, "[KroCodegen] Failed to write output file: %s\n", ctx.output_filename);
 #endif
     }
 

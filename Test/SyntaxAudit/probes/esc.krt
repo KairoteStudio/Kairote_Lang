@@ -1,0 +1,4 @@
+function main() {
+    string s = "a\tb\nc\"d";
+    P(s, 6);
+}

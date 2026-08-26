@@ -65,9 +65,9 @@ public class Program
 
 ### 环境要求
 
-- **操作系统**: Windows 10/11 | Linux | macOS
-- **Python**: 3.8+
-- **编译器**: GCC
+- **操作系统**: Linux | Windows | macOS
+- **Zig**: 0.17.0+ (作为 C 编译器和构建系统)
+- **C 标准库**: 需要 `libm` 和 `libpthread`
 
 ### 安装
 
@@ -75,20 +75,20 @@ public class Program
 # 克隆仓库
 git clone https://github.com/KairoteStudio/Kairote_Lang.git
 cd Kairote_Lang
-
-# 安装依赖
-pip install -r requirements.txt
 ```
 
 ### 构建项目
 
 ```bash
-# 开发构建
-python build.py
-
-# 发布构建
-python build.py --release
+# 构建 Re.KrtC 编译器（使用 zig）
+cd Re.KrtC
+zig build
 ```
+
+> 编译器依赖 `libarklink`。如果 `../ArkLink/build/libarklink.a` 不存在，需先构建 ArkLink：
+> ```bash
+> cd ../ArkLink && cmake -S . -B build && cmake --build build
+> ```
 
 ### 编写你的第一个 KairoteLang 程序 或 [学习文档](./docs/KrtC/doc/README.md)
 
@@ -122,35 +122,35 @@ KrtC build hello.krt
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    KairoteLang Toolchain                    │
-├─────────────┬─────────────┬─────────────┬───────────────────┤
-│   KrtC      │   ArkLink   │    LSP      │   Runtime         │
-│  编译器      │   链接器    │  语言服务    │   运行时           │
-├─────────────┼─────────────┼─────────────┼───────────────────┤
-│   词法分析   │  COFF/ELF   │   代码补全   │  内存管理         │
-│   语法分析   │    PE后端   │   错误诊断   │  垃圾回收         │
-│   语义分析   │   符号解析   │   跳转定义   │  异常处理         │
-│   SSA IR    │   重定位     │   悬停提示   │  标准库           │
-│   代码生成   │   库文件     │             │                   │
-└─────────────┴─────────────┴─────────────┴───────────────────┘
+├─────────────┬─────────────┬─────────────────────────────────┤
+│   Re.KrtC   │   ArkLink   │   Runtime                       │
+│  编译器      │   链接器    │   运行时                         │
+├─────────────┼─────────────┼─────────────────────────────────┤
+│   词法分析   │  COFF/ELF   │  内存管理                        │
+│   语法分析   │    PE后端   │  标准库                          │
+│   语义分析   │   符号解析   │  异常处理                        │
+│   SSA IR    │   重定位     │                                  │
+│   代码生成   │   库文件     │                                  │
+└─────────────┴─────────────┴─────────────────────────────────┘
 ```
 
 ### 项目结构
 
 ```
 Kairote_Lang/
-├── KrtC/                    # 编译器核心
+├── Re.KrtC/                # 编译器核心 (KrtC → Re.KrtC)
 │   ├── src/
+│   │   ├── Core/           # 基础库（内存、平台、工具）
 │   │   ├── compiler/       # 编译器前端、中端、后端
-│   │   ├── runtime/        # 运行时库
-│   │   └── tools/          # 开发工具
-│   └── build.py            # 构建脚本
+│   │   ├── Bytecode/       # 字节码定义
+│   │   └── Tools/          # 开发工具
+│   ├── Shared/             # 共享代码生成器
+│   ├── stub_include/       # 存根头文件
+│   └── build.zig           # Zig 构建脚本
 ├── ArkLink/                # 链接器
-│   ├── src/
-│   │   ├── core/           # 核心链接逻辑
-│   │   ├── backends/       # 目标文件格式后端
-│   │   └── cli/            # 命令行接口
+│   ├── src/                # 核心链接逻辑与后端
 │   └── include/            # 头文件
-├── lsp/                    # 语言服务器协议实现
+├── libs/                   # 标准库 (.krt)
 └── docs/                   # 文档
 ```
 
@@ -171,20 +171,14 @@ Kairote_Lang/
 - 符号版本控制
 - 死代码消除
 
-### 语言服务器 (LSP)
-
-- 实时代码诊断
-- 智能代码补全
-- 符号导航
-- 重构支持
-
 ---
 
 ## 路线图
 
 - [x] 基础编译器框架
 - [x] 链接器实现
-- [x] LSP 基础功能
+- [x] SSA IR 中端
+- [x] x86 / Kro 后端
 - [ ] 标准库完善
 - [ ] 包管理器
 - [ ] IDE 插件

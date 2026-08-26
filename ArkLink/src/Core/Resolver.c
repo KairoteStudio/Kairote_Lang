@@ -33,25 +33,20 @@ static void symbol_table_free(SymbolTable* table) {
 
 static int symbol_table_add(SymbolTable* table, const ArkResolverSymbol* sym) {
 
-    fprintf(stderr, "[symbol_table_add] Adding symbol: name=%s, is_export=%d, section=%u\n",
-            sym->name ? sym->name : "(null)",
-            sym->is_export,
-            sym->section_index);
 
     for (size_t i = 0; i < table->symbol_count; i++) {
         if (strcmp(table->symbols[i].name, sym->name) == 0) {
 
-            fprintf(stderr, "[symbol_table_add] Duplicate found: existing section=%u, new section=%u\n",
-                    table->symbols[i].section_index,
-                    sym->section_index);
 
             if (table->symbols[i].section_index == 0 && sym->section_index > 0) {
 
-                fprintf(stderr, "[symbol_table_add] Overwriting with new symbol (is_export=%d)\n", sym->is_export);
                 table->symbols[i] = *sym;
             } else if (table->symbols[i].section_index > 0 && sym->section_index > 0) {
 
-                return 0;
+                /* 重复的全局定义,保留先到者并继续
+                 * 原先在此返回 0 使整个链接失败, 导致任何 using 导入标准库的程序都无法生成可执行文件。
+                 */
+                return 1;
             } else {
 
             }
@@ -107,6 +102,60 @@ static ArkResolverSymbol* find_symbol(SymbolTable* table, const char* name) {
     return NULL;
 }
 
+/* 局部符号逐单元重命名表:
+ * 各编译单元的局部符号(如字符串常量 str_const_N)名字必然重复,
+ * 但重定位按"单元内符号名"解析, 因此重命名后必须记录映射, 供该单元的重定位查回自己的那份拷贝
+ */
+typedef struct {
+    size_t unit;
+    char* local_name;
+    char* global_name;
+} LocalRename;
+
+typedef struct {
+    LocalRename* items;
+    size_t count;
+    size_t capacity;
+} RenameTable;
+
+static void rename_table_free(RenameTable* t) {
+    if (!t) return;
+    for (size_t i = 0; i < t->count; i++) {
+        free(t->items[i].local_name);
+        free(t->items[i].global_name);
+    }
+    free(t->items);
+    t->items = NULL;
+    t->count = 0;
+    t->capacity = 0;
+}
+
+static int rename_table_add(RenameTable* t, size_t unit, const char* local, const char* global) {
+    if (t->count >= t->capacity) {
+        size_t nc = t->capacity ? t->capacity * 2 : 16;
+        LocalRename* ni = (LocalRename*)realloc(t->items, nc * sizeof(LocalRename));
+        if (!ni) return 0;
+        t->items = ni;
+        t->capacity = nc;
+    }
+    t->items[t->count].unit = unit;
+    t->items[t->count].local_name = strdup(local);
+    t->items[t->count].global_name = strdup(global);
+    t->count++;
+    return t->items[t->count - 1].local_name && t->items[t->count - 1].global_name;
+}
+
+static const char* rename_table_lookup(RenameTable* t, size_t unit, const char* local) {
+    for (size_t i = 0; i < t->count; i++) {
+        if (t->items[i].unit == unit && strcmp(t->items[i].local_name, local) == 0) {
+            return t->items[i].global_name;
+        }
+    }
+    if (t->count > 0) {
+    }
+    return NULL;
+}
+
 ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* units, size_t unit_count, ArkResolverPlan* out_plan) {
     if (!ctx || !units || unit_count == 0 || !out_plan) {
         return ARK_LINK_ERR_INVALID_ARGUMENT;
@@ -140,13 +189,16 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
         return ARK_LINK_ERR_MEMORY;
     }
 
-    size_t sec_idx_counter = 1;
+    size_t sec_idx_counter = 0;
     for (size_t i = 0; i < unit_count; i++) {
         ArkLinkUnit* unit = units[i];
         if (!unit) continue;
         unit_sec_start[i] = (uint32_t)sec_idx_counter;
         sec_idx_counter += unit->section_count;
     }
+
+    RenameTable renames;
+    memset(&renames, 0, sizeof(renames));
 
     for (size_t i = 0; i < unit_count; i++) {
         ArkLinkUnit* unit = units[i];
@@ -157,20 +209,26 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
         for (size_t j = 0; j < unit->symbol_count; j++) {
             ArkSymbolDesc* sym_desc = &unit->symbols[j];
 
-            fprintf(stderr, "[Resolver] Raw symbol from unit[%zu][%zu]: name=%s, raw_section=%u\n",
-                    i, j,
-                    sym_desc->name ? sym_desc->name : "(null)",
-                    sym_desc->section_index);
-
             ArkResolverSymbol sym = {0};
             sym.name = sym_desc->name;
             sym.binding = sym_desc->binding;
             sym.visibility = sym_desc->visibility;
 
+            if (sym_desc->section_index > 0 &&
+                sym_desc->binding != ARK_BIND_GLOBAL &&
+                sym.name && find_symbol(&sym_table, sym.name) &&
+                find_symbol(&sym_table, sym.name)->section_index > 0) {
+                char renamed[512];
+                snprintf(renamed, sizeof(renamed), "%s@u%zu", sym.name, i);
+                if (rename_table_add(&renames, i, sym.name, renamed)) {
+                    sym.name = strdup(renamed);
+                }
+            }
+
             if (sym_desc->section_index > 0) {
                 sym.section_index = unit_sec_start[i] + sym_desc->section_index - 1;
-                fprintf(stderr, "[Resolver] Calculated section: unit_sec_start[%zu]=%u + raw_section=%u - 1 = %u\n",
-                        i, unit_sec_start[i], sym_desc->section_index, sym.section_index);
+                if (sym.name && strstr(sym.name, "SYS_mmap")) {
+                }
             } else {
                 sym.section_index = 0;
 
@@ -179,8 +237,6 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
                         ArkLinkSection* sec = &unit->sections[s];
                         if (sec->kind == ARK_SECTION_CODE) {
                             sym.section_index = unit_sec_start[i] + s;
-                            fprintf(stderr, "[Resolver] Fixing main function section: %u -> %u\n",
-                                    0, sym.section_index);
                             break;
                         }
                     }
@@ -194,14 +250,6 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
             if (sym_desc->binding == ARK_BIND_GLOBAL) {
                 sym.is_export = 1;
             }
-
-            fprintf(stderr, "[Resolver] Symbol[%zu]: name=%s, binding=%d, section=%u, import_module=%s, is_export=%d\n",
-                    j,
-                    sym.name ? sym.name : "(null)",
-                    (int)sym.binding,
-                    sym.section_index,
-                    sym.import_module ? sym.import_module : "(null)",
-                    sym.is_export);
 
             if (!symbol_table_add(&sym_table, &sym)) {
                 free(unit_sec_start);
@@ -299,43 +347,26 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
 
     out_plan->backend_input->section_count = total_sections;
 
-    out_plan->backend_input->entry_section = 1;
+    out_plan->backend_input->entry_section = 0;
     out_plan->backend_input->entry_offset = 0;
 
     ArkResolverSymbol* entry_sym = find_symbol(&sym_table, "_start");
-    fprintf(stderr, "[Resolver] Looking for entry point symbol...\n");
     if (!entry_sym) {
         entry_sym = find_symbol(&sym_table, "main");
-        fprintf(stderr, "[Resolver]   _start not found, trying main: %p\n", (void*)entry_sym);
         if (!entry_sym) {
             entry_sym = find_symbol(&sym_table, "_ZN4mainEv");
-            fprintf(stderr, "[Resolver]   main not found, trying _ZN4mainEv: %p\n", (void*)entry_sym);
         }
         if (!entry_sym) {
             entry_sym = find_symbol(&sym_table, "_KrtMainEntry");
-            fprintf(stderr, "[Resolver]   _ZN4mainEv not found, trying _KrtMainEntry: %p\n", (void*)entry_sym);
         }
     }
 
     if (entry_sym) {
 
-        if (entry_sym->section_index > 0) {
-            out_plan->backend_input->entry_section = entry_sym->section_index;
-        } else {
-            out_plan->backend_input->entry_section = 1;
-        }
+        out_plan->backend_input->entry_section = entry_sym->section_index;
 
         out_plan->backend_input->entry_offset = entry_sym->value;
-        fprintf(stderr, "[Resolver] Found entry point: name=%s, section=%u, value=0x%x\n",
-                entry_sym->name ? entry_sym->name : "(null)",
-                entry_sym->section_index,
-                entry_sym->value);
-        fprintf(stderr, "[Resolver] Setting entry: section=%u, offset=0x%x (total_sections=%zu)\n",
-                out_plan->backend_input->entry_section,
-                out_plan->backend_input->entry_offset,
-                (size_t)total_sections);
     } else {
-        fprintf(stderr, "[Resolver] WARNING: No entry point symbol found!\n");
     }
 
     for (size_t i = 0; i < sym_table.symbol_count; i++) {
@@ -356,6 +387,11 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
             for (size_t k = 0; k < sec->reloc_count; k++) {
                 ArkRelocationDesc* reloc_desc = &sec->relocs[k];
 
+                if (i == 1 && k == 0 && j == 0) {
+                    for (size_t d = 0; d < renames.count && d < 40; d++) {
+                    }
+                }
+
                 ArkResolverReloc reloc = {0};
                 reloc.section = &out_plan->backend_input->sections[global_sec_idx];
                 reloc.section_index = global_sec_idx;
@@ -366,7 +402,8 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
 
                 if (reloc_desc->sym_idx < unit->symbol_count) {
                     const char* sym_name = unit->symbols[reloc_desc->sym_idx].name;
-                    ArkResolverSymbol* global_sym = find_symbol(&sym_table, sym_name);
+                    const char* renamed = rename_table_lookup(&renames, i, sym_name);
+                    ArkResolverSymbol* global_sym = find_symbol(&sym_table, renamed ? renamed : sym_name);
                     if (global_sym) {
                         reloc.symbol = global_sym;
                     }
@@ -415,12 +452,6 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
 
                     imports[idx].is_function = (sym_table.symbols[i].type == ARK_SYM_FUNC);
 
-                    fprintf(stderr, "[Resolver]   Import[%zu]: %s.%s (%s)\n",
-                            idx,
-                            imports[idx].module ? imports[idx].module : "(null)",
-                            imports[idx].symbol,
-                            imports[idx].is_function ? "FUNC" : "DATA");
-
                     idx++;
                 }
             }
@@ -431,30 +462,13 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
 
     size_t export_count = 0;
     int has_main_export = 0;
-
-    fprintf(stderr, "[Resolver] Counting exports from %zu symbols (addr=%p)...\n",
-            sym_table.symbol_count, (void*)sym_table.symbols);
     for (size_t i = 0; i < sym_table.symbol_count; i++) {
         ArkResolverSymbol* s = &sym_table.symbols[i];
-        fprintf(stderr, "[Resolver]   Symbol[%zu]@%p: name=%s, is_export=%d, import_module=%s, binding=%d\n",
-                i,
-                (void*)s,
-                s->name ? s->name : "(null)",
-                s->is_export,
-                s->import_module ? s->import_module : "(null)",
-                (int)s->binding);
 
         int is_import = s->import_module && strlen(s->import_module) > 0;
         if (s->is_export && !is_import) {
             export_count++;
-            fprintf(stderr, "[Resolver]     -> PASS: is_export=%d, import_module=%s\n",
-                    s->is_export,
-                    s->import_module ? s->import_module : "(null)");
-            fprintf(stderr, "[Resolver]     -> counted as export (total=%zu)\n", export_count);
         } else {
-            fprintf(stderr, "[Resolver]     -> FAIL: is_export=%d, is_import=%d\n",
-                    s->is_export,
-                    is_import);
         }
 
         if (!has_main_export &&
@@ -465,12 +479,9 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
             has_main_export = 1;
             if (!sym_table.symbols[i].is_export) {
                 export_count++;
-                fprintf(stderr, "[Resolver]     -> main not exported, adding (total=%zu)\n", export_count);
             }
         }
     }
-
-    fprintf(stderr, "[Resolver] Final export_count=%zu\n", export_count);
 
     if (export_count > 0) {
         ArkExportEntry* exports = (ArkExportEntry*)calloc(export_count, sizeof(ArkExportEntry));
@@ -488,7 +499,6 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
                     !is_import_sym) {
 
                     should_export = 1;
-                    fprintf(stderr, "[Resolver] Force-exporting 'main' function (entry point)\n");
                 }
 
                 if (should_export) {
@@ -499,20 +509,11 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
                     exports[idx].value = sym->value;
                     exports[idx].is_function = (sym->type == ARK_SYM_FUNC);
 
-                    fprintf(stderr, "[Resolver]   Export[%zu]: %s (sec=%u, off=0x%x, %s)\n",
-                            idx,
-                            exports[idx].name ? exports[idx].name : "(null)",
-                            exports[idx].section_index,
-                            exports[idx].offset,
-                            exports[idx].is_function ? "FUNC" : "DATA");
-
                     idx++;
                 }
             }
             out_plan->backend_input->exports = exports;
             out_plan->backend_input->export_count = export_count;
-
-            fprintf(stderr, "[Resolver] Total exports: %zu\n", export_count);
         }
     }
 
@@ -522,6 +523,7 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
     free(section_map);
     free(unit_sec_start);
     free(unit_sym_start);
+    rename_table_free(&renames);
 
     out_plan->symbols = sym_table.symbols;
     out_plan->symbol_count = sym_table.symbol_count;

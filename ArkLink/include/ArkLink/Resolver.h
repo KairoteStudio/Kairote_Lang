@@ -22,13 +22,13 @@ typedef struct ArkResolverSymbol {
     int is_export;
     const char* import_module;
     uint32_t iat_entry_rva;
-    uint8_t type;            
+    uint8_t type;
 } ArkResolverSymbol;
 
 typedef struct ArkResolverReloc {
     ArkSectionBuffer* section;
     uint32_t section_index;
-    uint32_t original_section_index;  
+    uint32_t original_section_index;
     uint32_t offset;
     uint32_t type;
     const ArkResolverSymbol* symbol;

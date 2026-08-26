@@ -1,0 +1,62 @@
+str0 = "3"
+str1 = "n"
+str2 = "4"
+str3 = "n"
+str4 = "7"
+str5 = "n"
+
+function _ZN1PEri(s, l)
+  entry:
+    t1 = cast arg0 82
+    t3 = cast arg1 82
+    t5 = syscall 1 1 t1 t3 0 0 0
+    t6 = return 0
+
+function _ZN1DEi(d)
+  entry:
+    t8 = eq arg0 3
+    t9 = branch t8
+  if_true_0:
+    t11 = call _ZN1PEri str0 1
+    t12 = jump
+  if_false_1:
+    t14 = call _ZN1PEri str1 1
+    t15 = jump
+  if_end_2:
+    t16 = return 0
+
+function _ZN1EEi(d)
+  entry:
+    t18 = eq arg0 4
+    t19 = branch t18
+  if_true_3:
+    t21 = call _ZN1PEri str2 1
+    t22 = jump
+  if_false_4:
+    t24 = call _ZN1PEri str3 1
+    t25 = jump
+  if_end_5:
+    t26 = return 0
+
+function _ZN1FEi(d)
+  entry:
+    t28 = eq arg0 7
+    t29 = branch t28
+  if_true_6:
+    t31 = call _ZN1PEri str4 1
+    t32 = jump
+  if_false_7:
+    t34 = call _ZN1PEri str5 1
+    t35 = jump
+  if_end_8:
+    t36 = return 0
+
+function main()
+  entry:
+    v__x = copy 3
+    v__y = copy 4
+    t40 = call _ZN1DEi v__x
+    t42 = call _ZN1EEi v__y
+    t44 = add v__x v__y
+    t46 = call _ZN1FEi t44
+    t47 = return 0

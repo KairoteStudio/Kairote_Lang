@@ -1,0 +1,24 @@
+str0 = "E"
+str1 = "n"
+
+function _ZN1PEri(s, l)
+  entry:
+    t1 = cast arg0 82
+    t3 = cast arg1 82
+    t5 = syscall 1 1 t1 t3 0 0 0
+    t6 = return 0
+
+function main()
+  entry:
+    x = copy 2
+    t9 = add x x
+    t11 = eq t9 5
+    t12 = branch t11
+  if_true_0:
+    t14 = call _ZN1PEri str0 1
+    t15 = jump
+  if_false_1:
+    t17 = call _ZN1PEri str1 1
+    t18 = jump
+  if_end_2:
+    t19 = return 0

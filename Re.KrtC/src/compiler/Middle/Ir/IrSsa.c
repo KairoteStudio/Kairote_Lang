@@ -939,7 +939,6 @@ void KrtIrSsaConstruct(KrtIRSSABuilder* ssa_builder, KrtIRFunction* func) {
         int count = 0;
         KrtIRInst* inst = b->first_inst;
         while (inst) {
-            fprintf(stderr, "[SSA] Before SSA: main block inst[%d] opcode=%d\n", count++, inst->opcode);
             inst = inst->next;
         }
     }
@@ -966,7 +965,6 @@ void KrtIrSsaConstruct(KrtIRSSABuilder* ssa_builder, KrtIRFunction* func) {
         int count = 0;
         KrtIRInst* inst = b->first_inst;
         while (inst) {
-            fprintf(stderr, "[SSA] After SSA: main block inst[%d] opcode=%d\n", count++, inst->opcode);
             inst = inst->next;
         }
     }

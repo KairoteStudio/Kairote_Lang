@@ -288,9 +288,6 @@ void ark_reloc_apply_elf(uint8_t* data, size_t size, const ArkRelocProcessor* pr
     uint64_t result = 0;
 
 #ifdef ARK_DEBUG
-    fprintf(stderr, "[RelocApply] action=%d, symbol_value=0x%lx, addend=%ld, p_vaddr=0x%lx, offset=0x%lx\n",
-            proc->action, (unsigned long)proc->symbol_value, (long)proc->addend,
-            (unsigned long)p_vaddr, (unsigned long)proc->offset);
 #endif
 
     switch (proc->action) {
@@ -302,8 +299,6 @@ void ark_reloc_apply_elf(uint8_t* data, size_t size, const ArkRelocProcessor* pr
         case ARK_RELOC_APPLY_GOT: {
             uint64_t pc_addr = ark_backend_calc_pc_relative(p_vaddr, proc->field_size);
 #ifdef ARK_DEBUG
-            fprintf(stderr, "[RelocApply] PC32: pc_addr=0x%lx, result=0x%lx\n",
-                    (unsigned long)pc_addr, (unsigned long)(proc->symbol_value + (uint64_t)proc->addend - pc_addr));
 #endif
             result = proc->symbol_value + (uint64_t)proc->addend - pc_addr;
             break;

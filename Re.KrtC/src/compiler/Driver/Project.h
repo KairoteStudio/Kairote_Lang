@@ -63,9 +63,6 @@ typedef struct KrtProject {
 KrtProject* KrtProjCreate(const char* name, KrtProjectType type);
 void KrtProjDestroy(KrtProject* project);
 
-KrtProject* KrtProjLoad(const char* proj_file);
-int KrtProjSave(KrtProject* project, const char* proj_file);
-
 void KrtProjAddFile(KrtProject* project, const char* file_path, const char* item_type);
 void KrtProjRemoveFile(KrtProject* project, const char* file_path);
 void KrtProjAddDependency(KrtProject* project, const char* name, const char* version, const char* path);

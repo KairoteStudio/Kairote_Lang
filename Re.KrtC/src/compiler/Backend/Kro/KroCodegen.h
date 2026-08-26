@@ -39,8 +39,6 @@ typedef struct {
     int current_function_id;
     const char* current_function_name;
     KrtIRBasicBlock* current_block;
-    
-    /* PHI node tracking for SSA */
     KrtIRInst* current_phi_inst;
     int phi_operand_index;
 } KROCodegenContext;

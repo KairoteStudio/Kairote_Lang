@@ -1,0 +1,13 @@
+public static extern int64 syscall(int64 n, int64 a1, int64 a2, int64 a3, int64 a4, int64 a5, int64 a6);
+function P(string s, int32 l) { syscall(1,1,(int64)s,(int64)l,0,0,0); }
+struct Vec {
+    int32 x;
+    int32 y;
+}
+function D(int32 d) { if (d == 7) { P("7", 1); } else { P("n", 1); } }
+function main() {
+    Vec v;
+    v.x = 3;
+    v.y = 4;
+    D(v.x + v.y);
+}

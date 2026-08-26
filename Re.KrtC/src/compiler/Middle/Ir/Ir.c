@@ -1,7 +1,4 @@
 #include "Ir.h"
-#include "IrMemory.h"
-#include "Core/Memory/Allocator.h"
-#include "Core/Utils/KrtString.h"
 #include "Core/Core.h"
 #include <string.h>
 #include <stdio.h>
@@ -281,8 +278,6 @@ static KrtIRInst* ir_create_inst(KrtIRBuilder* builder, KrtIROpcode opcode) {
     KrtIRBasicBlock* block = builder->current_block;
 
     if (builder->current_function && builder->current_function->name && strcmp(builder->current_function->name, "main") == 0) {
-        fprintf(stderr, "[Ir] create_inst: opcode=%d, block=%p, block->label=%s, inst_count=%d\n",
-                opcode, (void*)block, block->label, block->inst_count);
     }
     
     if (block->inst_count >= block->inst_capacity) {
@@ -879,6 +874,61 @@ KrtIRGlobal* KrtIrModuleAddGlobal(KrtIRBuilder* builder, const char* name, KrtTo
     builder->module->globals[idx].init_number = 0.0;
     
     return &builder->module->globals[idx];
+}
+
+void KrtIrVarTypePush(KrtIRBuilder* builder, const char* name, int token, int is_array) {
+    if (!builder || !name) return;
+    if (builder->var_type_count >= builder->var_type_capacity) {
+        builder->var_type_capacity = builder->var_type_capacity ? builder->var_type_capacity * 2 : 16;
+        builder->var_types = (struct KrtIrVarType*)KRT_REALLOC(builder->var_types,
+            builder->var_type_capacity * sizeof(struct KrtIrVarType));
+    }
+    struct KrtIrVarType* v = &builder->var_types[builder->var_type_count++];
+    v->name = name; v->token = token; v->is_array = is_array;
+    int collisions = 0;
+    for (int i = 0; i < builder->var_type_count - 1; i++) {
+        if (strcmp(builder->var_types[i].name, name) == 0) collisions++;
+    }
+    if (collisions == 0) {
+        v->ir_name = name;
+    } else {
+        size_t ln = strlen(name) + 12;
+        char* buf = (char*)KRT_MALLOC(ln);
+        if (buf) {
+            snprintf(buf, ln, "%s#%d", name, collisions + 1);
+            v->ir_name = KrtIrArenaStrdup(builder->arena, buf);
+            KRT_FREE(buf);
+        } else {
+            v->ir_name = name;
+        }
+    }
+}
+
+const char* KrtIrVarTypeResolveIRName(KrtIRBuilder* builder, const char* name) {
+    if (!builder || !name) return name;
+    for (int i = builder->var_type_count - 1; i >= 0; i--) {
+        if (strcmp(builder->var_types[i].name, name) == 0) {
+            return builder->var_types[i].ir_name ? builder->var_types[i].ir_name : name;
+        }
+    }
+    return name;
+}
+
+int KrtIrVarTypeFind(KrtIRBuilder* builder, const char* name, int* out_token, int* out_is_array) {
+    if (!builder || !name) return 0;
+    for (int i = builder->var_type_count - 1; i >= 0; i--) {
+        if (strcmp(builder->var_types[i].name, name) == 0) {
+            if (out_token)    *out_token    = builder->var_types[i].token;
+            if (out_is_array) *out_is_array = builder->var_types[i].is_array;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void KrtIrVarTypeTruncate(KrtIRBuilder* builder, int count) {
+    if (builder && count >= 0 && count <= builder->var_type_count)
+        builder->var_type_count = count;
 }
 
 KrtIRGlobal* KrtIrModuleFindGlobal(KrtIRModule* module, const char* name) {

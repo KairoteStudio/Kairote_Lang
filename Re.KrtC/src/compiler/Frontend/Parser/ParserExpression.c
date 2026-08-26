@@ -3,12 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include "Accelerator.h"
-#include "Core/Utils/KrtCommon.h"
-#include "Core/Memory/Arena.h"
-#include "Parser.h"
 #include "ParserBase.h"
 #include "ParserExpression.h"
-#include "../Lexer/Tokenizer.h"
 
 ASTNode* parser_parse_expression(Parser* parser);
 
@@ -25,9 +21,6 @@ ASTNode* parser_parse_expression(Parser* parser);
 
 #define PARSER_CREATE_NODE(type, line, col) ast_create_node_arena(type, line, col, parser->arena)
 #define PARSER_STRDUP(s) arena_strdup(parser->arena, s)
-
-#undef ast_create_node
-#define ast_create_node(type, line, col) ast_create_node_arena(type, line, col, parser->arena)
 
 static char* arena_strdup(KrtArena* arena, const char* str) {
     if (!str) return NULL;
@@ -119,7 +112,7 @@ ASTNode* parser_parse_call(Parser* parser, ASTNode* callee) {
     }
     parser_advance(parser);
 
-    ASTNode* node = ast_create_node(AST_CALL, parser->current_token.line, parser->current_token.column);
+    ASTNode* node = ast_create_node_arena(AST_CALL, parser->current_token.line, parser->current_token.column, parser->arena);
     if (PARSER_UNLIKELY(!node)) {
         goto cleanup_error;
     }
@@ -160,55 +153,158 @@ ASTNode* parser_parse_primary(Parser* parser) {
     switch (token.type) {
         case TOKEN_NUMBER: {
             parser_advance(parser);
-            ASTNode* node = ast_create_node(AST_NUMBER, token.line, token.column);
+            ASTNode* node = ast_create_node_arena(AST_NUMBER, token.line, token.column, parser->arena);
             if (!node) return NULL;
-            node->data.number_value = atof(token.value);
+            if (token.value[0] == '0' && (token.value[1] == 'b' || token.value[1] == 'B')) {
+                double bin = 0.0;
+                for (const char* bp = token.value + 2; *bp == '0' || *bp == '1'; bp++) {
+                    bin = bin * 2.0 + (double)(*bp - '0');
+                }
+                node->data.number_value = bin;
+            } else {
+                node->data.number_value = atof(token.value);
+            }
+            return node;
+        }
+        case TOKEN_FUNCTION: {
+            parser_advance(parser);
+            if (parser->current_token.type != TOKEN_LEFT_PAREN) return NULL;
+            parser_advance(parser);
+
+            char** params = NULL;
+            int param_count = 0;
+            int cap = 0;
+            while (parser->current_token.type != TOKEN_RIGHT_PAREN &&
+                   parser->current_token.type != TOKEN_EOF) {
+                if (parser->current_token.type == TOKEN_IDENTIFIER) {
+                    if (param_count == cap) {
+                        int ncap = cap ? cap * 2 : 4;
+                        char** np = (char**)KrtArenaAlloc(parser->arena, sizeof(char*) * ncap);
+                        if (!np) { params = NULL; break; }
+                        for (int k = 0; k < param_count; k++) np[k] = params[k];
+                        params = np; cap = ncap;
+                    }
+                    params[param_count++] = parser->current_token.value;
+                }
+                parser_advance(parser);
+                if (parser->current_token.type == TOKEN_COMMA) {
+                    parser_advance(parser);
+                }
+            }
+            if (parser->current_token.type != TOKEN_RIGHT_PAREN) return NULL;
+            parser_advance(parser);
+
+            if (parser->current_token.type != TOKEN_LAMBDA) return NULL;
+            parser_advance(parser);
+
+            ASTNode* node = ast_create_node_arena(AST_LAMBDA_EXPRESSION, token.line, token.column, parser->arena);
+            if (!node) return NULL;
+            node->data.lambda_expr.parameters = params;
+            node->data.lambda_expr.parameter_count = param_count;
+            node->data.lambda_expr.expression = parser_parse_expression(parser);
+            node->data.lambda_expr.body = NULL;
+            if (!node->data.lambda_expr.expression) return NULL;
             return node;
         }
         case TOKEN_STRING: {
             parser_advance(parser);
-            ASTNode* node = ast_create_node(AST_STRING, token.line, token.column);
+            ASTNode* node = ast_create_node_arena(AST_STRING, token.line, token.column, parser->arena);
             if (!node) return NULL;
             node->data.string_value = PARSER_STRDUP(token.value);
             return node;
         }
         case TOKEN_CHAR_LITERAL: {
             parser_advance(parser);
-            ASTNode* node = ast_create_node(AST_CHAR_LITERAL, token.line, token.column);
+            ASTNode* node = ast_create_node_arena(AST_CHAR_LITERAL, token.line, token.column, parser->arena);
             if (!node) return NULL;
             node->data.char_value = token.value ? token.value[0] : '\0';
             return node;
         }
         case TOKEN_IDENTIFIER: {
             parser_advance(parser);
-            ASTNode* node = ast_create_node(AST_IDENTIFIER, token.line, token.column);
+            ASTNode* node = ast_create_node_arena(AST_IDENTIFIER, token.line, token.column, parser->arena);
             if (!node) return NULL;
             node->data.identifier_name = PARSER_STRDUP(token.value);
             return node;
         }
         case TOKEN_TRUE: {
             parser_advance(parser);
-            ASTNode* node = ast_create_node(AST_BOOLEAN, token.line, token.column);
+            ASTNode* node = ast_create_node_arena(AST_BOOLEAN, token.line, token.column, parser->arena);
             if (!node) return NULL;
             node->data.boolean_value = 1;
             return node;
         }
         case TOKEN_FALSE: {
             parser_advance(parser);
-            ASTNode* node = ast_create_node(AST_BOOLEAN, token.line, token.column);
+            ASTNode* node = ast_create_node_arena(AST_BOOLEAN, token.line, token.column, parser->arena);
             if (!node) return NULL;
             node->data.boolean_value = 0;
             return node;
         }
         case TOKEN_NULL: {
             parser_advance(parser);
-            return ast_create_node(AST_NULL, token.line, token.column);
+            return ast_create_node_arena(AST_NULL, token.line, token.column, parser->arena);
         }
         case TOKEN_THIS: {
             parser_advance(parser);
-            return ast_create_node(AST_THIS, token.line, token.column);
+            return ast_create_node_arena(AST_THIS, token.line, token.column, parser->arena);
         }
         case TOKEN_LEFT_PAREN: {
+            Token next = lexer_peek_token(parser->lexer);
+            bool is_cast = false;
+            bool is_array_cast = false;
+
+            if ((next.type >= TOKEN_INT8 && next.type <= TOKEN_VOID) ||
+                next.type == TOKEN_TYPE_STRING) {
+                Token third = lexer_peek_nth_token(parser->lexer, 2);
+                if (third.type == TOKEN_RIGHT_PAREN) {
+                    is_cast = true;
+                } else if (third.type == TOKEN_MULTIPLY) {
+                    int idx = 3;
+                    Token scan = lexer_peek_nth_token(parser->lexer, idx);
+                    while (scan.type == TOKEN_MULTIPLY) {
+                        token_free(&scan);
+                        idx++;
+                        scan = lexer_peek_nth_token(parser->lexer, idx);
+                    }
+                    if (scan.type == TOKEN_RIGHT_PAREN) {
+                        is_cast = true;
+                    }
+                    token_free(&scan);
+                } else if (third.type == TOKEN_LEFT_BRACKET) {
+                    Token fifth = lexer_peek_nth_token(parser->lexer, 4);
+                    if (fifth.type == TOKEN_RIGHT_PAREN) {
+                        is_cast = true;
+                        is_array_cast = true;
+                    }
+                    token_free(&fifth);
+                }
+                token_free(&third);
+            }
+
+            if (is_cast) {
+                KrtTokenType cast_type = next.type;
+                parser_advance(parser);
+                parser_advance(parser);
+                if (is_array_cast) {
+                    parser_advance(parser);
+                    parser_advance(parser);
+                }
+                while (parser->current_token.type == TOKEN_MULTIPLY) {
+                    parser_advance(parser);
+                }
+                parser_advance(parser);
+                ASTNode* expr = parser_parse_expression(parser);
+                if (!expr) { token_free(&next); return NULL; }
+                ASTNode* node = ast_create_node_arena(AST_CAST_EXPRESSION, token.line, token.column, parser->arena);
+                if (!node) { ast_destroy_node(expr); token_free(&next); return NULL; }
+                node->data.cast_expr.target_type = cast_type;
+                node->data.cast_expr.expression = expr;
+                token_free(&next);
+                return node;
+            }
+            token_free(&next);
+
             parser_advance(parser);
             ASTNode* expr = parser_parse_expression(parser);
             if (!expr) return NULL;
@@ -251,7 +347,7 @@ ASTNode* parser_parse_primary(Parser* parser) {
             if (parser->current_token.type != TOKEN_RIGHT_BRACKET) goto array_cleanup;
             parser_advance(parser);
 
-            ASTNode* node = ast_create_node(AST_ARRAY_LITERAL, token.line, token.column);
+            ASTNode* node = ast_create_node_arena(AST_ARRAY_LITERAL, token.line, token.column, parser->arena);
             if (!node) goto array_cleanup;
             node->data.array_literal.elements = elements;
             node->data.array_literal.element_count = element_count;
@@ -277,17 +373,96 @@ array_cleanup:
                 if (parser->current_token.type != TOKEN_RIGHT_PAREN) { ast_destroy_node(expr); return NULL; }
                 parser_advance(parser);
 
-                ASTNode* node = ast_create_node(AST_CAST_EXPRESSION, token.line, token.column);
+                ASTNode* node = ast_create_node_arena(AST_CAST_EXPRESSION, token.line, token.column, parser->arena);
                 if (!node) { ast_destroy_node(expr); return NULL; }
                 node->data.cast_expr.target_type = type;
                 node->data.cast_expr.expression = expr;
                 return node;
             }
 
-            ASTNode* node = ast_create_node(AST_GENERIC_TYPE, token.line, token.column);
+            ASTNode* node = ast_create_node_arena(AST_GENERIC_TYPE, token.line, token.column, parser->arena);
             if (!node) return NULL;
             node->data.generic_type.type_name = PARSER_STRDUP(token.value);
             return node;
+        }
+        case TOKEN_NEW: {
+            parser_advance(parser);
+
+            if (parser->current_token.type == TOKEN_IDENTIFIER) {
+                char* class_name = PARSER_STRDUP(parser->current_token.value);
+                parser_advance(parser);
+                if (parser->current_token.type == TOKEN_LESS) {
+                    int depth = 0;
+                    do {
+                        if (parser->current_token.type == TOKEN_LESS) depth++;
+                        else if (parser->current_token.type == TOKEN_GREATER) depth--;
+                        parser_advance(parser);
+                    } while (depth > 0 && parser->current_token.type != TOKEN_EOF);
+                }
+
+                ASTNode** args = NULL;
+                int arg_count = 0;
+                int arg_capacity = 8;
+
+                if (parser->current_token.type == TOKEN_LEFT_PAREN) {
+                    parser_advance(parser);
+                    args = (ASTNode**)PARSER_ALLOC_FROM_ARENA(parser, sizeof(ASTNode*) * arg_capacity);
+                    if (!args) return NULL;
+
+                    if (parser->current_token.type != TOKEN_RIGHT_PAREN) {
+                        while (1) {
+                            ASTNode* arg = parser_parse_expression(parser);
+                            if (!arg) { return NULL; }
+                            if (arg_count >= arg_capacity) {
+                                arg_capacity *= 2;
+                                ASTNode** new_args = (ASTNode**)PARSER_ALLOC_FROM_ARENA(parser, sizeof(ASTNode*) * arg_capacity);
+                                if (!new_args) { return NULL; }
+                                memcpy(new_args, args, arg_count * sizeof(ASTNode*));
+                                args = new_args;
+                            }
+                            args[arg_count++] = arg;
+                            if (parser->current_token.type == TOKEN_COMMA) { parser_advance(parser); continue; }
+                            break;
+                        }
+                    }
+                    if (parser->current_token.type != TOKEN_RIGHT_PAREN) { return NULL; }
+                    parser_advance(parser);
+                }
+
+                ASTNode* node = ast_create_node_arena(AST_NEW_EXPRESSION, token.line, token.column, parser->arena);
+                if (!node) return NULL;
+                node->data.new_expr.class_name = class_name;
+                node->data.new_expr.arguments = args;
+                node->data.new_expr.argument_count = arg_count;
+                node->data.new_expr.argument_names = NULL;
+                node->data.new_expr.type_token = TOKEN_IDENTIFIER;
+                return node;
+            }
+
+            if (parser_is_type_keyword(parser->current_token.type)) {
+                KrtTokenType elem_type = parser->current_token.type;
+                char* elem_name = PARSER_STRDUP(parser->current_token.value ? parser->current_token.value : "");
+                parser_advance(parser);
+
+                if (parser->current_token.type != TOKEN_LEFT_BRACKET) return NULL;
+                parser_advance(parser);
+                ASTNode* size = parser_parse_expression(parser);
+                if (!size) return NULL;
+                if (parser->current_token.type != TOKEN_RIGHT_BRACKET) {
+                    ast_destroy_node(size);
+                    return NULL;
+                }
+                parser_advance(parser);
+
+                ASTNode* node = ast_create_node_arena(AST_NEW_ARRAY_EXPRESSION, token.line, token.column, parser->arena);
+                if (!node) { ast_destroy_node(size); return NULL; }
+                node->data.new_array_expr.type_token = elem_type;
+                node->data.new_array_expr.element_type = elem_name;
+                node->data.new_array_expr.size = size;
+                return node;
+            }
+
+            return NULL;
         }
         default:
             return NULL;
@@ -298,16 +473,43 @@ int get_operator_precedence(KrtTokenType type) {
     switch (type) {
         case TOKEN_OR: return 1;
         case TOKEN_AND: return 2;
-        case TOKEN_EQUAL: case TOKEN_NOT_EQUAL: return 3;
-        case TOKEN_LESS: case TOKEN_GREATER: case TOKEN_LESS_EQUAL: case TOKEN_GREATER_EQUAL: return 4;
-        case TOKEN_PLUS: case TOKEN_MINUS: return 5;
-        case TOKEN_MULTIPLY: case TOKEN_DIVIDE: case TOKEN_MODULO: return 6;
+        case TOKEN_BITWISE_OR:
+        case TOKEN_PIPE: return 3;
+        case TOKEN_BITWISE_XOR: return 4;
+        case TOKEN_BITWISE_AND: return 5;
+        case TOKEN_EQUAL: case TOKEN_NOT_EQUAL: return 6;
+        case TOKEN_LESS: case TOKEN_GREATER:
+        case TOKEN_LESS_EQUAL: case TOKEN_GREATER_EQUAL: return 7;
+        case TOKEN_LSHIFT: case TOKEN_RSHIFT: return 8;
+        case TOKEN_PLUS: case TOKEN_MINUS: return 9;
+        case TOKEN_MULTIPLY: case TOKEN_DIVIDE: case TOKEN_MODULO: return 10;
+        case TOKEN_NOT: return 11;
         default: return 0;
     }
 }
 
+static ASTNode* parser_parse_unary_prefix(Parser* parser) {
+    KrtTokenType op = parser->current_token.type;
+    int line = parser->current_token.line;
+    int col = parser->current_token.column;
+    parser_advance(parser);
+    ASTNode* operand = parser_parse_binary_operation(parser, 11);
+    if (!operand) return NULL;
+    ASTNode* node = ast_create_node_arena(AST_UNARY_OPERATION, line, col, parser->arena);
+    if (!node) { ast_destroy_node(operand); return NULL; }
+    node->data.unary_op.operator = op;
+    node->data.unary_op.operand = operand;
+    return node;
+}
+
 ASTNode* parser_parse_binary_operation(Parser* parser, int precedence) {
-    ASTNode* left = parser_parse_postfix_expression(parser);
+    ASTNode* left;
+    if (parser->current_token.type == TOKEN_MINUS ||
+        parser->current_token.type == TOKEN_NOT) {
+        left = parser_parse_unary_prefix(parser);
+    } else {
+        left = parser_parse_postfix_expression(parser);
+    }
     if (!left) return NULL;
 
     int prec = get_operator_precedence(parser->current_token.type);
@@ -317,10 +519,16 @@ ASTNode* parser_parse_binary_operation(Parser* parser, int precedence) {
         int op_col = parser->current_token.column;
         parser_advance(parser);
 
-        ASTNode* right = parser_parse_binary_operation(parser, get_operator_precedence(op) + 1);
+        ASTNode* right;
+        if (parser->current_token.type == TOKEN_MINUS ||
+            parser->current_token.type == TOKEN_NOT) {
+            right = parser_parse_unary_prefix(parser);
+        } else {
+            right = parser_parse_binary_operation(parser, get_operator_precedence(op) + 1);
+        }
         if (!right) { ast_destroy_node(left); return NULL; }
 
-        ASTNode* node = ast_create_node(AST_BINARY_OPERATION, op_line, op_col);
+        ASTNode* node = ast_create_node_arena(AST_BINARY_OPERATION, op_line, op_col, parser->arena);
         if (!node) { ast_destroy_node(left); ast_destroy_node(right); return NULL; }
         node->data.binary_op.left = left;
         node->data.binary_op.right = right;
@@ -338,12 +546,36 @@ ASTNode* parser_parse_postfix_expression(Parser* parser) {
     if (!primary) return NULL;
 
     while (1) {
-        if (parser->current_token.type == TOKEN_DOT) {
+        if (parser->current_token.type == TOKEN_DOUBLE_COLON &&
+            primary->type == AST_IDENTIFIER &&
+            strcmp(primary->data.identifier_name, "global") == 0) {
+            parser_advance(parser);
+            if (parser->current_token.type != TOKEN_IDENTIFIER) {
+                parser_report_error(parser,
+                                    parser->current_token.line,
+                                    parser->current_token.column,
+                                    "expected identifier after 'global::'");
+                ast_destroy_node(primary);
+                return NULL;
+            }
+            char tmp[512];
+            snprintf(tmp, sizeof(tmp), "global::%s", parser->current_token.value);
+            primary->data.identifier_name = PARSER_STRDUP(tmp);
+            parser_advance(parser);
+        } else if (parser->current_token.type == TOKEN_DOUBLE_COLON) {
+            parser_report_error(parser,
+                                parser->current_token.line,
+                                parser->current_token.column,
+                                "'::' is only valid as 'global::' root-scope escape; "
+                                "use '.' for member access");
+            ast_destroy_node(primary);
+            return NULL;
+        } else if (parser->current_token.type == TOKEN_DOT) {
             parser_advance(parser);
             if (parser->current_token.type != TOKEN_IDENTIFIER) { ast_destroy_node(primary); return NULL; }
 
-            ASTNode* member = ast_create_node(AST_MEMBER_ACCESS,
-                                             primary->line, primary->col);
+            ASTNode* member = ast_create_node_arena(AST_MEMBER_ACCESS,
+                                             primary->line, primary->col, parser->arena);
             if (!member) { ast_destroy_node(primary); return NULL; }
             member->data.member_access.object = primary;
             member->data.member_access.member_name = PARSER_STRDUP(parser->current_token.value);
@@ -358,8 +590,8 @@ ASTNode* parser_parse_postfix_expression(Parser* parser) {
             }
             parser_advance(parser);
 
-            ASTNode* access = ast_create_node(AST_ARRAY_ACCESS,
-                                              primary->line, primary->col);
+            ASTNode* access = ast_create_node_arena(AST_ARRAY_ACCESS,
+                                              primary->line, primary->col, parser->arena);
             if (!access) { ast_destroy_node(index); ast_destroy_node(primary); return NULL; }
             access->data.array_access.array = primary;
             access->data.array_access.index = index;
@@ -394,8 +626,8 @@ ASTNode* parser_parse_ternary_operation(Parser* parser) {
     ASTNode* else_expr = parser_parse_ternary_operation(parser);
     if (!else_expr) { ast_destroy_node(condition); ast_destroy_node(then_expr); return NULL; }
 
-    ASTNode* node = ast_create_node(AST_TERNARY_OPERATION,
-                                   condition->line, condition->col);
+    ASTNode* node = ast_create_node_arena(AST_TERNARY_OPERATION,
+                                   condition->line, condition->col, parser->arena);
     if (!node) { ast_destroy_node(condition); ast_destroy_node(then_expr); ast_destroy_node(else_expr); return NULL; }
     node->data.ternary_op.condition = condition;
     node->data.ternary_op.true_value = then_expr;
@@ -404,25 +636,6 @@ ASTNode* parser_parse_ternary_operation(Parser* parser) {
 }
 
 static ASTNode* parser_parse_unary_operation(Parser* parser) {
-    if (parser->current_token.type == TOKEN_MINUS ||
-        parser->current_token.type == TOKEN_NOT ||
-        parser->current_token.type == TOKEN_NOT) {
-
-        KrtTokenType op = parser->current_token.type;
-        int line = parser->current_token.line;
-        int col = parser->current_token.column;
-        parser_advance(parser);
-
-        ASTNode* operand = parser_parse_unary_operation(parser);
-        if (!operand) return NULL;
-
-        ASTNode* node = ast_create_node(AST_UNARY_OPERATION, line, col);
-        if (!node) { ast_destroy_node(operand); return NULL; }
-        node->data.unary_op.operand = operand;
-        node->data.unary_op.operator = op;
-        return node;
-    }
-
     return parser_parse_ternary_operation(parser);
 }
 

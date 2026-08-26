@@ -204,7 +204,7 @@ typedef enum {
     KRT_IR_LOAD,
     KRT_IR_STORE,
     KRT_IR_ALLOC,
-    KRT_IR_IMM,    
+    KRT_IR_IMM,
     KRT_IR_ADD,
     KRT_IR_SUB,
     KRT_IR_MUL,
@@ -243,45 +243,36 @@ typedef enum {
 #define KRT_IR_CACHE_LINE_SIZE 64
 
 typedef struct KrtIRInst {
-    
-    KrtIROpcode opcode;           
-    int operand_count;           
-    int operand_capacity;        
-    bool is_int_result;          
-    char _padding[3];            
-    
-    KrtIRValue* operands;         
-    KrtIRValue result;            
-    
-    KrtIRInst* next;              
+    KrtIROpcode opcode;
+    int operand_count;
+    int operand_capacity;
+    bool is_int_result;
+    char _padding[3];
+    KrtIRValue* operands;
+    KrtIRValue result;
+    KrtIRInst* next;
 } KrtIRInst;
 
 #define KRT_IR_BLOCK_CACHE_SIZE 4
 
 typedef struct KrtIRBasicBlock {
-    
-    char* label;                 
-    int id;                      
-    int inst_count;              
-    int inst_capacity;           
-    int cache_count;             
-    
-    KrtIRInst** insts;            
-    KrtIRInst* cache[KRT_IR_BLOCK_CACHE_SIZE];  
-    
-    KrtIRInst* first_inst;        
-    KrtIRInst* last_inst;         
-    
-    struct KrtIRBasicBlock** preds;  
+    char* label;
+    int id;
+    int inst_count;
+    int inst_capacity;
+    int cache_count;
+    KrtIRInst** insts;
+    KrtIRInst* cache[KRT_IR_BLOCK_CACHE_SIZE];
+    KrtIRInst* first_inst;
+    KrtIRInst* last_inst;
+    struct KrtIRBasicBlock** preds;
     int pred_count;
     int pred_capacity;
-    struct KrtIRBasicBlock** succs;  
+    struct KrtIRBasicBlock** succs;
     int succ_count;
     int succ_capacity;
-
     struct KrtIRBlockPhiList* phi_list;
-    
-    struct KrtIRBasicBlock* next;  
+    struct KrtIRBasicBlock* next;
 } KrtIRBasicBlock;
 
 typedef struct {
@@ -299,8 +290,8 @@ typedef struct {
 
 typedef struct KrtIRFunction {
     char* name;
-    KrtIRParam* params;              
-    KrtIRParamTable* param_table;    
+    KrtIRParam* params;
+    KrtIRParamTable* param_table;
     int param_count;
     KrtTokenType return_type;
     KrtIRBasicBlock* entry_block;
@@ -343,12 +334,13 @@ struct KrtIRBuilder {
     struct KrtIRClassLayout* layouts;
     int layout_count;
     int layout_capacity;
-    struct TypeCheckContext* type_context;
+    void* semantic_analyzer;
+    struct KrtIrVarType { const char* name; const char* ir_name; int token; int is_array; }* var_types;
+    int var_type_count;
+    int var_type_capacity;
     KrtIRMemoryArena* arena;
-
     int use_object_pool;
     int use_lazy_alloc;
-
     void* extensions;
 };
 KrtIRBuilder* KrtIrBuilderCreate(void);
@@ -419,7 +411,12 @@ KrtIRValue KrtIrPhi(KrtIRBuilder* builder, KrtIRValue* values, KrtIRBasicBlock**
 KrtIRGlobal* KrtIrModuleAddGlobal(KrtIRBuilder* builder, const char* name, KrtTokenType type);
 KrtIRGlobal* KrtIrModuleFindGlobal(KrtIRModule* module, const char* name);
 void KrtIrModuleSetGlobalNumberInitializer(KrtIRGlobal* global, double value);
-void KrtIrGenerateFromAst(KrtIRBuilder* builder, ASTNode* ast, struct TypeCheckContext* type_context);
+void KrtIrVarTypePush(KrtIRBuilder* builder, const char* name, int token, int is_array);
+int KrtIrVarTypeFind(KrtIRBuilder* builder, const char* name, int* out_token, int* out_is_array);
+const char* KrtIrVarTypeResolveIRName(KrtIRBuilder* builder, const char* name);
+void KrtIrVarTypeTruncate(KrtIRBuilder* builder, int count);
+
+void KrtIrGenerateFromAst(KrtIRBuilder* builder, ASTNode* ast, void* semantic_analyzer);
 void KrtIrPrint(KrtIRModule* module, FILE* output);
 
 typedef struct KrtIRFieldOffset {

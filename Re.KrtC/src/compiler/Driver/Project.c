@@ -1,4 +1,3 @@
-#include "../../Core/Utils/KrtCommon.h"
 #include "Project.h"
 #include <time.h>
 #include <errno.h>
@@ -341,7 +340,7 @@ int KrtProjCreateTemplate(KrtProject* project, const char* output_dir) {
 
     static const TemplateFile console_templates[] = {
         {
-            "main.esf",
+            "main.krt",
             "function main() {\n"
             "    print(\"Hello, Kairote Lang!\");\n"
             "}\n"
@@ -350,13 +349,13 @@ int KrtProjCreateTemplate(KrtProject* project, const char* output_dir) {
 
     static const TemplateFile library_templates[] = {
         {
-            "library.esf",
+            "library.krt",
             "function add(int32 a, int32 b) {\n"
             "    return a + b;\n"
             "}\n"
         },
         {
-            "exports.esf",
+            "exports.krt",
             "function export_symbols() {\n"
             "}\n"
         }
@@ -364,7 +363,7 @@ int KrtProjCreateTemplate(KrtProject* project, const char* output_dir) {
 
     static const TemplateFile web_templates[] = {
         {
-            "app.esf",
+            "app.krt",
             "function handle_request() {\n"
             "    print(\"HTTP/1.1 200 OK\\r\\n\");\n"
             "    print(\"Content-Type: text/html\\r\\n\\r\\n\");\n"
@@ -372,7 +371,7 @@ int KrtProjCreateTemplate(KrtProject* project, const char* output_dir) {
             "}\n"
         },
         {
-            "routes.esf",
+            "routes.krt",
             "function configure_routes() {\n"
             "}\n"
         }
@@ -380,7 +379,7 @@ int KrtProjCreateTemplate(KrtProject* project, const char* output_dir) {
 
     static const TemplateFile system_templates[] = {
         {
-            "kernel.esf",
+            "kernel.krt",
             "function void _start() asm {\n"
             "    mov rax, 1\n"
             "    mov rdi, 1\n"
@@ -395,7 +394,7 @@ int KrtProjCreateTemplate(KrtProject* project, const char* output_dir) {
             "    msg: db \"System.Everything is ready\", 10\n\n"
         },
         {
-            "drivers.esf",
+            "drivers.krt",
             "function init_drivers() {\n"
             "}\n"
         }
@@ -426,6 +425,7 @@ int KrtProjCreateTemplate(KrtProject* project, const char* output_dir) {
         return 0;
     }
 
+    char sources_buf[512] = "";
     for (size_t i = 0; i < template_count; ++i) {
         const TemplateFile* tpl = &templates[i];
         KrtProjAddFile(project, tpl->name, "Compile");
@@ -433,6 +433,52 @@ int KrtProjCreateTemplate(KrtProject* project, const char* output_dir) {
         char file_path[KRT_MAX_PATH];
         KrtJoinPath(file_path, sizeof(file_path), output_dir, tpl->name);
         KrtWriteFileIfPossible(file_path, tpl->content);
+
+        if (strlen(sources_buf) + strlen(tpl->name) + 1 < sizeof(sources_buf)) {
+            strncat(sources_buf, tpl->name, sizeof(sources_buf) - strlen(sources_buf) - 1);
+            strncat(sources_buf, " ", sizeof(sources_buf) - strlen(sources_buf) - 1);
+        }
+    }
+
+    char project_krt_path[KRT_MAX_PATH];
+    KrtJoinPath(project_krt_path, sizeof(project_krt_path), output_dir, "project.krt");
+    {
+        FILE* pk = fopen(project_krt_path, "w");
+        if (pk) {
+            const char* proj_name = project->name ? project->name : output_dir;
+            const char* type_str = "console";
+            switch (project->type) {
+                case KRT_PROJ_TYPE_LIBRARY: type_str = "library"; break;
+                case KRT_PROJ_TYPE_WEB: type_str = "web"; break;
+                case KRT_PROJ_TYPE_SYSTEM: type_str = "system"; break;
+                default: break;
+            }
+            
+            fprintf(pk, "// Kairote Lang project\n");
+            fprintf(pk, "function Configure(Project p) {\n");
+            fprintf(pk, "    p.Name(\"%s\");\n", proj_name);
+            fprintf(pk, "    p.Type(\"%s\");\n", type_str);
+            fprintf(pk, "    p.Output(\"%s\");\n", proj_name);
+            if (sources_buf[0] != '\0') {
+                size_t slen = strlen(sources_buf);
+                while (slen > 0 && (sources_buf[slen - 1] == ' ' || sources_buf[slen - 1] == '\t')) {
+                    sources_buf[--slen] = '\0';
+                }
+                fprintf(pk, "    p.Sources(");
+                char* save = NULL;
+                char* tok = strtok_r(sources_buf, " \t", &save);
+                int first = 1;
+                while (tok) {
+                    if (!first) fprintf(pk, ", ");
+                    fprintf(pk, "\"%s\"", tok);
+                    first = 0;
+                    tok = strtok_r(NULL, " \t", &save);
+                }
+                fprintf(pk, ");\n");
+            }
+            fprintf(pk, "}\n");
+            fclose(pk);
+        }
     }
 
     char exe_dir[KRT_MAX_PATH - 32];

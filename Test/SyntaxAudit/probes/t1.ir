@@ -1,0 +1,27 @@
+str0 = "3"
+str1 = "n"
+
+function _ZN1PEri(s, l)
+  entry:
+    t1 = cast arg0 82
+    t3 = cast arg1 82
+    t5 = syscall 1 1 t1 t3 0 0 0
+    t6 = return 0
+
+function _ZN1DEi(d)
+  entry:
+    t8 = eq arg0 3
+    t9 = branch t8
+  if_true_0:
+    t11 = call _ZN1PEri str0 1
+    t12 = jump
+  if_false_1:
+    t14 = call _ZN1PEri str1 1
+    t15 = jump
+  if_end_2:
+    t16 = return 0
+
+function main()
+  entry:
+    t18 = call _ZN1DEi 3
+    t19 = return 0

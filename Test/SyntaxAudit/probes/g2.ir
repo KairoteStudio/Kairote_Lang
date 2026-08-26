@@ -1,0 +1,53 @@
+str0 = "5"
+str1 = "n"
+
+function _ZN1DEi(d)
+  entry:
+    t1 = eq arg0 5
+    t2 = branch t1
+  if_true_0:
+    t4 = cast str0 82
+    t6 = cast 1 82
+    t8 = syscall 1 1 t4 t6 0 0 0
+    t9 = jump
+  if_false_1:
+    t11 = cast str1 82
+    t13 = cast 1 82
+    t15 = syscall 1 1 t11 t13 0 0 0
+    t16 = jump
+  if_end_2:
+    t17 = return 0
+
+function _ZN3Box3SetEi(this, v)
+  entry:
+    t19 = call KrtStorePtr arg0 0 arg1
+    t20 = return 0
+
+function _ZN3Box3GetEv(this)
+  entry:
+    t22 = loadptr arg0 0 8
+    t23 = return t22
+
+function main()
+  entry:
+    __krt_malloc_result_3 = copy 0
+    t26 = imm 16
+    t28 = syscall 9 0 t26 3 34 -1 0
+    t30 = lt t28 0
+    t31 = branch t30
+  malloc_success_3:
+    t33 = storeptr t28 0 t26 8
+    t35 = add t28 8
+    __krt_malloc_result_3 = copy t35
+    t37 = jump
+  malloc_failure_3:
+    t32 = jump
+  malloc_end_3:
+    t39 = call Box__constructor_0 __krt_malloc_result_3
+    b = copy __krt_malloc_result_3
+    t42 = call _ZN3Box3SetEi b 5
+    t44 = call _ZN3Box3GetEv b
+    t46 = call _ZN1DEi t44
+    t47 = return 0
+
+function Box__constructor_0()

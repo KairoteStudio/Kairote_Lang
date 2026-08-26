@@ -1,0 +1,8 @@
+public static extern int64 syscall(int64 n, int64 a1, int64 a2, int64 a3, int64 a4, int64 a5, int64 a6);
+function P(string s, int32 l) { syscall(1,1,(int64)s,(int64)l,0,0,0); }
+function main() {
+    bool r1 = 3 == 3;
+    bool r2 = 3 != 4;
+    bool r3 = 3 < 4;
+    if (r1 && r2 && r3) { P("C",1); } else { P("N",1); }
+}

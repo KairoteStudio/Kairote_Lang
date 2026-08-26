@@ -1,0 +1,7 @@
+using System;
+function main() {
+    Console.WriteLine("hello");
+    int32 x = 40;
+    Console.Write("x+2=");
+    Console.WriteLine(x + 2);
+}

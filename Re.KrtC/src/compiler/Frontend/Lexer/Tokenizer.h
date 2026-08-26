@@ -48,6 +48,7 @@ typedef enum {
     TOKEN_IF,
     TOKEN_ELSE,
     TOKEN_WHILE,
+    TOKEN_DO,
     TOKEN_FOR,
     TOKEN_FOREACH,
     TOKEN_IN,
@@ -108,6 +109,7 @@ typedef enum {
     TOKEN_LSHIFT,
     TOKEN_RSHIFT,
     TOKEN_UNSAFE,
+    TOKEN_POINT,
     TOKEN_POWER,
 
     TOKEN_TRY,
@@ -147,6 +149,8 @@ typedef enum {
 
     TOKEN_IS,
     TOKEN_AS,
+    TOKEN_CONST,
+    TOKEN_EXTERN,
     TOKEN_YIELD,
     TOKEN_LOCK,
     TOKEN_MATCH,
@@ -205,6 +209,8 @@ typedef struct {
     int column;
     Token current_token;
     KrtArena* arena;  
+    int error_count;
+    int error_line;
 } Lexer;
 
 Lexer* lexer_create(const char* source);

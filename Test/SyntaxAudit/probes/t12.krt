@@ -1,0 +1,14 @@
+public static extern int64 syscall(int64 n, int64 a1, int64 a2, int64 a3, int64 a4, int64 a5, int64 a6);
+class T {
+    public static int64 Probe(int32 v) {
+        int64 b = syscall(9, 0, 12, 3, 34, -1, 0);
+        char[] chars = (char[])b;
+        chars[0] = 65;
+        chars[1] = 66;
+        return b;
+    }
+}
+function main() {
+    T.Probe(1);
+    Console.Write("ok\n");
+}

@@ -41,46 +41,6 @@ public static class StringOps
         return (string)buf;
     }
 
-    // 多字符串拼接
-    public static string ConcatMultiple(string[] parts)
-    {
-        if (parts == null || parts.Length() == 0) return "";
-
-        // 计算总长度
-        int32 totalLen = 0;
-        int32 i = 0;
-        while (i < parts.Length())
-        {
-            if (parts[i] != null)
-            {
-                totalLen = totalLen + Length(parts[i]);
-            }
-            i = i + 1;
-        }
-
-        // 分配缓冲区
-        int64 buf = (int64)Memory.Allocate((int64)(totalLen + 1));
-
-        // 逐个复制
-        int32 offset = 0;
-        i = 0;
-        while (i < parts.Length())
-        {
-            if (parts[i] != null)
-            {
-                int32 len = Length(parts[i]);
-                Memory.Copy((void*)(buf + (int64)offset), (void*)Sys.InternalStringPtr(parts[i]), len);
-                offset = offset + len;
-            }
-            i = i + 1;
-        }
-
-        // null terminator
-        char[] arr = (char[])buf;
-        arr[totalLen] = '\0';
-
-        return (string)buf;
-    }
 
     // ========== 转换操作 ==========
 

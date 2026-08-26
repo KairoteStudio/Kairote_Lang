@@ -1,6 +1,5 @@
 
 #include "X86RegAlloc.h"
-#include "../../../Core/Utils/KrtCommon.h"
 #include <string.h>
 
 static __attribute__((unused)) const char* g_caller_saved_regs[] = {

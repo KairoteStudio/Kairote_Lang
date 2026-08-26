@@ -1,6 +1,4 @@
-#include "X86Codegen.h"
 #include "X86RegAlloc.h"
-#include "../../../Core/Utils/KrtCommon.h"
 #include "../../Middle/Ir/IrSsa.h"
 #include <string.h>
 

@@ -1,0 +1,27 @@
+str0 = "Y"
+str1 = "N"
+
+function _ZN1PEri(s, l)
+  entry:
+    t1 = cast arg0 82
+    t3 = cast arg1 82
+    t5 = syscall 1 1 t1 t3 0 0 0
+    t6 = return 0
+
+function main()
+  entry:
+    t8 = imm 1
+    r1 = copy t8
+    t11 = imm 1
+    r2 = copy t11
+    t14 = imm 1
+    r3 = copy t14
+    t17 = imm 1
+    r4 = copy t17
+    t20 = imm 1
+    r5 = copy t20
+    t23 = imm 0
+    r6 = copy t23
+    t26 = call _ZN1PEri str0 1
+    t28 = call _ZN1PEri str1 1
+    t29 = return 0

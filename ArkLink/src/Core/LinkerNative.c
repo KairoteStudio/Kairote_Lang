@@ -124,33 +124,6 @@ ArkLinkResult arklink_session_link_native(ArkLinkSession* session) {
 
     log_message(session, ARK_LOG_INFO, "Writing output file...");
 
-    fprintf(stderr, "[LinkerNative] DEBUG: About to write output file:\n");
-    fprintf(stderr, "  output.data=%p\n", (void*)output.data);
-    fprintf(stderr, "  output.size=%lu (0x%lx)\n", (unsigned long)output.size, (unsigned long)output.size);
-
-    if (output.data && output.size > 0x3000) {
-        typedef struct { int64_t d_tag; uint64_t d_val; } DynEntry;
-        DynEntry* file_dyn = (DynEntry*)(output.data + 0x3000);
-        fprintf(stderr, "  Dynamic section at offset 0x3000 in output.data:\n");
-        for (int i = 0; i < 10; i++) {
-            const char* tag_name = "UNKNOWN";
-            switch (file_dyn[i].d_tag) {
-                case 0: tag_name = "DT_NULL"; break;
-                case 1: tag_name = "DT_NEEDED"; break;
-                case 5: tag_name = "DT_STRTAB"; break;
-                case 6: tag_name = "DT_SYMTAB"; break;
-                case 10: tag_name = "DT_STRSZ"; break;
-                case 11: tag_name = "DT_SYMENT"; break;
-                case 25: tag_name = "DT_INIT_ARRAY"; break;
-                case 26: tag_name = "DT_INIT_ARRAYSZ"; break;
-                case 27: tag_name = "DT_FINI_ARRAY"; break;
-                case 28: tag_name = "DT_FINI_ARRAYSZ"; break;
-            }
-            fprintf(stderr, "    [%d] d_tag=%ld (%s), d_val=0x%lx\n",
-                    i, (long)file_dyn[i].d_tag, tag_name, (unsigned long)file_dyn[i].d_val);
-        }
-    }
-
     FILE* out_file = fopen(session->output_path, "wb");
     if (!out_file) {
         snprintf(session->error_buffer, sizeof(session->error_buffer),
@@ -168,27 +141,6 @@ ArkLinkResult arklink_session_link_native(ArkLinkSession* session) {
 
     size_t written = fwrite(output.data, 1, output.size, out_file);
     fclose(out_file);
-
-    fprintf(stderr, "[LinkerNative] DEBUG: After fwrite, verifying written file:\n");
-    FILE* verify_file = fopen(session->output_path, "rb");
-    if (verify_file) {
-        typedef struct { int64_t d_tag; uint64_t d_val; } DynEntry;
-
-        fseek(verify_file, 0x3000 + 6 * 16, SEEK_SET);  // [6] DT_INIT_ARRAYSZ
-        DynEntry entry6;
-        fread(&entry6, sizeof(DynEntry), 1, verify_file);
-        fprintf(stderr, "  [6] DT_INIT_ARRAYSZ at 0x%lx: d_tag=%ld, d_val=0x%lx\n",
-                (unsigned long)(0x3000 + 6 * 16), (long)entry6.d_tag, (unsigned long)entry6.d_val);
-
-        fseek(verify_file, 0x3000 + 5 * 16, SEEK_SET);  // [5] DT_INIT_ARRAY
-        DynEntry entry5;
-        fread(&entry5, sizeof(DynEntry), 1, verify_file);
-        fprintf(stderr, "  [5] DT_INIT_ARRAY at 0x%lx: d_tag=%ld, d_val=0x%lx\n",
-                (unsigned long)(0x3000 + 5 * 16), (long)entry5.d_tag, (unsigned long)entry5.d_val);
-
-        fclose(verify_file);
-    }
-
     if (written != output.size) {
         strncpy(session->error_buffer, "Failed to write output file", sizeof(session->error_buffer) - 1);
         free(output.data);

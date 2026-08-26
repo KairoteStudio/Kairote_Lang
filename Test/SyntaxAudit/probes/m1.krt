@@ -1,0 +1,3 @@
+function main() {
+    Console.WriteLine(Sys.InternalStringLength("hello"));
+}

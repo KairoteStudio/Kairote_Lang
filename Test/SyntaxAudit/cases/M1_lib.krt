@@ -1,0 +1,3 @@
+int32 LibAdd(int32 v) {
+    return v + 2;
+}

@@ -3,11 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include "Accelerator.h"
-#include "Core/Utils/KrtCommon.h"
-#include "Core/Memory/Arena.h"
-#include "Parser.h"
 #include "ParserBase.h"
-#include "../Lexer/Tokenizer.h"
+#include "../../../Core/Utils/OutputCache.h"
 
 #define PARSER_DEFAULT_ARENA_SIZE (128 * 1024)
 #define PARSER_FUNCTION_CAPACITY_INIT 16
@@ -59,9 +56,6 @@
 #define PARSER_CREATE_NODE(type, line, col) ast_create_node_arena(type, line, col, parser->arena)
 #define PARSER_STRDUP(s) arena_strdup(parser->arena, s)
 
-#undef ast_create_node
-#define ast_create_node(type, line, col) ast_create_node_arena(type, line, col, parser->arena)
-
 static __attribute__((unused)) char* arena_strdup(KrtArena* arena, const char* str) {
     if (!str) return NULL;
     size_t len = strlen(str) + 1;
@@ -73,6 +67,13 @@ static __attribute__((unused)) char* arena_strdup(KrtArena* arena, const char* s
 }
 
 void parser_advance(Parser* parser) {
+    if (parser) {
+        int i = parser->hist_len < 8 ? parser->hist_len : 7;
+        if (parser->hist_len < 8) parser->hist_len++;
+        else { for (int k = 0; k < 7; k++) { parser->hist_type[k] = parser->hist_type[k+1]; parser->hist_line[k] = parser->hist_line[k+1]; } }
+        parser->hist_type[i] = (int)parser->current_token.type;
+        parser->hist_line[i] = parser->current_token.line;
+    }
     token_free(&parser->current_token);
     parser->current_token = lexer_next_token(parser->lexer);
 }
@@ -98,6 +99,23 @@ void parser_add_declared_function(Parser* parser, const char* func_name) {
     parser->declared_functions[parser->declared_function_count++] = KRT_STRDUP(func_name);
 }
 
+void parser_report_error(Parser* parser, int line, int col, const char* format, ...) {
+    if (!parser) return;
+    parser->error_count++;
+    char prefix[64];
+    if (parser->source_name) {
+        snprintf(prefix, sizeof(prefix), "%s(%d,%d): ", parser->source_name, line, col);
+    } else {
+        snprintf(prefix, sizeof(prefix), "(%d,%d): ", line, col);
+    }
+    char body[512];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(body, sizeof(body), format, args);
+    va_end(args);
+    KrtOutputCacheAddError("%s\033[31merror:\033[0m %s\n", prefix, body);
+}
+
 Parser* parser_create(Lexer* lexer) {
     return parser_create_with_arena(lexer, PARSER_DEFAULT_ARENA_SIZE);
 }
@@ -117,6 +135,9 @@ Parser* parser_create_with_arena(Lexer* lexer, size_t arena_size) {
     parser->declared_function_capacity = 0;
     parser->is_unsafe_mode = 0;
     parser->current_class = NULL;
+    parser->error_count = 0;
+    parser->source_name = NULL;
+    parser->hist_len = 0;
 
     if (arena_size > 0) {
         parser->arena = KrtArenaCreate(arena_size);

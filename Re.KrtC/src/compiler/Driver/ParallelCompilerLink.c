@@ -1,7 +1,5 @@
 #include "ParallelCompiler.h"
 #include "ArkLinkIntegration.h"
-#include "../../Core/Utils/KrtCommon.h"
-#include "../../Core/Utils/Logger.h"
 #include "../../Core/Utils/Path.h"
 #include <stdlib.h>
 #include <string.h>
@@ -55,6 +53,11 @@ int ParallelCompilerLinkResults(ParallelCompiler* compiler, const char* final_ou
     KrtArkLinkAddObjectFile(ark_ctx, cache_obj);
     KrtArkLinkAddObjectFile(ark_ctx, allocator_obj);
     KrtArkLinkAddObjectFile(ark_ctx, KrtStringObj);
+
+    if (KrtArkLinkLoadProjectLibraries(ark_ctx, compiler->config) != 0) {
+        KrtArkLinkContextDestroy(ark_ctx);
+        return -1;
+    }
 
     if (KrtArkLinkSetOutput(ark_ctx, final_output) != 0) {
         KrtError("Failed to set output path");

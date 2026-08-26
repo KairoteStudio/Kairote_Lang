@@ -1,0 +1,14 @@
+str0 = "ab"
+str1 = "done
+"
+
+function main()
+  entry:
+    t1 = imm -1
+    t3 = syscall 9 0 12 3 34 t1 0
+    buf = copy t3
+    t6 = call _ZN3Sys17InternalStringPtrEr str0
+    t8 = add t6 1
+    t10 = call _ZN6Memory4CopyEvvi buf t8 2
+    t12 = call _ZN7Console5WriteEr str1
+    t13 = return 0

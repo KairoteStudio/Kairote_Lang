@@ -1,13 +1,9 @@
 #include "Compiler.h"
-#include "../Middle/Ir/Ir.h"
 #include "../Middle/Ir/IrSsa.h"
 #include "../Middle/Ir/IrOptimizer.h"
 #include "../Backend/X86/X86Codegen.h"
 #include "../Backend/Vm/VmCodegen.h"
 #include "../Backend/Kro/KroCodegen.h"
-#include "../../Core/Utils/KrtCommon.h"
-#include "BytecodeGenerator.h"
-#include "../Frontend/Semantic/TypeChecker.h"
 
 KrtCompiler* KrtCompilerCreate(const char* output_filename, KrtTargetPlatform target) {
     KrtCompiler* compiler = (KrtCompiler*)KRT_MALLOC(sizeof(KrtCompiler));
@@ -43,7 +39,7 @@ void KrtCompilerDestroy(KrtCompiler* compiler) {
     KRT_FREE(compiler);
 }
 
-void KrtCompilerCompile(KrtCompiler* compiler, ASTNode* ast, TypeCheckContext* type_context) {
+void KrtCompilerCompile(KrtCompiler* compiler, ASTNode* ast, void* semantic_analyzer) {
     if (!compiler || !ast) {
         return;
     }
@@ -53,7 +49,7 @@ void KrtCompilerCompile(KrtCompiler* compiler, ASTNode* ast, TypeCheckContext* t
         return;
     }
 
-    KrtIrGenerateFromAst(ir_builder, ast, type_context);
+    KrtIrGenerateFromAst(ir_builder, ast, semantic_analyzer);
 
     {
         KrtIRFunction* f = ir_builder->module->functions;
@@ -63,7 +59,6 @@ void KrtCompilerCompile(KrtCompiler* compiler, ASTNode* ast, TypeCheckContext* t
                 int count = 0;
                 KrtIRInst* inst = b->first_inst;
                 while (inst) {
-                    fprintf(stderr, "[PostIrGen] main inst[%d] opcode=%d\n", count++, inst->opcode);
                     inst = inst->next;
                 }
             }
@@ -71,9 +66,6 @@ void KrtCompilerCompile(KrtCompiler* compiler, ASTNode* ast, TypeCheckContext* t
         }
     }
 
-    /* The current SSA renamer does not preserve loop-exit versions correctly.
-       Keep mutable IR variables until the SSA pass is replaced with a
-       dominance-tree implementation. */
 
     IROptimizer* optimizer = ir_optimizer_create();
     if (optimizer) {
@@ -82,6 +74,8 @@ void KrtCompilerCompile(KrtCompiler* compiler, ASTNode* ast, TypeCheckContext* t
         ir_optimize_module(optimizer, ir_builder->module, opt_flags);
         ir_optimizer_destroy(optimizer);
     }
+
+    if (getenv("KRT_DUMP_IR")) KrtIrPrint(ir_builder->module, stderr);
 
     switch (compiler->target) {
         case KRT_TARGET_IR_TEXT:
@@ -116,7 +110,6 @@ void KrtCompilerCompile(KrtCompiler* compiler, ASTNode* ast, TypeCheckContext* t
             break;
         }
         case KRT_TARGET_EXE_PLATFORM: {
-            KrtIrPrint(ir_builder->module, stderr);
             KrtKrtGenerate(compiler->output_file, compiler->output_filename, ir_builder->module);
             break;
         }

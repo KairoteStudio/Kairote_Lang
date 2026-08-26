@@ -1,0 +1,15 @@
+str0 = "S"
+
+function _ZN1PEri(s, l)
+  entry:
+    t1 = cast arg0 82
+    t3 = cast arg1 82
+    t5 = syscall 1 1 t1 t3 0 0 0
+    t6 = return 0
+
+function main()
+  entry:
+    v__x = copy 3
+    v__y = copy 4
+    t10 = call _ZN1PEri str0 1
+    t11 = return 0

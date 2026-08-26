@@ -1,0 +1,164 @@
+// ===== 测试输出运行时 v6 =====
+public static extern int64 syscall(int64 n, int64 a1, int64 a2, int64 a3, int64 a4, int64 a5, int64 a6);
+
+function OutStrN(string s, int32 len) {
+    syscall(1, 1, (int64)s, (int64)len, 0, 0, 0);
+}
+
+function OutNL() {
+    OutStrN("\n", 1);
+}
+
+function OutBool(bool b) {
+    if (b) { OutStrN("true", 4); } else { OutStrN("false", 5); }
+}
+
+function OutDigit(int32 d) {
+    if (d == 0) { OutStrN("0", 1); }
+    else if (d == 1) { OutStrN("1", 1); }
+    else if (d == 2) { OutStrN("2", 1); }
+    else if (d == 3) { OutStrN("3", 1); }
+    else if (d == 4) { OutStrN("4", 1); }
+    else if (d == 5) { OutStrN("5", 1); }
+    else if (d == 6) { OutStrN("6", 1); }
+    else if (d == 7) { OutStrN("7", 1); }
+    else if (d == 8) { OutStrN("8", 1); }
+    else { OutStrN("9", 1); }
+}
+
+function OutInt(int32 num) {
+    if (num < 0) {
+        OutStrN("-", 1);
+        num = 0 - num;
+    }
+    bool started = false;
+    {
+        int32 d0 = (num / 1000000000) % 10;
+        if (d0 == 0) {
+            if (started == false) {
+                /* 前导零跳过 */
+            } else {
+                OutDigit(d0);
+            }
+        } else {
+            OutDigit(d0);
+            started = true;
+        }
+    }
+    {
+        int32 d1 = (num / 100000000) % 10;
+        if (d1 == 0) {
+            if (started == false) {
+                /* 前导零跳过 */
+            } else {
+                OutDigit(d1);
+            }
+        } else {
+            OutDigit(d1);
+            started = true;
+        }
+    }
+    {
+        int32 d2 = (num / 10000000) % 10;
+        if (d2 == 0) {
+            if (started == false) {
+                /* 前导零跳过 */
+            } else {
+                OutDigit(d2);
+            }
+        } else {
+            OutDigit(d2);
+            started = true;
+        }
+    }
+    {
+        int32 d3 = (num / 1000000) % 10;
+        if (d3 == 0) {
+            if (started == false) {
+                /* 前导零跳过 */
+            } else {
+                OutDigit(d3);
+            }
+        } else {
+            OutDigit(d3);
+            started = true;
+        }
+    }
+    {
+        int32 d4 = (num / 100000) % 10;
+        if (d4 == 0) {
+            if (started == false) {
+                /* 前导零跳过 */
+            } else {
+                OutDigit(d4);
+            }
+        } else {
+            OutDigit(d4);
+            started = true;
+        }
+    }
+    {
+        int32 d5 = (num / 10000) % 10;
+        if (d5 == 0) {
+            if (started == false) {
+                /* 前导零跳过 */
+            } else {
+                OutDigit(d5);
+            }
+        } else {
+            OutDigit(d5);
+            started = true;
+        }
+    }
+    {
+        int32 d6 = (num / 1000) % 10;
+        if (d6 == 0) {
+            if (started == false) {
+                /* 前导零跳过 */
+            } else {
+                OutDigit(d6);
+            }
+        } else {
+            OutDigit(d6);
+            started = true;
+        }
+    }
+    {
+        int32 d7 = (num / 100) % 10;
+        if (d7 == 0) {
+            if (started == false) {
+                /* 前导零跳过 */
+            } else {
+                OutDigit(d7);
+            }
+        } else {
+            OutDigit(d7);
+            started = true;
+        }
+    }
+    {
+        int32 d8 = (num / 10) % 10;
+        if (d8 == 0) {
+            if (started == false) {
+                /* 前导零跳过 */
+            } else {
+                OutDigit(d8);
+            }
+        } else {
+            OutDigit(d8);
+            started = true;
+        }
+    }
+    {
+        int32 d9 = (num / 1) % 10;
+        if (d9 == 0) {
+            if (started == false) {
+            } else {
+                OutDigit(d9);
+            }
+        } else {
+            OutDigit(d9);
+            started = true;
+        }
+    }
+}

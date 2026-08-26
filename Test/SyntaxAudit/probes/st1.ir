@@ -1,0 +1,87 @@
+str0 = "foo"
+str1 = "bar"
+str2 = "Z"
+
+function _ZN1PEri(s, len)
+  entry:
+    t1 = cast arg0 82
+    t3 = cast arg1 82
+    t5 = syscall 1 1 t1 t3 0 0 0
+    t6 = return 0
+
+function main()
+  entry:
+    a = copy str0
+    b = copy str1
+    __slen_0 = copy 0
+    t10 = jump
+  strlen_check_0:
+    t12 = add a __slen_0
+    t14 = loadptr t12 0 1
+    t16 = ne t14 0
+    t17 = branch t16
+  strlen_body_x:
+    t19 = add __slen_0 1
+    __slen_0 = copy t19
+    t21 = jump
+  strlen_end_0:
+    __slen_1 = copy 0
+    t23 = jump
+  strlen_check_1:
+    t25 = add b __slen_1
+    t27 = loadptr t25 0 1
+    t29 = ne t27 0
+    t30 = branch t29
+  strlen_body_x:
+    t32 = add __slen_1 1
+    __slen_1 = copy t32
+    t34 = jump
+  strlen_end_1:
+    t36 = add __slen_0 __slen_1
+    t38 = add t36 1
+    __krt_malloc_result_2 = copy 0
+    t41 = add t38 8
+    t43 = syscall 9 0 t41 3 34 -1 0
+    t45 = lt t43 0
+    t46 = branch t45
+  malloc_success_2:
+    t48 = storeptr t43 0 t41 8
+    t50 = add t43 8
+    __krt_malloc_result_2 = copy t50
+    t52 = jump
+  malloc_failure_2:
+    t47 = jump
+  malloc_end_2:
+    __cpa_3 = copy 0
+    t54 = jump
+  cpa_chk_3:
+    t56 = lt __cpa_3 __slen_0
+    t57 = branch t56
+  cpa_body_3:
+    t59 = add a __cpa_3
+    t61 = loadptr t59 0 1
+    t62 = array_store __krt_malloc_result_2 __cpa_3 t61 1
+    t64 = add __cpa_3 1
+    __cpa_3 = copy t64
+    t66 = jump
+  cpa_end_3:
+    __cpb_4 = copy 0
+    t68 = jump
+  cpb_chk_4:
+    t70 = lt __cpb_4 __slen_1
+    t71 = branch t70
+  cpb_body_4:
+    t73 = add b __cpb_4
+    t75 = loadptr t73 0 1
+    t77 = add __slen_0 __cpb_4
+    t78 = array_store __krt_malloc_result_2 t77 t75 1
+    t80 = add __cpb_4 1
+    __cpb_4 = copy t80
+    t82 = jump
+  cpb_end_4:
+    t84 = add __slen_0 __slen_1
+    t85 = array_store __krt_malloc_result_2 t84 0 1
+    c = copy __krt_malloc_result_2
+    t88 = call _ZN1PEri c 6
+    t90 = call _ZN1PEri str2 1
+    t91 = return 0

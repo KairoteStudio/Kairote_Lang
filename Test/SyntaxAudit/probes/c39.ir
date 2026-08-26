@@ -1,0 +1,109 @@
+str0 = "N"
+str1 = "0"
+str2 = "1"
+str3 = "2"
+str4 = "3"
+str5 = "4"
+str6 = "5"
+str7 = "9"
+str8 = "+"
+str9 = "i"
+str10 = "o"
+
+function _ZN1PEri(s, len)
+  entry:
+    t1 = cast arg0 82
+    t3 = cast arg1 82
+    t5 = syscall 1 1 t1 t3 0 0 0
+    t6 = return 0
+
+function _ZN1DEi(d)
+  entry:
+    t8 = lt arg0 0
+    t9 = branch t8
+  if_true_0:
+    t11 = call _ZN1PEri str0 1
+    t12 = jump
+  if_false_1:
+    t14 = eq arg0 0
+    t15 = branch t14
+  if_end_2:
+    t65 = return 0
+  if_true_3:
+    t17 = call _ZN1PEri str1 1
+    t18 = jump
+  if_false_4:
+    t20 = eq arg0 1
+    t21 = branch t20
+  if_end_5:
+    t64 = jump
+  if_true_6:
+    t23 = call _ZN1PEri str2 1
+    t24 = jump
+  if_false_7:
+    t26 = eq arg0 2
+    t27 = branch t26
+  if_end_8:
+    t63 = jump
+  if_true_9:
+    t29 = call _ZN1PEri str3 1
+    t30 = jump
+  if_false_10:
+    t32 = eq arg0 3
+    t33 = branch t32
+  if_end_11:
+    t62 = jump
+  if_true_12:
+    t35 = call _ZN1PEri str4 1
+    t36 = jump
+  if_false_13:
+    t38 = eq arg0 4
+    t39 = branch t38
+  if_end_14:
+    t61 = jump
+  if_true_15:
+    t41 = call _ZN1PEri str5 1
+    t42 = jump
+  if_false_16:
+    t44 = eq arg0 5
+    t45 = branch t44
+  if_end_17:
+    t60 = jump
+  if_true_18:
+    t47 = call _ZN1PEri str6 1
+    t48 = jump
+  if_false_19:
+    t50 = eq arg0 9
+    t51 = branch t50
+  if_end_20:
+    t59 = jump
+  if_true_21:
+    t53 = call _ZN1PEri str7 1
+    t54 = jump
+  if_false_22:
+    t56 = call _ZN1PEri str8 1
+    t57 = jump
+  if_end_23:
+    t58 = jump
+
+function main()
+  entry:
+    x = copy 1
+    x = copy 2
+    t69 = eq x 2
+    t70 = branch t69
+  if_true_24:
+    t72 = call _ZN1PEri str9 1
+    t73 = jump
+  if_false_25:
+    t74 = jump
+  if_end_26:
+    t76 = eq x 1
+    t77 = branch t76
+  if_true_27:
+    t79 = call _ZN1PEri str10 1
+    t80 = jump
+  if_false_28:
+    t81 = jump
+  if_end_29:
+    t82 = return 0

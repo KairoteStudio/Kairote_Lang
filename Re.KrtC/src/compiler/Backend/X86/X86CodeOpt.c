@@ -1,6 +1,4 @@
 #include "X86CodeOpt.h"
-#include "../../../Core/Utils/KrtCommon.h"
-#include "../../Middle/Ir/Ir.h"
 #include <string.h>
 #include <stdlib.h>
 

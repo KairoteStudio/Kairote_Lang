@@ -466,25 +466,17 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
     size_t total_syms = next_sym_idx;
     nim_free(&sym_map);
 
-    fprintf(stderr, "[ElfBackend] Step 4.5: Updating reloc symbol values to absolute addresses\n");
     for (size_t i = 0; i < input->reloc_count; i++) {
         ArkResolverReloc* reloc = &input->relocs[i];
-        if (reloc->symbol && reloc->symbol->section_index > 0 && reloc->symbol->section_index <= ns) {
-            uint64_t sec_vaddr = ark_layout_get_section(layout, reloc->symbol->section_index - 1) ?
-                                 ark_layout_get_section(layout, reloc->symbol->section_index - 1)->virtual_address : 0;
+        if (reloc->symbol && reloc->symbol->section_index >= 0 && reloc->symbol->section_index <= ns) {
+            uint64_t sec_vaddr = ark_layout_get_section(layout, reloc->symbol->section_index) ?
+                                 ark_layout_get_section(layout, reloc->symbol->section_index)->virtual_address : 0;
             reloc->symbol_rva = (uint32_t)(sec_vaddr + reloc->symbol->value);
 #ifdef ARK_DEBUG
-            fprintf(stderr, "[ElfBackend]   Reloc[%zu]: symbol '%s' value 0x%lx -> abs 0x%x (sec_vaddr=0x%lx)\n",
-                    i,
-                    reloc->symbol->name ? reloc->symbol->name : "(null)",
-                    (unsigned long)reloc->symbol->value,
-                    reloc->symbol_rva,
-                    (unsigned long)sec_vaddr);
 #endif
         }
     }
 
-    fprintf(stderr, "[ElfBackend] Step 5: Applying relocations using unified interface, ns=%zu, reloc_count=%zu\n", ns, input->reloc_count);
 
     for (size_t i = 0; i < ns; i++) {
         ArkSectionBuffer* target = &input->sections[i];
@@ -608,13 +600,7 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
         meta_secs[fini_array_shidx].size  = 0;
 
         func_import_count = 0;
-        fprintf(stderr, "[ElfBackend]   === Dynamic Linking Import Symbols ===\n");
         for (size_t i = 0; i < input->import_count; i++) {
-            fprintf(stderr, "[ElfBackend]   Import[%zu]: %s.%s (%s)\n",
-                    i,
-                    input->imports[i].module ? input->imports[i].module : "(null)",
-                    input->imports[i].symbol,
-                    input->imports[i].is_function ? "FUNC" : "DATA");
 
             if (input->imports[i].is_function) {
                 func_import_count++;
@@ -640,14 +626,6 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
             meta_secs[gotplt_shidx].size  = gotplt_size;
             cur_offset += gotplt_size;
 
-            fprintf(stderr, "[ElfBackend]   PLT: offset=0x%lx, vaddr=0x%lx, size=%zu (%zu functions)\n",
-                    (unsigned long)meta_secs[plt_shidx].offset,
-                    (unsigned long)meta_secs[plt_shidx].vaddr,
-                    plt_size, func_import_count);
-            fprintf(stderr, "[ElfBackend]   GOT.plt: offset=0x%lx, vaddr=0x%lx, size=%zu\n",
-                    (unsigned long)meta_secs[gotplt_shidx].offset,
-                    (unsigned long)meta_secs[gotplt_shidx].vaddr,
-                    gotplt_size);
         } else {
             meta_secs[plt_shidx].offset = 0;
             meta_secs[plt_shidx].vaddr = 0;
@@ -695,25 +673,74 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
         }
         if (code_file_end == 0) code_file_end = cur_offset;
     }
-    uint64_t seg1_filesz = ark_backend_align_up(code_file_end, page_size);
-    uint64_t seg1_memsz  = seg1_filesz;
 
-    uint64_t data_start = has_dynamic ? meta_secs[interp_shidx].offset : rw_start;
-    uint64_t seg2_offset = data_start;
-    uint64_t seg2_vaddr  = image_base + data_start;
+    uint64_t seg1_filesz = 0, seg1_memsz = 0;
+    uint64_t seg2_offset = 0, seg2_vaddr = 0;
+    uint64_t rw_filesz = 0, rw_memsz = 0;
+    static Elf64_Phdr static_loads[48];
+    int n_static_loads = 0;
+    size_t phdr_load_count = 0;
+    if (!has_dynamic && !has_tls) {
+        uint32_t cur_flags = 0;
+        for (size_t i = 0; i < ns; i++) {
+            ArkSectionKind k = (ArkSectionKind)input->sections[i].kind;
+            if (k != ARK_SECTION_CODE && k != ARK_SECTION_DATA &&
+                k != ARK_SECTION_RODATA && k != ARK_SECTION_BSS &&
+                k != ARK_SECTION_TDATA) continue;
+            ArkSectionLayout* lsec = ark_layout_get_section(layout, i);
+            uint64_t va = SEC_VADDR(i);
+            uint64_t vsz = SEC_VSIZE(i);
+            uint64_t off = lsec ? lsec->file_offset : meta_secs[i + 1].offset;
+            uint32_t f = (k == ARK_SECTION_CODE) ? (PF_R | PF_X)
+                       : (k == ARK_SECTION_RODATA) ? PF_R
+                       : (PF_R | PF_W);
+            uint64_t filesz_add = (k == ARK_SECTION_BSS) ? 0 : vsz;
 
-    uint64_t data_end = file_size;
-    if (data_end < data_start) data_end = data_start;
-    uint64_t rw_filesz = data_end - data_start;
-    uint64_t rw_memsz = rw_filesz;
+            if (n_static_loads > 0 && cur_flags == f) {
+                Elf64_Phdr* c = &static_loads[n_static_loads - 1];
+                uint64_t fend = off + filesz_add;
+                uint64_t vend = va + vsz;
+                if (fend > c->p_offset + c->p_filesz) { /* 同权限但文件上不相邻则开新段,这个{}为空是正常的 */ }
+                if ((uint64_t)(c->p_offset + c->p_filesz) >= off || fend <= (uint64_t)(c->p_offset + c->p_filesz)) {
+                    if (fend > (uint64_t)(c->p_offset + c->p_filesz)) c->p_filesz = fend - c->p_offset;
+                    if (vend > (uint64_t)(c->p_vaddr + c->p_memsz)) c->p_memsz = vend - c->p_vaddr;
+                    continue;
+                }
+            }
+            if (n_static_loads >= 48) break;
+            Elf64_Phdr* seg = &static_loads[n_static_loads++];
+            memset(seg, 0, sizeof(*seg));
+            seg->p_type   = PT_LOAD;
+            seg->p_flags  = f;
+            seg->p_offset = off;
+            seg->p_vaddr  = va;
+            seg->p_paddr  = va;
+            seg->p_filesz = filesz_add;
+            seg->p_memsz  = vsz;
+            seg->p_align  = page_size;
+            cur_flags = f;
+        }
+        if (n_static_loads > 0) {
+            seg1_filesz = static_loads[0].p_filesz;
+            seg1_memsz  = static_loads[0].p_memsz;
+        } else {
+            seg1_filesz = ark_backend_align_up(code_file_end, page_size);
+            seg1_memsz  = seg1_filesz;
+        }
+    } else {
+        seg1_filesz = ark_backend_align_up(code_file_end, page_size);
+        seg1_memsz  = seg1_filesz;
 
-    fprintf(stderr, "[ElfBackend] DEBUG Segment Layout:\n");
-    fprintf(stderr, "  code_file_end=0x%lx\n", (unsigned long)code_file_end);
-    fprintf(stderr, "  seg1_filesz (LOAD[0] RX)=0x%lx\n", (unsigned long)seg1_filesz);
-    fprintf(stderr, "  data_start=0x%lx\n", (unsigned long)data_start);
-    fprintf(stderr, "  seg2_offset (LOAD[1] RW)=0x%lx\n", (unsigned long)seg2_offset);
+        uint64_t data_start = has_dynamic ? meta_secs[interp_shidx].offset : rw_start;
+        seg2_offset = data_start;
+        seg2_vaddr  = image_base + data_start;
 
-    fprintf(stderr, "[ElfBackend] Step 7: Building symbol table, total_syms=%zu\n", total_syms);
+        uint64_t data_end = file_size;
+        if (data_end < data_start) data_end = data_start;
+        rw_filesz = data_end - data_start;
+        rw_memsz = rw_filesz;
+    }
+
     symtab = (Elf64_Sym*)calloc(total_syms ? total_syms : 1, sizeof(Elf64_Sym));
     if (!symtab) goto oom;
     for (size_t i = 0; i < ns; i++) {
@@ -735,9 +762,9 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
             Elf64_Sym* s = &symtab[idx];
             s->st_info  = ELF_ST_INFO(STB_GLOBAL, input->exports[i].is_function ? STT_FUNC : STT_OBJECT);
             s->st_other = 0;
-            if (input->exports[i].section_index > 0 && input->exports[i].section_index <= ns) {
+            if (input->exports[i].section_index >= 0 && input->exports[i].section_index <= ns) {
                 s->st_shndx = (uint16_t)input->exports[i].section_index;
-                s->st_value = SEC_VADDR(input->exports[i].section_index - 1) + input->exports[i].offset;
+                s->st_value = SEC_VADDR(input->exports[i].section_index) + input->exports[i].offset;
                 s->st_size  = 0;
             } else {
                 s->st_shndx = SHN_ABS;
@@ -800,20 +827,11 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
 
         Elf64_Sym* s = &symtab[next_global_idx];
         s->st_name  = off;
-        uint64_t export_sec_idx = input->exports[i].section_index - 1;
+        uint64_t export_sec_idx = input->exports[i].section_index;
 #ifdef ARK_DEBUG
-        fprintf(stderr, "[ElfBackend] DEBUG: export[%zu] section_index=%u -> layout_idx=%lu, layout=%p, section_count=%zu\n",
-                i, input->exports[i].section_index, (unsigned long)export_sec_idx,
-                (void*)layout, layout ? layout->section_count : 0);
         if (layout && export_sec_idx < layout->section_count) {
-            fprintf(stderr, "[ElfBackend] DEBUG: layout[%lu].vaddr=0x%lx\n",
-                    (unsigned long)export_sec_idx,
-                    (unsigned long)layout->sections[export_sec_idx].virtual_address);
         } else if (!layout) {
-            fprintf(stderr, "[ElfBackend] ERROR: layout is NULL!\n");
         } else {
-            fprintf(stderr, "[ElfBackend] ERROR: export_sec_idx(%lu) >= section_count(%zu)\n",
-                    (unsigned long)export_sec_idx, layout->section_count);
         }
 #endif
         uint64_t sec_vaddr = SEC_VADDR(export_sec_idx);
@@ -822,11 +840,8 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
         s->st_info  = ELF_ST_INFO(STB_GLOBAL,
                                   input->exports[i].is_function ? STT_FUNC : STT_OBJECT);
         s->st_other = 0;
-        s->st_shndx = input->exports[i].section_index > 0 ? (uint16_t)input->exports[i].section_index : SHN_ABS;
+        s->st_shndx = input->exports[i].section_index >= 0 ? (uint16_t)(input->exports[i].section_index + 1) : SHN_ABS;
 
-        fprintf(stderr, "[ElfBackend] Export symbol[%zu]: %s addr=0x%lx (sec_vaddr=0x%lx + offset=0x%x) sec=%u\n",
-                i, n, (unsigned long)s->st_value, (unsigned long)sec_vaddr,
-                input->exports[i].value, s->st_shndx);
 
         nim_add(&name_off_map, n, off);
         next_global_idx++;
@@ -854,7 +869,6 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
         next_global_idx++;
     }
     nim_free(&name_off_map);
-    fprintf(stderr, "[ElfBackend] Step 8: Building .rela.* sections, rela_sections=%zu\n", rela_sections);
     rela_arrays = (Elf64_Rela**)calloc(rela_sections ? rela_sections : 1, sizeof(Elf64_Rela*));
     if (!rela_arrays) goto oom;
     rela_idx = 0;
@@ -879,8 +893,6 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
                         break;
                     }
                 }
-                fprintf(stderr, "[ElfBackend] Reloc[%zu]: sym=%s, sym_idx=%u, type=%u, section_index=%u\n",
-                        j, r->symbol->name, sym_idx, r->type, r->symbol->section_index);
             }
             uint32_t r_type = 0;
             switch (r->type) {
@@ -892,7 +904,6 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
                 default: r_type = R_X86_64_64;     break;
             }
             if (r->symbol && r->symbol->section_index == 0 && r->symbol->import_module != NULL) {
-                fprintf(stderr, "[ElfBackend]   -> Skipping import symbol %s from .rela.text\n", r->symbol->name);
                 continue;
             }
             rela_arrays[rela_idx][cur].r_offset = SEC_VADDR(r->section_index) + r->offset;
@@ -903,7 +914,6 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
         rela_idx++;
     }
 
-    fprintf(stderr, "[ElfBackend] Step 8.5: has_dynamic=%d\n", has_dynamic);
     dynsym = NULL;
     memset(&dynstr, 0, sizeof(dynstr));
     dyntab = NULL;
@@ -914,7 +924,6 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
         free(rela_arrays); \
     } while (0)
     if (has_dynamic) {
-        fprintf(stderr, "[ElfBackend]   Building dynamic sections...\n");
         if (!sb_init(&dynstr)) { FREE_RELA_ARRAYS(); goto oom; }
         NameIndexMap module_off = {0};
         NameIndexMap symbol_off = {0};
@@ -924,13 +933,11 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
             const char* mod = input->imports[i].module;
             if (sym && !nim_lookup(&symbol_off, sym, NULL)) {
                 uint32_t off = sb_add(&dynstr, sym);
-                fprintf(stderr, "[ElfBackend]   sb_add(sym=%s) -> off=%u, dynstr.size=%zu\n", sym, off, dynstr.buffer->size);
                 if (off == (uint32_t)-1) {
                     nim_free(&module_off); nim_free(&symbol_off); sb_free(&dynstr);
                     FREE_RELA_ARRAYS(); goto oom;
                 }
                 nim_add(&symbol_off, sym, off);
-                fprintf(stderr, "[ElfBackend]   nim_add(sym=%s, off=%u) -> symbol_off.count=%zu\n", sym, off, symbol_off.count);
             }
             if (mod && !nim_lookup(&module_off, mod, NULL)) {
                 uint32_t off = sb_add(&dynstr, mod);
@@ -962,7 +969,7 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
             Elf64_Sym* s = &dynsym[export_dynsym_idx];
             s->st_info  = ELF_ST_INFO(STB_GLOBAL, STT_FUNC);
             s->st_other = 0;
-            s->st_shndx = input->exports[i].section_index > 0 ? (uint16_t)input->exports[i].section_index : SHN_ABS;
+            s->st_shndx = input->exports[i].section_index >= 0 ? (uint16_t)(input->exports[i].section_index + 1) : SHN_ABS;
             s->st_value = input->exports[i].offset;
             s->st_size  = 0;
             uint32_t name_off = 0;
@@ -973,9 +980,6 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
                 }
             }
             s->st_name = name_off;
-            fprintf(stderr, "[ElfBackend]   .dynsym[%zu] EXPORT: st_name=%u (%s), st_value=0x%lx, st_shndx=%u\n",
-                    export_dynsym_idx, s->st_name, sym ? sym : "(null)",
-                    (unsigned long)s->st_value, s->st_shndx);
             export_dynsym_idx++;
         }
 
@@ -988,7 +992,6 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
             s->st_value = 0;
             s->st_size  = 0;
             s->st_name  = (sym && nim_lookup(&symbol_off, sym, &s->st_name)) ? s->st_name : 0;
-            fprintf(stderr, "[ElfBackend]   .dynsym[%zu]: st_name=%u, sym=%s\n", 1 + i, s->st_name, sym ? sym : "(null)");
         }
 
 
@@ -1019,9 +1022,6 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
         nim_free(&module_emitted);
         
         dyntab[di].d_tag = DT_INIT_ARRAY;    dyntab[di].d_val = META_VADDR(init_array_shidx); di++;
-        fprintf(stderr, "[ElfBackend] DEBUG: init_array_shidx=%zu, META_VADDR=0x%lx, forcing size=0\n",
-                init_array_shidx,
-                (unsigned long)META_VADDR(init_array_shidx));
         dyntab[di].d_tag = DT_INIT_ARRAYSZ;  dyntab[di].d_val = 0; di++;
 
         dyntab[di].d_tag = DT_FINI_ARRAY;    dyntab[di].d_val = META_VADDR(fini_array_shidx); di++;
@@ -1043,12 +1043,9 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
             dyntab[di].d_tag = DT_RELA;      dyntab[di].d_val = first_rela_vaddr; di++;
             dyntab[di].d_tag = DT_RELASZ;    dyntab[di].d_val = total_rela_size; di++;
             dyntab[di].d_tag = DT_RELAENT;   dyntab[di].d_val = sizeof(Elf64_Rela); di++;
-            fprintf(stderr, "[ElfBackend]   DT_RELA=0x%lx, DT_RELASZ=%lu, DT_RELAENT=%lu\n",
-                    (unsigned long)first_rela_vaddr, (unsigned long)total_rela_size, (unsigned long)sizeof(Elf64_Rela));
         }
         dyntab[di].d_tag = DT_NULL; dyntab[di].d_val = 0; di++;
 
-        fprintf(stderr, "[ElfBackend] DEBUG: Complete dyntab (%zu entries):\n", di);
         for (size_t i = 0; i < di && i < 15; i++) {
             const char* tag_name = "UNKNOWN";
             switch (dyntab[i].d_tag) {
@@ -1072,7 +1069,6 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
         meta_secs[dynstr_shidx].size  = (uint64_t)dynstr.buffer->size;
         meta_secs[dynamic_shidx].size = (uint64_t)(dyntab_count * sizeof(Elf64_Dyn));
 
-        fprintf(stderr, "[ElfBackend] DEBUG: After setting sizes:\n");
         fprintf(stderr, "  dynsym_shidx=%zu, size=%lu\n", dynsym_shidx, (unsigned long)meta_secs[dynsym_shidx].size);
         fprintf(stderr, "  dynstr_shidx=%zu, size=%lu\n", dynstr_shidx, (unsigned long)meta_secs[dynstr_shidx].size);
         fprintf(stderr, "  dynamic_shidx=%zu, size=%lu\n", dynamic_shidx, (unsigned long)meta_secs[dynamic_shidx].size);
@@ -1123,8 +1119,6 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
         rela_dyn_count = glob_dat_count + abs64_import_count;
         rela_plt_count = jump_slot_count;
 
-        fprintf(stderr, "[ElfBackend]   Import reloc breakdown: JUMP_SLOT=%zu, GLOB_DAT=%zu, ABS64=%zu\n",
-                jump_slot_count, glob_dat_count, abs64_import_count);
 
 
         Elf64_Rela* rela_plt_data = NULL;
@@ -1167,7 +1161,6 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
             const char* sym_name = r->symbol->name;
             uint32_t dyn_sym_idx = 0;
             if (!nim_lookup(&dynsym_idx_map, sym_name, &dyn_sym_idx)) {
-                fprintf(stderr, "[ElfBackend]   WARNING: Import symbol '%s' not found in dynsym map\n", sym_name);
                 continue;
             }
 
@@ -1180,8 +1173,6 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
                 rela_plt_data[pr_idx].r_offset = gotplt_entry_vaddr;
                 rela_plt_data[pr_idx].r_info   = ELF_R_INFO(dyn_sym_idx, R_X86_64_JUMP_SLOT);
                 rela_plt_data[pr_idx].r_addend = 0;
-                fprintf(stderr, "[ElfBackend]   .rela.plt[%zu]: GOT.plt vaddr=0x%lx, sym=%s, dyn_sym_idx=%u, PLT[%u], type=JUMP_SLOT\n",
-                        pr_idx, (unsigned long)gotplt_entry_vaddr, sym_name, dyn_sym_idx, plt_entry);
                 pr_idx++;
 
             } else {
@@ -1191,14 +1182,10 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
                     rela_dyn_data[dr_idx].r_offset = target_vaddr;
                     rela_dyn_data[dr_idx].r_info   = ELF_R_INFO(dyn_sym_idx, R_X86_64_GLOB_DAT);
                     rela_dyn_data[dr_idx].r_addend = 0;
-                    fprintf(stderr, "[ElfBackend]   .rela.dyn[%zu]: vaddr=0x%lx, sym=%s, dyn_sym_idx=%u, type=GLOB_DAT\n",
-                            dr_idx, (unsigned long)target_vaddr, sym_name, dyn_sym_idx);
                 } else {
                     rela_dyn_data[dr_idx].r_offset = target_vaddr;
                     rela_dyn_data[dr_idx].r_info   = ELF_R_INFO(dyn_sym_idx, R_X86_64_64);
                     rela_dyn_data[dr_idx].r_addend = r->addend;
-                    fprintf(stderr, "[ElfBackend]   .rela.dyn[%zu]: vaddr=0x%lx, sym=%s, dyn_sym_idx=%u, type=ABS64\n",
-                            dr_idx, (unsigned long)target_vaddr, sym_name, dyn_sym_idx);
                 }
                 dr_idx++;
             }
@@ -1227,7 +1214,6 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
                 dyntab[null_idx - 5].d_tag = DT_JMPREL;
                 dyntab[null_idx - 5].d_val = META_VADDR(reladyn_shidx) + META_SIZE(reladyn_shidx);
                 if (rela_plt_count == 0 || rela_plt_count > UINT32_MAX / sizeof(Elf64_Rela)) {
-                    fprintf(stderr, "[ElfBackend] WARNING: Invalid rela_plt_count=%zu for PLTRELSZ\n", rela_plt_count);
                     rela_plt_count = func_import_count > 0 ? func_import_count : 0;
                 }
                 dyntab[null_idx - 4].d_tag = DT_PLTRELSZ;
@@ -1242,36 +1228,25 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
                     dyntab[null_idx - 1].d_tag = DT_BIND_NOW;
                     dyntab[null_idx - 1].d_val = 0;
 
-                    fprintf(stderr, "[ElfBackend]   Using BIND_NOW (immediate resolution)\n");
                 } else {
-                    fprintf(stderr, "[ElfBackend]   Using lazy binding (default)\n");
                 }
 
-                fprintf(stderr, "[ElfBackend]   Added PLT entries: DT_JMPREL=0x%lx, DT_PLTRELSZ=%lu, DT_PLTGOT=0x%lx\n",
-                        (unsigned long)dyntab[null_idx - 5].d_val,
-                        (unsigned long)dyntab[null_idx - 4].d_val,
-                        (unsigned long)dyntab[null_idx - 3].d_val);
 
                 (void)META_OFFSET(reladyn_shidx);
             }
         }
 
-        fprintf(stderr, "[ElfBackend]   DT_RELA updated: vaddr=0x%lx, size=%lu\n",
-                (unsigned long)META_VADDR(reladyn_shidx), (unsigned long)META_SIZE(reladyn_shidx));
         nim_free(&module_off);
         nim_free(&symbol_off);
     }
 
 
-    fprintf(stderr, "[ElfBackend] Step 9: Allocating output buffer, file_size=%lu\n", (unsigned long)file_size);
     uint8_t* out_buf = (uint8_t*)calloc(1, file_size);
     if (!out_buf) {
-        fprintf(stderr, "[ElfBackend] ERROR: Failed to allocate output buffer\n");
         FREE_RELA_ARRAYS();
         if (has_dynamic) { free(dynsym); free(dyntab); sb_free(&dynstr); }
         goto oom;
     }
-    fprintf(stderr, "[ElfBackend] Output buffer allocated successfully\n");
 
     Elf64_Ehdr ehdr = {0};
     ehdr.e_ident[0] = 0x7f;
@@ -1291,22 +1266,10 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
     ehdr.e_machine   = EM_X86_64;
     ehdr.e_version   = EV_CURRENT;
     ehdr.e_entry     = image_base;
-    fprintf(stderr, "[ElfBackend] Setting entry point: image_base=0x%lx, entry_section=%u, entry_offset=0x%x, ns=%zu\n",
-            (unsigned long)image_base,
-            input->entry_section,
-            input->entry_offset,
-            (size_t)ns);
-    if (input->entry_section >= 1 && input->entry_section <= ns) {
-        ehdr.e_entry = SEC_VADDR(input->entry_section - 1) + input->entry_offset;
-        fprintf(stderr, "[ElfBackend] Entry point set to: 0x%lx (SEC_VADDR(%u)=0x%lx + offset=0x%x)\n",
-                (unsigned long)ehdr.e_entry,
-                input->entry_section - 1,
-                (unsigned long)SEC_VADDR(input->entry_section - 1),
-                input->entry_offset);
+    if (input->entry_section >= 0 && input->entry_section <= ns) {
+        ehdr.e_entry = SEC_VADDR(input->entry_section) + input->entry_offset;
     } else {
-        fprintf(stderr, "[ElfBackend] WARNING: entry_section %u out of range [1, %zu], using image_base\n",
-                input->entry_section,
-                (size_t)ns);
+        // 留空,别动
     }
     ehdr.e_phoff     = sizeof(Elf64_Ehdr);
     ehdr.e_shoff     = shdr_offset;
@@ -1315,37 +1278,47 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
     ehdr.e_phentsize = sizeof(Elf64_Phdr);
 
     int has_relro = has_dynamic && func_import_count > 0;
-    int needs_gnu_stack = 1;  // Always add GNU_STACK for modern Linux compatibility
-    ehdr.e_phnum   = (uint16_t)(2 + (has_dynamic ? 2 : 0) + (has_tls ? 1 : 0) + (has_relro ? 1 : 0) + (needs_gnu_stack ? 1 : 0));
+    int needs_gnu_stack = 1;  
     ehdr.e_shentsize = sizeof(Elf64_Shdr);
     ehdr.e_shnum     = (uint16_t)elf_shnum;
     ehdr.e_shstrndx  = (uint16_t)shstrtab_shidx;
+    if (!has_dynamic && !has_tls) {
+        for (int li = 0; li < n_static_loads; li++) {
+            memcpy(out_buf + sizeof(Elf64_Ehdr) + phdr_load_count * sizeof(Elf64_Phdr),
+                   &static_loads[li], sizeof(Elf64_Phdr));
+            phdr_load_count++;
+        }
+    } else {
+        Elf64_Phdr phdr0 = {0};
+        phdr0.p_type   = PT_LOAD;
+        phdr0.p_flags  = PF_R | PF_X;
+        phdr0.p_offset = 0;
+        phdr0.p_vaddr  = image_base;
+        phdr0.p_paddr  = image_base;
+        phdr0.p_filesz = seg1_filesz;
+        phdr0.p_memsz  = seg1_memsz;
+        phdr0.p_align  = page_size;
+        memcpy(out_buf + sizeof(Elf64_Ehdr), &phdr0, sizeof(phdr0));
+        phdr_load_count++;
+
+        Elf64_Phdr phdr1 = {0};
+        phdr1.p_type   = PT_LOAD;
+        phdr1.p_flags  = PF_R | PF_W;
+        phdr1.p_offset = seg2_offset;
+        phdr1.p_vaddr  = seg2_vaddr;
+        phdr1.p_paddr  = seg2_vaddr;
+        phdr1.p_filesz = rw_filesz;
+        phdr1.p_memsz  = rw_memsz;
+        phdr1.p_align  = page_size;
+        memcpy(out_buf + sizeof(Elf64_Ehdr) + phdr_load_count * sizeof(Elf64_Phdr), &phdr1, sizeof(phdr1));
+        phdr_load_count++;
+    }
+
+    ehdr.e_phnum   = (uint16_t)(phdr_load_count + (has_tls ? 1 : 0) + (has_relro ? 1 : 0) + (needs_gnu_stack ? 1 : 0));
     memcpy(out_buf, &ehdr, sizeof(ehdr));
 
-    Elf64_Phdr phdr0 = {0};
-    phdr0.p_type   = PT_LOAD;
-    phdr0.p_flags  = PF_R | PF_X;  // RX: code segment only
-    phdr0.p_offset = 0;
-    phdr0.p_vaddr  = image_base;
-    phdr0.p_paddr  = image_base;
-    phdr0.p_filesz = seg1_filesz;
-    phdr0.p_memsz  = seg1_memsz;
-    phdr0.p_align  = page_size;
-    memcpy(out_buf + sizeof(Elf64_Ehdr), &phdr0, sizeof(phdr0));
-
-    Elf64_Phdr phdr1 = {0};
-    phdr1.p_type   = PT_LOAD;
-    phdr1.p_flags  = PF_R | PF_W;
-    phdr1.p_offset = seg2_offset;
-    phdr1.p_vaddr  = seg2_vaddr;
-    phdr1.p_paddr  = seg2_vaddr;
-    phdr1.p_filesz = rw_filesz;
-    phdr1.p_memsz  = rw_memsz;
-    phdr1.p_align  = page_size;
-    memcpy(out_buf + sizeof(Elf64_Ehdr) + sizeof(Elf64_Phdr), &phdr1, sizeof(phdr1));
-
     Elf64_Phdr phdr2 = {0}, phdr3 = {0}, phdr_tls = {0};
-    size_t phdr_write_idx = 2;
+    size_t phdr_write_idx = phdr_load_count;
     if (has_dynamic) {
         phdr2.p_type   = PT_INTERP;
         phdr2.p_offset = META_OFFSET(interp_shidx);
@@ -1399,10 +1372,6 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
         memcpy(out_buf + sizeof(Elf64_Ehdr) + phdr_write_idx * sizeof(Elf64_Phdr),
                &phdr_relro, sizeof(phdr_relro));
 
-        fprintf(stderr, "[ElfBackend]   PT_GNU_RELRO: vaddr=0x%lx-0x%lx (size=%lu)\n",
-                (unsigned long)relro_start,
-                (unsigned long)relro_end,
-                (unsigned long)(relro_end - relro_start));
     }
 
     if (needs_gnu_stack) {
@@ -1419,7 +1388,6 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
         memcpy(out_buf + sizeof(Elf64_Ehdr) + phdr_write_idx * sizeof(Elf64_Phdr),
                &phdr_stack, sizeof(phdr_stack));
 
-        fprintf(stderr, "[ElfBackend]   PT_GNU_STACK added (flags=RW, non-executable)\n");
     }
 
     for (size_t i = 0; i < ns; i++) {
@@ -1445,7 +1413,6 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
     memcpy(out_buf + META_OFFSET(shstrtab_shidx), shstrtab.buffer->data, shstrtab.buffer->size);
     if (has_dynamic) {
         static const char interp_path[] = "/lib64/ld-linux-x86-64.so.2";
-        fprintf(stderr, "[ElfBackend] DEBUG: Before writing sections to out_buf:\n");
         fprintf(stderr, "  META_OFFSET(interp_shidx)=0x%lx\n", (unsigned long)META_OFFSET(interp_shidx));
         fprintf(stderr, "  META_OFFSET(dynsym_shidx)=0x%lx\n", (unsigned long)META_OFFSET(dynsym_shidx));
         fprintf(stderr, "  META_OFFSET(dynstr_shidx)=0x%lx\n", (unsigned long)META_OFFSET(dynstr_shidx));
@@ -1469,16 +1436,13 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
             for (size_t i = 0; i < hash_nchain; i++) {
                 hash_data[3 + i] = (uint32_t)((i + 1) % hash_nchain);
             }
-            fprintf(stderr, "[ElfBackend] Written .hash table: nbuckets=%zu, nchain=%zu\n", hash_nbuckets, hash_nchain);
         }
 
-        fprintf(stderr, "[ElfBackend] DEBUG: About to copy dynamic section...\n");
         fprintf(stderr, "  Destination: out_buf + 0x%lx\n", (unsigned long)META_OFFSET(dynamic_shidx));
         fprintf(stderr, "  Source size: %lu bytes\n", (unsigned long)META_SIZE(dynamic_shidx));
 
         memcpy(out_buf + META_OFFSET(dynamic_shidx), dyntab, META_SIZE(dynamic_shidx));
 
-        fprintf(stderr, "[ElfBackend] DEBUG: After copying dynamic section, verifying content:\n");
         Elf64_Dyn* written_dyn = (Elf64_Dyn*)(out_buf + META_OFFSET(dynamic_shidx));
         for (size_t i = 0; i < 10 && i < dyntab_count; i++) {
             const char* tag_name = "UNKNOWN";
@@ -1511,13 +1475,11 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
         }
 
         if (func_import_count > 0 && META_SIZE(plt_shidx) > 0 && META_SIZE(gotplt_shidx) > 0) {
-            fprintf(stderr, "[ElfBackend] WARNING: About to write PLT/GOT, checking addresses:\n");
             fprintf(stderr, "  META_OFFSET(plt_shidx)=0x%lx\n", (unsigned long)META_OFFSET(plt_shidx));
             fprintf(stderr, "  META_OFFSET(gotplt_shidx)=0x%lx\n", (unsigned long)META_OFFSET(gotplt_shidx));
             fprintf(stderr, "  file_size=0x%lx\n", (unsigned long)file_size);
 
             if (META_OFFSET(plt_shidx) == 0 || META_OFFSET(gotplt_shidx) == 0) {
-                fprintf(stderr, "[ElfBackend] ERROR: PLT or GOT.plt offset is 0! Skipping PLT/GOT write to avoid corruption!\n");
                 func_import_count = 0;
             } else {
                 uint8_t* plt_base = out_buf + META_OFFSET(plt_shidx);
@@ -1526,13 +1488,9 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
 
             size_t expected_plt_size = (1 + func_import_count) * 16;
             if (META_SIZE(plt_shidx) < expected_plt_size) {
-                fprintf(stderr, "[ElfBackend] ERROR: .plt section too small: expected %zu, actual %lu\n",
-                        expected_plt_size, (unsigned long)META_SIZE(plt_shidx));
                 func_import_count = (META_SIZE(plt_shidx) / 16) - 1;
             }
             if (META_SIZE(gotplt_shidx) < (3 + func_import_count) * sizeof(uint64_t)) {
-                fprintf(stderr, "[ElfBackend] WARNING: .got.plt may be too small for %zu functions\n",
-                        func_import_count);
             }
 
             plt_base[0]  = 0xff; plt_base[1]  = 0x35;
@@ -1563,9 +1521,6 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
                 int32_t disp_to_plt0 = (int32_t)(plt_vaddr - (entry_vaddr + 15));
                 memcpy(entry + 12, &disp_to_plt0, 4);
 
-                fprintf(stderr, "[ElfBackend]   PLT[%zu]: vaddr=0x%lx, GOT.plt[%lu]=0x%lx\n",
-                        i + 1, (unsigned long)entry_vaddr,
-                        (unsigned long)(3 + i), (unsigned long)got_entry_vaddr);
             }
             }
         }
@@ -1578,8 +1533,6 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
 
             size_t required_got_entries = 3 + func_import_count;
             if (META_SIZE(gotplt_shidx) < required_got_entries * sizeof(uint64_t)) {
-                fprintf(stderr, "[ElfBackend] ERROR: .got.plt too small: need %zu entries, have %lu\n",
-                        required_got_entries, (unsigned long)(META_SIZE(gotplt_shidx) / sizeof(uint64_t)));
                 func_import_count = (META_SIZE(gotplt_shidx) / sizeof(uint64_t)) - 3;
                 if ((int64_t)func_import_count < 0) func_import_count = 0;
             }
@@ -1601,8 +1554,6 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
                 uint64_t push_instr_addr = plt_vaddr + (1 + i) * 16 + 6;
                 memcpy(gotplt_base + (3 + i) * sizeof(uint64_t), &push_instr_addr, sizeof(uint64_t));
 
-                fprintf(stderr, "[ElfBackend]   GOT.plt[%zu]=0x%lx (-> PLT[%zu]+6)\n",
-                        3 + i, (unsigned long)push_instr_addr, i + 1);
             }
         }
     }
@@ -1815,7 +1766,6 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
     output->image_base  = image_base;
 
     if (has_dynamic) {
-        fprintf(stderr, "[ElfBackend] FINAL CHECK: dynamic section in out_buf before return:\n");
         Elf64_Dyn* final_dyn = (Elf64_Dyn*)(out_buf + META_OFFSET(dynamic_shidx));
         for (size_t i = 0; i < 10 && i < dyntab_count; i++) {
             const char* tag_name = "UNKNOWN";
