@@ -181,7 +181,11 @@ static void collect_exports_from_node(SemanticAnalyzer* analyzer, ASTNode* node)
             if (name) {
                 SymbolEntry* existing = symbol_table_lookup(analyzer->global_symbol_table, name);
                 if (!existing) {
-                    symbol_table_define(analyzer->global_symbol_table, name, SYMBOL_FUNCTION, 0, NULL);
+                    SymbolEntry* sym = symbol_table_define(analyzer->global_symbol_table, name, SYMBOL_FUNCTION, 0, NULL);
+                    /* M1: 预登记只算占位(FORWARD_REF), 不能是 DEFINED ——
+                     * 否则本体文件预登记时撞 "already defined"; 且跨文件
+                     * 引用方也能凭此条目通过查找 */
+                    if (sym) sym->state = SYMBOL_FORWARD_REF;
                 }
             }
             break;
@@ -2369,7 +2373,10 @@ FunctionAnalysisResult semantic_analyzer_analyze_function(SemanticAnalyzer* anal
     }
 
     SymbolEntry* func_symbol;
-    if (existing && existing->state == SYMBOL_FORWARD_REF) {
+    /* M1: 复用任何未定义的既有函数条目 —— 覆盖两类来源:
+     * 前向引用(本文件后置定义) 与 collect_exports 预登记(跨文件) */
+    if (existing && existing->type == SYMBOL_FUNCTION &&
+        existing->state != SYMBOL_DEFINED) {
         func_symbol = existing;
     } else {
         func_symbol = symbol_table_define(analyzer->symbol_table, func_name,

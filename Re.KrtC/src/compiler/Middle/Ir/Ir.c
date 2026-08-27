@@ -381,6 +381,33 @@ KrtIRValue KrtIrAdd(KrtIRBuilder* builder, KrtIRValue lhs, KrtIRValue rhs) {
     return result;
 }
 
+/* 双精度立即数: 物化时按位型装入(区别于整数编码的 IMM) */
+KrtIRValue KrtIrImmF(KrtIRBuilder* builder, double value) {
+    (void)builder;
+    KrtIRValue result;
+    memset(&result, 0, sizeof(result));
+    result.type = KRT_IR_VALUE_IMM_F;
+    result.data.imm = value;
+    return result;
+}
+
+/* 浮点二元运算通用构造(FADD..FGE), 骨架同 KrtIrAdd */
+KrtIRValue KrtIrFloatBinary(KrtIRBuilder* builder, KrtIROpcode op, KrtIRValue lhs, KrtIRValue rhs) {
+    KrtIRValue result = {0};
+    result.type = KRT_IR_VALUE_TEMP;
+    result.data.index = builder ? builder->temp_counter++ : 0;
+
+    if (!builder || !builder->current_block) return result;
+
+    KrtIRInst* inst = ir_create_inst(builder, op);
+    if (inst) {
+        ir_add_operand(inst, lhs);
+        ir_add_operand(inst, rhs);
+        result.data.index = inst->result.data.index;
+    }
+    return result;
+}
+
 KrtIRValue KrtIrSub(KrtIRBuilder* builder, KrtIRValue lhs, KrtIRValue rhs) {
     KrtIRValue result = {0};
     result.type = KRT_IR_VALUE_TEMP;
@@ -1101,7 +1128,9 @@ static const char* ir_opcode_names[] = {
     "lt", "gt", "eq", "le", "ge", "ne",
     "jump", "branch", "call", "return", "label",
     "strcat", "cast", "loadptr", "storeptr", "array_store",
-    "int_to_string", "double_to_string", "copy", "syscall", "phi", "nop"
+    "int_to_string", "double_to_string", "copy", "syscall", "phi", "nop",
+    "fadd", "fsub", "fmul", "fdiv",
+    "feq", "fne", "flt", "fle", "fgt", "fge"
 };
 
 static void print_value(FILE* out, KrtIRValue* val) {
@@ -1112,6 +1141,7 @@ static void print_value(FILE* out, KrtIRValue* val) {
     switch (val->type) {
         case KRT_IR_VALUE_VOID: fprintf(out, "void"); break;
         case KRT_IR_VALUE_IMM: fprintf(out, "%.0f", val->data.imm); break;
+        case KRT_IR_VALUE_IMM_F: fprintf(out, "%.17g", val->data.imm); break;
         case KRT_IR_VALUE_VAR: fprintf(out, "%s", val->data.name ? val->data.name : "?"); break;
         case KRT_IR_VALUE_TEMP: fprintf(out, "t%d", val->data.index); break;
         case KRT_IR_VALUE_ARG: fprintf(out, "arg%d", val->data.index); break;
