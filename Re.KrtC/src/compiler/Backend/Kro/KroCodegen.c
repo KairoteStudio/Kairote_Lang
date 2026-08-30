@@ -56,6 +56,77 @@ static const int g_syscall_arg_reg_count = 4;
 #define KRO_SHADOW_SPACE_SIZE 32
 #endif
 
+/* ---- target-OS syscall ABI -------------------------------------------------
+ *
+ * The tables above describe the *host* kernel, chosen at compile time.  A cross
+ * target needs a second axis, chosen at run time, because the same KrtC binary
+ * has to be able to emit for another kernel.  Selected by KRT_TARGET_OS; absent
+ * or unrecognised keeps the existing host behaviour untouched.
+ *
+ * MiniOS-M (a teaching x86_64 kernel) differs in three ways that all matter:
+ *   - it never sets up the SYSCALL/SYSRET MSRs, so the `syscall` instruction
+ *     faults there; the entry sequence is `int 0x80` (CD 80)
+ *   - argument 4 arrives in rcx, not r10 (args 1-3 and 5-6 agree with Linux)
+ *   - the numbers are its own, and notably exit is 0 -- which is *read* on
+ *     Linux, so an untranslated exit does not fault, it hangs.  That asymmetry
+ *     is why translation lives here rather than being left to the .krt source:
+ *     Kairote has no conditional compilation, so the runtime cannot spell two
+ *     sets of numbers, and a missed one fails silently.
+ */
+typedef struct {
+    const char* name;
+    int trap_is_int80;         /* 0 = syscall (0F 05), 1 = int 0x80 (CD 80) */
+    int arg4_reg;
+} KrtKroTargetAbi;
+
+static const KrtKroTargetAbi KRT_KRO_ABI_HOST   = {"host",   0, REG_R10};
+static const KrtKroTargetAbi KRT_KRO_ABI_MINIOS = {"minios", 1, REG_RCX};
+
+static const KrtKroTargetAbi* kro_target_abi(void) {
+    const char* os = getenv("KRT_TARGET_OS");
+    if (os && strcmp(os, "minios") == 0) return &KRT_KRO_ABI_MINIOS;
+    return &KRT_KRO_ABI_HOST;
+}
+
+/* Linux number -> MiniOS number, for the calls the .krt runtime actually
+ * issues.  An unlisted number is passed through and reported: emitting a Linux
+ * number against another kernel is exactly the silent failure this exists to
+ * prevent. */
+typedef struct { int linux_nr; int target_nr; const char* name; } KrtKroNrMap;
+
+static const KrtKroNrMap KRT_KRO_NR_MINIOS[] = {
+    {0,  2,  "read"},   {1,  1,  "write"},
+    {2,  18, "open"},   {3,  16, "close"},
+    {9,  49, "mmap"},   {11, 50, "munmap"},
+    {60, 0,  "exit"},
+};
+
+static int kro_translate_nr(long linux_nr, int* known) {
+    *known = 1;
+    for (size_t i = 0; i < sizeof(KRT_KRO_NR_MINIOS) / sizeof(KRT_KRO_NR_MINIOS[0]); i++) {
+        if (KRT_KRO_NR_MINIOS[i].linux_nr == (int)linux_nr)
+            return KRT_KRO_NR_MINIOS[i].target_nr;
+    }
+    *known = 0;
+    return (int)linux_nr;
+}
+
+/* mmap's `flags`, translated bit by bit.  A number can be mapped as a whole
+ * because the value *is* the meaning; a bitmask cannot.  Linux
+ * MAP_PRIVATE|MAP_ANONYMOUS is 0x22, and on MiniOS those bits are 0x1|0x8 =
+ * 0x9 -- 0x22 there would read as MAP_SHARED plus an undefined bit, i.e.
+ * quietly wrong rather than rejected.  PROT_* is deliberately absent: read,
+ * write and exec are 1/2/4 on both. */
+static long kro_translate_map_flags(long linux_flags, int* known) {
+    long out = 0, rest = linux_flags;
+    if (rest & 0x01) { out |= 0x2; rest &= ~0x01L; }   /* SHARED    */
+    if (rest & 0x02) { out |= 0x1; rest &= ~0x02L; }   /* PRIVATE   */
+    if (rest & 0x10) { out |= 0x4; rest &= ~0x10L; }   /* FIXED     */
+    if (rest & 0x20) { out |= 0x8; rest &= ~0x20L; }   /* ANONYMOUS */
+    *known = (rest == 0);
+    return out;
+}
+
 static void sanitize_label_name(const char* name, char* out, size_t out_size) {
     if (!name || !out || out_size == 0) return;
     size_t j = 0;
@@ -302,17 +373,32 @@ static void emit_function_epilogue(KROCodegenContext* ctx) {
         emit_bytes(ctx, (const uint8_t*)"\x48\x89\xC1", 3);
         emit_call_external(ctx, "ExitProcess");
 #else
-        emit_byte(ctx, 0x48);
-        emit_byte(ctx, 0x89);
-        emit_byte(ctx, 0xC7);
+        {
+            /* main's return becomes exit(rax).  The number and the trap both
+             * differ per target, and this path does not go through
+             * KRT_IR_SYSCALL, so it needs the same treatment separately. */
+            const KrtKroTargetAbi* exit_abi = kro_target_abi();
+            int nr_known = 0;
+            int exit_nr = (exit_abi == &KRT_KRO_ABI_HOST)
+                              ? 60 : kro_translate_nr(60, &nr_known);
 
-        emit_byte(ctx, 0x48);
-        emit_byte(ctx, 0xC7);
-        emit_byte(ctx, 0xC0);
-        emit_u32(ctx, 60);
+            emit_byte(ctx, 0x48);
+            emit_byte(ctx, 0x89);
+            emit_byte(ctx, 0xC7);
 
-        emit_byte(ctx, 0x0F);
-        emit_byte(ctx, 0x05);
+            emit_byte(ctx, 0x48);
+            emit_byte(ctx, 0xC7);
+            emit_byte(ctx, 0xC0);
+            emit_u32(ctx, (uint32_t)exit_nr);
+
+            if (exit_abi->trap_is_int80) {
+                emit_byte(ctx, 0xCD);
+                emit_byte(ctx, 0x80);
+            } else {
+                emit_byte(ctx, 0x0F);
+                emit_byte(ctx, 0x05);
+            }
+        }
 #endif
     } else {
         emit_byte(ctx, X86_RET);
@@ -984,16 +1070,63 @@ static void KroGenerateInstruction(KROCodegenContext* ctx, KrtIRInst* inst) {
             int arg_count = inst->operand_count - 1;
             if (arg_count > g_syscall_arg_reg_count) arg_count = g_syscall_arg_reg_count;
 
+            const KrtKroTargetAbi* abi = kro_target_abi();
+            int cross = (abi != &KRT_KRO_ABI_HOST);
+
+            /* Numbers reach here as immediates for every call the runtime makes
+             * (they come from `public const int64 SYS_*`).  One computed at run
+             * time cannot be translated, so say so rather than emit a Linux
+             * number against another kernel. */
+            int nr_is_imm = (syscall_num->type == KRT_IR_VALUE_IMM);
+            long linux_nr = nr_is_imm ? (long)syscall_num->data.imm : -1;
+            int is_mmap = nr_is_imm && linux_nr == 9;
+
             for (int i = arg_count - 1; i >= 0; i--) {
                 KrtIRValue* arg = &inst->operands[i + 1];
-                int target_reg = g_syscall_arg_regs[i];
+                int target_reg = (cross && i == 3) ? abi->arg4_reg
+                                                   : g_syscall_arg_regs[i];
+                if (cross && is_mmap && i == 3 && arg->type == KRT_IR_VALUE_IMM) {
+                    int flags_known = 0;
+                    long mapped = kro_translate_map_flags((long)arg->data.imm,
+                                                          &flags_known);
+                    if (!flags_known) {
+                        fprintf(stderr, "[KroCodegen] mmap flags 0x%lx has bits "
+                                "with no %s equivalent\n",
+                                (long)arg->data.imm, abi->name);
+                    }
+                    KrtIRValue mapped_val = *arg;
+                    mapped_val.data.imm = (double)mapped;
+                    emit_load_value_to_reg(ctx, &mapped_val, target_reg);
+                    continue;
+                }
                 emit_load_value_to_reg(ctx, arg, target_reg);
             }
 
-            emit_load_value_to_reg(ctx, syscall_num, REG_RAX);
+            if (cross && nr_is_imm) {
+                int nr_known = 0;
+                int target_nr = kro_translate_nr(linux_nr, &nr_known);
+                if (!nr_known) {
+                    fprintf(stderr, "[KroCodegen] syscall %ld has no %s mapping; "
+                            "emitting it unchanged\n", linux_nr, abi->name);
+                }
+                KrtIRValue nr_val = *syscall_num;
+                nr_val.data.imm = (double)target_nr;
+                emit_load_value_to_reg(ctx, &nr_val, REG_RAX);
+            } else {
+                if (cross) {
+                    fprintf(stderr, "[KroCodegen] syscall number is not a "
+                            "constant; cannot translate it for %s\n", abi->name);
+                }
+                emit_load_value_to_reg(ctx, syscall_num, REG_RAX);
+            }
 
-            emit_byte(ctx, 0x0F);
-            emit_byte(ctx, 0x05);
+            if (abi->trap_is_int80) {
+                emit_byte(ctx, 0xCD);
+                emit_byte(ctx, 0x80);
+            } else {
+                emit_byte(ctx, 0x0F);
+                emit_byte(ctx, 0x05);
+            }
 
             if (inst->result.type == KRT_IR_VALUE_TEMP) {
                 int slot = alloc_temp_slot(ctx, inst->result.data.index);
@@ -1367,11 +1500,26 @@ void KrtKrtGenerate(FILE* output_file, const char* output_filename, KrtIRModule*
             /* mov rdi, rax */
             emit_bytes(&ctx, (const uint8_t*)"\x48\x89\xc7", 3);
 
-            /* mov rax, 60 (sys_exit) */
-            emit_bytes(&ctx, (const uint8_t*)"\x48\xc7\xc0\x3c\x00\x00\x00", 7);
+            {
+                /* _start's exit, per target -- same reasoning as the main-return
+                 * path above; the entry stub is emitted here rather than by the
+                 * linker, so it is ours to get right. */
+                const KrtKroTargetAbi* start_abi = kro_target_abi();
+                int nr_known = 0;
+                int exit_nr = (start_abi == &KRT_KRO_ABI_HOST)
+                                  ? 60 : kro_translate_nr(60, &nr_known);
+                uint8_t mov_rax[7] = {0x48, 0xc7, 0xc0, 0, 0, 0, 0};
+                mov_rax[3] = (uint8_t)(exit_nr & 0xff);
+                mov_rax[4] = (uint8_t)((exit_nr >> 8) & 0xff);
+                mov_rax[5] = (uint8_t)((exit_nr >> 16) & 0xff);
+                mov_rax[6] = (uint8_t)((exit_nr >> 24) & 0xff);
+                emit_bytes(&ctx, mov_rax, 7);
 
-            /* syscall */
-            emit_bytes(&ctx, (const uint8_t*)"\x0f\x05", 2);
+                if (start_abi->trap_is_int80)
+                    emit_bytes(&ctx, (const uint8_t*)"\xcd\x80", 2);
+                else
+                    emit_bytes(&ctx, (const uint8_t*)"\x0f\x05", 2);
+            }
 
         }
     }
