@@ -592,7 +592,7 @@ static void plan_function_storage(KROCodegenContext* ctx, KrtIRFunction* func) {
 
 static void emit_store_parameter_word(KROCodegenContext* ctx, KrtIRFunction* func, int index, int word,
                                       int source_reg) {
-    if (func->params[index].type == TOKEN_FLOAT32) {
+    if (!func->params[index].is_array && func->params[index].type == TOKEN_FLOAT32) {
         emit_float32_conversion(ctx, source_reg, true);
     }
     KROPackedField* field = &ctx->arg_packed[index];

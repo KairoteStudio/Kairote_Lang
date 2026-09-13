@@ -1,84 +1,173 @@
+using System.String;
+using System.Sys;
 namespace System.Runtime;
 
-// ============================================
-// Convert — 类型转换
-// 纯 .krt 实现
-// ============================================
-
-public static class Convert
-{
-    // 字符串转 int32
-    public static int32 ToInt32(string s)
-    {
-        if (s == null) return 0;
-
-        int32 len = Sys.InternalStringLength(s);
-        int64 ptr = Sys.InternalStringPtr(s);
-        char[] arr = (char[])ptr;
-
-        int32 result = 0;
-        int32 i = 0;
-        int32 negative = 0;
-
-        if (len > 0 && arr[0] == '-')
-        {
-            negative = 1;
-            i = 1;
-        }
-
-        while (i < len)
-        {
-            char c = arr[i];
-            if (c < '0' || c > '9') break;
-            result = result * 10 + ((int32)c - (int32)'0');
-            i = i + 1;
-        }
-
-        if (negative == 1) result = -result;
-        return result;
+public static class Convert {
+    /** Parse a decimal prefix with optional minus and wrapping arithmetic; an absent prefix yields zero. */
+    public static int32 ToInt32(string value) {
+        return (int32)ToInt64(value);
     }
 
-    // 字符串转 int64
-    public static int64 ToInt64(string s)
-    {
-        if (s == null) return 0;
-
-        int32 len = Sys.InternalStringLength(s);
-        int64 ptr = Sys.InternalStringPtr(s);
-        char[] arr = (char[])ptr;
-
-        int64 result = 0;
-        int32 i = 0;
-        int32 negative = 0;
-
-        if (len > 0 && arr[0] == '-')
-        {
-            negative = 1;
-            i = 1;
+    /** Parse a decimal prefix with optional minus and wrapping arithmetic; an absent prefix yields zero. */
+    public static int64 ToInt64(string value) {
+        unsafe(using krt.mem;) {
+            if (value == null) {
+                return 0;
+            }
+            int32 length = (int32)Sys.InternalStringLength(value);
+            byte* characters = (byte*)Sys.InternalStringPtr(value);
+            int64 result = 0;
+            int32 index = 0;
+            bool negative = false;
+            if (length > 0 && characters[0] == '-') {
+                negative = true;
+                index = 1;
+            }
+            while (index < length) {
+                byte character = characters[index];
+                if (character < '0' || character > '9') {
+                    break;
+                }
+                result = result * 10 + ((int64)character - (int64)'0');
+                index = index + 1;
+            }
+            return negative ? -result : result;
         }
-
-        while (i < len)
-        {
-            char c = arr[i];
-            if (c < '0' || c > '9') break;
-            result = result * 10 + ((int64)c - (int64)'0');
-            i = i + 1;
-        }
-
-        if (negative == 1) result = -result;
-        return result;
     }
 
-    // int32 转 string
-    public static string ToString(int32 value)
-    {
-        return Sys.InternalInt32ToString(value);
+    /** Parse a complete signed decimal with optional sign; invalid input or overflow clears result and fails. */
+    public static bool TryToInt32(string value, ref int32 result) {
+        result = 0;
+        int64 parsed = 0;
+        if (!TryToInt64(value, ref parsed)) {
+            return false;
+        }
+        if (parsed < (int64)-2147483648 || parsed > (int64)2147483647) {
+            return false;
+        }
+        result = (int32)parsed;
+        return true;
     }
 
-    // bool 转 string
-    public static string ToString(bool value)
-    {
-        if (value) return "True";
-        return "False";
+    /** Parse a complete signed decimal with optional sign; invalid input or overflow clears result and fails. */
+    public static bool TryToInt64(string value, ref int64 result) {
+        unsafe(using krt.mem;) {
+            result = 0;
+            if (value == null) {
+                return false;
+            }
+            int64 full_length = Sys.InternalStringLength(value);
+            if (full_length == 0 || full_length > 2147483647) {
+                return false;
+            }
+            int32 length = (int32)full_length;
+            byte* characters = (byte*)Sys.InternalStringPtr(value);
+            int32 index = 0;
+            bool negative = false;
+            if (characters[0] == '-' || characters[0] == '+') {
+                negative = characters[0] == '-';
+                index = 1;
+            }
+            if (index == length) {
+                return false;
+            }
+            int64 limit = (int64)-9223372036854775807;
+            if (negative) {
+                limit = (int64)-9223372036854775808;
+            }
+            int64 multiplication_limit = limit / 10;
+            // Accumulate negatively so MIN never needs an unrepresentable opposite.
+            int64 accumulator = 0;
+            while (index < length) {
+                byte character = characters[index];
+                if (character < '0' || character > '9') {
+                    return false;
+                }
+                int64 digit = (int64)character - (int64)'0';
+                if (accumulator < multiplication_limit) {
+                    return false;
+                }
+                accumulator = accumulator * 10;
+                if (accumulator < limit + digit) {
+                    return false;
+                }
+                accumulator = accumulator - digit;
+                index = index + 1;
+            }
+            result = negative ? accumulator : -accumulator;
+            return true;
+        }
+    }
+
+    /** Parse a complete unsigned decimal with optional plus; invalid input or overflow clears result and fails. */
+    public static bool TryToUInt32(string value, ref uint32 result) {
+        result = 0;
+        uint64 parsed = 0;
+        if (!TryToUInt64(value, ref parsed) || parsed > (uint64)4294967295) {
+            return false;
+        }
+        result = (uint32)parsed;
+        return true;
+    }
+
+    /** Parse a complete unsigned decimal with optional plus; invalid input or overflow clears result and fails. */
+    public static bool TryToUInt64(string value, ref uint64 result) {
+        unsafe(using krt.mem;) {
+            result = 0;
+            if (value == null) {
+                return false;
+            }
+            int64 full_length = Sys.InternalStringLength(value);
+            if (full_length == 0 || full_length > 2147483647) {
+                return false;
+            }
+            int32 length = (int32)full_length;
+            byte* characters = (byte*)Sys.InternalStringPtr(value);
+            int32 index = characters[0] == '+' ? 1 : 0;
+            if (index == length) {
+                return false;
+            }
+            uint64 accumulator = 0;
+            while (index < length) {
+                byte character = characters[index];
+                if (character < '0' || character > '9') {
+                    return false;
+                }
+                uint64 digit = (uint64)((int32)character - (int32)'0');
+                if (accumulator > (uint64)1844674407370955161 ||
+                    (accumulator == (uint64)1844674407370955161 && digit > (uint64)5)) {
+                    return false;
+                }
+                accumulator = accumulator * (uint64)10 + digit;
+                index = index + 1;
+            }
+            result = accumulator;
+            return true;
+        }
+    }
+
+    /** Return owned decimal text or null; free with Memory.Free using StringOps.Length(result) + 1 bytes. */
+    public static string ToString(int32 value) {
+        return StringOps.FromInt32(value);
+    }
+
+    /** Return owned decimal text or null; free with Memory.Free using StringOps.Length(result) + 1 bytes. */
+    public static string ToString(int64 value) {
+        return StringOps.FromInt64(value);
+    }
+
+    /** Return owned decimal text or null; free with Memory.Free using StringOps.Length(result) + 1 bytes. */
+    public static string ToString(uint32 value) {
+        return StringOps.FromUInt64((uint64)value);
+    }
+
+    /** Return owned decimal text or null; free with Memory.Free using StringOps.Length(result) + 1 bytes. */
+    public static string ToString(uint64 value) {
+        return StringOps.FromUInt64(value);
+    }
+
+    /** Return a borrowed boolean literal that must not be freed. */
+    public static string ToString(bool value) {
+        return value ? "True" : "False";
     }
 }

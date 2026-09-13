@@ -1,222 +1,271 @@
+using System.Memory;
+using System.Sys;
+using System.String;
+
 namespace System.Runtime;
 
-// ============================================
-// StringBuilder — 可变字符串构建器
-// 纯 .krt 实现
-//
-// 当前状态: 实现完成, 但受限于编译器跨文件调用限制,
-// 需要在同一文件中包含所有依赖函数。
-// ============================================
-
-public static class StringBuilder
-{
-    // 分配缓冲区
-    // 使用 syscall(mmap) 直接分配内存
-    public static int64 AllocateBuffer(int32 capacity)
-    {
-        // mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0)
-        return Sys.syscall(9, 0, (int64)(capacity + 1), 3, 0x22, -1, 0);
+/**
+ * Explicit byte-buffer builder. Capacity excludes the extra zero terminator byte.
+ * Callers own buffers and lengths; invalid arguments or insufficient capacity return -1.
+ * Clear returns a new logical length only; the next mutation writes the terminator.
+ */
+public static class StringBuilder {
+    private static bool valid_buffer(int64 buffer, int32 buffer_size, int32 current_length) {
+        return buffer > 0 && buffer_size >= 0 && current_length >= 0 && current_length <= buffer_size;
     }
 
-    // 释放缓冲区
-    public static void FreeBuffer(int64 buffer, int32 capacity)
-    {
-        Sys.syscall(11, buffer, (int64)(capacity + 1), 0, 0, 0, 0);
-    }
-
-    // 追加字符串到缓冲区
-    // 参数: buffer, bufferSize, currentLength, value
-    // 返回: 新长度, 如果容量不足返回 -1
-    public static int32 AppendString(int64 buffer, int32 bufferSize, int32 currentLength, string value)
-    {
-        if (value == null) return currentLength;
-
-        int32 valueLen = (int32)Sys.InternalStringLength(value);
-        if (valueLen == 0) return currentLength;
-
-        if (currentLength + valueLen > bufferSize) return -1;
-
-        int64 valuePtr = Sys.InternalStringPtr(value);
-        char[] src = (char[])valuePtr;
-        char[] dst = (char[])buffer;
-
-        int32 i = 0;
-        while (i < valueLen)
-        {
-            dst[currentLength + i] = src[i];
-            i = i + 1;
-        }
-
-        return currentLength + valueLen;
-    }
-
-    // 追加字符到缓冲区
-    public static int32 AppendChar(int64 buffer, int32 bufferSize, int32 currentLength, char value)
-    {
-        if (currentLength + 1 > bufferSize) return -1;
-
-        char[] dst = (char[])buffer;
-        dst[currentLength] = value;
-        return currentLength + 1;
-    }
-
-    // 追加 int32 到缓冲区
-    public static int32 AppendInt32(int64 buffer, int32 bufferSize, int32 currentLength, int32 value)
-    {
-        string s = Sys.InternalInt32ToString(value);
-        return AppendString(buffer, bufferSize, currentLength, s);
-    }
-
-    // 追加 bool 到缓冲区
-    public static int32 AppendBool(int64 buffer, int32 bufferSize, int32 currentLength, bool value)
-    {
-        if (value)
-        {
-            return AppendString(buffer, bufferSize, currentLength, "True");
-        }
-        else
-        {
-            return AppendString(buffer, bufferSize, currentLength, "False");
+    /** Allocates capacity + 1 zero-initialized bytes; returns zero for invalid capacity or allocation failure. */
+    public static int64 AllocateBuffer(int32 capacity) {
+        unsafe(using krt.mem;) {
+            if (capacity < 0) {
+                return 0;
+            }
+            byte* buffer = (byte*)Memory.Allocate((int64)capacity + 1);
+            if (buffer == null) {
+                return 0;
+            }
+            buffer[0] = 0;
+            return (int64)buffer;
         }
     }
 
-    // 追加一行（字符串 + 换行）
-    public static int32 AppendLine(int64 buffer, int32 bufferSize, int32 currentLength, string value)
-    {
-        int32 len = AppendString(buffer, bufferSize, currentLength, value);
-        if (len < 0) return -1;
-        return AppendChar(buffer, bufferSize, len, '\n');
+    /** Releases a buffer with the same capacity passed to AllocateBuffer; null is ignored. */
+    public static void FreeBuffer(int64 buffer, int32 capacity) {
+        unsafe(using krt.mem;) {
+            if (buffer > 0 && capacity >= 0) {
+                Memory.Free((void*)buffer, (int64)capacity + 1);
+            }
+        }
     }
 
-    // 追加空行
-    public static int32 AppendLine(int64 buffer, int32 bufferSize, int32 currentLength)
-    {
-        return AppendChar(buffer, bufferSize, currentLength, '\n');
+    /** Appends bytes and a terminator; null is empty, overlap is allowed, failure leaves bytes unchanged. */
+    public static int32 AppendString(int64 buffer, int32 buffer_size, int32 current_length, string value) {
+        unsafe(using krt.mem;) {
+            if (!valid_buffer(buffer, buffer_size, current_length)) {
+                return -1;
+            }
+            int32 value_length = StringOps.Length(value);
+            if (value_length < 0 || value_length > buffer_size - current_length) {
+                return -1;
+            }
+            byte* data = (byte*)buffer;
+            Memory.Move((void*)(data + current_length), (void*)Sys.InternalStringPtr(value), value_length);
+            int32 length = current_length + value_length;
+            data[length] = 0;
+            return length;
+        }
     }
 
-    // 插入字符串
-    public static int32 Insert(int64 buffer, int32 bufferSize, int32 currentLength, int32 index, string value)
-    {
-        if (value == null) return currentLength;
-        if (index < 0) index = 0;
-        if (index > currentLength) index = currentLength;
-
-        int32 valueLen = (int32)Sys.InternalStringLength(value);
-        if (valueLen == 0) return currentLength;
-
-        if (currentLength + valueLen > bufferSize) return -1;
-
-        // 向后移动现有字符
-        char[] buf = (char[])buffer;
-        int32 i = currentLength - 1;
-        while (i >= index)
-        {
-            buf[i + valueLen] = buf[i];
-            i = i - 1;
+    /** Appends one byte and a terminator; embedded zero bytes are counted in the explicit length. */
+    public static int32 AppendChar(int64 buffer, int32 buffer_size, int32 current_length, char value) {
+        unsafe(using krt.mem;) {
+            if (!valid_buffer(buffer, buffer_size, current_length) || current_length == buffer_size) {
+                return -1;
+            }
+            byte* data = (byte*)buffer;
+            data[current_length] = (byte)value;
+            data[current_length + 1] = 0;
+            return current_length + 1;
         }
-
-        // 插入新字符
-        int64 valuePtr = Sys.InternalStringPtr(value);
-        char[] src = (char[])valuePtr;
-        i = 0;
-        while (i < valueLen)
-        {
-            buf[index + i] = src[i];
-            i = i + 1;
-        }
-
-        return currentLength + valueLen;
     }
 
-    // 移除指定范围的字符
-    public static int32 Remove(int64 buffer, int32 currentLength, int32 index, int32 length)
-    {
-        if (index < 0 || index >= currentLength || length <= 0) return currentLength;
-
-        if (index + length > currentLength)
-        {
-            length = currentLength - index;
+    private static int32 append_owned(int64 buffer, int32 buffer_size, int32 current_length, string value) {
+        unsafe(using krt.mem;) {
+            if (value == null) {
+                return -1;
+            }
+            int32 length = AppendString(buffer, buffer_size, current_length, value);
+            Memory.Free((void*)Sys.InternalStringPtr(value), (int64)StringOps.Length(value) + 1);
+            return length;
         }
-
-        char[] buf = (char[])buffer;
-        int32 i = index + length;
-        while (i < currentLength)
-        {
-            buf[i - length] = buf[i];
-            i = i + 1;
-        }
-
-        return currentLength - length;
     }
 
-    // 清空缓冲区（重置长度）
-    public static int32 Clear(int32 currentLength)
-    {
+    /** Appends the full signed int32 decimal range without retaining a temporary allocation. */
+    public static int32 AppendInt32(int64 buffer, int32 buffer_size, int32 current_length, int32 value) {
+        return AppendInt64(buffer, buffer_size, current_length, (int64)value);
+    }
+
+    /** Appends the full signed int64 decimal range; allocation failure leaves the buffer unchanged. */
+    public static int32 AppendInt64(int64 buffer, int32 buffer_size, int32 current_length, int64 value) {
+        if (!valid_buffer(buffer, buffer_size, current_length)) {
+            return -1;
+        }
+        return append_owned(buffer, buffer_size, current_length, StringOps.FromInt64(value));
+    }
+
+    /** Appends the full unsigned uint64 decimal range; allocation failure leaves the buffer unchanged. */
+    public static int32 AppendUInt64(int64 buffer, int32 buffer_size, int32 current_length, uint64 value) {
+        if (!valid_buffer(buffer, buffer_size, current_length)) {
+            return -1;
+        }
+        return append_owned(buffer, buffer_size, current_length, StringOps.FromUInt64(value));
+    }
+
+    /** Appends True or False. */
+    public static int32 AppendBool(int64 buffer, int32 buffer_size, int32 current_length, bool value) {
+        if (value) {
+            return AppendString(buffer, buffer_size, current_length, "True");
+        }
+        return AppendString(buffer, buffer_size, current_length, "False");
+    }
+
+    /** Appends a string and newline atomically with respect to capacity validation. */
+    public static int32 AppendLine(int64 buffer, int32 buffer_size, int32 current_length, string value) {
+        if (!valid_buffer(buffer, buffer_size, current_length) || current_length == buffer_size) {
+            return -1;
+        }
+        int32 value_length = StringOps.Length(value);
+        if (value_length < 0 || value_length > buffer_size - current_length - 1) {
+            return -1;
+        }
+        int32 length = AppendString(buffer, buffer_size, current_length, value);
+        if (length < 0) {
+            return -1;
+        }
+        return AppendChar(buffer, buffer_size, length, '\n');
+    }
+
+    /** Appends one newline. */
+    public static int32 AppendLine(int64 buffer, int32 buffer_size, int32 current_length) {
+        return AppendChar(buffer, buffer_size, current_length, '\n');
+    }
+
+    /** Inserts at a clamped index, preserving overlapping source bytes before moving the suffix. */
+    public static int32 Insert(int64 buffer, int32 buffer_size, int32 current_length, int32 index, string value) {
+        unsafe(using krt.mem;) {
+            if (!valid_buffer(buffer, buffer_size, current_length)) {
+                return -1;
+            }
+            int32 value_length = StringOps.Length(value);
+            if (value_length < 0 || value_length > buffer_size - current_length) {
+                return -1;
+            }
+            if (index < 0) {
+                index = 0;
+            }
+            if (index > current_length) {
+                index = current_length;
+            }
+            byte* data = (byte*)buffer;
+            byte* source = (byte*)Sys.InternalStringPtr(value);
+            byte* snapshot = (byte*)0;
+            int64 source_address = (int64)source;
+            if (value_length > 0 && source_address < buffer + (int64)current_length &&
+                buffer < source_address + (int64)value_length) {
+                snapshot = (byte*)Memory.Allocate((int64)value_length);
+                if (snapshot == null) {
+                    return -1;
+                }
+                Memory.Copy((void*)snapshot, (void*)source, value_length);
+                source = snapshot;
+            }
+            Memory.Move((void*)(data + index + value_length), (void*)(data + index), current_length - index);
+            Memory.Copy((void*)(data + index), (void*)source, value_length);
+            int32 length = current_length + value_length;
+            data[length] = 0;
+            if (snapshot != null) {
+                Memory.Free((void*)snapshot, (int64)value_length);
+            }
+            return length;
+        }
+    }
+
+    /** Removes a clamped byte range; an out-of-range index or nonpositive count is a no-op. */
+    public static int32 Remove(int64 buffer, int32 current_length, int32 index, int32 length) {
+        unsafe(using krt.mem;) {
+            if (buffer <= 0 || current_length < 0) {
+                return -1;
+            }
+            if (index < 0 || index >= current_length || length <= 0) {
+                return current_length;
+            }
+            if (length > current_length - index) {
+                length = current_length - index;
+            }
+            byte* data = (byte*)buffer;
+            int32 tail_start = index + length;
+            Memory.Move((void*)(data + index), (void*)(data + tail_start), current_length - tail_start);
+            int32 result = current_length - length;
+            data[result] = 0;
+            return result;
+        }
+    }
+
+    /** Returns zero as the new logical length; this legacy overload does not access the buffer. */
+    public static int32 Clear(int32 current_length) {
         return 0;
     }
 
-    // 从缓冲区创建字符串
-    public static string BufferToString(int64 buffer, int32 length)
-    {
-        if (length == 0) return "";
-
-        // 分配新缓冲区
-        int64 newBuf = Sys.syscall(9, 0, (int64)(length + 1), 3, 0x22, -1, 0);
-        char[] src = (char[])buffer;
-        char[] dst = (char[])newBuf;
-
-        int32 i = 0;
-        while (i < length)
-        {
-            dst[i] = src[i];
-            i = i + 1;
-        }
-        dst[length] = '\0';
-
-        return (string)newBuf;
-    }
-
-    // 查找字符首次出现的位置
-    public static int32 IndexOf(int64 buffer, int32 length, char c)
-    {
-        char[] buf = (char[])buffer;
-        int32 i = 0;
-        while (i < length)
-        {
-            if (buf[i] == c) return i;
-            i = i + 1;
-        }
-        return -1;
-    }
-
-    // 查找字符最后一次出现的位置
-    public static int32 LastIndexOf(int64 buffer, int32 length, char c)
-    {
-        char[] buf = (char[])buffer;
-        int32 i = length - 1;
-        while (i >= 0)
-        {
-            if (buf[i] == c) return i;
-            i = i - 1;
-        }
-        return -1;
-    }
-
-    // 替换字符
-    public static int32 Replace(int64 buffer, int32 length, char oldChar, char newChar)
-    {
-        char[] buf = (char[])buffer;
-        int32 count = 0;
-        int32 i = 0;
-        while (i < length)
-        {
-            if (buf[i] == oldChar)
-            {
-                buf[i] = newChar;
-                count = count + 1;
+    /** Allocates an independent terminated copy, including empty; free with the supplied length + 1. */
+    public static string BufferToString(int64 buffer, int32 length) {
+        unsafe(using krt.mem;) {
+            if (length < 0 || (buffer <= 0 && length != 0)) {
+                return null;
             }
-            i = i + 1;
+            byte* result = (byte*)Memory.Allocate((int64)length + 1);
+            if (result == null) {
+                return null;
+            }
+            Memory.Copy((void*)result, (void*)buffer, length);
+            result[length] = 0;
+            return (string)(int64)result;
         }
-        return count;
+    }
+
+    /** Finds the first matching byte within the explicit length, including embedded zero bytes. */
+    public static int32 IndexOf(int64 buffer, int32 length, char character) {
+        unsafe(using krt.mem;) {
+            if (buffer <= 0 || length < 0) {
+                return -1;
+            }
+            byte* data = (byte*)buffer;
+            int32 index = 0;
+            while (index < length) {
+                if ((int32)data[index] == (int32)character) {
+                    return index;
+                }
+                index = index + 1;
+            }
+            return -1;
+        }
+    }
+
+    /** Finds the last matching byte within the explicit length. */
+    public static int32 LastIndexOf(int64 buffer, int32 length, char character) {
+        unsafe(using krt.mem;) {
+            if (buffer <= 0 || length <= 0) {
+                return -1;
+            }
+            byte* data = (byte*)buffer;
+            int32 index = length - 1;
+            while (index >= 0) {
+                if ((int32)data[index] == (int32)character) {
+                    return index;
+                }
+                index = index - 1;
+            }
+            return -1;
+        }
+    }
+
+    /** Replaces matching bytes in place and returns the count, or -1 for invalid buffer/length. */
+    public static int32 Replace(int64 buffer, int32 length, char old_character, char new_character) {
+        unsafe(using krt.mem;) {
+            if (buffer <= 0 || length < 0) {
+                return -1;
+            }
+            byte* data = (byte*)buffer;
+            int32 count = 0;
+            int32 index = 0;
+            while (index < length) {
+                if ((int32)data[index] == (int32)old_character) {
+                    data[index] = (byte)new_character;
+                    count = count + 1;
+                }
+                index = index + 1;
+            }
+            data[length] = 0;
+            return count;
+        }
     }
 }

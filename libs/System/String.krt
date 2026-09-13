@@ -1,269 +1,407 @@
+using System.Memory;
+using System.Sys;
 
-
-// ============================================
-// String — 核心字符串操作
-// 纯 .krt 实现, 不依赖 C 运行时库
-// ============================================
-
-public static class StringOps
-{
-    // ========== 基础操作 ==========
-
-    // 获取字符串长度 (公开接口)
-    public static int32 Length(string s)
-    {
-        return (int32)Sys.InternalStringLength(s);
+/**
+ * Zero-terminated byte strings; indices count bytes, not Unicode characters.
+ * Each non-null result of a string-producing method owns an independent allocation,
+ * including empty strings. Free its base address with Length(result) + 1 bytes.
+ */
+public static class StringOps {
+    /** Returns zero for null, or -1 when the byte length exceeds int32. */
+    public static int32 Length(string value) {
+        int64 length = Sys.InternalStringLength(value);
+        if (length > 2147483647) {
+            return -1;
+        }
+        return (int32)length;
     }
 
-    // 字符串拼接: a + b
-    public static string Concat(string a, string b)
-    {
+    /** Concatenates two strings, treating null as empty; returns null on allocation/size failure. */
+    public static string Concat(string left, string right) {
         unsafe(using krt.mem;) {
-            if (a == null) a = "";
-            if (b == null) b = "";
-
-            int32 lenA = Length(a);
-            int32 lenB = Length(b);
-            int32 totalLen = lenA + lenB;
-
-            // 分配新缓冲区 (+1 for null terminator)
-            int64 buf = (int64)Memory.Allocate((int64)(totalLen + 1));
-
-            // 复制 a
-            Memory.Copy((void*)buf, (void*)Sys.InternalStringPtr(a), lenA);
-
-            // 复制 b
-            Memory.Copy((void*)(buf + (int64)lenA), (void*)Sys.InternalStringPtr(b), lenB);
-
-            // 添加 null terminator
-            char[] arr = (char[])buf;
-            arr[totalLen] = '\0';
-
-            return (string)buf;
+            int32 left_length = Length(left);
+            int32 right_length = Length(right);
+            if (left_length < 0 || right_length < 0 || left_length > 2147483647 - right_length) {
+                return null;
+            }
+            int32 length = left_length + right_length;
+            byte* buffer = (byte*)Memory.Allocate((int64)length + 1);
+            if (buffer == null) {
+                return null;
+            }
+            Memory.Copy((void*)buffer, (void*)Sys.InternalStringPtr(left), left_length);
+            Memory.Copy((void*)(buffer + left_length), (void*)Sys.InternalStringPtr(right), right_length);
+            buffer[length] = 0;
+            return (string)(int64)buffer;
         }
     }
 
-
-    // ========== 转换操作 ==========
-
-    // int32 转字符串
-    public static string FromInt32(int32 value)
-    {
-        return Sys.InternalInt32ToString(value);
-    }
-
-    // int64 转字符串
-    public static string FromInt64(int64 value)
-    {
+    private static string format_unsigned(uint64 value, bool negative) {
         unsafe(using krt.mem;) {
-            if (value == 0) return "0";
-
-            int64 v = value;
-            int32 negative = 0;
-            if (v < 0)
-            {
-                negative = 1;
-                v = -v;
-            }
-
-            // 计算位数
-            int64 temp = v;
-            int32 digits = 0;
-            while (temp > 0)
-            {
+            uint64 remaining = value;
+            int32 digits = 1;
+            while (remaining >= (uint64)10) {
                 digits = digits + 1;
-                temp = temp / 10;
+                remaining = remaining / (uint64)10;
             }
-
-            int32 totalLen = digits + negative;
-            int64 buf = (int64)Memory.Allocate((int64)(totalLen + 1));
-            char[] arr = (char[])buf;
-
-            // 从后往前填充数字
-            int32 pos = totalLen - 1;
-            temp = v;
-            while (temp > 0)
-            {
-                int32 digit = (int32)(temp % 10);
-                arr[pos] = (char)((int32)'0' + digit);
-                pos = pos - 1;
-                temp = temp / 10;
+            int32 prefix = negative ? 1 : 0;
+            int32 length = digits + prefix;
+            byte* buffer = (byte*)Memory.Allocate((int64)length + 1);
+            if (buffer == null) {
+                return null;
             }
-
-            // 添加负号
-            if (negative == 1)
-            {
-                arr[0] = '-';
+            int32 position = length;
+            remaining = value;
+            while (position > prefix) {
+                position = position - 1;
+                buffer[position] = (byte)((uint64)48 + remaining % (uint64)10);
+                remaining = remaining / (uint64)10;
             }
-
-            // null terminator
-            arr[totalLen] = '\0';
-
-            return (string)buf;
+            if (negative) {
+                buffer[0] = 45;
+            }
+            buffer[length] = 0;
+            return (string)(int64)buffer;
         }
     }
 
-    // ========== 比较操作 ==========
+    /** Allocates the decimal representation, including the int32 minimum; null on allocation failure. */
+    public static string FromInt32(int32 value) {
+        return FromInt64((int64)value);
+    }
 
-    // 快速字符串比较
-    // 返回: 0 = 相等, <0 = s1 < s2, >0 = s1 > s2
-    public static int32 Compare(string s1, string s2)
-    {
-        if (s1 == s2) return 0;
-        if (s1 == null) return -1;
-        if (s2 == null) return 1;
-
-        int32 len1 = Length(s1);
-        int32 len2 = Length(s2);
-        int32 minLen = len1 < len2 ? len1 : len2;
-
-        int64 ptr1 = Sys.InternalStringPtr(s1);
-        int64 ptr2 = Sys.InternalStringPtr(s2);
-        char[] arr1 = (char[])ptr1;
-        char[] arr2 = (char[])ptr2;
-
-        int32 i = 0;
-        while (i < minLen)
-        {
-            if (arr1[i] != arr2[i])
-            {
-                return (int32)arr1[i] - (int32)arr2[i];
-            }
-            i = i + 1;
+    /** Allocates the decimal representation without signed negation of the int64 minimum. */
+    public static string FromInt64(int64 value) {
+        uint64 magnitude = (uint64)value;
+        bool negative = value < 0;
+        if (negative) {
+            magnitude = (uint64)0 - magnitude;
         }
-
-        return len1 - len2;
+        return format_unsigned(magnitude, negative);
     }
 
-    // 判断字符串是否相等
-    public static bool Equals(string s1, string s2)
-    {
-        return Compare(s1, s2) == 0;
+    /** Allocates the decimal representation of the full uint64 range; null on allocation failure. */
+    public static string FromUInt64(uint64 value) {
+        return format_unsigned(value, false);
     }
 
-    // ========== 查找操作 ==========
-
-    // 查找字符首次出现的位置
-    public static int32 IndexOf(string s, char c)
-    {
-        if (s == null) return -1;
-
-        int32 len = Length(s);
-        int64 ptr = Sys.InternalStringPtr(s);
-        char[] arr = (char[])ptr;
-
-        int32 i = 0;
-        while (i < len)
-        {
-            if (arr[i] == c) return i;
-            i = i + 1;
-        }
-
-        return -1;
-    }
-
-    // 查找字符最后一次出现的位置
-    public static int32 LastIndexOf(string s, char c)
-    {
-        if (s == null) return -1;
-
-        int32 len = Length(s);
-        int64 ptr = Sys.InternalStringPtr(s);
-        char[] arr = (char[])ptr;
-
-        int32 i = len - 1;
-        while (i >= 0)
-        {
-            if (arr[i] == c) return i;
-            i = i - 1;
-        }
-
-        return -1;
-    }
-
-    // ========== 子串操作 ==========
-
-    // 提取子串
-    public static string Substring(string s, int32 start)
-    {
-        if (s == null) return null;
-        int32 len = Length(s);
-        if (start < 0) start = 0;
-        if (start >= len) return "";
-        return Substring(s, start, len - start);
-    }
-
-    public static string Substring(string s, int32 start, int32 length)
-    {
+    /** Compares unsigned bytes lexicographically; null sorts before non-null strings. */
+    public static int32 Compare(string left, string right) {
         unsafe(using krt.mem;) {
-            if (s == null) return null;
-
-            int32 len = Length(s);
-            if (start < 0) start = 0;
-            if (start >= len) return "";
-            if (length < 0) length = 0;
-            if (start + length > len) length = len - start;
-
-            int64 buf = (int64)Memory.Allocate((int64)(length + 1));
-            Memory.Copy((void*)buf, (void*)(Sys.InternalStringPtr(s) + (int64)start), length);
-
-            char[] arr = (char[])buf;
-            arr[length] = '\0';
-
-            return (string)buf;
+            if ((int64)left == (int64)right) {
+                return 0;
+            }
+            if (left == null) {
+                return -1;
+            }
+            if (right == null) {
+                return 1;
+            }
+            byte* left_data = (byte*)Sys.InternalStringPtr(left);
+            byte* right_data = (byte*)Sys.InternalStringPtr(right);
+            int64 index = 0;
+            while (left_data[index] == right_data[index]) {
+                if (left_data[index] == 0) {
+                    return 0;
+                }
+                index = index + 1;
+            }
+            return (int32)left_data[index] - (int32)right_data[index];
         }
     }
 
-
-
-    // ========== 判断操作 ==========
-
-    // 判断是否以指定前缀开头
-    public static bool StartsWith(string s, string prefix)
-    {
-        if (s == null || prefix == null) return false;
-
-        int32 lenS = Length(s);
-        int32 lenP = Length(prefix);
-        if (lenP > lenS) return false;
-
-        int64 ptrS = Sys.InternalStringPtr(s);
-        int64 ptrP = Sys.InternalStringPtr(prefix);
-        char[] arrS = (char[])ptrS;
-        char[] arrP = (char[])ptrP;
-
-        int32 i = 0;
-        while (i < lenP)
-        {
-            if (arrS[i] != arrP[i]) return false;
-            i = i + 1;
-        }
-
-        return true;
+    /** Tests byte equality, including equality of two null values. */
+    public static bool Equals(string left, string right) {
+        return Compare(left, right) == 0;
     }
 
-    // 判断是否以指定后缀结尾
-    public static bool EndsWith(string s, string suffix)
-    {
-        if (s == null || suffix == null) return false;
+    /** Tests whether the value is null or has no bytes. */
+    public static bool IsNullOrEmpty(string value) {
+        return Length(value) == 0;
+    }
 
-        int32 lenS = Length(s);
-        int32 lenSu = Length(suffix);
-        if (lenSu > lenS) return false;
+    private static bool is_ascii_space(byte value) {
+        return value == 32 || (value >= 9 && value <= 13);
+    }
 
-        int32 offset = lenS - lenSu;
-        int64 ptrS = Sys.InternalStringPtr(s);
-        int64 ptrSu = Sys.InternalStringPtr(suffix);
-        char[] arrS = (char[])ptrS;
-        char[] arrSu = (char[])ptrSu;
-
-        int32 i = 0;
-        while (i < lenSu)
-        {
-            if (arrS[offset + i] != arrSu[i]) return false;
-            i = i + 1;
+    /** Tests null, empty, or ASCII whitespace only; does not interpret Unicode whitespace. */
+    public static bool IsNullOrWhiteSpace(string value) {
+        unsafe(using krt.mem;) {
+            int32 length = Length(value);
+            if (length < 0) {
+                return false;
+            }
+            byte* data = (byte*)Sys.InternalStringPtr(value);
+            int32 index = 0;
+            while (index < length) {
+                if (!is_ascii_space(data[index])) {
+                    return false;
+                }
+                index = index + 1;
+            }
+            return true;
         }
+    }
 
-        return true;
+    /** Finds a byte, excluding the zero terminator; returns -1 when absent or invalid. */
+    public static int32 IndexOf(string value, char character) {
+        unsafe(using krt.mem;) {
+            int32 length = Length(value);
+            byte* data = (byte*)Sys.InternalStringPtr(value);
+            int32 index = 0;
+            while (index < length) {
+                if ((int32)data[index] == (int32)character) {
+                    return index;
+                }
+                index = index + 1;
+            }
+            return -1;
+        }
+    }
+
+    /** Finds the last matching byte, excluding the zero terminator; returns -1 when absent. */
+    public static int32 LastIndexOf(string value, char character) {
+        unsafe(using krt.mem;) {
+            int32 length = Length(value);
+            if (length <= 0) {
+                return -1;
+            }
+            byte* data = (byte*)Sys.InternalStringPtr(value);
+            int32 index = length - 1;
+            while (index >= 0) {
+                if ((int32)data[index] == (int32)character) {
+                    return index;
+                }
+                index = index - 1;
+            }
+            return -1;
+        }
+    }
+
+    /** Finds the first matching byte substring; null arguments return -1 and empty matches at zero. */
+    public static int32 IndexOf(string value, string needle) {
+        return IndexOf(value, needle, 0);
+    }
+
+    /** Searches at or after start; negative or out-of-range start returns -1. */
+    public static int32 IndexOf(string value, string needle, int32 start) {
+        unsafe(using krt.mem;) {
+            if (value == null || needle == null) {
+                return -1;
+            }
+            int32 length = Length(value);
+            int32 needle_length = Length(needle);
+            if (start < 0 || length < 0 || needle_length < 0 || start > length) {
+                return -1;
+            }
+            if (needle_length == 0) {
+                return start;
+            }
+            if (needle_length > length - start) {
+                return -1;
+            }
+            byte* data = (byte*)Sys.InternalStringPtr(value);
+            byte* sought = (byte*)Sys.InternalStringPtr(needle);
+            int32 last = length - needle_length;
+            int32 index = start;
+            while (index <= last) {
+                int32 matched = 0;
+                while (matched < needle_length && data[index + matched] == sought[matched]) {
+                    matched = matched + 1;
+                }
+                if (matched == needle_length) {
+                    return index;
+                }
+                index = index + 1;
+            }
+            return -1;
+        }
+    }
+
+    /** Finds the last matching substring; an empty needle matches at the byte length. */
+    public static int32 LastIndexOf(string value, string needle) {
+        unsafe(using krt.mem;) {
+            if (value == null || needle == null) {
+                return -1;
+            }
+            int32 length = Length(value);
+            int32 needle_length = Length(needle);
+            if (length < 0 || needle_length < 0 || needle_length > length) {
+                return -1;
+            }
+            if (needle_length == 0) {
+                return length;
+            }
+            byte* data = (byte*)Sys.InternalStringPtr(value);
+            byte* sought = (byte*)Sys.InternalStringPtr(needle);
+            int32 index = length - needle_length;
+            while (index >= 0) {
+                int32 matched = 0;
+                while (matched < needle_length && data[index + matched] == sought[matched]) {
+                    matched = matched + 1;
+                }
+                if (matched == needle_length) {
+                    return index;
+                }
+                index = index - 1;
+            }
+            return -1;
+        }
+    }
+
+    /** Tests whether a byte substring occurs; null arguments return false. */
+    public static bool Contains(string value, string needle) {
+        return IndexOf(value, needle) >= 0;
+    }
+
+    /** Copies from start to the end, clamping negative start to zero; null stays null. */
+    public static string Substring(string value, int32 start) {
+        return Substring(value, start, 2147483647);
+    }
+
+    /** Allocates a clamped byte range, including empty ranges; null input or allocation failure returns null. */
+    public static string Substring(string value, int32 start, int32 length) {
+        unsafe(using krt.mem;) {
+            if (value == null) {
+                return null;
+            }
+            int32 source_length = Length(value);
+            if (source_length < 0) {
+                return null;
+            }
+            if (start < 0) {
+                start = 0;
+            }
+            if (start > source_length) {
+                start = source_length;
+            }
+            if (length < 0) {
+                length = 0;
+            }
+            if (length > source_length - start) {
+                length = source_length - start;
+            }
+            byte* buffer = (byte*)Memory.Allocate((int64)length + 1);
+            if (buffer == null) {
+                return null;
+            }
+            byte* data = (byte*)Sys.InternalStringPtr(value);
+            Memory.Copy((void*)buffer, (void*)(data + start), length);
+            buffer[length] = 0;
+            return (string)(int64)buffer;
+        }
+    }
+
+    /** Tests an exact byte prefix; null arguments return false and an empty prefix matches. */
+    public static bool StartsWith(string value, string prefix) {
+        unsafe(using krt.mem;) {
+            if (value == null || prefix == null) {
+                return false;
+            }
+            byte* data = (byte*)Sys.InternalStringPtr(value);
+            byte* sought = (byte*)Sys.InternalStringPtr(prefix);
+            int64 index = 0;
+            while (sought[index] != 0) {
+                if (data[index] != sought[index]) {
+                    return false;
+                }
+                index = index + 1;
+            }
+            return true;
+        }
+    }
+
+    /** Tests an exact byte suffix; null arguments return false and an empty suffix matches. */
+    public static bool EndsWith(string value, string suffix) {
+        if (value == null || suffix == null) {
+            return false;
+        }
+        int32 length = Length(value);
+        int32 suffix_length = Length(suffix);
+        if (length < 0 || suffix_length < 0 || suffix_length > length) {
+            return false;
+        }
+        return IndexOf(value, suffix, length - suffix_length) >= 0;
+    }
+
+    private static string trim_ascii(string value, bool trim_start, bool trim_end) {
+        unsafe(using krt.mem;) {
+            if (value == null) {
+                return null;
+            }
+            int32 length = Length(value);
+            if (length < 0) {
+                return null;
+            }
+            byte* data = (byte*)Sys.InternalStringPtr(value);
+            int32 start = 0;
+            int32 end = length;
+            if (trim_start) {
+                while (start < end && is_ascii_space(data[start])) {
+                    start = start + 1;
+                }
+            }
+            if (trim_end) {
+                while (end > start && is_ascii_space(data[end - 1])) {
+                    end = end - 1;
+                }
+            }
+            return Substring(value, start, end - start);
+        }
+    }
+
+    /** Copies without leading and trailing ASCII whitespace; null stays null. */
+    public static string Trim(string value) {
+        return trim_ascii(value, true, true);
+    }
+
+    /** Copies without leading ASCII whitespace; null stays null. */
+    public static string TrimStart(string value) {
+        return trim_ascii(value, true, false);
+    }
+
+    /** Copies without trailing ASCII whitespace; null stays null. */
+    public static string TrimEnd(string value) {
+        return trim_ascii(value, false, true);
+    }
+
+    private static string change_ascii_case(string value, bool upper) {
+        unsafe(using krt.mem;) {
+            if (value == null) {
+                return null;
+            }
+            int32 length = Length(value);
+            if (length < 0) {
+                return null;
+            }
+            byte* buffer = (byte*)Memory.Allocate((int64)length + 1);
+            if (buffer == null) {
+                return null;
+            }
+            byte* data = (byte*)Sys.InternalStringPtr(value);
+            int32 index = 0;
+            while (index < length) {
+                byte character = data[index];
+                if (upper && character >= 97 && character <= 122) {
+                    character = (byte)((int32)character - 32);
+                } else if (!upper && character >= 65 && character <= 90) {
+                    character = (byte)((int32)character + 32);
+                }
+                buffer[index] = character;
+                index = index + 1;
+            }
+            buffer[length] = 0;
+            return (string)(int64)buffer;
+        }
+    }
+
+    /** Allocates a copy with ASCII a-z uppercased; all other bytes remain unchanged. */
+    public static string ToUpper(string value) {
+        return change_ascii_case(value, true);
+    }
+
+    /** Allocates a copy with ASCII A-Z lowercased; all other bytes remain unchanged. */
+    public static string ToLower(string value) {
+        return change_ascii_case(value, false);
     }
 }

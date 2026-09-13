@@ -26,6 +26,7 @@ static void collect_compile_error(CompileTask* task, const char* error_msg) {
 
 static void compile_task(CompileTask* task, KrtCompilePipeline* pipeline) {
     double start_time = KrtTimeNowSeconds();
+    task->has_object_code = false;
 
     ParallelCompiler* compiler = (ParallelCompiler*)task->compiler_context;
     int result;
@@ -35,8 +36,9 @@ static void compile_task(CompileTask* task, KrtCompilePipeline* pipeline) {
     } else {
 
         result = KrtCompilePipelineExecute(pipeline, task->input_file, task->output_file);
+        task->has_object_code = result == 1 && pipeline->compiler && pipeline->compiler->has_object_code;
 
-        if (result == 1 && task->obj_file) {
+        if (result == 1 && task->has_object_code && task->obj_file) {
             char assemble_cmd[1024];
             KrtPlatformType platform = compiler->config ? compiler->config->platform : KRT_CONFIG_PLATFORM_WINDOWS;
 
@@ -185,6 +187,7 @@ int ParallelCompilerAddFile(ParallelCompiler* compiler, const char* input_file, 
     task->target_type = target_type;
     task->show_ir = show_ir;
     task->result = -1;
+    task->has_object_code = false;
     task->error_message = NULL;
     task->duration = 0.0;
     task->compiler_context = compiler;
