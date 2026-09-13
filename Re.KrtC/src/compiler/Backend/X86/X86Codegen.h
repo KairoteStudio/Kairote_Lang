@@ -17,11 +17,7 @@
 #define X86_TEMP_INITIAL_CAPACITY 256
 #define X86_TEMP_GROWTH_FACTOR 2
 
-typedef enum {
-    TEMP_LOC_NONE,
-    TEMP_LOC_REGISTER,
-    TEMP_LOC_STACK
-} TempLocationType;
+typedef enum { TEMP_LOC_NONE, TEMP_LOC_REGISTER, TEMP_LOC_STACK } TempLocationType;
 
 typedef struct {
     TempLocationType type;
@@ -60,20 +56,33 @@ typedef struct {
     void* regalloc;
 } CodegenContext;
 
+/** @brief Emit x86 assembly for module into output. */
 void KrtX86Generate(FILE* output, KrtIRModule* module);
 
+/** @brief Initialize register and stack bookkeeping for func. */
 void codegen_context_init(CodegenContext* ctx, KrtIRFunction* func, KrtIRModule* module);
+/** @brief Release storage owned by ctx. */
 void codegen_context_destroy(CodegenContext* ctx);
+/** @brief Return mutable storage information for temp_idx. */
 TempLocation* codegen_get_temp_location(CodegenContext* ctx, int temp_idx);
+/** @brief Record that temp_idx is available in reg. */
 void codegen_set_temp_in_register(CodegenContext* ctx, int temp_idx, const char* reg);
+/** @brief Record the frame offset containing temp_idx. */
 void codegen_set_temp_on_stack(CodegenContext* ctx, int temp_idx, int offset);
+/** @brief Reserve a free register, or return NULL when all are occupied. */
 const char* codegen_alloc_register(CodegenContext* ctx);
+/** @brief Mark reg as available for subsequent allocation. */
 void codegen_free_register(CodegenContext* ctx, const char* reg);
+/** @brief Find or assign a frame offset for var_name. */
 int codegen_get_var_offset(CodegenContext* ctx, const char* var_name);
 
+/** @brief Emit a load of temp_idx into target_reg. */
 void codegen_emit_load_temp(FILE* output, CodegenContext* ctx, int temp_idx, const char* target_reg);
+/** @brief Emit storage of source_reg as temp_idx. */
 void codegen_emit_store_temp(FILE* output, CodegenContext* ctx, int temp_idx, const char* source_reg);
+/** @brief Emit a load of var_name into target_reg. */
 void codegen_emit_load_var(FILE* output, CodegenContext* ctx, const char* var_name, const char* target_reg);
+/** @brief Emit storage of source_reg into var_name. */
 void codegen_emit_store_var(FILE* output, CodegenContext* ctx, const char* var_name, const char* source_reg);
 
 #endif

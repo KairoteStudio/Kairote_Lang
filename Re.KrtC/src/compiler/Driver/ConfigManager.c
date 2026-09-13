@@ -14,60 +14,43 @@
 #define KRT_PLATFORM_DEFAULT KRT_CONFIG_PLATFORM_LINUX
 #endif
 
-static const char* g_win_object_files[] = {
-    NULL
-};
+static const char* g_win_object_files[] = {NULL};
 
-static const char* g_win_end_objects[] = {
-    NULL
-};
+static const char* g_win_end_objects[] = {NULL};
 
-static const char* g_win_library_paths[] = {
-    NULL
-};
+static const char* g_win_library_paths[] = {NULL};
 
-static const char* g_win_libraries[] = {
-    NULL
-};
+static const char* g_win_libraries[] = {NULL};
 
-static const char* g_linux_libraries[] = {
-    NULL
-};
+static const char* g_linux_libraries[] = {NULL};
 
 static const KrtLinkerConfig g_linker_configs[] = {
-    {
-        "Windows",
-        g_win_object_files, sizeof(g_win_object_files) / sizeof(char*),
-        g_win_end_objects, sizeof(g_win_end_objects) / sizeof(char*),
-        g_win_library_paths, sizeof(g_win_library_paths) / sizeof(char*),
-        g_win_libraries, sizeof(g_win_libraries) / sizeof(char*),
-        "mainCRTStartup", "console", NULL
-    },
-    {
-        "Linux",
-        NULL, 0,
-        NULL, 0,
-        NULL, 0,
-        g_linux_libraries, sizeof(g_linux_libraries) / sizeof(char*),
-        "_start", NULL, NULL
-    }
-};
+    {"Windows", g_win_object_files, sizeof(g_win_object_files) / sizeof(char*), g_win_end_objects,
+     sizeof(g_win_end_objects) / sizeof(char*), g_win_library_paths, sizeof(g_win_library_paths) / sizeof(char*),
+     g_win_libraries, sizeof(g_win_libraries) / sizeof(char*), "mainCRTStartup", "console", NULL},
+    {"Linux", NULL, 0, NULL, 0, NULL, 0, g_linux_libraries, sizeof(g_linux_libraries) / sizeof(char*), "_start", NULL,
+     NULL}};
 
 KrtConfig* KrtConfigCreate(void) {
     KrtConfig* config = (KrtConfig*)KRT_MALLOC(sizeof(KrtConfig));
-    if (!config) return NULL;
-    
+    if (!config) {
+        return NULL;
+    }
+
     memset(config, 0, sizeof(KrtConfig));
     config->target_type = KRT_TARGET_ASM;
+    config->optimization_level = 2;
     config->platform = KrtConfigDetectPlatform();
     config->linker_config = KrtConfigGetLinkerConfig(config->platform);
     config->keep_temp_files = 1;
-    
+
     return config;
 }
 
 void KrtConfigDestroy(KrtConfig* config) {
-    if (!config) return;
+    if (!config) {
+        return;
+    }
 
     if (config->imported_files) {
         for (int i = 0; i < config->imported_file_count; i++) {
@@ -81,20 +64,23 @@ void KrtConfigDestroy(KrtConfig* config) {
     KRT_FREE(config);
 }
 
-void KrtConfigAddImportedFile(KrtConfig* config, const char* file_path)
-{
-    if (!config || !file_path) return;
-
-    for (int i = 0; i < config->imported_file_count; i++)
-    {
-        if (strcmp(config->imported_files[i], file_path) == 0) return;
+void KrtConfigAddImportedFile(KrtConfig* config, const char* file_path) {
+    if (!config || !file_path) {
+        return;
     }
 
-    if (config->imported_file_count >= config->imported_file_capacity)
-    {
+    for (int i = 0; i < config->imported_file_count; i++) {
+        if (strcmp(config->imported_files[i], file_path) == 0) {
+            return;
+        }
+    }
+
+    if (config->imported_file_count >= config->imported_file_capacity) {
         int new_capacity = config->imported_file_capacity == 0 ? 8 : config->imported_file_capacity * 2;
         char** new_files = (char**)KRT_REALLOC(config->imported_files, new_capacity * sizeof(char*));
-        if (!new_files) return;
+        if (!new_files) {
+            return;
+        }
         config->imported_files = new_files;
         config->imported_file_capacity = new_capacity;
     }
@@ -112,35 +98,47 @@ KrtPlatformType KrtConfigDetectPlatform(void) {
 
 const KrtLinkerConfig* KrtConfigGetLinkerConfig(KrtPlatformType platform) {
     switch (platform) {
-        case KRT_CONFIG_PLATFORM_WINDOWS:
-            return &g_linker_configs[0];
-        case KRT_CONFIG_PLATFORM_LINUX:
-            return &g_linker_configs[1];
-        default:
-            return &g_linker_configs[1]; 
+    case KRT_CONFIG_PLATFORM_WINDOWS:
+        return &g_linker_configs[0];
+    case KRT_CONFIG_PLATFORM_LINUX:
+        return &g_linker_configs[1];
+    default:
+        return &g_linker_configs[1];
     }
 }
 
 const char* KrtConfigProjectNameFromType(const char* project_type) {
-    if (!project_type) return "MyProject";
-    if (strcmp(project_type, "console") == 0) return "ConsoleApp";
-    if (strcmp(project_type, "library") == 0) return "Library";
-    if (strcmp(project_type, "web") == 0) return "WebApp";
-    if (strcmp(project_type, "system") == 0) return "SystemProject";
+    if (!project_type) {
+        return "MyProject";
+    }
+    if (strcmp(project_type, "console") == 0) {
+        return "ConsoleApp";
+    }
+    if (strcmp(project_type, "library") == 0) {
+        return "Library";
+    }
+    if (strcmp(project_type, "web") == 0) {
+        return "WebApp";
+    }
+    if (strcmp(project_type, "system") == 0) {
+        return "SystemProject";
+    }
     return project_type;
 }
 
 const char* KrtConfigGetDefaultOutput(KrtConfig* config) {
-    if (!config) return "output";
-    
+    if (!config) {
+        return "output";
+    }
+
     switch (config->target_type) {
-        case KRT_TARGET_EXE:
-            return (config->platform == KRT_CONFIG_PLATFORM_WINDOWS) ? "a.exe" : "a";
-        case KRT_TARGET_IR:
-            return "output.ir";
-        case KRT_TARGET_ASM:
-        default:
-            return "output.asm";
+    case KRT_TARGET_EXE:
+        return (config->platform == KRT_CONFIG_PLATFORM_WINDOWS) ? "a.exe" : "a";
+    case KRT_TARGET_IR:
+        return "output.ir";
+    case KRT_TARGET_ASM:
+    default:
+        return "output.asm";
     }
 }
 
@@ -149,13 +147,15 @@ int KrtConfigNeedsLinking(KrtConfig* config) {
 }
 
 int KrtConfigValidate(KrtConfig* config) {
-    if (!config) return 0;
-    
+    if (!config) {
+        return 0;
+    }
+
     if (!config->create_project && !config->input_file) {
         KrtError("Input file not specified");
         return 0;
     }
-    
+
     return 1;
 }
 

@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub const minimum_zig_version = "0.17.0";
+pub const minimum_zig_version = "0.16.0";
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -19,9 +19,13 @@ pub fn build(b: *std.Build) void {
     const c_flags = &.{
         "-Wall",
         "-Wextra",
-        "-Wno-unused-variable",
-        "-Wno-unused-function",
-        "-Wno-unused-parameter",
+        "-Werror=unused-variable",
+        "-Werror=unused-function",
+        "-Werror=unused-parameter",
+        "-Werror=unused-but-set-variable",
+        "-Werror=implicit-function-declaration",
+        "-Wformat=2",
+        "-Wshadow",
     };
 
     const krtc_module = b.createModule(.{

@@ -19,7 +19,7 @@
 #define KRT_MAX_PATH 1024
 #endif
 
-static char KrtPathSeparator(void) {
+static char path_separator(void) {
 #ifdef _WIN32
     return '\\';
 #else
@@ -27,40 +27,40 @@ static char KrtPathSeparator(void) {
 #endif
 }
 
-static int KrtPathIsSeparator(char c) {
+static int path_is_separator(char c) {
     return (c == '/') || (c == '\\');
 }
 
-static int KrtCopyDirectoryRecursive(const char* src_dir, const char* dst_dir) {
+static int copy_directory_recursive(const char* src_dir, const char* dst_dir) {
 #ifdef _WIN32
-    
+
     KRT_MKDIR(dst_dir);
-    
+
     char search_path[KRT_MAX_PATH];
     snprintf(search_path, sizeof(search_path), "%s\\*", src_dir);
-    
+
     WIN32_FIND_DATAA find_data;
-    HANDLE hFind = FindFirstFileA(search_path, &find_data);
-    
-    if (hFind == INVALID_HANDLE_VALUE) {
+    HANDLE find_handle = FindFirstFileA(search_path, &find_data);
+
+    if (find_handle == INVALID_HANDLE_VALUE) {
         return -1;
     }
-    
+
     do {
         if (strcmp(find_data.cFileName, ".") == 0 || strcmp(find_data.cFileName, "..") == 0) {
             continue;
         }
-        
+
         char src_path[KRT_MAX_PATH];
         char dst_path[KRT_MAX_PATH];
         snprintf(src_path, sizeof(src_path), "%s\\%s", src_dir, find_data.cFileName);
         snprintf(dst_path, sizeof(dst_path), "%s\\%s", dst_dir, find_data.cFileName);
-        
+
         if (find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-            
-            KrtCopyDirectoryRecursive(src_path, dst_path);
+
+            copy_directory_recursive(src_path, dst_path);
         } else {
-            
+
             FILE* src_fp = fopen(src_path, "rb");
             if (src_fp) {
                 FILE* dst_fp = fopen(dst_path, "wb");
@@ -75,36 +75,36 @@ static int KrtCopyDirectoryRecursive(const char* src_dir, const char* dst_dir) {
                 fclose(src_fp);
             }
         }
-    } while (FindNextFileA(hFind, &find_data));
-    
-    FindClose(hFind);
+    } while (FindNextFileA(find_handle, &find_data));
+
+    FindClose(find_handle);
 #else
-    
+
     mkdir(dst_dir, 0775);
-    
+
     DIR* dir = opendir(src_dir);
     if (!dir) {
         return -1;
     }
-    
+
     struct dirent* entry;
     while ((entry = readdir(dir)) != NULL) {
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
             continue;
         }
-        
+
         char src_path[KRT_MAX_PATH];
         char dst_path[KRT_MAX_PATH];
         snprintf(src_path, sizeof(src_path), "%s/%s", src_dir, entry->d_name);
         snprintf(dst_path, sizeof(dst_path), "%s/%s", dst_dir, entry->d_name);
-        
+
         struct stat st;
         if (stat(src_path, &st) == 0) {
             if (S_ISDIR(st.st_mode)) {
-                
-                KrtCopyDirectoryRecursive(src_path, dst_path);
+
+                copy_directory_recursive(src_path, dst_path);
             } else {
-                
+
                 FILE* src_fp = fopen(src_path, "rb");
                 if (src_fp) {
                     FILE* dst_fp = fopen(dst_path, "wb");
@@ -121,14 +121,16 @@ static int KrtCopyDirectoryRecursive(const char* src_dir, const char* dst_dir) {
             }
         }
     }
-    
+
     closedir(dir);
 #endif
     return 0;
 }
 
-static void KrtJoinPath(char* buffer, size_t buffer_size, const char* base, const char* part) {
-    if (!buffer || buffer_size == 0) return;
+static void join_path(char* buffer, size_t buffer_size, const char* base, const char* part) {
+    if (!buffer || buffer_size == 0) {
+        return;
+    }
     if (!base || base[0] == '\0') {
         snprintf(buffer, buffer_size, "%s", part ? part : "");
         return;
@@ -138,9 +140,9 @@ static void KrtJoinPath(char* buffer, size_t buffer_size, const char* base, cons
         return;
     }
 
-    char sep = KrtPathSeparator();
+    char sep = path_separator();
     size_t base_len = strlen(base);
-    int need_sep = base_len > 0 && !KrtPathIsSeparator(base[base_len - 1]);
+    int need_sep = base_len > 0 && !path_is_separator(base[base_len - 1]);
 
     if (!need_sep) {
         snprintf(buffer, buffer_size, "%s%s", base, part);
@@ -149,16 +151,20 @@ static void KrtJoinPath(char* buffer, size_t buffer_size, const char* base, cons
     }
 }
 
-static int KrtCreateDirectoryRecursive(const char* path) {
-    if (!path || path[0] == '\0') return 0;
+static int create_directory_recursive(const char* path) {
+    if (!path || path[0] == '\0') {
+        return 0;
+    }
 
     char temp[KRT_MAX_PATH];
     snprintf(temp, sizeof(temp), "%s", path);
     size_t len = strlen(temp);
-    if (len == 0) return 0;
+    if (len == 0) {
+        return 0;
+    }
 
     for (size_t i = 0; i < len; ++i) {
-        if (KrtPathIsSeparator(temp[i])) {
+        if (path_is_separator(temp[i])) {
             char old = temp[i];
             temp[i] = '\0';
             if (temp[0] != '\0') {
@@ -176,17 +182,23 @@ static int KrtCreateDirectoryRecursive(const char* path) {
     return 0;
 }
 
-static void KrtWriteFileIfPossible(const char* path, const char* content) {
-    if (!path || !content) return;
+static void write_file_if_possible(const char* path, const char* content) {
+    if (!path || !content) {
+        return;
+    }
     FILE* fp = fopen(path, "w");
-    if (!fp) return;
+    if (!fp) {
+        return;
+    }
     fputs(content, fp);
     fclose(fp);
 }
 
 KrtProject* KrtProjCreate(const char* name, KrtProjectType type) {
     KrtProject* project = KRT_CALLOC(1, sizeof(KrtProject));
-    if (!project) return NULL;
+    if (!project) {
+        return NULL;
+    }
 
     project->name = KRT_STRDUP(name);
     project->version = KRT_STRDUP("1.0.0");
@@ -207,7 +219,9 @@ KrtProject* KrtProjCreate(const char* name, KrtProjectType type) {
 }
 
 void KrtProjDestroy(KrtProject* project) {
-    if (!project) return;
+    if (!project) {
+        return;
+    }
 
     KRT_FREE(project->name);
     KRT_FREE(project->version);
@@ -254,10 +268,14 @@ void KrtProjDestroy(KrtProject* project) {
 }
 
 void KrtProjAddFile(KrtProject* project, const char* file_path, const char* item_type) {
-    if (!project || !file_path) return;
+    if (!project || !file_path) {
+        return;
+    }
 
     KrtProjectItem* item = KRT_CALLOC(1, sizeof(KrtProjectItem));
-    if (!item) return;
+    if (!item) {
+        return;
+    }
 
     item->file_path = KRT_STRDUP(file_path);
     item->item_type = KRT_STRDUP(item_type ? item_type : "Compile");
@@ -273,10 +291,14 @@ void KrtProjAddFile(KrtProject* project, const char* file_path, const char* item
 }
 
 void KrtProjAddDependency(KrtProject* project, const char* name, const char* version, const char* path) {
-    if (!project || !name) return;
+    if (!project || !name) {
+        return;
+    }
 
     KrtProjectDependency* dep = KRT_CALLOC(1, sizeof(KrtProjectDependency));
-    if (!dep) return;
+    if (!dep) {
+        return;
+    }
 
     dep->name = KRT_STRDUP(name);
     dep->version = KRT_STRDUP(version ? version : "*");
@@ -287,7 +309,9 @@ void KrtProjAddDependency(KrtProject* project, const char* name, const char* ver
 }
 
 char** KrtProjGetSourceFiles(KrtProject* project, int* count) {
-    if (!project || !count) return NULL;
+    if (!project || !count) {
+        return NULL;
+    }
 
     int file_count = 0;
     KrtProjectItem* item = project->items;
@@ -323,7 +347,9 @@ char** KrtProjGetSourceFiles(KrtProject* project, int* count) {
 }
 
 int KrtProjCreateTemplate(KrtProject* project, const char* output_dir) {
-    if (!project || !output_dir) return 0;
+    if (!project || !output_dir) {
+        return 0;
+    }
 
     if (output_dir[0] == '\0') {
         output_dir = project->name ? project->name : "MyProject";
@@ -338,90 +364,62 @@ int KrtProjCreateTemplate(KrtProject* project, const char* output_dir) {
         const char* content;
     } TemplateFile;
 
-    static const TemplateFile console_templates[] = {
-        {
-            "main.krt",
-            "function main() {\n"
-            "    print(\"Hello, Kairote Lang!\");\n"
-            "}\n"
-        }
-    };
+    static const TemplateFile console_templates[] = {{"main.krt", "function main() {\n"
+                                                                  "    print(\"Hello, Kairote Lang!\");\n"
+                                                                  "}\n"}};
 
-    static const TemplateFile library_templates[] = {
-        {
-            "library.krt",
-            "function add(int32 a, int32 b) {\n"
-            "    return a + b;\n"
-            "}\n"
-        },
-        {
-            "exports.krt",
-            "function export_symbols() {\n"
-            "}\n"
-        }
-    };
+    static const TemplateFile library_templates[] = {{"library.krt", "function add(int32 a, int32 b) {\n"
+                                                                     "    return a + b;\n"
+                                                                     "}\n"},
+                                                     {"exports.krt", "function export_symbols() {\n"
+                                                                     "}\n"}};
 
-    static const TemplateFile web_templates[] = {
-        {
-            "app.krt",
-            "function handle_request() {\n"
-            "    print(\"HTTP/1.1 200 OK\\r\\n\");\n"
-            "    print(\"Content-Type: text/html\\r\\n\\r\\n\");\n"
-            "    print(\"<h1>Hello from Kairote Lang Web!</h1>\");\n"
-            "}\n"
-        },
-        {
-            "routes.krt",
-            "function configure_routes() {\n"
-            "}\n"
-        }
-    };
+    static const TemplateFile web_templates[] = {{"app.krt", "function handle_request() {\n"
+                                                             "    print(\"HTTP/1.1 200 OK\\r\\n\");\n"
+                                                             "    print(\"Content-Type: text/html\\r\\n\\r\\n\");\n"
+                                                             "    print(\"<h1>Hello from Kairote Lang Web!</h1>\");\n"
+                                                             "}\n"},
+                                                 {"routes.krt", "function configure_routes() {\n"
+                                                                "}\n"}};
 
-    static const TemplateFile system_templates[] = {
-        {
-            "kernel.krt",
-            "function void _start() asm {\n"
-            "    mov rax, 1\n"
-            "    mov rdi, 1\n"
-            "    mov rsi, msg\n"
-            "    mov rdx, 13\n"
-            "    syscall\n"
-            "    mov rax, 60\n"
-            "    xor rdi, rdi\n"
-            "    syscall\n"
-            "}\n\n"
-            "section .data\n"
-            "    msg: db \"System.Everything is ready\", 10\n\n"
-        },
-        {
-            "drivers.krt",
-            "function init_drivers() {\n"
-            "}\n"
-        }
-    };
+    static const TemplateFile system_templates[] = {{"kernel.krt",
+                                                     "function void _start() asm {\n"
+                                                     "    mov rax, 1\n"
+                                                     "    mov rdi, 1\n"
+                                                     "    mov rsi, msg\n"
+                                                     "    mov rdx, 13\n"
+                                                     "    syscall\n"
+                                                     "    mov rax, 60\n"
+                                                     "    xor rdi, rdi\n"
+                                                     "    syscall\n"
+                                                     "}\n\n"
+                                                     "section .data\n"
+                                                     "    msg: db \"System.Everything is ready\", 10\n\n"},
+                                                    {"drivers.krt", "function init_drivers() {\n"
+                                                                    "}\n"}};
 
     const TemplateFile* templates = console_templates;
     size_t template_count = sizeof(console_templates) / sizeof(console_templates[0]);
 
     switch (project->type) {
-        case KRT_PROJ_TYPE_LIBRARY:
-            templates = library_templates;
-            template_count = sizeof(library_templates) / sizeof(library_templates[0]);
-            break;
-        case KRT_PROJ_TYPE_WEB:
-            templates = web_templates;
-            template_count = sizeof(web_templates) / sizeof(web_templates[0]);
-            break;
-        case KRT_PROJ_TYPE_SYSTEM:
-            templates = system_templates;
-            template_count = sizeof(system_templates) / sizeof(system_templates[0]);
-            break;
-        case KRT_PROJ_TYPE_CONSOLE:
-        default:
-            break;
+    case KRT_PROJ_TYPE_LIBRARY:
+        templates = library_templates;
+        template_count = sizeof(library_templates) / sizeof(library_templates[0]);
+        break;
+    case KRT_PROJ_TYPE_WEB:
+        templates = web_templates;
+        template_count = sizeof(web_templates) / sizeof(web_templates[0]);
+        break;
+    case KRT_PROJ_TYPE_SYSTEM:
+        templates = system_templates;
+        template_count = sizeof(system_templates) / sizeof(system_templates[0]);
+        break;
+    case KRT_PROJ_TYPE_CONSOLE:
+    default:
+        break;
     }
 
-    if (KrtCreateDirectoryRecursive(output_dir) != 0) {
+    if (create_directory_recursive(output_dir) != 0) {
         return 0;
     }
 
@@ -431,8 +429,8 @@ int KrtProjCreateTemplate(KrtProject* project, const char* output_dir) {
         KrtProjAddFile(project, tpl->name, "Compile");
 
         char file_path[KRT_MAX_PATH];
-        KrtJoinPath(file_path, sizeof(file_path), output_dir, tpl->name);
-        KrtWriteFileIfPossible(file_path, tpl->content);
+        join_path(file_path, sizeof(file_path), output_dir, tpl->name);
+        write_file_if_possible(file_path, tpl->content);
 
         if (strlen(sources_buf) + strlen(tpl->name) + 1 < sizeof(sources_buf)) {
             strncat(sources_buf, tpl->name, sizeof(sources_buf) - strlen(sources_buf) - 1);
@@ -441,19 +439,26 @@ int KrtProjCreateTemplate(KrtProject* project, const char* output_dir) {
     }
 
     char project_krt_path[KRT_MAX_PATH];
-    KrtJoinPath(project_krt_path, sizeof(project_krt_path), output_dir, "project.krt");
+    join_path(project_krt_path, sizeof(project_krt_path), output_dir, "project.krt");
     {
         FILE* pk = fopen(project_krt_path, "w");
         if (pk) {
             const char* proj_name = project->name ? project->name : output_dir;
             const char* type_str = "console";
             switch (project->type) {
-                case KRT_PROJ_TYPE_LIBRARY: type_str = "library"; break;
-                case KRT_PROJ_TYPE_WEB: type_str = "web"; break;
-                case KRT_PROJ_TYPE_SYSTEM: type_str = "system"; break;
-                default: break;
+            case KRT_PROJ_TYPE_LIBRARY:
+                type_str = "library";
+                break;
+            case KRT_PROJ_TYPE_WEB:
+                type_str = "web";
+                break;
+            case KRT_PROJ_TYPE_SYSTEM:
+                type_str = "system";
+                break;
+            default:
+                break;
             }
-            
+
             fprintf(pk, "// Kairote Lang project\n");
             fprintf(pk, "function Configure(Project p) {\n");
             fprintf(pk, "    p.Name(\"%s\");\n", proj_name);
@@ -469,7 +474,9 @@ int KrtProjCreateTemplate(KrtProject* project, const char* output_dir) {
                 char* tok = strtok_r(sources_buf, " \t", &save);
                 int first = 1;
                 while (tok) {
-                    if (!first) fprintf(pk, ", ");
+                    if (!first) {
+                        fprintf(pk, ", ");
+                    }
                     fprintf(pk, "\"%s\"", tok);
                     first = 0;
                     tok = strtok_r(NULL, " \t", &save);
@@ -505,38 +512,37 @@ int KrtProjCreateTemplate(KrtProject* project, const char* output_dir) {
     }
 #endif
 
-    snprintf(stdlib_src, sizeof(stdlib_src), "%s%c..%cstdlib", exe_dir, KrtPathSeparator(), KrtPathSeparator());
+    snprintf(stdlib_src, sizeof(stdlib_src), "%s%c..%cstdlib", exe_dir, path_separator(), path_separator());
     struct stat stdlib_stat;
     if (stat(stdlib_src, &stdlib_stat) != 0 || !(stdlib_stat.st_mode & S_IFDIR)) {
 
-        snprintf(stdlib_src, sizeof(stdlib_src), "%s%cstdlib", exe_dir, KrtPathSeparator());
+        snprintf(stdlib_src, sizeof(stdlib_src), "%s%cstdlib", exe_dir, path_separator());
     }
 
     if (stat(stdlib_src, &stdlib_stat) == 0 && (stdlib_stat.st_mode & S_IFDIR)) {
-        snprintf(stdlib_dst, sizeof(stdlib_dst), "%s%cstdlib", output_dir, KrtPathSeparator());
-        KrtCopyDirectoryRecursive(stdlib_src, stdlib_dst);
+        snprintf(stdlib_dst, sizeof(stdlib_dst), "%s%cstdlib", output_dir, path_separator());
+        copy_directory_recursive(stdlib_src, stdlib_dst);
     }
 
     return 1;
 }
 
 char** KrtProjGetTemplates(int* count) {
-    if (!count) return NULL;
+    if (!count) {
+        return NULL;
+    }
 
-    static char* templates[] = {
-        "console",
-        "library",
-        "web",
-        "system"
-    };
+    static char* templates[] = {"console", "library", "web", "system"};
 
     *count = sizeof(templates) / sizeof(templates[0]);
     return templates;
 }
 
 char* KrtProjGetOutputPath(KrtProject* project, KrtProjectConfig config) {
-    if (!project) return NULL;
-    
+    if (!project) {
+        return NULL;
+    }
+
     KrtProjectPropertyGroup* prop = project->property_groups;
     while (prop) {
         if (prop->config == config && prop->output_path) {
@@ -544,13 +550,15 @@ char* KrtProjGetOutputPath(KrtProject* project, KrtProjectConfig config) {
         }
         prop = prop->next;
     }
-    
+
     return NULL;
 }
 
 char* KrtProjGetIntermediatePath(KrtProject* project, KrtProjectConfig config) {
-    if (!project) return NULL;
-    
+    if (!project) {
+        return NULL;
+    }
+
     KrtProjectPropertyGroup* prop = project->property_groups;
     while (prop) {
         if (prop->config == config && prop->intermediate_path) {
@@ -558,6 +566,6 @@ char* KrtProjGetIntermediatePath(KrtProject* project, KrtProjectConfig config) {
         }
         prop = prop->next;
     }
-    
+
     return NULL;
 }

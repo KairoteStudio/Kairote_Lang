@@ -1,0 +1,21 @@
+// pointer ternary and short circuit
+int tick(int* p) { unsafe(using krt.mem;) { *p+=1; return *p; } }
+            int* tickPointer(int* p, int* result) { unsafe(using krt.mem;) { *p+=1; } return result; }
+
+int main() { unsafe(using krt.mem;) {
+
+            var x=1; var y=2; var choose=true;
+            let p=choose ? &x : &y; *p=7;
+            if (x!=7 || y!=2) { return 1; }
+            let maybe=choose ? &y : null;
+            if (maybe is int* hit) { *hit=9; } else { return 2; }
+            if (y!=9) { return 3; }
+            let absent=choose ? null : &x;
+            if (absent is int* hit) { return 4; }
+            var calls=0;
+            if (false && tick(&calls)>0) { return 5; }
+            if (true || tick(&calls)>0) { if (calls!=0) { return 6; } }
+            let branch=choose ? &x : tickPointer(&calls, &y);
+            if (branch!=&x || calls!=0) { return 7; }
+
+} return 0; }

@@ -4,8 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
-
-#define DEBUG_SYMBOL_TABLE 1
+#include <limits.h>
 
 static unsigned int hash_string(const char* str, int table_size) {
     unsigned int hash = 5381;
@@ -16,9 +15,79 @@ static unsigned int hash_string(const char* str, int table_size) {
     return hash % table_size;
 }
 
+static bool grow_scope_index(SymbolScope* scope) {
+    if (scope->hash_size > INT_MAX / 2) {
+        return false;
+    }
+    int size = scope->hash_size ? scope->hash_size * 2 : 16;
+    SymbolEntry** buckets = KRT_CALLOC(size, sizeof(SymbolEntry*));
+    if (!buckets) {
+        return false;
+    }
+    for (SymbolEntry* entry = scope->symbols; entry; entry = entry->scope_next) {
+        unsigned bucket = hash_string(entry->name, size);
+        entry->scope_hash_next = buckets[bucket];
+        buckets[bucket] = entry;
+    }
+    KRT_FREE(scope->hash_table);
+    scope->hash_table = buckets;
+    scope->hash_size = size;
+    return true;
+}
+
+static void grow_table_index(SymbolTable* table) {
+    if (table->hash_size > INT_MAX / 2) {
+        return;
+    }
+    int size = table->hash_size * 2;
+    SymbolEntry** buckets = KRT_CALLOC(size, sizeof(SymbolEntry*));
+    if (!buckets) {
+        return;
+    }
+    for (int i = 0; i < table->hash_size; i++) {
+        SymbolEntry* entry = table->hash_table[i];
+        while (entry) {
+            SymbolEntry* next = entry->next;
+            unsigned bucket = hash_string(entry->name, size);
+            entry->next = buckets[bucket];
+            buckets[bucket] = entry;
+            entry = next;
+        }
+    }
+    /* Doubling splits old buckets; reverse each chain to retain shadowing order. */
+    for (int i = 0; i < size; i++) {
+        SymbolEntry* entry = buckets[i];
+        buckets[i] = NULL;
+        while (entry) {
+            SymbolEntry* next = entry->next;
+            entry->next = buckets[i];
+            buckets[i] = entry;
+            entry = next;
+        }
+    }
+    KRT_FREE(table->hash_table);
+    table->hash_table = buckets;
+    table->hash_size = size;
+}
+
+static SymbolEntry* lookup_in_scope(SymbolScope* scope, const char* name) {
+    if (!scope || !scope->hash_size) {
+        return NULL;
+    }
+    unsigned bucket = hash_string(name, scope->hash_size);
+    for (SymbolEntry* entry = scope->hash_table[bucket]; entry; entry = entry->scope_hash_next) {
+        if (strcmp(entry->name, name) == 0) {
+            return entry;
+        }
+    }
+    return NULL;
+}
+
 SymbolTable* symbol_table_create(void) {
     SymbolTable* table = KRT_CALLOC(1, sizeof(SymbolTable));
-    if (!table) return NULL;
+    if (!table) {
+        return NULL;
+    }
 
     table->hash_size = 256;
     table->hash_table = KRT_CALLOC(table->hash_size, sizeof(SymbolEntry*));
@@ -52,7 +121,9 @@ SymbolTable* symbol_table_create(void) {
 }
 
 void symbol_table_destroy(SymbolTable* table) {
-    if (!table) return;
+    if (!table) {
+        return;
+    }
 
     SymbolScope* scope = table->global_scope;
     while (scope) {
@@ -72,6 +143,7 @@ void symbol_table_destroy(SymbolTable* table) {
             sym = next_sym;
         }
 
+        KRT_FREE(scope->hash_table);
         KRT_FREE(scope);
         scope = next_scope;
     }
@@ -82,10 +154,14 @@ void symbol_table_destroy(SymbolTable* table) {
 }
 
 void symbol_table_push_scope(SymbolTable* table) {
-    if (!table) return;
+    if (!table) {
+        return;
+    }
 
     SymbolScope* new_scope = KRT_CALLOC(1, sizeof(SymbolScope));
-    if (!new_scope) return;
+    if (!new_scope) {
+        return;
+    }
 
     new_scope->parent = table->current_scope;
     new_scope->scope_level = table->current_scope->scope_level + 1;
@@ -103,11 +179,11 @@ void symbol_table_pop_scope(SymbolTable* table) {
     SymbolEntry* sym = old_scope->symbols;
     while (sym) {
         SymbolEntry* next_sym = sym->scope_next;
-        
+
         unsigned int hash = hash_string(sym->name, table->hash_size);
         SymbolEntry* entry = table->hash_table[hash];
         SymbolEntry* prev = NULL;
-        
+
         while (entry) {
             if (entry == sym) {
                 if (prev) {
@@ -117,22 +193,25 @@ void symbol_table_pop_scope(SymbolTable* table) {
                 }
                 KRT_FREE(sym->name);
                 KRT_FREE(sym);
+                table->symbol_count--;
                 break;
             }
             prev = entry;
             entry = entry->next;
         }
-        
+
         sym = next_sym;
     }
 
     old_scope->symbols = NULL;
+    KRT_FREE(old_scope->hash_table);
     KRT_FREE(old_scope);
 }
 
-SymbolEntry* symbol_table_declare(SymbolTable* table, const char* name,
-                                SymbolType type, int line) {
-    if (!table || !name) return NULL;
+SymbolEntry* symbol_table_declare(SymbolTable* table, const char* name, SymbolType type, int line) {
+    if (!table || !name) {
+        return NULL;
+    }
 
     SymbolEntry* existing = symbol_table_lookup_current_scope(table, name);
     if (existing) {
@@ -145,14 +224,27 @@ SymbolEntry* symbol_table_declare(SymbolTable* table, const char* name,
         }
     }
 
+    SymbolScope* scope = table->current_scope;
+    if (((size_t)scope->symbol_count + 1) * 4 >= (size_t)scope->hash_size * 3 && !grow_scope_index(scope)) {
+        return NULL;
+    }
+    if (((size_t)table->symbol_count + 1) * 4 >= (size_t)table->hash_size * 3) {
+        grow_table_index(table);
+    }
     SymbolEntry* sym = KRT_CALLOC(1, sizeof(SymbolEntry));
-    if (!sym) return NULL;
+    if (!sym) {
+        return NULL;
+    }
 
     sym->name = KRT_STRDUP(name);
+    if (!sym->name) {
+        KRT_FREE(sym);
+        return NULL;
+    }
     sym->type = type;
     sym->state = SYMBOL_DECLARED;
     sym->declaration_line = line;
-    sym->is_array = false; 
+    sym->is_array = false;
 
     unsigned int hash = hash_string(name, table->hash_size);
     sym->next = table->hash_table[hash];
@@ -160,15 +252,20 @@ SymbolEntry* symbol_table_declare(SymbolTable* table, const char* name,
 
     sym->scope_next = table->current_scope->symbols;
     table->current_scope->symbols = sym;
+    unsigned scope_hash = hash_string(name, scope->hash_size);
+    sym->scope_hash_next = scope->hash_table[scope_hash];
+    scope->hash_table[scope_hash] = sym;
+    scope->symbol_count++;
 
     table->symbol_count++;
-    
+
     return sym;
 }
 
-SymbolEntry* symbol_table_define(SymbolTable* table, const char* name,
-                               SymbolType type, int line, void* data) {
-    if (!table || !name) return NULL;
+SymbolEntry* symbol_table_define(SymbolTable* table, const char* name, SymbolType type, int line, void* data) {
+    if (!table || !name) {
+        return NULL;
+    }
 
     SymbolEntry* sym = symbol_table_lookup_current_scope(table, name);
 
@@ -182,17 +279,21 @@ SymbolEntry* symbol_table_define(SymbolTable* table, const char* name,
         sym->definition_line = line;
 
         switch (type) {
-            case SYMBOL_VARIABLE:
-                if (data) sym->ir_value = (KrtIRValue*)data;
-                sym->is_array = false; 
-                break;
-            case SYMBOL_FUNCTION:
-                if (data) sym->ir_function = (KrtIRFunction*)data;
-                sym->is_array = false; 
-                break;
-            default:
-                sym->is_array = false; 
-                break;
+        case SYMBOL_VARIABLE:
+            if (data) {
+                sym->ir_value = (KrtIRValue*)data;
+            }
+            sym->is_array = false;
+            break;
+        case SYMBOL_FUNCTION:
+            if (data) {
+                sym->ir_function = (KrtIRFunction*)data;
+            }
+            sym->is_array = false;
+            break;
+        default:
+            sym->is_array = false;
+            break;
         }
 
         return sym;
@@ -203,17 +304,21 @@ SymbolEntry* symbol_table_define(SymbolTable* table, const char* name,
             sym->definition_line = line;
 
             switch (type) {
-                case SYMBOL_VARIABLE:
-                    if (data) sym->ir_value = (KrtIRValue*)data;
-                    sym->is_array = false; 
-                    break;
-                case SYMBOL_FUNCTION:
-                    if (data) sym->ir_function = (KrtIRFunction*)data;
-                    sym->is_array = false; 
-                    break;
-                default:
-                    sym->is_array = false; 
-                    break;
+            case SYMBOL_VARIABLE:
+                if (data) {
+                    sym->ir_value = (KrtIRValue*)data;
+                }
+                sym->is_array = false;
+                break;
+            case SYMBOL_FUNCTION:
+                if (data) {
+                    sym->ir_function = (KrtIRFunction*)data;
+                }
+                sym->is_array = false;
+                break;
+            default:
+                sym->is_array = false;
+                break;
             }
         }
         return sym;
@@ -221,64 +326,67 @@ SymbolEntry* symbol_table_define(SymbolTable* table, const char* name,
 }
 
 SymbolEntry* symbol_table_lookup(SymbolTable* table, const char* name) {
-    if (!table || !name) return NULL;
+    if (!table || !name) {
+        return NULL;
+    }
 
     unsigned int hash = hash_string(name, table->hash_size);
     SymbolEntry* sym = table->hash_table[hash];
-    
+
     while (sym) {
         if (sym->name && strcmp(sym->name, name) == 0) {
             return sym;
         }
         sym = sym->next;
     }
-    
+
     return NULL;
 }
 
 SymbolEntry* symbol_table_lookup_current_scope(SymbolTable* table, const char* name) {
-    if (!table || !table->current_scope || !name) return NULL;
-
-    SymbolEntry* sym = table->current_scope->symbols;
-    while (sym) {
-        if (sym->name && strcmp(sym->name, name) == 0) {
-            return sym;
-        }
-        sym = sym->scope_next;
+    if (!table || !table->current_scope || !name) {
+        return NULL;
     }
 
-    return NULL;
+    return lookup_in_scope(table->current_scope, name);
 }
 
 SymbolEntry* symbol_table_lookup_scope_chain(SymbolTable* table, const char* name) {
-    if (!table || !name) return NULL;
-    
+    if (!table || !name) {
+        return NULL;
+    }
+
     SymbolScope* current_scope = table->current_scope;
     while (current_scope) {
-        SymbolEntry* sym = current_scope->symbols;
-        while (sym) {
-            if (sym->name && strcmp(sym->name, name) == 0) {
-                return sym;
-            }
-            sym = sym->scope_next;
+        SymbolEntry* sym = lookup_in_scope(current_scope, name);
+        if (sym) {
+            return sym;
         }
         current_scope = current_scope->parent;
     }
-    
+
     return symbol_table_lookup(table, name);
 }
 
-bool symbol_table_query_var_type(SymbolTable* table, const char* name,
-                                 KrtTokenType* out_value_type, bool* out_is_array) {
+bool symbol_table_query_var_type(SymbolTable* table, const char* name, KrtTokenType* out_value_type,
+                                 bool* out_is_array) {
     SymbolEntry* e = table ? symbol_table_lookup_scope_chain(table, name) : NULL;
-    if (!e) return false;
-    if (out_value_type) *out_value_type = e->value_type;
-    if (out_is_array)   *out_is_array   = e->is_array;
+    if (!e) {
+        return false;
+    }
+    if (out_value_type) {
+        *out_value_type = e->value_type;
+    }
+    if (out_is_array) {
+        *out_is_array = e->is_array;
+    }
     return true;
 }
 
 void symbol_table_mark_defined(SymbolTable* table, const char* name, int line) {
-    if (!table || !name) return;
+    if (!table || !name) {
+        return;
+    }
 
     SymbolEntry* sym = symbol_table_lookup(table, name);
     if (sym) {
@@ -288,7 +396,9 @@ void symbol_table_mark_defined(SymbolTable* table, const char* name, int line) {
 }
 
 void symbol_table_check_undefined(SymbolTable* table) {
-    if (!table) return;
+    if (!table) {
+        return;
+    }
 
     for (int i = 0; i < table->hash_size; i++) {
         SymbolEntry* sym = table->hash_table[i];
@@ -302,7 +412,9 @@ void symbol_table_check_undefined(SymbolTable* table) {
 }
 
 bool symbol_table_check_entry_point_conflict(SymbolTable* table) {
-    if (!table) return false;
+    if (!table) {
+        return false;
+    }
 
     int entry_count = 0;
 
@@ -325,7 +437,9 @@ bool symbol_table_check_entry_point_conflict(SymbolTable* table) {
 }
 
 SymbolEntry* symbol_table_get_entry_point(SymbolTable* table) {
-    if (!table) return NULL;
+    if (!table) {
+        return NULL;
+    }
 
     for (int i = 0; i < table->hash_size; i++) {
         SymbolEntry* sym = table->hash_table[i];
@@ -341,7 +455,9 @@ SymbolEntry* symbol_table_get_entry_point(SymbolTable* table) {
 }
 
 void symbol_table_set_entry_point(SymbolTable* table, const char* name) {
-    if (!table || !name) return;
+    if (!table || !name) {
+        return;
+    }
 
     SymbolEntry* sym = symbol_table_lookup(table, name);
     if (sym && sym->type == SYMBOL_FUNCTION) {
@@ -351,29 +467,44 @@ void symbol_table_set_entry_point(SymbolTable* table, const char* name) {
 
 const char* symbol_type_to_string(SymbolType type) {
     switch (type) {
-        case SYMBOL_VARIABLE: return "变量";
-        case SYMBOL_FUNCTION: return "函数";
-        case SYMBOL_TYPE: return "类型";
-        case SYMBOL_LABEL: return "标签";
-        case SYMBOL_FIELD: return "字段";
-        case SYMBOL_STATIC_FIELD: return "静态字段";
-        case SYMBOL_CLASS: return "类";
-        case SYMBOL_NAMESPACE: return "命名空间";
-        default: return "未知";
+    case SYMBOL_VARIABLE:
+        return "变量";
+    case SYMBOL_FUNCTION:
+        return "函数";
+    case SYMBOL_TYPE:
+        return "类型";
+    case SYMBOL_LABEL:
+        return "标签";
+    case SYMBOL_FIELD:
+        return "字段";
+    case SYMBOL_STATIC_FIELD:
+        return "静态字段";
+    case SYMBOL_CLASS:
+        return "类";
+    case SYMBOL_NAMESPACE:
+        return "命名空间";
+    default:
+        return "未知";
     }
 }
 
 const char* symbol_state_to_string(SymbolState state) {
     switch (state) {
-        case SYMBOL_DECLARED: return "已声明";
-        case SYMBOL_DEFINED: return "已定义";
-        case SYMBOL_FORWARD_REF: return "前向引用";
-        default: return "未知";
+    case SYMBOL_DECLARED:
+        return "已声明";
+    case SYMBOL_DEFINED:
+        return "已定义";
+    case SYMBOL_FORWARD_REF:
+        return "前向引用";
+    default:
+        return "未知";
     }
 }
 
 void symbol_table_print_stats(SymbolTable* table) {
-    if (!table) return;
+    if (!table) {
+        return;
+    }
 
     printf("符号表统计信息:\n");
     printf("  总符号数: %d\n", table->symbol_count);
@@ -386,22 +517,32 @@ void symbol_table_print_stats(SymbolTable* table) {
         SymbolEntry* sym = table->hash_table[i];
         while (sym) {
             switch (sym->type) {
-                case SYMBOL_VARIABLE: var_count++; break;
-                case SYMBOL_FUNCTION: func_count++; break;
-                case SYMBOL_TYPE: type_count++; break;
-                case SYMBOL_LABEL: label_count++; break;
-                default: break;
+            case SYMBOL_VARIABLE:
+                var_count++;
+                break;
+            case SYMBOL_FUNCTION:
+                func_count++;
+                break;
+            case SYMBOL_TYPE:
+                type_count++;
+                break;
+            case SYMBOL_LABEL:
+                label_count++;
+                break;
+            default:
+                break;
             }
             sym = sym->next;
         }
     }
 
-    printf("  变量: %d, 函数: %d, 类型: %d, 标签: %d\n",
-           var_count, func_count, type_count, label_count);
+    printf("  变量: %d, 函数: %d, 类型: %d, 标签: %d\n", var_count, func_count, type_count, label_count);
 }
 
 void symbol_table_add_error(SymbolTable* table, const char* format, ...) {
-    if (!table || !format) return;
+    if (!table || !format) {
+        return;
+    }
 
     va_list args;
     va_start(args, format);
@@ -420,7 +561,9 @@ int symbol_table_get_error_count(SymbolTable* table) {
 }
 
 void symbol_table_define_namespace(SymbolTable* table, const char* namespace_name) {
-    if (!table || !namespace_name) return;
+    if (!table || !namespace_name) {
+        return;
+    }
 
     SymbolEntry* existing = symbol_table_lookup(table, namespace_name);
     if (existing) {
@@ -435,7 +578,9 @@ void symbol_table_define_namespace(SymbolTable* table, const char* namespace_nam
 }
 
 SymbolEntry* symbol_table_lookup_in_namespace(SymbolTable* table, const char* namespace_name, const char* symbol_name) {
-    if (!table || !namespace_name || !symbol_name) return NULL;
+    if (!table || !namespace_name || !symbol_name) {
+        return NULL;
+    }
 
     SymbolEntry* namespace_entry = symbol_table_lookup(table, namespace_name);
     if (!namespace_entry) {
@@ -450,7 +595,9 @@ SymbolEntry* symbol_table_lookup_in_namespace(SymbolTable* table, const char* na
 
     if (namespace_entry->nested_table) {
         SymbolEntry* found = symbol_table_lookup(namespace_entry->nested_table, symbol_name);
-        if (found) return found;
+        if (found) {
+            return found;
+        }
     }
 
     SymbolEntry* global_found = symbol_table_lookup(table, symbol_name);
@@ -458,7 +605,9 @@ SymbolEntry* symbol_table_lookup_in_namespace(SymbolTable* table, const char* na
 }
 
 struct SymbolScope* symbol_table_enter_nested_scope(SymbolTable* table, SymbolEntry* entry) {
-    if (!table || !entry) return NULL;
+    if (!table || !entry) {
+        return NULL;
+    }
 
     if (!entry->nested_table) {
         entry->nested_table = symbol_table_create();
@@ -474,7 +623,9 @@ struct SymbolScope* symbol_table_enter_nested_scope(SymbolTable* table, SymbolEn
 }
 
 void symbol_table_exit_nested_scope(SymbolTable* table, SymbolScope* previous_scope) {
-    if (!table) return;
+    if (!table) {
+        return;
+    }
     if (previous_scope) {
         table->current_scope = previous_scope;
     }

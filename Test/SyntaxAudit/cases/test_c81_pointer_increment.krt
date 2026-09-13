@@ -1,0 +1,13 @@
+// memory lvalue increment
+int main() { unsafe(using krt.mem;) {
+
+            var x=4; let p=&x;
+            let a=(*p)++; let b=++*p; let c=(*p)--; let d=--*p;
+            if (a!=4 || b!=6 || c!=6 || d!=4 || x!=4) { return 1; }
+            var buf=stackalloc int[3]; buf[0]=10; buf[1]=20; buf[2]=30;
+            var i=0; let e=buf[i++]++; let f=++buf[i++];
+            if (e!=10 || f!=21 || i!=2 || buf[0]!=11 || buf[1]!=21 || buf[2]!=30) { return 2; }
+            var q=buf; let pp=&q; let before=(*pp)++; let after=++*pp;
+            if (before!=buf || after!=buf+2 || q!=buf+2) { return 3; }
+
+} return 0; }

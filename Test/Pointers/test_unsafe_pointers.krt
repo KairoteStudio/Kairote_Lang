@@ -1,0 +1,31 @@
+int add(int a, int b) { return a + b; }
+int*? find(int* buf) { return buf; }
+int main() {
+unsafe(using krt.mem, Acme.Ffi.Native;) {
+    var x = 42;
+    let p = &x;
+    *p = 7;
+    let y = *p;
+    if (x != 7 || y != 7) { return 1; }
+    let q = p + 4;
+    let n = q - p;
+    if (n != 4) { return 2; }
+    var buf = stackalloc int[64];
+    buf[3] = 1;
+    if (buf[3] != 1) { return 3; }
+    let bp = (byte*)p;
+    if (*bp != 7) { return 4; }
+    let vp: void* = p;
+    let pp: int** = &p;
+    **pp = 9;
+    if (x != 9) { return 5; }
+    let f: fn(int, int) -> int = &add;
+    if (f(3, 4) != 7) { return 6; }
+    let op = p < q;
+    if (!op) { return 7; }
+    let maybe: int*? = find(buf);
+    if (maybe is int* hit) { *hit = 0; }
+    if (buf[0] != 0) { return 8; }
+}
+return 0;
+}

@@ -69,19 +69,19 @@ typedef enum {
     AST_NAMESPACE_IMPORT,
     AST_QUALIFIED_NAME,
 
-    AST_PROPERTY_DECLARATION,    
-    AST_PROPERTY_GETTER,         
-    AST_PROPERTY_SETTER,         
-    AST_LAMBDA_EXPRESSION,       
-    AST_LINQ_QUERY,              
-    AST_LINQ_FROM,               
-    AST_LINQ_WHERE,              
-    AST_LINQ_SELECT,             
-    AST_LINQ_ORDERBY,            
-    AST_LINQ_JOIN,               
-    AST_LINQ_LET,                
-    AST_LINQ_GROUP,              
-    AST_ATTRIBUTE,               
+    AST_PROPERTY_DECLARATION,
+    AST_PROPERTY_GETTER,
+    AST_PROPERTY_SETTER,
+    AST_LAMBDA_EXPRESSION,
+    AST_LINQ_QUERY,
+    AST_LINQ_FROM,
+    AST_LINQ_WHERE,
+    AST_LINQ_SELECT,
+    AST_LINQ_ORDERBY,
+    AST_LINQ_JOIN,
+    AST_LINQ_LET,
+    AST_LINQ_GROUP,
+    AST_ATTRIBUTE,
     AST_ATTRIBUTE_LIST,
     AST_UNSAFE_CALL,
     AST_POINT_BLOCK,
@@ -116,13 +116,60 @@ typedef enum {
     AST_NULL_COALESCING,
     AST_NULL_CONDITIONAL,
     AST_CAST_EXPRESSION,
-    AST_NULL
+    AST_NULL,
+    AST_POINTER_ASSIGNMENT
 } ASTNodeType;
+
+#include "../../../Core/Utils/Integer.h"
+
+typedef struct KrtFunctionType KrtFunctionType;
+typedef struct {
+    KrtTokenType token;
+    unsigned pointer_depth;
+    bool nullable;
+    /* Bit 0 describes the immediately pointed-to slot. */
+    uint64_t pointee_nullable;
+    KrtFunctionType* function;
+    char* type_name;
+    /* Parameter mode; expressions retain the referred-to type. */
+    bool is_ref;
+} KrtSourceType;
+struct KrtFunctionType {
+    KrtSourceType result;
+    KrtSourceType* parameters;
+    int parameter_count;
+};
+/** @brief Return whether the source type is a data or function pointer. */
+static inline bool KrtSourceIsPointer(KrtSourceType type) {
+    return type.pointer_depth || type.function;
+}
+/** @brief Return the IR storage token for the source value, excluding ref parameter mode. */
+static inline KrtTokenType KrtSourceStorage(KrtSourceType type) {
+    return KrtSourceIsPointer(type) ? TOKEN_UINT64 : type.token;
+}
+/** @brief Return the ABI storage token, representing ref parameters as addresses. */
+static inline KrtTokenType KrtSourceAbiStorage(KrtSourceType type) {
+    return type.is_ref ? TOKEN_UINT64 : KrtSourceStorage(type);
+}
+
+/** @brief Copy nested type metadata into arena; allocation failure is a fatal compiler error. */
+KrtSourceType KrtSourceTypeClone(KrtArena* arena, KrtSourceType type);
 
 typedef struct ASTNode {
     ASTNodeType type;
     int line;
     int col;
+    bool is_integer_literal;
+    KrtUInt128 integer_value;
+    KrtSourceType declared_type;
+    KrtSourceType resolved_type;
+    KrtFunctionType* function_type;
+    bool is_indirect_call;
+    bool is_function_reference;
+    char* lexical_namespace;
+    bool is_ref_argument;
+    bool is_ref_binding;
+    bool is_enum;
     union {
         double number_value;
         char* string_value;
@@ -341,7 +388,7 @@ typedef struct ASTNode {
             struct ASTNode** parameters;
             int parameter_count;
             struct ASTNode* declaration;
-            struct ASTNode** constraints;  
+            struct ASTNode** constraints;
             int constraint_count;
         } template_decl;
         struct {
@@ -358,9 +405,9 @@ typedef struct ASTNode {
             char* type_name;
         } generic_type;
         struct {
-            char* param_name;           
-            char* constraint_type;       
-            struct ASTNode* interface_constraint; 
+            char* param_name;
+            char* constraint_type;
+            struct ASTNode* interface_constraint;
         } generic_constraint;
 
         struct {
@@ -395,19 +442,19 @@ typedef struct ASTNode {
             struct ASTNode* body;
         } using_stmt;
         struct {
-            char* alias;  
-            char** namespace_path;  
-            int path_length;  
-            int is_alias;  
+            char* alias;
+            char** namespace_path;
+            int path_length;
+            int is_alias;
         } using_directive;
         struct {
             char* namespace_name;
         } namespace_import;
         struct {
-            char** parts;  
-            int part_count;  
+            char** parts;
+            int part_count;
         } qualified_name;
-        
+
         struct {
             char* name;
             KrtTokenType type;
@@ -424,7 +471,7 @@ typedef struct ASTNode {
             int is_auto;
         } property_getter;
         struct {
-            char* value_param_name;  
+            char* value_param_name;
             struct ASTNode* body;
             int is_auto;
         } property_setter;
@@ -432,7 +479,7 @@ typedef struct ASTNode {
             char** parameters;
             int parameter_count;
             struct ASTNode* body;
-            struct ASTNode* expression;  
+            struct ASTNode* expression;
         } lambda_expr;
         struct {
             struct ASTNode* from_clause;
@@ -443,14 +490,14 @@ typedef struct ASTNode {
         struct {
             char* var_name;
             struct ASTNode* source;
-            struct ASTNode* type;  
+            struct ASTNode* type;
         } linq_from;
         struct {
             struct ASTNode* condition;
         } linq_where;
         struct {
             struct ASTNode* expression;
-            struct ASTNode* key_selector;  
+            struct ASTNode* key_selector;
             bool ascending;
         } linq_select;
         struct {
@@ -464,7 +511,7 @@ typedef struct ASTNode {
             struct ASTNode* join_source;
             struct ASTNode* left_key;
             struct ASTNode* right_key;
-            char* into_var_name;  
+            char* into_var_name;
         } linq_join;
         struct {
             char* var_name;
@@ -479,18 +526,18 @@ typedef struct ASTNode {
             char* name;
             struct ASTNode** arguments;
             int argument_count;
-            struct ASTNode* named_arguments;  
+            struct ASTNode* named_arguments;
         } attribute;
         struct {
             struct ASTNode** attributes;
             int attribute_count;
-            struct ASTNode* target;  
+            struct ASTNode* target;
         } attribute_list;
         struct {
-            struct ASTNode* expression; 
-            char** permissions;       
+            struct ASTNode* expression;
+            char** permissions;
             int permission_count;
-            int is_block;             
+            int is_block;
         } unsafe_call;
         struct {
             struct ASTNode* body;
@@ -503,6 +550,7 @@ typedef struct ASTNode {
             struct ASTNode* expression;
             char* type_name;
             struct ASTNode* type_expr;
+            char* binding_name;
         } is_expr;
         struct {
             struct ASTNode* expression;
@@ -566,6 +614,11 @@ typedef struct ASTNode {
             struct ASTNode* pointer;
         } pointer_deref;
         struct {
+            struct ASTNode* pointer;
+            struct ASTNode* value;
+            KrtTokenType operator;
+        } pointer_assignment;
+        struct {
             struct ASTNode* operand;
         } address_of;
         struct {
@@ -611,15 +664,21 @@ typedef struct ASTNode {
         } null_conditional;
         struct {
             KrtTokenType target_type;
+            bool target_is_pointer;
             struct ASTNode* expression;
         } cast_expr;
     } data;
-    int is_arena_allocated;  
+    int is_arena_allocated;
 } ASTNode;
 
 ASTNode* ast_create_node(ASTNodeType type, int line, int col);
 ASTNode* ast_create_node_arena(ASTNodeType type, int line, int col, KrtArena* arena);
 void ast_destroy_node(ASTNode* node);
+/** @brief Deep-copy a tree into arena; return NULL for invalid input or allocation failure. */
+ASTNode* KrtAstClone(KrtArena* arena, const ASTNode* node);
 void ast_print(ASTNode* node, int indent);
+
+/** @brief Visit nodes in preorder; a false visitor result skips that node's descendants. */
+void KrtAstVisit(ASTNode* node, bool (*visitor)(ASTNode*, void*), void* context);
 
 #endif

@@ -5,6 +5,7 @@
 #include "Bytecode.h"
 #include "BytecodeGenerator.h"
 
+/** @brief Initialize chunk and emit the module main function as VM bytecode. */
 void KrtVmCodegenGenerate(KrtIRModule* ir_module, KrtChunk* chunk);
 
 #endif

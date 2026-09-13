@@ -1,0 +1,48 @@
+public static extern int64 syscall(int64 n, int64 a1, int64 a2, int64 a3, int64 a4, int64 a5, int64 a6);
+
+int64 BenchmarkNow(int64 storage) {
+    if (syscall(228, 1, storage, 0, 0, 0, 0) != 0) { return -1; }
+    int64[] stamp = (int64[])storage;
+    return stamp[0] * 1000000000 + stamp[1];
+}
+
+int32 BenchmarkFinish(int64 started, int64 stopped, int64 result) {
+    if (started < 0 || stopped < started) { return 90; }
+    int64[] report = new int64[2];
+    report[0] = stopped - started;
+    report[1] = result;
+    if (syscall(1, 2, (int64)report, 16, 0, 0, 0) != 16) { return 91; }
+    return 0;
+}
+
+int32 main() {
+    int64[] stamp = new int64[2];
+    char[] buffer = new char[4096];
+    int32 index = 0;
+    while (index < 4096) {
+        buffer[index] = (char)(index % 251);
+        index++;
+    }
+    int64 pointer = (int64)buffer;
+    int64 started = BenchmarkNow((int64)stamp);
+    int64 fd = syscall(2, (int64)"payload.bin", 578, 384, 0, 0, 0);
+    if (fd < 0) { return 1; }
+    int32 written = 0;
+    while (written < 100000) {
+        if (syscall(1, fd, pointer, 4096, 0, 0, 0) != 4096) { return 2; }
+        written++;
+    }
+    if (syscall(74, fd, 0, 0, 0, 0, 0) != 0) { return 3; }
+    if (syscall(8, fd, 0, 0, 0, 0, 0) != 0) { return 4; }
+    if (syscall(221, fd, 0, 0, 4, 0, 0) != 0) { return 5; }
+    int32 read_count = 0;
+    while (read_count < 100000) {
+        if (syscall(0, fd, pointer, 4096, 0, 0, 0) != 4096) { return 6; }
+        if (buffer[0] != (char)0 || buffer[4095] != (char)79) { return 7; }
+        read_count++;
+    }
+    if (syscall(0, fd, pointer, 4096, 0, 0, 0) != 0) { return 8; }
+    if (syscall(3, fd, 0, 0, 0, 0, 0) != 0) { return 9; }
+    int64 stopped = BenchmarkNow((int64)stamp);
+    return BenchmarkFinish(started, stopped, ((int64)written + (int64)read_count) * 4096);
+}

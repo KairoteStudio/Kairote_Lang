@@ -46,14 +46,12 @@ KrtStackAnalyzer* KrtStackAnalyzerInit(void);
 
 void KrtStackAnalyzerDestroy(KrtStackAnalyzer* analyzer);
 
-KrtStackFrame* KrtStackAnalyzerBeginFunction(KrtStackAnalyzer* analyzer,
-                                             const char* function_name);
+KrtStackFrame* KrtStackAnalyzerBeginFunction(KrtStackAnalyzer* analyzer, const char* function_name);
 
 void KrtStackAnalyzerEndFunction(KrtStackAnalyzer* analyzer);
 
-void KrtStackFrameAddUsage(KrtStackFrame* frame, size_t size,
-                             KrtStackUsageType type, const char* description,
-                             const char* file, int line);
+void KrtStackFrameAddUsage(KrtStackFrame* frame, size_t size, KrtStackUsageType type, const char* description,
+                           const char* file, int line);
 
 void KrtStackFrameOptimizeLayout(KrtStackFrame* frame);
 
@@ -65,8 +63,7 @@ int KrtStackFrameCheckOverflow(const KrtStackFrame* frame, size_t stack_limit);
 
 size_t KrtCalculateDynamicStackSize(const char* ir_code);
 
-size_t KrtPredictStackUsage(const char* function_signature,
-                             size_t param_count, size_t local_var_count);
+size_t KrtPredictStackUsage(const char* function_signature, size_t param_count, size_t local_var_count);
 
 KrtStackAnalyzer* KrtGetGlobalStackAnalyzer(void);
 

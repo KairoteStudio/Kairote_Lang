@@ -56,18 +56,18 @@ ArkLinkResult arklink_session_link_native(ArkLinkSession* session) {
     for (size_t i = 0; i < session->input_count; i++) {
         ArkLinkResult result = ark_loader_load_unit(ctx, session->inputs[i], &loader_opts, &units[i], &diag);
         if (result != ARK_LINK_OK) {
-            snprintf(session->error_buffer, sizeof(session->error_buffer),
-                     "Failed to load %s: %s", session->inputs[i], diag.message ? diag.message : "Unknown error");
+            snprintf(session->error_buffer, sizeof(session->error_buffer), "Failed to load %s: %s", session->inputs[i],
+                     diag.message ? diag.message : "Unknown error");
 
             for (size_t j = 0; j < i; j++) {
-                if (units[j]) ark_link_unit_destroy(units[j]);
+                if (units[j]) {
+                    ark_link_unit_destroy(units[j]);
+                }
             }
             free(units);
             ark_context_destroy(ctx);
             return result;
         }
-
-
     }
 
     log_message(session, ARK_LOG_INFO, "Resolving symbols...");
@@ -78,7 +78,9 @@ ArkLinkResult arklink_session_link_native(ArkLinkSession* session) {
         strncpy(session->error_buffer, "Symbol resolution failed", sizeof(session->error_buffer) - 1);
 
         for (size_t i = 0; i < session->input_count; i++) {
-            if (units[i]) ark_link_unit_destroy(units[i]);
+            if (units[i]) {
+                ark_link_unit_destroy(units[i]);
+            }
         }
         free(units);
         ark_context_destroy(ctx);
@@ -100,22 +102,24 @@ ArkLinkResult arklink_session_link_native(ArkLinkSession* session) {
     ArkBackendOutput output = {0};
 
     switch (session->target) {
-        case ARK_LINK_TARGET_PE:
-            result = ark_backend_pe_link(ctx, plan.backend_input, &output);
-            break;
-        case ARK_LINK_TARGET_ELF:
-            result = ark_backend_elf_link(ctx, plan.backend_input, &output);
-            break;
-        default:
-            result = ARK_LINK_ERR_UNSUPPORTED;
-            break;
+    case ARK_LINK_TARGET_PE:
+        result = ark_backend_pe_link(ctx, plan.backend_input, &output);
+        break;
+    case ARK_LINK_TARGET_ELF:
+        result = ark_backend_elf_link(ctx, plan.backend_input, &output);
+        break;
+    default:
+        result = ARK_LINK_ERR_UNSUPPORTED;
+        break;
     }
 
     if (result != ARK_LINK_OK) {
         strncpy(session->error_buffer, "Backend linking failed", sizeof(session->error_buffer) - 1);
         ark_resolver_plan_destroy(ctx, &plan);
         for (size_t i = 0; i < session->input_count; i++) {
-            if (units[i]) ark_link_unit_destroy(units[i]);
+            if (units[i]) {
+                ark_link_unit_destroy(units[i]);
+            }
         }
         free(units);
         ark_context_destroy(ctx);
@@ -126,13 +130,15 @@ ArkLinkResult arklink_session_link_native(ArkLinkSession* session) {
 
     FILE* out_file = fopen(session->output_path, "wb");
     if (!out_file) {
-        snprintf(session->error_buffer, sizeof(session->error_buffer),
-                 "Failed to open output file: %s", session->output_path);
+        snprintf(session->error_buffer, sizeof(session->error_buffer), "Failed to open output file: %s",
+                 session->output_path);
         free(output.data);
         free(output.section_maps);
         ark_resolver_plan_destroy(ctx, &plan);
         for (size_t i = 0; i < session->input_count; i++) {
-            if (units[i]) ark_link_unit_destroy(units[i]);
+            if (units[i]) {
+                ark_link_unit_destroy(units[i]);
+            }
         }
         free(units);
         ark_context_destroy(ctx);
@@ -147,7 +153,9 @@ ArkLinkResult arklink_session_link_native(ArkLinkSession* session) {
         free(output.section_maps);
         ark_resolver_plan_destroy(ctx, &plan);
         for (size_t i = 0; i < session->input_count; i++) {
-            if (units[i]) ark_link_unit_destroy(units[i]);
+            if (units[i]) {
+                ark_link_unit_destroy(units[i]);
+            }
         }
         free(units);
         ark_context_destroy(ctx);
@@ -159,7 +167,9 @@ ArkLinkResult arklink_session_link_native(ArkLinkSession* session) {
     ark_resolver_plan_destroy(ctx, &plan);
 
     for (size_t i = 0; i < session->input_count; i++) {
-        if (units[i]) ark_link_unit_destroy(units[i]);
+        if (units[i]) {
+            ark_link_unit_destroy(units[i]);
+        }
     }
     free(units);
     ark_context_destroy(ctx);

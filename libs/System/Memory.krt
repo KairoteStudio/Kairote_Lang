@@ -13,37 +13,45 @@ public static class Memory
     // 从 syscall 获取内存分配
     public static void* Allocate(int64 size)
     {
-        return (void*)Sys.syscall(SYS_mmap, 0, size, 3, 0x22, -1, 0);
+        unsafe(using krt.mem;) {
+            return (void*)Sys.syscall(SYS_mmap, 0, size, 3, 0x22, -1, 0);
+        }
     }
 
     // 释放内存
     public static void Free(void* ptr, int64 size)
     {
-        Sys.syscall(SYS_munmap, (int64)ptr, size, 0, 0, 0, 0);
+        unsafe(using krt.mem;) {
+            Sys.syscall(SYS_munmap, (int64)ptr, size, 0, 0, 0, 0);
+        }
     }
 
     // 复制内存块
     public static void Copy(void* dest, void* src, int32 length)
     {
-        char[] d = (char[])dest;
-        char[] s = (char[])src;
-        int32 i = 0;
-        while (i < length)
-        {
-            d[i] = s[i];
-            i = i + 1;
+        unsafe(using krt.mem;) {
+            char* d = (char*)dest;
+            char* s = (char*)src;
+            int32 i = 0;
+            while (i < length)
+            {
+                d[i] = s[i];
+                i = i + 1;
+            }
         }
     }
 
     // 设置内存块
     public static void Set(void* dest, char value, int32 length)
     {
-        char[] d = (char[])dest;
-        int32 i = 0;
-        while (i < length)
-        {
-            d[i] = value;
-            i = i + 1;
+        unsafe(using krt.mem;) {
+            char* d = (char*)dest;
+            int32 i = 0;
+            while (i < length)
+            {
+                d[i] = value;
+                i = i + 1;
+            }
         }
     }
 }

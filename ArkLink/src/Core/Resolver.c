@@ -19,7 +19,9 @@ typedef struct {
 
 static int symbol_table_init(SymbolTable* table, size_t initial_capacity) {
     table->symbols = (ArkResolverSymbol*)malloc(initial_capacity * sizeof(ArkResolverSymbol));
-    if (!table->symbols) return 0;
+    if (!table->symbols) {
+        return 0;
+    }
     table->symbol_count = 0;
     table->symbol_capacity = initial_capacity;
     return 1;
@@ -33,10 +35,8 @@ static void symbol_table_free(SymbolTable* table) {
 
 static int symbol_table_add(SymbolTable* table, const ArkResolverSymbol* sym) {
 
-
     for (size_t i = 0; i < table->symbol_count; i++) {
         if (strcmp(table->symbols[i].name, sym->name) == 0) {
-
 
             if (table->symbols[i].section_index == 0 && sym->section_index > 0) {
 
@@ -48,16 +48,18 @@ static int symbol_table_add(SymbolTable* table, const ArkResolverSymbol* sym) {
                  */
                 return 1;
             } else {
-
             }
             return 1;
         }
     }
-    
+
     if (table->symbol_count >= table->symbol_capacity) {
         size_t new_capacity = table->symbol_capacity * 2;
-        ArkResolverSymbol* new_symbols = (ArkResolverSymbol*)realloc(table->symbols, new_capacity * sizeof(ArkResolverSymbol));
-        if (!new_symbols) return 0;
+        ArkResolverSymbol* new_symbols =
+            (ArkResolverSymbol*)realloc(table->symbols, new_capacity * sizeof(ArkResolverSymbol));
+        if (!new_symbols) {
+            return 0;
+        }
         table->symbols = new_symbols;
         table->symbol_capacity = new_capacity;
     }
@@ -67,7 +69,9 @@ static int symbol_table_add(SymbolTable* table, const ArkResolverSymbol* sym) {
 
 static int reloc_table_init(RelocTable* table, size_t initial_capacity) {
     table->relocs = (ArkResolverReloc*)malloc(initial_capacity * sizeof(ArkResolverReloc));
-    if (!table->relocs) return 0;
+    if (!table->relocs) {
+        return 0;
+    }
     table->reloc_count = 0;
     table->reloc_capacity = initial_capacity;
     return 1;
@@ -82,8 +86,11 @@ static void reloc_table_free(RelocTable* table) {
 static int reloc_table_add(RelocTable* table, const ArkResolverReloc* reloc) {
     if (table->reloc_count >= table->reloc_capacity) {
         size_t new_capacity = table->reloc_capacity * 2;
-        ArkResolverReloc* new_relocs = (ArkResolverReloc*)realloc(table->relocs, new_capacity * sizeof(ArkResolverReloc));
-        if (!new_relocs) return 0;
+        ArkResolverReloc* new_relocs =
+            (ArkResolverReloc*)realloc(table->relocs, new_capacity * sizeof(ArkResolverReloc));
+        if (!new_relocs) {
+            return 0;
+        }
         table->relocs = new_relocs;
         table->reloc_capacity = new_capacity;
     }
@@ -92,7 +99,9 @@ static int reloc_table_add(RelocTable* table, const ArkResolverReloc* reloc) {
 }
 
 static ArkResolverSymbol* find_symbol(SymbolTable* table, const char* name) {
-    if (!name) return NULL;
+    if (!name) {
+        return NULL;
+    }
     for (size_t i = 0; i < table->symbol_count; i++) {
         const char* sym_name = table->symbols[i].name;
         if (sym_name && strcmp(sym_name, name) == 0) {
@@ -119,7 +128,9 @@ typedef struct {
 } RenameTable;
 
 static void rename_table_free(RenameTable* t) {
-    if (!t) return;
+    if (!t) {
+        return;
+    }
     for (size_t i = 0; i < t->count; i++) {
         free(t->items[i].local_name);
         free(t->items[i].global_name);
@@ -134,7 +145,9 @@ static int rename_table_add(RenameTable* t, size_t unit, const char* local, cons
     if (t->count >= t->capacity) {
         size_t nc = t->capacity ? t->capacity * 2 : 16;
         LocalRename* ni = (LocalRename*)realloc(t->items, nc * sizeof(LocalRename));
-        if (!ni) return 0;
+        if (!ni) {
+            return 0;
+        }
         t->items = ni;
         t->capacity = nc;
     }
@@ -156,7 +169,8 @@ static const char* rename_table_lookup(RenameTable* t, size_t unit, const char* 
     return NULL;
 }
 
-ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* units, size_t unit_count, ArkResolverPlan* out_plan) {
+ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* units, size_t unit_count,
+                                   ArkResolverPlan* out_plan) {
     if (!ctx || !units || unit_count == 0 || !out_plan) {
         return ARK_LINK_ERR_INVALID_ARGUMENT;
     }
@@ -192,7 +206,9 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
     size_t sec_idx_counter = 0;
     for (size_t i = 0; i < unit_count; i++) {
         ArkLinkUnit* unit = units[i];
-        if (!unit) continue;
+        if (!unit) {
+            continue;
+        }
         unit_sec_start[i] = (uint32_t)sec_idx_counter;
         sec_idx_counter += unit->section_count;
     }
@@ -202,7 +218,9 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
 
     for (size_t i = 0; i < unit_count; i++) {
         ArkLinkUnit* unit = units[i];
-        if (!unit) continue;
+        if (!unit) {
+            continue;
+        }
 
         unit_sym_start[i] = (uint32_t)sym_table.symbol_count;
 
@@ -214,10 +232,8 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
             sym.binding = sym_desc->binding;
             sym.visibility = sym_desc->visibility;
 
-            if (sym_desc->section_index > 0 &&
-                sym_desc->binding != ARK_BIND_GLOBAL &&
-                sym.name && find_symbol(&sym_table, sym.name) &&
-                find_symbol(&sym_table, sym.name)->section_index > 0) {
+            if (sym_desc->section_index > 0 && sym_desc->binding != ARK_BIND_GLOBAL && sym.name &&
+                find_symbol(&sym_table, sym.name) && find_symbol(&sym_table, sym.name)->section_index > 0) {
                 char renamed[512];
                 snprintf(renamed, sizeof(renamed), "%s@u%zu", sym.name, i);
                 if (rename_table_add(&renames, i, sym.name, renamed)) {
@@ -338,8 +354,6 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
             dst->flags = src->flags;
             dst->alignment = (uint32_t)src->alignment;
 
-
-
             section_map[i][j] = (uint32_t)sec_idx;
             sec_idx++;
         }
@@ -378,7 +392,9 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
 
     for (size_t i = 0; i < unit_count; i++) {
         ArkLinkUnit* unit = units[i];
-        if (!unit) continue;
+        if (!unit) {
+            continue;
+        }
 
         for (size_t j = 0; j < unit->section_count; j++) {
             ArkLinkSection* sec = &unit->sections[j];
@@ -471,9 +487,7 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
         } else {
         }
 
-        if (!has_main_export &&
-            sym_table.symbols[i].name &&
-            strcmp(sym_table.symbols[i].name, "main") == 0 &&
+        if (!has_main_export && sym_table.symbols[i].name && strcmp(sym_table.symbols[i].name, "main") == 0 &&
             !(sym_table.symbols[i].import_module && strlen(sym_table.symbols[i].import_module) > 0)) {
 
             has_main_export = 1;
@@ -493,10 +507,7 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
                 int is_import_sym = sym->import_module && strlen(sym->import_module) > 0;
                 int should_export = sym->is_export && !is_import_sym;
 
-                if (!should_export &&
-                    sym->name &&
-                    strcmp(sym->name, "main") == 0 &&
-                    !is_import_sym) {
+                if (!should_export && sym->name && strcmp(sym->name, "main") == 0 && !is_import_sym) {
 
                     should_export = 1;
                 }
@@ -535,7 +546,9 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
 
 void ark_resolver_plan_destroy(ArkLinkContext* ctx, ArkResolverPlan* plan) {
     (void)ctx;
-    if (!plan) return;
+    if (!plan) {
+        return;
+    }
 
     if (plan->symbols) {
         free(plan->symbols);
@@ -580,7 +593,7 @@ void ark_resolver_plan_destroy(ArkLinkContext* ctx, ArkResolverPlan* plan) {
     }
 
     if (plan->backend_input) {
-        
+
         if (plan->backend_input->sections) {
             for (size_t i = 0; i < plan->backend_input->section_count; i++) {
                 if (plan->backend_input->sections[i].data) {

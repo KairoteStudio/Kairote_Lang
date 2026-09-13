@@ -18,27 +18,29 @@ public static class StringOps
     // 字符串拼接: a + b
     public static string Concat(string a, string b)
     {
-        if (a == null) a = "";
-        if (b == null) b = "";
+        unsafe(using krt.mem;) {
+            if (a == null) a = "";
+            if (b == null) b = "";
 
-        int32 lenA = Length(a);
-        int32 lenB = Length(b);
-        int32 totalLen = lenA + lenB;
+            int32 lenA = Length(a);
+            int32 lenB = Length(b);
+            int32 totalLen = lenA + lenB;
 
-        // 分配新缓冲区 (+1 for null terminator)
-        int64 buf = (int64)Memory.Allocate((int64)(totalLen + 1));
+            // 分配新缓冲区 (+1 for null terminator)
+            int64 buf = (int64)Memory.Allocate((int64)(totalLen + 1));
 
-        // 复制 a
-        Memory.Copy((void*)buf, (void*)Sys.InternalStringPtr(a), lenA);
+            // 复制 a
+            Memory.Copy((void*)buf, (void*)Sys.InternalStringPtr(a), lenA);
 
-        // 复制 b
-        Memory.Copy((void*)(buf + (int64)lenA), (void*)Sys.InternalStringPtr(b), lenB);
+            // 复制 b
+            Memory.Copy((void*)(buf + (int64)lenA), (void*)Sys.InternalStringPtr(b), lenB);
 
-        // 添加 null terminator
-        char[] arr = (char[])buf;
-        arr[totalLen] = '\0';
+            // 添加 null terminator
+            char[] arr = (char[])buf;
+            arr[totalLen] = '\0';
 
-        return (string)buf;
+            return (string)buf;
+        }
     }
 
 
@@ -53,50 +55,52 @@ public static class StringOps
     // int64 转字符串
     public static string FromInt64(int64 value)
     {
-        if (value == 0) return "0";
+        unsafe(using krt.mem;) {
+            if (value == 0) return "0";
 
-        int64 v = value;
-        int32 negative = 0;
-        if (v < 0)
-        {
-            negative = 1;
-            v = -v;
+            int64 v = value;
+            int32 negative = 0;
+            if (v < 0)
+            {
+                negative = 1;
+                v = -v;
+            }
+
+            // 计算位数
+            int64 temp = v;
+            int32 digits = 0;
+            while (temp > 0)
+            {
+                digits = digits + 1;
+                temp = temp / 10;
+            }
+
+            int32 totalLen = digits + negative;
+            int64 buf = (int64)Memory.Allocate((int64)(totalLen + 1));
+            char[] arr = (char[])buf;
+
+            // 从后往前填充数字
+            int32 pos = totalLen - 1;
+            temp = v;
+            while (temp > 0)
+            {
+                int32 digit = (int32)(temp % 10);
+                arr[pos] = (char)((int32)'0' + digit);
+                pos = pos - 1;
+                temp = temp / 10;
+            }
+
+            // 添加负号
+            if (negative == 1)
+            {
+                arr[0] = '-';
+            }
+
+            // null terminator
+            arr[totalLen] = '\0';
+
+            return (string)buf;
         }
-
-        // 计算位数
-        int64 temp = v;
-        int32 digits = 0;
-        while (temp > 0)
-        {
-            digits = digits + 1;
-            temp = temp / 10;
-        }
-
-        int32 totalLen = digits + negative;
-        int64 buf = (int64)Memory.Allocate((int64)(totalLen + 1));
-        char[] arr = (char[])buf;
-
-        // 从后往前填充数字
-        int32 pos = totalLen - 1;
-        temp = v;
-        while (temp > 0)
-        {
-            int32 digit = (int32)(temp % 10);
-            arr[pos] = (char)((int32)'0' + digit);
-            pos = pos - 1;
-            temp = temp / 10;
-        }
-
-        // 添加负号
-        if (negative == 1)
-        {
-            arr[0] = '-';
-        }
-
-        // null terminator
-        arr[totalLen] = '\0';
-
-        return (string)buf;
     }
 
     // ========== 比较操作 ==========
@@ -191,21 +195,23 @@ public static class StringOps
 
     public static string Substring(string s, int32 start, int32 length)
     {
-        if (s == null) return null;
+        unsafe(using krt.mem;) {
+            if (s == null) return null;
 
-        int32 len = Length(s);
-        if (start < 0) start = 0;
-        if (start >= len) return "";
-        if (length < 0) length = 0;
-        if (start + length > len) length = len - start;
+            int32 len = Length(s);
+            if (start < 0) start = 0;
+            if (start >= len) return "";
+            if (length < 0) length = 0;
+            if (start + length > len) length = len - start;
 
-        int64 buf = (int64)Memory.Allocate((int64)(length + 1));
-        Memory.Copy((void*)buf, (void*)(Sys.InternalStringPtr(s) + (int64)start), length);
+            int64 buf = (int64)Memory.Allocate((int64)(length + 1));
+            Memory.Copy((void*)buf, (void*)(Sys.InternalStringPtr(s) + (int64)start), length);
 
-        char[] arr = (char[])buf;
-        arr[length] = '\0';
+            char[] arr = (char[])buf;
+            arr[length] = '\0';
 
-        return (string)buf;
+            return (string)buf;
+        }
     }
 
 
