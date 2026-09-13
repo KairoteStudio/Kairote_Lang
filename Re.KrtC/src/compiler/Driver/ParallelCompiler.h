@@ -15,6 +15,7 @@ typedef struct CompileTask {
     int target_type;
     int show_ir;
     int result;
+    bool has_object_code;
     char* error_message;
     double duration;
     void* compiler_context;

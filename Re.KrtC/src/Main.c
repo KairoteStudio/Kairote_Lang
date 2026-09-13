@@ -267,17 +267,26 @@ static int link_kro_executable(KrtConfig* config, KrtPlatform* platform, const c
                 if (import_pipeline) {
                     int import_result = KrtCompilePipelineExecute(import_pipeline, src_path, kro_path);
                     if (import_result && import_pipeline->compiler) {
-                        if (import_kro_count >= import_kro_capacity) {
-                            import_kro_capacity *= 2;
-                            char** expanded = (char**)realloc(import_kro_files, import_kro_capacity * sizeof(char*));
-                            if (!expanded) {
+                        if (import_pipeline->compiler->has_object_code) {
+                            if (import_kro_count >= import_kro_capacity) {
+                                import_kro_capacity *= 2;
+                                char** expanded =
+                                    (char**)realloc(import_kro_files, import_kro_capacity * sizeof(char*));
+                                if (!expanded) {
+                                    imports_ok = 0;
+                                    KrtCompilePipelineDestroy(import_pipeline);
+                                    break;
+                                }
+                                import_kro_files = expanded;
+                            }
+                            char* imported_kro = strdup(kro_path);
+                            if (!imported_kro) {
                                 imports_ok = 0;
                                 KrtCompilePipelineDestroy(import_pipeline);
                                 break;
                             }
-                            import_kro_files = expanded;
+                            import_kro_files[import_kro_count++] = imported_kro;
                         }
-                        import_kro_files[import_kro_count++] = strdup(kro_path);
 
                         int nested_count = 0;
                         char** nested_files = KrtCompilePipelineGetImportedFiles(import_pipeline, &nested_count);
@@ -285,6 +294,7 @@ static int link_kro_executable(KrtConfig* config, KrtPlatform* platform, const c
                             KrtConfigAddImportedFile(config, nested_files[j]);
                         }
                     } else {
+                        KrtCompilePipelinePrintErrorReport(import_pipeline);
                         imports_ok = 0;
                     }
                     KrtCompilePipelineDestroy(import_pipeline);

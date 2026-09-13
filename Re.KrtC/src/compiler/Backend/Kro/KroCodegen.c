@@ -1423,6 +1423,8 @@ void KrtKrtGenerate(FILE* output_file, const char* output_filename, KrtIRModule*
     }
 
     if (func_count == 0) {
+        /* Globals and string constants still require a valid object without a text section. */
+        kro_write_file(ctx.writer, ctx.output_filename);
         kro_writer_destroy(ctx.writer);
         if (ctx.string_const_sym_indices) {
             KRT_FREE(ctx.string_const_sym_indices);

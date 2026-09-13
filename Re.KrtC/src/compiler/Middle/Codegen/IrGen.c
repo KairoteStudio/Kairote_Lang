@@ -54,6 +54,44 @@ static int irgen_size_from_token(KrtTokenType t) {
     }
 }
 
+/* Arrays carry an element token for overloads but use an address for values. */
+static KrtTokenType irgen_array_expression_element_type(KrtIRBuilder* builder, ASTNode* expr) {
+    if (!expr || KrtSourceIsPointer(expr->resolved_type)) {
+        return TOKEN_EOF;
+    }
+    if (expr->type == AST_NEW_ARRAY_EXPRESSION) {
+        return expr->data.new_array_expr.type_token;
+    }
+    if (expr->type == AST_IDENTIFIER && builder) {
+        int token = 0, is_array = 0;
+        if (KrtIrVarTypeFind(builder, expr->data.identifier_name, &token, &is_array)) {
+            return is_array ? (KrtTokenType)token : TOKEN_EOF;
+        }
+        if (builder->semantic_analyzer) {
+            KrtTokenType variable_type = TOKEN_EOF;
+            bool variable_is_array = false;
+            if (symbol_table_query_var_type((SymbolTable*)builder->semantic_analyzer, expr->data.identifier_name,
+                                            &variable_type, &variable_is_array) &&
+                variable_is_array) {
+                return variable_type;
+            }
+        }
+    }
+    if (expr->type == AST_TERNARY_OPERATION) {
+        ASTNode* left_expr = expr->data.ternary_op.true_value;
+        ASTNode* right_expr = expr->data.ternary_op.false_value;
+        KrtTokenType left = irgen_array_expression_element_type(builder, left_expr);
+        KrtTokenType right = irgen_array_expression_element_type(builder, right_expr);
+        if (left == right || (right_expr && right_expr->type == AST_NULL)) {
+            return left;
+        }
+        if (left_expr && left_expr->type == AST_NULL) {
+            return right;
+        }
+    }
+    return TOKEN_EOF;
+}
+
 static KrtTokenType irgen_array_element_type(KrtIRBuilder* builder, ASTNode* expr) {
     if (!expr) {
         return TOKEN_EOF;
@@ -63,49 +101,11 @@ static KrtTokenType irgen_array_element_type(KrtIRBuilder* builder, ASTNode* exp
         element.pointer_depth--;
         return KrtSourceStorage(element);
     }
-    if (expr->type == AST_NEW_ARRAY_EXPRESSION) {
-        return expr->data.new_array_expr.type_token;
-    }
-    if (expr->type == AST_IDENTIFIER) {
-        int token = 0, is_array = 0;
-        if (KrtIrVarTypeFind(builder, expr->data.identifier_name, &token, &is_array)) {
-            return is_array ? (KrtTokenType)token : TOKEN_EOF;
-        }
-    }
-    return TOKEN_EOF;
+    return irgen_array_expression_element_type(builder, expr);
 }
 
 static int irgen_array_element_size(KrtIRBuilder* builder, ASTNode* array_expr) {
-    if (!array_expr) {
-        return 8;
-    }
-    if (array_expr->resolved_type.pointer_depth) {
-        return irgen_size_from_token(irgen_array_element_type(builder, array_expr));
-    }
-    (void)0;
-
-    if (array_expr->type == AST_NEW_ARRAY_EXPRESSION) {
-        return irgen_size_from_token(array_expr->data.new_array_expr.type_token);
-    }
-
-    if (array_expr->type == AST_IDENTIFIER && builder) {
-        int tok = 0, is_arr = 0;
-        if (KrtIrVarTypeFind(builder, array_expr->data.identifier_name, &tok, &is_arr)) {
-            return is_arr ? irgen_size_from_token((KrtTokenType)tok) : 8;
-        }
-        if (builder->semantic_analyzer) {
-            KrtTokenType vt = 0;
-            bool is_array = false;
-            if (symbol_table_query_var_type((SymbolTable*)builder->semantic_analyzer, array_expr->data.identifier_name,
-                                            &vt, &is_array) &&
-                is_array) {
-                return irgen_size_from_token(vt);
-            }
-        }
-        return 8;
-    }
-
-    return 8;
+    return irgen_size_from_token(irgen_array_element_type(builder, array_expr));
 }
 
 static int irgen_is_syscall_method(const char* class_name, const char* method_name) {
@@ -829,7 +829,15 @@ static KrtIRValue irgen_synth_streq(KrtIRBuilder* builder, KrtIRValue a, KrtIRVa
     KrtIRBasicBlock* step = KrtIrBlockCreate(builder, nb);
     KrtIRBasicBlock* neq = KrtIrBlockCreate(builder, "seq_diff_x");
     KrtIRBasicBlock* end = KrtIrBlockCreate(builder, eb);
-    KrtIrJump(builder, chk);
+    KrtIRBasicBlock* left_check = KrtIrBlockCreate(builder, "seq_left_check");
+    KrtIRBasicBlock* right_check = KrtIrBlockCreate(builder, "seq_right_check");
+
+    /* Equal addresses include two null strings. Never read either null operand. */
+    KrtIrBranch(builder, KrtIrCompare(builder, KRT_IR_EQ, a, b), end, left_check);
+    KrtIrBlockSetCurrent(builder, left_check);
+    KrtIrBranch(builder, KrtIrCompare(builder, KRT_IR_EQ, a, KRT_IMM_ZERO(builder)), neq, right_check);
+    KrtIrBlockSetCurrent(builder, right_check);
+    KrtIrBranch(builder, KrtIrCompare(builder, KRT_IR_EQ, b, KRT_IMM_ZERO(builder)), neq, chk);
 
     KrtIrBlockSetCurrent(builder, chk);
     KrtIRValue i0 = KrtIrLoad(builder, in);
@@ -1224,13 +1232,11 @@ static KrtIRValue irgen_typed_call_argument(KrtIRBuilder* builder, ASTNode* call
         return value;
     }
     KrtSourceType parameter = call->function_type->parameters[index];
-    int is_array = argument->type == AST_ARRAY_LITERAL, token = 0;
-    if (argument->type == AST_IDENTIFIER) {
-        KrtIrVarTypeFind(builder, argument->data.identifier_name, &token, &is_array);
-    }
+    bool is_array =
+        argument->type == AST_ARRAY_LITERAL || irgen_array_expression_element_type(builder, argument) != TOKEN_EOF;
     KrtTokenType type = KrtSourceAbiStorage(parameter);
-    if (!is_array && (parameter.is_ref || KrtSourceIsPointer(parameter) || KrtTokenIntegerBits(type) > 64 ||
-                      irgen_is_float_token(type))) {
+    if (parameter.is_ref || KrtSourceIsPointer(parameter) ||
+        (!is_array && (KrtTokenIntegerBits(type) || irgen_is_float_token(type)))) {
         return KrtIrCast(builder, value, type);
     }
     return value;
@@ -1715,9 +1721,9 @@ static KrtIRValue irgen_expr_ternary_operation(KrtIRBuilder* builder, ASTNode* e
     char res_name[64];
     snprintf(res_name, sizeof(res_name), "__ter_%d", builder->label_counter++);
     KrtIrAlloc(builder, res_name);
-    KrtIrVarTypePush(builder, res_name,
-                     KrtSourceIsPointer(expr->resolved_type) ? TOKEN_UINT64 : krt_ir_infer_mangle_type(builder, expr),
-                     0);
+    bool is_address =
+        KrtSourceIsPointer(expr->resolved_type) || irgen_array_expression_element_type(builder, expr) != TOKEN_EOF;
+    KrtIrVarTypePush(builder, res_name, is_address ? TOKEN_UINT64 : krt_ir_infer_mangle_type(builder, expr), 0);
 
     KrtIrBlockSetCurrent(builder, true_block);
     KrtIRValue true_value = krt_ir_generate_expression(builder, expr->data.ternary_op.true_value);
@@ -3154,6 +3160,13 @@ static void irgen_stmt_static_function_declaration(KrtIRBuilder* builder, ASTNod
     KrtIRFunction* func =
         KrtIrFunctionCreate(builder, function_name, params, stmt->data.static_function_decl.parameter_count,
                             stmt->data.static_function_decl.return_type);
+    int saved_var_type_count = builder->var_type_count;
+    for (int i = 0; i < pc; i++) {
+        KrtIrVarTypePush(builder, stmt->data.static_function_decl.parameters[i],
+                         stmt->data.static_function_decl.parameter_types[i],
+                         stmt->data.static_function_decl.parameter_is_array &&
+                             stmt->data.static_function_decl.parameter_is_array[i]);
+    }
     KrtIrFunctionSetEntry(builder, func);
     KRT_IRGEN_SAFE_FREE(params);
 
@@ -3170,6 +3183,7 @@ static void irgen_stmt_static_function_declaration(KrtIRBuilder* builder, ASTNod
         KrtIrReturn(builder, KRT_IMM_ZERO(builder));
     }
 
+    KrtIrVarTypeTruncate(builder, saved_var_type_count);
     KRT_IRGEN_SAFE_FREE(mangled_name);
     return;
 }
@@ -3335,8 +3349,8 @@ static int krt_ir_check_has_return(ASTNode* node) {
     case AST_POINT_BLOCK:
         return krt_ir_check_has_return(node->data.point_block.body);
     case AST_IF_STATEMENT:
-        return krt_ir_check_has_return(node->data.if_stmt.then_branch) &&
-               (!node->data.if_stmt.else_branch || krt_ir_check_has_return(node->data.if_stmt.else_branch));
+        return node->data.if_stmt.else_branch && krt_ir_check_has_return(node->data.if_stmt.then_branch) &&
+               krt_ir_check_has_return(node->data.if_stmt.else_branch);
     case AST_WHILE_STATEMENT:
     case AST_DO_WHILE_STATEMENT:
     case AST_FOR_STATEMENT:

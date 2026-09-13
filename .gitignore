@@ -20,6 +20,7 @@ lsp/obj/
 lsp/build/
 *.o
 *.kro
+__pycache__/
 # Generated test results and disassembly are retained locally.
 /Test/**/*.json
 /Test/**/*.asm

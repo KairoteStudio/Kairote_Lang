@@ -1,0 +1,1420 @@
+using System.Memory;
+
+/**
+ * Operations on compiler-allocated arrays of standard integers, bool, float32 and float64.
+ * Raw Memory.Allocate buffers have no array header and cannot be passed here.
+ */
+public static class ArrayOps {
+    private static int32 get_length(void* data, int32 element_size) {
+        unsafe(using krt.mem;) {
+            if (data == null) {
+                return 0;
+            }
+            // The compiler stores allocation bytes at data - 8; its heap header is 16 bytes.
+            int64* header = (int64*)data;
+            int64 total_size = header[-1];
+            if (total_size < 16) {
+                return -1;
+            }
+            int64 byte_length = total_size - 16;
+            if (byte_length % (int64)element_size != 0) {
+                return -1;
+            }
+            int64 count = byte_length / (int64)element_size;
+            if (count > 2147483647) {
+                return -1;
+            }
+            return (int32)count;
+        }
+    }
+
+    private static bool valid_range(int32 length, int32 start, int32 count) {
+        if (length < 0 || start < 0 || count < 0 || start > length) {
+            return false;
+        }
+        return count <= length - start;
+    }
+
+    private static bool copy_range(void* source, int32 source_index, void* destination,
+                                   int32 destination_index, int32 count, int32 element_size) {
+        unsafe(using krt.mem;) {
+            int32 source_length = get_length(source, element_size);
+            int32 destination_length = get_length(destination, element_size);
+            if (!valid_range(source_length, source_index, count) ||
+                !valid_range(destination_length, destination_index, count)) {
+                return false;
+            }
+            if (count == 0) {
+                return true;
+            }
+            byte* first = (byte*)source + (int64)source_index * (int64)element_size;
+            byte* target = (byte*)destination + (int64)destination_index * (int64)element_size;
+            return Memory.TryMove(target, first, (int64)count * (int64)element_size);
+        }
+    }
+
+    private static bool clear_range(void* data, int32 start, int32 count, int32 element_size) {
+        unsafe(using krt.mem;) {
+            if (!valid_range(get_length(data, element_size), start, count)) {
+                return false;
+            }
+            if (count == 0) {
+                return true;
+            }
+            byte* target = (byte*)data + (int64)start * (int64)element_size;
+            return Memory.TryClear(target, (int64)count * (int64)element_size);
+        }
+    }
+
+    /** Return element count, zero for null, or -1 for an invalid/oversized array header. */
+    public static int32 Length(byte[] values) {
+        unsafe(using krt.mem;) {
+            return get_length((void*)values, 1);
+        }
+    }
+
+    /** Copy all source elements with overlap support; false leaves destination unchanged. */
+    public static bool Copy(byte[] source, byte[] destination) {
+        return ArrayOps.Copy(source, 0, destination, 0, ArrayOps.Length(source));
+    }
+
+    /** Copy count elements from index zero, reporting invalid ranges without partial writes. */
+    public static bool Copy(byte[] source, byte[] destination, int32 count) {
+        return ArrayOps.Copy(source, 0, destination, 0, count);
+    }
+
+    /** Copy a checked range with overlap support; zero count is permitted at either array end. */
+    public static bool Copy(byte[] source, int32 source_index, byte[] destination,
+                            int32 destination_index, int32 count) {
+        unsafe(using krt.mem;) {
+            return copy_range((void*)source, source_index, (void*)destination, destination_index, count, 1);
+        }
+    }
+
+    /** Clear every element, reporting whether the array header is valid. */
+    public static bool Clear(byte[] values) {
+        return ArrayOps.Clear(values, 0, ArrayOps.Length(values));
+    }
+
+    /** Clear a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Clear(byte[] values, int32 start, int32 count) {
+        unsafe(using krt.mem;) {
+            return clear_range((void*)values, start, count, 1);
+        }
+    }
+
+    /** Fill every element with value, reporting whether the array header is valid. */
+    public static bool Fill(byte[] values, byte value) {
+        return ArrayOps.Fill(values, value, 0, ArrayOps.Length(values));
+    }
+
+    /** Fill a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Fill(byte[] values, byte value, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return false;
+        }
+        int32 index = start;
+        int32 end = start + count;
+        while (index < end) {
+            values[index] = value;
+            index = index + 1;
+        }
+        return true;
+    }
+
+    /** Reverse every element in place. */
+    public static bool Reverse(byte[] values) {
+        return ArrayOps.Reverse(values, 0, ArrayOps.Length(values));
+    }
+
+    /** Reverse a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Reverse(byte[] values, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return false;
+        }
+        int32 left = start;
+        int32 right = start + count - 1;
+        while (left < right) {
+            byte temporary = values[left];
+            values[left] = values[right];
+            values[right] = temporary;
+            left = left + 1;
+            right = right - 1;
+        }
+        return true;
+    }
+
+    /** Find the first element equal under ==, or return -1 when absent. */
+    public static int32 IndexOf(byte[] values, byte value) {
+        return ArrayOps.IndexOf(values, value, 0, ArrayOps.Length(values));
+    }
+
+    /** Search a checked range: -1 means absent and -2 means invalid arguments. */
+    public static int32 IndexOf(byte[] values, byte value, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return -2;
+        }
+        int32 index = start;
+        int32 end = start + count;
+        while (index < end) {
+            if (values[index] == value) {
+                return index;
+            }
+            index = index + 1;
+        }
+        return -1;
+    }
+
+    /** Return whether an element compares equal to value. */
+    public static bool Contains(byte[] values, byte value) {
+        return ArrayOps.IndexOf(values, value) >= 0;
+    }
+
+    /** Return element count, zero for null, or -1 for an invalid/oversized array header. */
+    public static int32 Length(int8[] values) {
+        unsafe(using krt.mem;) {
+            return get_length((void*)values, 1);
+        }
+    }
+
+    /** Copy all source elements with overlap support; false leaves destination unchanged. */
+    public static bool Copy(int8[] source, int8[] destination) {
+        return ArrayOps.Copy(source, 0, destination, 0, ArrayOps.Length(source));
+    }
+
+    /** Copy count elements from index zero, reporting invalid ranges without partial writes. */
+    public static bool Copy(int8[] source, int8[] destination, int32 count) {
+        return ArrayOps.Copy(source, 0, destination, 0, count);
+    }
+
+    /** Copy a checked range with overlap support; zero count is permitted at either array end. */
+    public static bool Copy(int8[] source, int32 source_index, int8[] destination,
+                            int32 destination_index, int32 count) {
+        unsafe(using krt.mem;) {
+            return copy_range((void*)source, source_index, (void*)destination, destination_index, count, 1);
+        }
+    }
+
+    /** Clear every element, reporting whether the array header is valid. */
+    public static bool Clear(int8[] values) {
+        return ArrayOps.Clear(values, 0, ArrayOps.Length(values));
+    }
+
+    /** Clear a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Clear(int8[] values, int32 start, int32 count) {
+        unsafe(using krt.mem;) {
+            return clear_range((void*)values, start, count, 1);
+        }
+    }
+
+    /** Fill every element with value, reporting whether the array header is valid. */
+    public static bool Fill(int8[] values, int8 value) {
+        return ArrayOps.Fill(values, value, 0, ArrayOps.Length(values));
+    }
+
+    /** Fill a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Fill(int8[] values, int8 value, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return false;
+        }
+        int32 index = start;
+        int32 end = start + count;
+        while (index < end) {
+            values[index] = value;
+            index = index + 1;
+        }
+        return true;
+    }
+
+    /** Reverse every element in place. */
+    public static bool Reverse(int8[] values) {
+        return ArrayOps.Reverse(values, 0, ArrayOps.Length(values));
+    }
+
+    /** Reverse a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Reverse(int8[] values, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return false;
+        }
+        int32 left = start;
+        int32 right = start + count - 1;
+        while (left < right) {
+            int8 temporary = values[left];
+            values[left] = values[right];
+            values[right] = temporary;
+            left = left + 1;
+            right = right - 1;
+        }
+        return true;
+    }
+
+    /** Find the first element equal under ==, or return -1 when absent. */
+    public static int32 IndexOf(int8[] values, int8 value) {
+        return ArrayOps.IndexOf(values, value, 0, ArrayOps.Length(values));
+    }
+
+    /** Search a checked range: -1 means absent and -2 means invalid arguments. */
+    public static int32 IndexOf(int8[] values, int8 value, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return -2;
+        }
+        int32 index = start;
+        int32 end = start + count;
+        while (index < end) {
+            if (values[index] == value) {
+                return index;
+            }
+            index = index + 1;
+        }
+        return -1;
+    }
+
+    /** Return whether an element compares equal to value. */
+    public static bool Contains(int8[] values, int8 value) {
+        return ArrayOps.IndexOf(values, value) >= 0;
+    }
+
+    /** Return element count, zero for null, or -1 for an invalid/oversized array header. */
+    public static int32 Length(int16[] values) {
+        unsafe(using krt.mem;) {
+            return get_length((void*)values, 2);
+        }
+    }
+
+    /** Copy all source elements with overlap support; false leaves destination unchanged. */
+    public static bool Copy(int16[] source, int16[] destination) {
+        return ArrayOps.Copy(source, 0, destination, 0, ArrayOps.Length(source));
+    }
+
+    /** Copy count elements from index zero, reporting invalid ranges without partial writes. */
+    public static bool Copy(int16[] source, int16[] destination, int32 count) {
+        return ArrayOps.Copy(source, 0, destination, 0, count);
+    }
+
+    /** Copy a checked range with overlap support; zero count is permitted at either array end. */
+    public static bool Copy(int16[] source, int32 source_index, int16[] destination,
+                            int32 destination_index, int32 count) {
+        unsafe(using krt.mem;) {
+            return copy_range((void*)source, source_index, (void*)destination, destination_index, count, 2);
+        }
+    }
+
+    /** Clear every element, reporting whether the array header is valid. */
+    public static bool Clear(int16[] values) {
+        return ArrayOps.Clear(values, 0, ArrayOps.Length(values));
+    }
+
+    /** Clear a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Clear(int16[] values, int32 start, int32 count) {
+        unsafe(using krt.mem;) {
+            return clear_range((void*)values, start, count, 2);
+        }
+    }
+
+    /** Fill every element with value, reporting whether the array header is valid. */
+    public static bool Fill(int16[] values, int16 value) {
+        return ArrayOps.Fill(values, value, 0, ArrayOps.Length(values));
+    }
+
+    /** Fill a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Fill(int16[] values, int16 value, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return false;
+        }
+        int32 index = start;
+        int32 end = start + count;
+        while (index < end) {
+            values[index] = value;
+            index = index + 1;
+        }
+        return true;
+    }
+
+    /** Reverse every element in place. */
+    public static bool Reverse(int16[] values) {
+        return ArrayOps.Reverse(values, 0, ArrayOps.Length(values));
+    }
+
+    /** Reverse a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Reverse(int16[] values, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return false;
+        }
+        int32 left = start;
+        int32 right = start + count - 1;
+        while (left < right) {
+            int16 temporary = values[left];
+            values[left] = values[right];
+            values[right] = temporary;
+            left = left + 1;
+            right = right - 1;
+        }
+        return true;
+    }
+
+    /** Find the first element equal under ==, or return -1 when absent. */
+    public static int32 IndexOf(int16[] values, int16 value) {
+        return ArrayOps.IndexOf(values, value, 0, ArrayOps.Length(values));
+    }
+
+    /** Search a checked range: -1 means absent and -2 means invalid arguments. */
+    public static int32 IndexOf(int16[] values, int16 value, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return -2;
+        }
+        int32 index = start;
+        int32 end = start + count;
+        while (index < end) {
+            if (values[index] == value) {
+                return index;
+            }
+            index = index + 1;
+        }
+        return -1;
+    }
+
+    /** Return whether an element compares equal to value. */
+    public static bool Contains(int16[] values, int16 value) {
+        return ArrayOps.IndexOf(values, value) >= 0;
+    }
+
+    /** Return element count, zero for null, or -1 for an invalid/oversized array header. */
+    public static int32 Length(uint16[] values) {
+        unsafe(using krt.mem;) {
+            return get_length((void*)values, 2);
+        }
+    }
+
+    /** Copy all source elements with overlap support; false leaves destination unchanged. */
+    public static bool Copy(uint16[] source, uint16[] destination) {
+        return ArrayOps.Copy(source, 0, destination, 0, ArrayOps.Length(source));
+    }
+
+    /** Copy count elements from index zero, reporting invalid ranges without partial writes. */
+    public static bool Copy(uint16[] source, uint16[] destination, int32 count) {
+        return ArrayOps.Copy(source, 0, destination, 0, count);
+    }
+
+    /** Copy a checked range with overlap support; zero count is permitted at either array end. */
+    public static bool Copy(uint16[] source, int32 source_index, uint16[] destination,
+                            int32 destination_index, int32 count) {
+        unsafe(using krt.mem;) {
+            return copy_range((void*)source, source_index, (void*)destination, destination_index, count, 2);
+        }
+    }
+
+    /** Clear every element, reporting whether the array header is valid. */
+    public static bool Clear(uint16[] values) {
+        return ArrayOps.Clear(values, 0, ArrayOps.Length(values));
+    }
+
+    /** Clear a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Clear(uint16[] values, int32 start, int32 count) {
+        unsafe(using krt.mem;) {
+            return clear_range((void*)values, start, count, 2);
+        }
+    }
+
+    /** Fill every element with value, reporting whether the array header is valid. */
+    public static bool Fill(uint16[] values, uint16 value) {
+        return ArrayOps.Fill(values, value, 0, ArrayOps.Length(values));
+    }
+
+    /** Fill a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Fill(uint16[] values, uint16 value, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return false;
+        }
+        int32 index = start;
+        int32 end = start + count;
+        while (index < end) {
+            values[index] = value;
+            index = index + 1;
+        }
+        return true;
+    }
+
+    /** Reverse every element in place. */
+    public static bool Reverse(uint16[] values) {
+        return ArrayOps.Reverse(values, 0, ArrayOps.Length(values));
+    }
+
+    /** Reverse a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Reverse(uint16[] values, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return false;
+        }
+        int32 left = start;
+        int32 right = start + count - 1;
+        while (left < right) {
+            uint16 temporary = values[left];
+            values[left] = values[right];
+            values[right] = temporary;
+            left = left + 1;
+            right = right - 1;
+        }
+        return true;
+    }
+
+    /** Find the first element equal under ==, or return -1 when absent. */
+    public static int32 IndexOf(uint16[] values, uint16 value) {
+        return ArrayOps.IndexOf(values, value, 0, ArrayOps.Length(values));
+    }
+
+    /** Search a checked range: -1 means absent and -2 means invalid arguments. */
+    public static int32 IndexOf(uint16[] values, uint16 value, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return -2;
+        }
+        int32 index = start;
+        int32 end = start + count;
+        while (index < end) {
+            if (values[index] == value) {
+                return index;
+            }
+            index = index + 1;
+        }
+        return -1;
+    }
+
+    /** Return whether an element compares equal to value. */
+    public static bool Contains(uint16[] values, uint16 value) {
+        return ArrayOps.IndexOf(values, value) >= 0;
+    }
+
+    /** Return element count, zero for null, or -1 for an invalid/oversized array header. */
+    public static int32 Length(int32[] values) {
+        unsafe(using krt.mem;) {
+            return get_length((void*)values, 4);
+        }
+    }
+
+    /** Copy all source elements with overlap support; false leaves destination unchanged. */
+    public static bool Copy(int32[] source, int32[] destination) {
+        return ArrayOps.Copy(source, 0, destination, 0, ArrayOps.Length(source));
+    }
+
+    /** Copy count elements from index zero, reporting invalid ranges without partial writes. */
+    public static bool Copy(int32[] source, int32[] destination, int32 count) {
+        return ArrayOps.Copy(source, 0, destination, 0, count);
+    }
+
+    /** Copy a checked range with overlap support; zero count is permitted at either array end. */
+    public static bool Copy(int32[] source, int32 source_index, int32[] destination,
+                            int32 destination_index, int32 count) {
+        unsafe(using krt.mem;) {
+            return copy_range((void*)source, source_index, (void*)destination, destination_index, count, 4);
+        }
+    }
+
+    /** Clear every element, reporting whether the array header is valid. */
+    public static bool Clear(int32[] values) {
+        return ArrayOps.Clear(values, 0, ArrayOps.Length(values));
+    }
+
+    /** Clear a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Clear(int32[] values, int32 start, int32 count) {
+        unsafe(using krt.mem;) {
+            return clear_range((void*)values, start, count, 4);
+        }
+    }
+
+    /** Fill every element with value, reporting whether the array header is valid. */
+    public static bool Fill(int32[] values, int32 value) {
+        return ArrayOps.Fill(values, value, 0, ArrayOps.Length(values));
+    }
+
+    /** Fill a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Fill(int32[] values, int32 value, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return false;
+        }
+        int32 index = start;
+        int32 end = start + count;
+        while (index < end) {
+            values[index] = value;
+            index = index + 1;
+        }
+        return true;
+    }
+
+    /** Reverse every element in place. */
+    public static bool Reverse(int32[] values) {
+        return ArrayOps.Reverse(values, 0, ArrayOps.Length(values));
+    }
+
+    /** Reverse a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Reverse(int32[] values, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return false;
+        }
+        int32 left = start;
+        int32 right = start + count - 1;
+        while (left < right) {
+            int32 temporary = values[left];
+            values[left] = values[right];
+            values[right] = temporary;
+            left = left + 1;
+            right = right - 1;
+        }
+        return true;
+    }
+
+    /** Find the first element equal under ==, or return -1 when absent. */
+    public static int32 IndexOf(int32[] values, int32 value) {
+        return ArrayOps.IndexOf(values, value, 0, ArrayOps.Length(values));
+    }
+
+    /** Search a checked range: -1 means absent and -2 means invalid arguments. */
+    public static int32 IndexOf(int32[] values, int32 value, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return -2;
+        }
+        int32 index = start;
+        int32 end = start + count;
+        while (index < end) {
+            if (values[index] == value) {
+                return index;
+            }
+            index = index + 1;
+        }
+        return -1;
+    }
+
+    /** Return whether an element compares equal to value. */
+    public static bool Contains(int32[] values, int32 value) {
+        return ArrayOps.IndexOf(values, value) >= 0;
+    }
+
+    /** Return element count, zero for null, or -1 for an invalid/oversized array header. */
+    public static int32 Length(uint32[] values) {
+        unsafe(using krt.mem;) {
+            return get_length((void*)values, 4);
+        }
+    }
+
+    /** Copy all source elements with overlap support; false leaves destination unchanged. */
+    public static bool Copy(uint32[] source, uint32[] destination) {
+        return ArrayOps.Copy(source, 0, destination, 0, ArrayOps.Length(source));
+    }
+
+    /** Copy count elements from index zero, reporting invalid ranges without partial writes. */
+    public static bool Copy(uint32[] source, uint32[] destination, int32 count) {
+        return ArrayOps.Copy(source, 0, destination, 0, count);
+    }
+
+    /** Copy a checked range with overlap support; zero count is permitted at either array end. */
+    public static bool Copy(uint32[] source, int32 source_index, uint32[] destination,
+                            int32 destination_index, int32 count) {
+        unsafe(using krt.mem;) {
+            return copy_range((void*)source, source_index, (void*)destination, destination_index, count, 4);
+        }
+    }
+
+    /** Clear every element, reporting whether the array header is valid. */
+    public static bool Clear(uint32[] values) {
+        return ArrayOps.Clear(values, 0, ArrayOps.Length(values));
+    }
+
+    /** Clear a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Clear(uint32[] values, int32 start, int32 count) {
+        unsafe(using krt.mem;) {
+            return clear_range((void*)values, start, count, 4);
+        }
+    }
+
+    /** Fill every element with value, reporting whether the array header is valid. */
+    public static bool Fill(uint32[] values, uint32 value) {
+        return ArrayOps.Fill(values, value, 0, ArrayOps.Length(values));
+    }
+
+    /** Fill a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Fill(uint32[] values, uint32 value, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return false;
+        }
+        int32 index = start;
+        int32 end = start + count;
+        while (index < end) {
+            values[index] = value;
+            index = index + 1;
+        }
+        return true;
+    }
+
+    /** Reverse every element in place. */
+    public static bool Reverse(uint32[] values) {
+        return ArrayOps.Reverse(values, 0, ArrayOps.Length(values));
+    }
+
+    /** Reverse a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Reverse(uint32[] values, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return false;
+        }
+        int32 left = start;
+        int32 right = start + count - 1;
+        while (left < right) {
+            uint32 temporary = values[left];
+            values[left] = values[right];
+            values[right] = temporary;
+            left = left + 1;
+            right = right - 1;
+        }
+        return true;
+    }
+
+    /** Find the first element equal under ==, or return -1 when absent. */
+    public static int32 IndexOf(uint32[] values, uint32 value) {
+        return ArrayOps.IndexOf(values, value, 0, ArrayOps.Length(values));
+    }
+
+    /** Search a checked range: -1 means absent and -2 means invalid arguments. */
+    public static int32 IndexOf(uint32[] values, uint32 value, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return -2;
+        }
+        int32 index = start;
+        int32 end = start + count;
+        while (index < end) {
+            if (values[index] == value) {
+                return index;
+            }
+            index = index + 1;
+        }
+        return -1;
+    }
+
+    /** Return whether an element compares equal to value. */
+    public static bool Contains(uint32[] values, uint32 value) {
+        return ArrayOps.IndexOf(values, value) >= 0;
+    }
+
+    /** Return element count, zero for null, or -1 for an invalid/oversized array header. */
+    public static int32 Length(int64[] values) {
+        unsafe(using krt.mem;) {
+            return get_length((void*)values, 8);
+        }
+    }
+
+    /** Copy all source elements with overlap support; false leaves destination unchanged. */
+    public static bool Copy(int64[] source, int64[] destination) {
+        return ArrayOps.Copy(source, 0, destination, 0, ArrayOps.Length(source));
+    }
+
+    /** Copy count elements from index zero, reporting invalid ranges without partial writes. */
+    public static bool Copy(int64[] source, int64[] destination, int32 count) {
+        return ArrayOps.Copy(source, 0, destination, 0, count);
+    }
+
+    /** Copy a checked range with overlap support; zero count is permitted at either array end. */
+    public static bool Copy(int64[] source, int32 source_index, int64[] destination,
+                            int32 destination_index, int32 count) {
+        unsafe(using krt.mem;) {
+            return copy_range((void*)source, source_index, (void*)destination, destination_index, count, 8);
+        }
+    }
+
+    /** Clear every element, reporting whether the array header is valid. */
+    public static bool Clear(int64[] values) {
+        return ArrayOps.Clear(values, 0, ArrayOps.Length(values));
+    }
+
+    /** Clear a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Clear(int64[] values, int32 start, int32 count) {
+        unsafe(using krt.mem;) {
+            return clear_range((void*)values, start, count, 8);
+        }
+    }
+
+    /** Fill every element with value, reporting whether the array header is valid. */
+    public static bool Fill(int64[] values, int64 value) {
+        return ArrayOps.Fill(values, value, 0, ArrayOps.Length(values));
+    }
+
+    /** Fill a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Fill(int64[] values, int64 value, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return false;
+        }
+        int32 index = start;
+        int32 end = start + count;
+        while (index < end) {
+            values[index] = value;
+            index = index + 1;
+        }
+        return true;
+    }
+
+    /** Reverse every element in place. */
+    public static bool Reverse(int64[] values) {
+        return ArrayOps.Reverse(values, 0, ArrayOps.Length(values));
+    }
+
+    /** Reverse a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Reverse(int64[] values, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return false;
+        }
+        int32 left = start;
+        int32 right = start + count - 1;
+        while (left < right) {
+            int64 temporary = values[left];
+            values[left] = values[right];
+            values[right] = temporary;
+            left = left + 1;
+            right = right - 1;
+        }
+        return true;
+    }
+
+    /** Find the first element equal under ==, or return -1 when absent. */
+    public static int32 IndexOf(int64[] values, int64 value) {
+        return ArrayOps.IndexOf(values, value, 0, ArrayOps.Length(values));
+    }
+
+    /** Search a checked range: -1 means absent and -2 means invalid arguments. */
+    public static int32 IndexOf(int64[] values, int64 value, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return -2;
+        }
+        int32 index = start;
+        int32 end = start + count;
+        while (index < end) {
+            if (values[index] == value) {
+                return index;
+            }
+            index = index + 1;
+        }
+        return -1;
+    }
+
+    /** Return whether an element compares equal to value. */
+    public static bool Contains(int64[] values, int64 value) {
+        return ArrayOps.IndexOf(values, value) >= 0;
+    }
+
+    /** Return element count, zero for null, or -1 for an invalid/oversized array header. */
+    public static int32 Length(uint64[] values) {
+        unsafe(using krt.mem;) {
+            return get_length((void*)values, 8);
+        }
+    }
+
+    /** Copy all source elements with overlap support; false leaves destination unchanged. */
+    public static bool Copy(uint64[] source, uint64[] destination) {
+        return ArrayOps.Copy(source, 0, destination, 0, ArrayOps.Length(source));
+    }
+
+    /** Copy count elements from index zero, reporting invalid ranges without partial writes. */
+    public static bool Copy(uint64[] source, uint64[] destination, int32 count) {
+        return ArrayOps.Copy(source, 0, destination, 0, count);
+    }
+
+    /** Copy a checked range with overlap support; zero count is permitted at either array end. */
+    public static bool Copy(uint64[] source, int32 source_index, uint64[] destination,
+                            int32 destination_index, int32 count) {
+        unsafe(using krt.mem;) {
+            return copy_range((void*)source, source_index, (void*)destination, destination_index, count, 8);
+        }
+    }
+
+    /** Clear every element, reporting whether the array header is valid. */
+    public static bool Clear(uint64[] values) {
+        return ArrayOps.Clear(values, 0, ArrayOps.Length(values));
+    }
+
+    /** Clear a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Clear(uint64[] values, int32 start, int32 count) {
+        unsafe(using krt.mem;) {
+            return clear_range((void*)values, start, count, 8);
+        }
+    }
+
+    /** Fill every element with value, reporting whether the array header is valid. */
+    public static bool Fill(uint64[] values, uint64 value) {
+        return ArrayOps.Fill(values, value, 0, ArrayOps.Length(values));
+    }
+
+    /** Fill a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Fill(uint64[] values, uint64 value, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return false;
+        }
+        int32 index = start;
+        int32 end = start + count;
+        while (index < end) {
+            values[index] = value;
+            index = index + 1;
+        }
+        return true;
+    }
+
+    /** Reverse every element in place. */
+    public static bool Reverse(uint64[] values) {
+        return ArrayOps.Reverse(values, 0, ArrayOps.Length(values));
+    }
+
+    /** Reverse a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Reverse(uint64[] values, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return false;
+        }
+        int32 left = start;
+        int32 right = start + count - 1;
+        while (left < right) {
+            uint64 temporary = values[left];
+            values[left] = values[right];
+            values[right] = temporary;
+            left = left + 1;
+            right = right - 1;
+        }
+        return true;
+    }
+
+    /** Find the first element equal under ==, or return -1 when absent. */
+    public static int32 IndexOf(uint64[] values, uint64 value) {
+        return ArrayOps.IndexOf(values, value, 0, ArrayOps.Length(values));
+    }
+
+    /** Search a checked range: -1 means absent and -2 means invalid arguments. */
+    public static int32 IndexOf(uint64[] values, uint64 value, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return -2;
+        }
+        int32 index = start;
+        int32 end = start + count;
+        while (index < end) {
+            if (values[index] == value) {
+                return index;
+            }
+            index = index + 1;
+        }
+        return -1;
+    }
+
+    /** Return whether an element compares equal to value. */
+    public static bool Contains(uint64[] values, uint64 value) {
+        return ArrayOps.IndexOf(values, value) >= 0;
+    }
+
+    /** Return element count, zero for null, or -1 for an invalid/oversized array header. */
+    public static int32 Length(int128[] values) {
+        unsafe(using krt.mem;) {
+            return get_length((void*)values, 16);
+        }
+    }
+
+    /** Copy all source elements with overlap support; false leaves destination unchanged. */
+    public static bool Copy(int128[] source, int128[] destination) {
+        return ArrayOps.Copy(source, 0, destination, 0, ArrayOps.Length(source));
+    }
+
+    /** Copy count elements from index zero, reporting invalid ranges without partial writes. */
+    public static bool Copy(int128[] source, int128[] destination, int32 count) {
+        return ArrayOps.Copy(source, 0, destination, 0, count);
+    }
+
+    /** Copy a checked range with overlap support; zero count is permitted at either array end. */
+    public static bool Copy(int128[] source, int32 source_index, int128[] destination,
+                            int32 destination_index, int32 count) {
+        unsafe(using krt.mem;) {
+            return copy_range((void*)source, source_index, (void*)destination, destination_index, count, 16);
+        }
+    }
+
+    /** Clear every element, reporting whether the array header is valid. */
+    public static bool Clear(int128[] values) {
+        return ArrayOps.Clear(values, 0, ArrayOps.Length(values));
+    }
+
+    /** Clear a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Clear(int128[] values, int32 start, int32 count) {
+        unsafe(using krt.mem;) {
+            return clear_range((void*)values, start, count, 16);
+        }
+    }
+
+    /** Fill every element with value, reporting whether the array header is valid. */
+    public static bool Fill(int128[] values, int128 value) {
+        return ArrayOps.Fill(values, value, 0, ArrayOps.Length(values));
+    }
+
+    /** Fill a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Fill(int128[] values, int128 value, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return false;
+        }
+        int32 index = start;
+        int32 end = start + count;
+        while (index < end) {
+            values[index] = value;
+            index = index + 1;
+        }
+        return true;
+    }
+
+    /** Reverse every element in place. */
+    public static bool Reverse(int128[] values) {
+        return ArrayOps.Reverse(values, 0, ArrayOps.Length(values));
+    }
+
+    /** Reverse a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Reverse(int128[] values, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return false;
+        }
+        int32 left = start;
+        int32 right = start + count - 1;
+        while (left < right) {
+            int128 temporary = values[left];
+            values[left] = values[right];
+            values[right] = temporary;
+            left = left + 1;
+            right = right - 1;
+        }
+        return true;
+    }
+
+    /** Find the first element equal under ==, or return -1 when absent. */
+    public static int32 IndexOf(int128[] values, int128 value) {
+        return ArrayOps.IndexOf(values, value, 0, ArrayOps.Length(values));
+    }
+
+    /** Search a checked range: -1 means absent and -2 means invalid arguments. */
+    public static int32 IndexOf(int128[] values, int128 value, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return -2;
+        }
+        int32 index = start;
+        int32 end = start + count;
+        while (index < end) {
+            if (values[index] == value) {
+                return index;
+            }
+            index = index + 1;
+        }
+        return -1;
+    }
+
+    /** Return whether an element compares equal to value. */
+    public static bool Contains(int128[] values, int128 value) {
+        return ArrayOps.IndexOf(values, value) >= 0;
+    }
+
+    /** Return element count, zero for null, or -1 for an invalid/oversized array header. */
+    public static int32 Length(uint128[] values) {
+        unsafe(using krt.mem;) {
+            return get_length((void*)values, 16);
+        }
+    }
+
+    /** Copy all source elements with overlap support; false leaves destination unchanged. */
+    public static bool Copy(uint128[] source, uint128[] destination) {
+        return ArrayOps.Copy(source, 0, destination, 0, ArrayOps.Length(source));
+    }
+
+    /** Copy count elements from index zero, reporting invalid ranges without partial writes. */
+    public static bool Copy(uint128[] source, uint128[] destination, int32 count) {
+        return ArrayOps.Copy(source, 0, destination, 0, count);
+    }
+
+    /** Copy a checked range with overlap support; zero count is permitted at either array end. */
+    public static bool Copy(uint128[] source, int32 source_index, uint128[] destination,
+                            int32 destination_index, int32 count) {
+        unsafe(using krt.mem;) {
+            return copy_range((void*)source, source_index, (void*)destination, destination_index, count, 16);
+        }
+    }
+
+    /** Clear every element, reporting whether the array header is valid. */
+    public static bool Clear(uint128[] values) {
+        return ArrayOps.Clear(values, 0, ArrayOps.Length(values));
+    }
+
+    /** Clear a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Clear(uint128[] values, int32 start, int32 count) {
+        unsafe(using krt.mem;) {
+            return clear_range((void*)values, start, count, 16);
+        }
+    }
+
+    /** Fill every element with value, reporting whether the array header is valid. */
+    public static bool Fill(uint128[] values, uint128 value) {
+        return ArrayOps.Fill(values, value, 0, ArrayOps.Length(values));
+    }
+
+    /** Fill a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Fill(uint128[] values, uint128 value, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return false;
+        }
+        int32 index = start;
+        int32 end = start + count;
+        while (index < end) {
+            values[index] = value;
+            index = index + 1;
+        }
+        return true;
+    }
+
+    /** Reverse every element in place. */
+    public static bool Reverse(uint128[] values) {
+        return ArrayOps.Reverse(values, 0, ArrayOps.Length(values));
+    }
+
+    /** Reverse a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Reverse(uint128[] values, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return false;
+        }
+        int32 left = start;
+        int32 right = start + count - 1;
+        while (left < right) {
+            uint128 temporary = values[left];
+            values[left] = values[right];
+            values[right] = temporary;
+            left = left + 1;
+            right = right - 1;
+        }
+        return true;
+    }
+
+    /** Find the first element equal under ==, or return -1 when absent. */
+    public static int32 IndexOf(uint128[] values, uint128 value) {
+        return ArrayOps.IndexOf(values, value, 0, ArrayOps.Length(values));
+    }
+
+    /** Search a checked range: -1 means absent and -2 means invalid arguments. */
+    public static int32 IndexOf(uint128[] values, uint128 value, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return -2;
+        }
+        int32 index = start;
+        int32 end = start + count;
+        while (index < end) {
+            if (values[index] == value) {
+                return index;
+            }
+            index = index + 1;
+        }
+        return -1;
+    }
+
+    /** Return whether an element compares equal to value. */
+    public static bool Contains(uint128[] values, uint128 value) {
+        return ArrayOps.IndexOf(values, value) >= 0;
+    }
+
+    /** Return element count, zero for null, or -1 for an invalid/oversized array header. */
+    public static int32 Length(bool[] values) {
+        unsafe(using krt.mem;) {
+            return get_length((void*)(int64)values, 1);
+        }
+    }
+
+    /** Copy all source elements with overlap support; false leaves destination unchanged. */
+    public static bool Copy(bool[] source, bool[] destination) {
+        return ArrayOps.Copy(source, 0, destination, 0, ArrayOps.Length(source));
+    }
+
+    /** Copy count elements from index zero, reporting invalid ranges without partial writes. */
+    public static bool Copy(bool[] source, bool[] destination, int32 count) {
+        return ArrayOps.Copy(source, 0, destination, 0, count);
+    }
+
+    /** Copy a checked range with overlap support; zero count is permitted at either array end. */
+    public static bool Copy(bool[] source, int32 source_index, bool[] destination,
+                            int32 destination_index, int32 count) {
+        unsafe(using krt.mem;) {
+            return copy_range((void*)(int64)source, source_index, (void*)(int64)destination, destination_index, count, 1);
+        }
+    }
+
+    /** Clear every element, reporting whether the array header is valid. */
+    public static bool Clear(bool[] values) {
+        return ArrayOps.Clear(values, 0, ArrayOps.Length(values));
+    }
+
+    /** Clear a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Clear(bool[] values, int32 start, int32 count) {
+        unsafe(using krt.mem;) {
+            return clear_range((void*)(int64)values, start, count, 1);
+        }
+    }
+
+    /** Fill every element with value, reporting whether the array header is valid. */
+    public static bool Fill(bool[] values, bool value) {
+        return ArrayOps.Fill(values, value, 0, ArrayOps.Length(values));
+    }
+
+    /** Fill a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Fill(bool[] values, bool value, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return false;
+        }
+        int32 index = start;
+        int32 end = start + count;
+        while (index < end) {
+            values[index] = value;
+            index = index + 1;
+        }
+        return true;
+    }
+
+    /** Reverse every element in place. */
+    public static bool Reverse(bool[] values) {
+        return ArrayOps.Reverse(values, 0, ArrayOps.Length(values));
+    }
+
+    /** Reverse a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Reverse(bool[] values, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return false;
+        }
+        int32 left = start;
+        int32 right = start + count - 1;
+        while (left < right) {
+            bool temporary = values[left];
+            values[left] = values[right];
+            values[right] = temporary;
+            left = left + 1;
+            right = right - 1;
+        }
+        return true;
+    }
+
+    /** Find the first element equal under ==, or return -1 when absent. */
+    public static int32 IndexOf(bool[] values, bool value) {
+        return ArrayOps.IndexOf(values, value, 0, ArrayOps.Length(values));
+    }
+
+    /** Search a checked range: -1 means absent and -2 means invalid arguments. */
+    public static int32 IndexOf(bool[] values, bool value, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return -2;
+        }
+        int32 index = start;
+        int32 end = start + count;
+        while (index < end) {
+            if (values[index] == value) {
+                return index;
+            }
+            index = index + 1;
+        }
+        return -1;
+    }
+
+    /** Return whether an element compares equal to value. */
+    public static bool Contains(bool[] values, bool value) {
+        return ArrayOps.IndexOf(values, value) >= 0;
+    }
+
+    /** Return element count, zero for null, or -1 for an invalid/oversized array header. */
+    public static int32 Length(float32[] values) {
+        unsafe(using krt.mem;) {
+            return get_length((void*)(int64)values, 4);
+        }
+    }
+
+    /** Copy all source elements with overlap support; false leaves destination unchanged. */
+    public static bool Copy(float32[] source, float32[] destination) {
+        return ArrayOps.Copy(source, 0, destination, 0, ArrayOps.Length(source));
+    }
+
+    /** Copy count elements from index zero, reporting invalid ranges without partial writes. */
+    public static bool Copy(float32[] source, float32[] destination, int32 count) {
+        return ArrayOps.Copy(source, 0, destination, 0, count);
+    }
+
+    /** Copy a checked range with overlap support; zero count is permitted at either array end. */
+    public static bool Copy(float32[] source, int32 source_index, float32[] destination,
+                            int32 destination_index, int32 count) {
+        unsafe(using krt.mem;) {
+            return copy_range((void*)(int64)source, source_index, (void*)(int64)destination, destination_index, count, 4);
+        }
+    }
+
+    /** Clear every element, reporting whether the array header is valid. */
+    public static bool Clear(float32[] values) {
+        return ArrayOps.Clear(values, 0, ArrayOps.Length(values));
+    }
+
+    /** Clear a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Clear(float32[] values, int32 start, int32 count) {
+        unsafe(using krt.mem;) {
+            return clear_range((void*)(int64)values, start, count, 4);
+        }
+    }
+
+    /** Fill every element with value, reporting whether the array header is valid. */
+    public static bool Fill(float32[] values, float32 value) {
+        return ArrayOps.Fill(values, value, 0, ArrayOps.Length(values));
+    }
+
+    /** Fill a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Fill(float32[] values, float32 value, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return false;
+        }
+        int32 index = start;
+        int32 end = start + count;
+        while (index < end) {
+            values[index] = value;
+            index = index + 1;
+        }
+        return true;
+    }
+
+    /** Reverse every element in place. */
+    public static bool Reverse(float32[] values) {
+        return ArrayOps.Reverse(values, 0, ArrayOps.Length(values));
+    }
+
+    /** Reverse a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Reverse(float32[] values, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return false;
+        }
+        int32 left = start;
+        int32 right = start + count - 1;
+        while (left < right) {
+            float32 temporary = values[left];
+            values[left] = values[right];
+            values[right] = temporary;
+            left = left + 1;
+            right = right - 1;
+        }
+        return true;
+    }
+
+    /** Find the first element equal under ==, or return -1 when absent. */
+    public static int32 IndexOf(float32[] values, float32 value) {
+        return ArrayOps.IndexOf(values, value, 0, ArrayOps.Length(values));
+    }
+
+    /** Search a checked range: -1 means absent and -2 means invalid arguments. */
+    public static int32 IndexOf(float32[] values, float32 value, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return -2;
+        }
+        int32 index = start;
+        int32 end = start + count;
+        while (index < end) {
+            if (values[index] == value) {
+                return index;
+            }
+            index = index + 1;
+        }
+        return -1;
+    }
+
+    /** Return whether an element compares equal to value. */
+    public static bool Contains(float32[] values, float32 value) {
+        return ArrayOps.IndexOf(values, value) >= 0;
+    }
+
+    /** Return element count, zero for null, or -1 for an invalid/oversized array header. */
+    public static int32 Length(float64[] values) {
+        unsafe(using krt.mem;) {
+            return get_length((void*)(int64)values, 8);
+        }
+    }
+
+    /** Copy all source elements with overlap support; false leaves destination unchanged. */
+    public static bool Copy(float64[] source, float64[] destination) {
+        return ArrayOps.Copy(source, 0, destination, 0, ArrayOps.Length(source));
+    }
+
+    /** Copy count elements from index zero, reporting invalid ranges without partial writes. */
+    public static bool Copy(float64[] source, float64[] destination, int32 count) {
+        return ArrayOps.Copy(source, 0, destination, 0, count);
+    }
+
+    /** Copy a checked range with overlap support; zero count is permitted at either array end. */
+    public static bool Copy(float64[] source, int32 source_index, float64[] destination,
+                            int32 destination_index, int32 count) {
+        unsafe(using krt.mem;) {
+            return copy_range((void*)(int64)source, source_index, (void*)(int64)destination, destination_index, count, 8);
+        }
+    }
+
+    /** Clear every element, reporting whether the array header is valid. */
+    public static bool Clear(float64[] values) {
+        return ArrayOps.Clear(values, 0, ArrayOps.Length(values));
+    }
+
+    /** Clear a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Clear(float64[] values, int32 start, int32 count) {
+        unsafe(using krt.mem;) {
+            return clear_range((void*)(int64)values, start, count, 8);
+        }
+    }
+
+    /** Fill every element with value, reporting whether the array header is valid. */
+    public static bool Fill(float64[] values, float64 value) {
+        return ArrayOps.Fill(values, value, 0, ArrayOps.Length(values));
+    }
+
+    /** Fill a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Fill(float64[] values, float64 value, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return false;
+        }
+        int32 index = start;
+        int32 end = start + count;
+        while (index < end) {
+            values[index] = value;
+            index = index + 1;
+        }
+        return true;
+    }
+
+    /** Reverse every element in place. */
+    public static bool Reverse(float64[] values) {
+        return ArrayOps.Reverse(values, 0, ArrayOps.Length(values));
+    }
+
+    /** Reverse a checked range; invalid ranges leave all elements unchanged. */
+    public static bool Reverse(float64[] values, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return false;
+        }
+        int32 left = start;
+        int32 right = start + count - 1;
+        while (left < right) {
+            float64 temporary = values[left];
+            values[left] = values[right];
+            values[right] = temporary;
+            left = left + 1;
+            right = right - 1;
+        }
+        return true;
+    }
+
+    /** Find the first element equal under ==, or return -1 when absent. */
+    public static int32 IndexOf(float64[] values, float64 value) {
+        return ArrayOps.IndexOf(values, value, 0, ArrayOps.Length(values));
+    }
+
+    /** Search a checked range: -1 means absent and -2 means invalid arguments. */
+    public static int32 IndexOf(float64[] values, float64 value, int32 start, int32 count) {
+        if (!valid_range(ArrayOps.Length(values), start, count)) {
+            return -2;
+        }
+        int32 index = start;
+        int32 end = start + count;
+        while (index < end) {
+            if (values[index] == value) {
+                return index;
+            }
+            index = index + 1;
+        }
+        return -1;
+    }
+
+    /** Return whether an element compares equal to value. */
+    public static bool Contains(float64[] values, float64 value) {
+        return ArrayOps.IndexOf(values, value) >= 0;
+    }
+}

@@ -1,57 +1,154 @@
+using System.Sys;
 
-
-// ============================================
-// Memory — 内存分配封装
-// 纯 .krt 实现, 通过 syscall 直接操作 mmap/munmap
-// ============================================
-
-public static class Memory
-{
+/** Linux x86-64 byte operations for caller-owned, accessible address ranges. */
+public static class Memory {
     public const int64 SYS_mmap = 9;
     public const int64 SYS_munmap = 11;
 
-    // 从 syscall 获取内存分配
-    public static void* Allocate(int64 size)
-    {
+    /** Return zeroed storage, or null for nonpositive size, overflow, or allocation failure. */
+    public static void* Allocate(int64 size) {
         unsafe(using krt.mem;) {
-            return (void*)Sys.syscall(SYS_mmap, 0, size, 3, 0x22, -1, 0);
-        }
-    }
-
-    // 释放内存
-    public static void Free(void* ptr, int64 size)
-    {
-        unsafe(using krt.mem;) {
-            Sys.syscall(SYS_munmap, (int64)ptr, size, 0, 0, 0, 0);
-        }
-    }
-
-    // 复制内存块
-    public static void Copy(void* dest, void* src, int32 length)
-    {
-        unsafe(using krt.mem;) {
-            char* d = (char*)dest;
-            char* s = (char*)src;
-            int32 i = 0;
-            while (i < length)
-            {
-                d[i] = s[i];
-                i = i + 1;
+            if (size <= 0 || size > 9223372036854771712) {
+                return (void*)0;
             }
+            int64 allocation = Sys.Syscall(SYS_mmap, 0, size, 3, 0x22, -1, 0);
+            if (allocation < 0) {
+                return (void*)0;
+            }
+            return (void*)allocation;
         }
     }
 
-    // 设置内存块
-    public static void Set(void* dest, char value, int32 length)
-    {
+    private static bool is_valid_range(void* address, int64 length) {
         unsafe(using krt.mem;) {
-            char* d = (char*)dest;
-            int32 i = 0;
-            while (i < length)
-            {
-                d[i] = value;
-                i = i + 1;
+            if (length < 0) {
+                return false;
             }
+            if (length == 0) {
+                return true;
+            }
+            if (address == null) {
+                return false;
+            }
+            uint64 start = (uint64)address;
+            return (uint64)length <= (uint64)-1 - start;
+        }
+    }
+
+    /** Release an Allocate result. Invalid arguments leave memory unchanged. */
+    public static void Free(void* ptr, int64 size) {
+        TryFree(ptr, size);
+    }
+
+    /** Return false for invalid size/alignment/range or a failed unmap; zero size is a no-op. */
+    public static bool TryFree(void* address, int64 size) {
+        unsafe(using krt.mem;) {
+            if (!is_valid_range(address, size) || size > 9223372036854771712) {
+                return false;
+            }
+            if (size == 0) {
+                return true;
+            }
+            if (((uint64)address & 4095) != 0) {
+                return false;
+            }
+            return Sys.Syscall(SYS_munmap, (int64)address, size, 0, 0, 0, 0) == 0;
+        }
+    }
+
+    /** Copy bytes with overlap support. Invalid arguments perform no writes; use TryCopy for status. */
+    public static void Copy(void* dest, void* src, int32 length) {
+        TryCopy(dest, src, (int64)length);
+    }
+
+    /** Copy bytes with overlap support, reporting invalid ranges before any write. */
+    public static bool TryCopy(void* destination, void* source, int64 length) {
+        return TryMove(destination, source, length);
+    }
+
+    /** Move bytes with overlap support. Invalid arguments perform no writes; use TryMove for status. */
+    public static void Move(void* destination, void* source, int32 length) {
+        TryMove(destination, source, (int64)length);
+    }
+
+    /** Zero length succeeds without accessing pointers; negative lengths, null ranges and wraparound fail. */
+    public static bool TryMove(void* destination, void* source, int64 length) {
+        unsafe(using krt.mem;) {
+            if (!is_valid_range(destination, length) || !is_valid_range(source, length)) {
+                return false;
+            }
+            if (length == 0 || destination == source) {
+                return true;
+            }
+            byte* target = (byte*)destination;
+            byte* original = (byte*)source;
+            if ((uint64)destination < (uint64)source) {
+                int64 index = 0;
+                while (index < length) {
+                    target[index] = original[index];
+                    index = index + 1;
+                }
+            } else {
+                int64 index = length;
+                while (index > 0) {
+                    index = index - 1;
+                    target[index] = original[index];
+                }
+            }
+            return true;
+        }
+    }
+
+    /** Set each byte to the low eight bits of value; use TrySet to observe invalid arguments. */
+    public static void Set(void* dest, char value, int32 length) {
+        TrySet(dest, (byte)value, (int64)length);
+    }
+
+    /** Set an accessible byte range, returning false for invalid arguments before any write. */
+    public static bool TrySet(void* destination, byte value, int64 length) {
+        unsafe(using krt.mem;) {
+            if (!is_valid_range(destination, length)) {
+                return false;
+            }
+            byte* target = (byte*)destination;
+            int64 index = 0;
+            while (index < length) {
+                target[index] = value;
+                index = index + 1;
+            }
+            return true;
+        }
+    }
+
+    /** Zero a byte range; invalid arguments perform no writes. */
+    public static void Clear(void* destination, int32 length) {
+        TryClear(destination, (int64)length);
+    }
+
+    /** Zero an accessible byte range and report whether the arguments were valid. */
+    public static bool TryClear(void* destination, int64 length) {
+        return TrySet(destination, (byte)0, length);
+    }
+
+    /** Compare unsigned bytes: -1, 0 or 1; invalid ranges return -2 and zero length returns 0. */
+    public static int32 Compare(void* left, void* right, int32 length) {
+        unsafe(using krt.mem;) {
+            if (!is_valid_range(left, (int64)length) || !is_valid_range(right, (int64)length)) {
+                return -2;
+            }
+            byte* first = (byte*)left;
+            byte* second = (byte*)right;
+            int32 index = 0;
+            while (index < length) {
+                if (first[index] < second[index]) {
+                    return -1;
+                }
+                if (first[index] > second[index]) {
+                    return 1;
+                }
+                index = index + 1;
+            }
+            return 0;
         }
     }
 }
