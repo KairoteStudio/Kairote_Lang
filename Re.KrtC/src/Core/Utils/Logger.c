@@ -1,3 +1,4 @@
+#include "Attributes.h"
 #include "OutputCache.h"
 #include "KrtCommon.h"
 #include <stdlib.h>
@@ -5,7 +6,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 
-static int KrtFormatAndOutput(FILE* stream, const char* format, va_list args) {
+static KRT_PRINTF_FORMAT(2, 0) int format_and_output(FILE* stream, const char* format, va_list args) {
     if (!format) {
         return -1;
     }
@@ -115,7 +116,7 @@ int KrtFprintf(FILE* stream, const char* format, ...) {
 
     va_list args;
     va_start(args, format);
-    int result = KrtFormatAndOutput(stream, format, args);
+    int result = format_and_output(stream, format, args);
     va_end(args);
 
     if (!KrtOutputCacheIsEnabled() && stream) {

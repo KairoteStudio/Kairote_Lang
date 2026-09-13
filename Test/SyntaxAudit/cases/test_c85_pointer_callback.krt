@@ -1,0 +1,16 @@
+// function pointer signature stack and wide arguments
+int sum(int a,int b,int c,int d,int e,int f,int g,int h) { return a+b+c+d+e+f+g+h; }
+            int128 wide(int128 a,int128 b,int128 c,int128 d) { return a+b+c+d; }
+            int apply(fn(int,int,int,int,int,int,int,int) -> int f) {
+                unsafe(using krt.mem;) { return f(1,2,3,4,5,6,7,8); }
+            }
+
+int main() { unsafe(using krt.mem;) {
+
+            let f: fn(int,int,int,int,int,int,int,int) -> int = &sum;
+            if (f(1,2,3,4,5,6,7,8) != 36) { return 1; }
+            let w: fn(int128, int128, int128, int128) -> int128 = &wide;
+            if (w(1,2,3,(int128)18446744073709551616) != (int128)18446744073709551622) { return 2; }
+            if (apply(&sum) != 36) { return 3; }
+
+} return 0; }

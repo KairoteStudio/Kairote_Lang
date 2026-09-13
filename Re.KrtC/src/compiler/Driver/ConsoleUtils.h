@@ -20,4 +20,4 @@ int KrtConsoleSupportsColor(void);
 void KrtConsoleSetColorEnabled(int enabled);
 const char* KrtColor(const char* code);
 
-#endif 
+#endif

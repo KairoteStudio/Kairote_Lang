@@ -1,6 +1,8 @@
 #ifndef KRT_PARSER_H
 #define KRT_PARSER_H
 
+#include "Core/Utils/Attributes.h"
+
 #include "../Lexer/Tokenizer.h"
 #include "Ast.h"
 
@@ -12,7 +14,7 @@ typedef struct {
     int declared_function_capacity;
     int is_unsafe_mode;
     char* current_class;
-    KrtArena* arena;  
+    KrtArena* arena;
     int error_count;
     const char* source_name;
     int hist_type[8];
@@ -20,7 +22,7 @@ typedef struct {
     int hist_len;
 } Parser;
 
-void parser_report_error(Parser* parser, int line, int col, const char* format, ...);
+void parser_report_error(Parser* parser, int line, int col, const char* format, ...) KRT_PRINTF_FORMAT(4, 5);
 
 Parser* parser_create(Lexer* lexer);
 Parser* parser_create_with_arena(Lexer* lexer, size_t arena_size);

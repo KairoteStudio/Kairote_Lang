@@ -21,11 +21,7 @@ typedef enum {
     KRT_STAGE_COMPLETE
 } KrtCompileStage;
 
-typedef enum {
-    KRT_RESULT_SUCCESS,
-    KRT_RESULT_FAILED,
-    KRT_RESULT_UP_TO_DATE
-} KrtCompileResult;
+typedef enum { KRT_RESULT_SUCCESS, KRT_RESULT_FAILED, KRT_RESULT_UP_TO_DATE } KrtCompileResult;
 
 typedef struct {
     KrtCompileStage stage;
@@ -67,6 +63,16 @@ typedef struct {
 
 KrtCompilePipeline* KrtCompilePipelineCreate(KrtConfig* config, KrtPlatform* platform);
 void KrtCompilePipelineDestroy(KrtCompilePipeline* pipeline);
+/** Release per-file state while retaining the borrowed configuration and platform for reuse. */
+void KrtCompilePipelineReset(KrtCompilePipeline* pipeline);
+/** Append private clones of standard-library declarations; return 1 on success and 0 on failure. */
+int KrtCompilePipelineLoadStandardLibrary(KrtCompilePipeline* pipeline, const char* directory);
+/** Clear the process-wide parsed-library cache and counters under its mutex. */
+void KrtStdlibCacheClear(void);
+/** Read cache counters atomically; either output pointer may be NULL. */
+void KrtStdlibCacheGetStats(unsigned long long* hits, unsigned long long* misses);
+/** Clone the cached AST into arena, reparsing changed files; return NULL on read/parse/allocation failure. */
+ASTNode* KrtStdlibCacheClone(const char* path, KrtArena* arena, bool expand_macros);
 int KrtCompilePipelineExecute(KrtCompilePipeline* pipeline, const char* input_file, const char* output_file);
 void KrtCompilePipelineSetMergedAst(KrtCompilePipeline* pipeline, ASTNode* merged_ast);
 void KrtCompilePipelineSetSemanticAnalyzer(KrtCompilePipeline* pipeline, SemanticAnalyzer* analyzer);
@@ -74,7 +80,8 @@ int KrtCompilePipelineReadSource(KrtCompilePipeline* pipeline);
 int KrtCompilePipelinePreprocess(KrtCompilePipeline* pipeline);
 int KrtCompilePipelineLex(KrtCompilePipeline* pipeline);
 int KrtCompilePipelineParse(KrtCompilePipeline* pipeline);
-int KrtCompilePipelineSemantic(KrtCompilePipeline* pipeline);int KrtCompilePipelineCodegen(KrtCompilePipeline* pipeline);
+int KrtCompilePipelineSemantic(KrtCompilePipeline* pipeline);
+int KrtCompilePipelineCodegen(KrtCompilePipeline* pipeline);
 int KrtCompilePipelineGetSuccess(KrtCompilePipeline* pipeline);
 const char* KrtCompilePipelineGetError(KrtCompilePipeline* pipeline);
 const char* KrtCompilePipelineGetFailedStageName(KrtCompilePipeline* pipeline);

@@ -10,34 +10,38 @@
 extern "C" {
 #endif
 
-typedef enum ArkOutputType {
-    ARK_OUTPUT_EXECUTABLE,
-    ARK_OUTPUT_SHARED_LIB,
-    ARK_OUTPUT_OBJECT
-} ArkOutputType;
+typedef enum ArkOutputType { ARK_OUTPUT_EXECUTABLE, ARK_OUTPUT_SHARED_LIB, ARK_OUTPUT_OBJECT } ArkOutputType;
 
 typedef enum ArkRelocFieldSize {
-    ARK_RELOC_FIELD_8   = 1,
-    ARK_RELOC_FIELD_16  = 2,
-    ARK_RELOC_FIELD_32  = 4,
-    ARK_RELOC_FIELD_64  = 8
+    ARK_RELOC_FIELD_8 = 1,
+    ARK_RELOC_FIELD_16 = 2,
+    ARK_RELOC_FIELD_32 = 4,
+    ARK_RELOC_FIELD_64 = 8
 } ArkRelocFieldSize;
 
 typedef struct ArkBuffer {
     uint8_t* data;
-    size_t   size;
-    size_t   capacity;
+    size_t size;
+    size_t capacity;
     uint32_t base_rva;
 } ArkBuffer;
 
+/** @brief Create an owned byte buffer, or return NULL on allocation failure. */
 ArkBuffer* ark_buffer_create(size_t initial_capacity, uint32_t base_rva);
-void       ark_buffer_destroy(ArkBuffer* buf);
-size_t     ark_buffer_append(ArkBuffer* buf, const void* data, size_t len);
-size_t     ark_buffer_append_zero(ArkBuffer* buf, size_t len);
-uint32_t   ark_buffer_add_string(ArkBuffer* buf, const char* str);
-char*      ark_buffer_get_string(ArkBuffer* buf, uint32_t offset);
-uint32_t   ark_buffer_get_rva(ArkBuffer* buf, size_t offset);
-void       ark_buffer_align(ArkBuffer* buf, size_t alignment);
+/** @brief Release buf and its byte storage, accepting NULL. */
+void ark_buffer_destroy(ArkBuffer* buf);
+/** @brief Append bytes, returning their offset or SIZE_MAX on failure; source may alias buf. */
+size_t ark_buffer_append(ArkBuffer* buf, const void* data, size_t len);
+/** @brief Append zeroed bytes, returning their offset or SIZE_MAX on failure. */
+size_t ark_buffer_append_zero(ArkBuffer* buf, size_t len);
+/** @brief Append a terminated string, returning its offset or UINT32_MAX on failure. */
+uint32_t ark_buffer_add_string(ArkBuffer* buf, const char* str);
+/** @brief Return a borrowed character pointer at an in-range offset, or NULL if invalid. */
+char* ark_buffer_get_string(ArkBuffer* buf, uint32_t offset);
+/** @brief Convert a buffer offset to a relative virtual address. */
+uint32_t ark_buffer_get_rva(ArkBuffer* buf, size_t offset);
+/** @brief Append zero padding to align buf size. */
+void ark_buffer_align(ArkBuffer* buf, size_t alignment);
 
 typedef enum ArkSegmentType {
     ARK_SEGMENT_CODE,
@@ -60,28 +64,30 @@ typedef struct ArkSectionLayout {
 
 typedef struct ArkImageLayout {
     ArkSectionLayout* sections;
-    size_t           section_count;
-    
-    uint64_t         image_base;
-    uint64_t         image_size;
-    uint64_t         file_size;
-    uint64_t         headers_size;
-    
-    uint64_t         code_segment_start;
-    uint64_t         code_segment_end;
-    uint64_t         data_segment_start;
-    uint64_t         data_segment_end;
-    
-    uint32_t         section_alignment;
-    uint32_t         file_alignment;
+    size_t section_count;
+
+    uint64_t image_base;
+    uint64_t image_size;
+    uint64_t file_size;
+    uint64_t headers_size;
+
+    uint64_t code_segment_start;
+    uint64_t code_segment_end;
+    uint64_t data_segment_start;
+    uint64_t data_segment_end;
+
+    uint32_t section_alignment;
+    uint32_t file_alignment;
 } ArkImageLayout;
 
-ArkImageLayout* ark_layout_create(const ArkBackendInput* input, 
-                                  uint32_t section_alignment,
-                                  uint32_t file_alignment);
-void            ark_layout_destroy(ArkImageLayout* layout);
+/** @brief Plan aligned input sections, returning an owned layout or NULL on failure. */
+ArkImageLayout* ark_layout_create(const ArkBackendInput* input, uint32_t section_alignment, uint32_t file_alignment);
+/** @brief Release layout and its section records, accepting NULL. */
+void ark_layout_destroy(ArkImageLayout* layout);
+/** @brief Return a borrowed section layout, or NULL for an invalid index. */
 const ArkSectionLayout* ark_layout_get_section(const ArkImageLayout* layout, size_t index);
-uint64_t               ark_layout_calc_total_size(const ArkImageLayout* layout, int include_bss);
+/** @brief Return the planned image extent, optionally including BSS. */
+uint64_t ark_layout_calc_total_size(const ArkImageLayout* layout, int include_bss);
 
 typedef enum ArkRelocAction {
     ARK_RELOC_APPLY_ABSOLUTE,
@@ -94,25 +100,24 @@ typedef enum ArkRelocAction {
 typedef struct ArkRelocProcessor {
     ArkRelocAction action;
     ArkRelocFieldSize field_size;
-    int             is_pc_relative;
-    uint32_t        target_section;
-    uint32_t        offset;
-    uint64_t        symbol_value;
-    int64_t         addend;
+    int is_pc_relative;
+    uint32_t target_section;
+    uint32_t offset;
+    uint64_t symbol_value;
+    int64_t addend;
 } ArkRelocProcessor;
 
 typedef void (*ArkRelocApplyFn)(uint8_t* data, size_t size, const ArkRelocProcessor* proc, uint64_t p_vaddr);
-typedef int  (*ArkRelocShouldProcessFn)(const ArkResolverReloc* reloc, void* user_data);
+typedef int (*ArkRelocShouldProcessFn)(const ArkResolverReloc* reloc, void* user_data);
 
-void ark_reloc_process_all(ArkResolverReloc* relocs, size_t count,
-                           ArkRelocApplyFn apply_fn,
-                           ArkRelocShouldProcessFn filter_fn,
-                           void* user_data,
-                           uint8_t* section_data,
-                           size_t section_size,
-                           const ArkImageLayout* layout);
+/** @brief Apply relocations accepted by filter_fn using apply_fn and layout. */
+void ark_reloc_process_all(ArkResolverReloc* relocs, size_t count, ArkRelocApplyFn apply_fn,
+                           ArkRelocShouldProcessFn filter_fn, void* user_data, uint8_t* section_data,
+                           size_t section_size, const ArkImageLayout* layout);
 
+/** @brief Apply one bounded ELF relocation field at its virtual address. */
 void ark_reloc_apply_elf(uint8_t* data, size_t size, const ArkRelocProcessor* proc, uint64_t p_vaddr);
+/** @brief Apply one bounded PE base relocation field. */
 void ark_reloc_apply_pe_base(uint8_t* data, size_t size, const ArkRelocProcessor* proc, uint64_t p_vaddr);
 
 typedef struct ArkImportEntry {
@@ -134,16 +139,18 @@ typedef struct ArkExportEntry {
 typedef struct ArkModuleImports {
     const char* module_name;
     const char** symbols;
-    size_t      symbol_count;
+    size_t symbol_count;
 } ArkModuleImports;
 
 typedef struct ArkImportGroup {
     ArkModuleImports* modules;
-    size_t           module_count;
+    size_t module_count;
 } ArkImportGroup;
 
+/** @brief Group imports by module, returning owned lists or NULL on allocation failure. */
 ArkImportGroup* ark_import_group_create(const ArkImportEntry* imports, size_t count);
-void            ark_import_group_destroy(ArkImportGroup* group);
+/** @brief Release grouped import lists, accepting NULL. */
+void ark_import_group_destroy(ArkImportGroup* group);
 
 typedef struct ArkBackendInput {
     ArkSectionBuffer* sections;
@@ -182,14 +189,21 @@ typedef struct ArkBackendOutput {
 
 typedef ArkLinkResult (*ArkBackendLinkFn)(ArkLinkContext* ctx, ArkBackendInput* input, ArkBackendOutput* output);
 
+/** @brief Build a PE image in output; the caller owns successful image and section-map allocations. */
 ArkLinkResult ark_backend_pe_link(ArkLinkContext* ctx, ArkBackendInput* input, ArkBackendOutput* output);
+/** @brief Build an ELF image in output; the caller owns successful image and section-map allocations. */
 ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, ArkBackendOutput* output);
 
+/** @brief Return the address immediately after a relocation field. */
 uint64_t ark_backend_calc_pc_relative(uint64_t p_vaddr, ArkRelocFieldSize field_size);
-int      ark_backend_should_use_dynamic_elf(const ArkBackendInput* input);
+/** @brief Return whether input requires dynamic ELF metadata. */
+int ark_backend_should_use_dynamic_elf(const ArkBackendInput* input);
+/** @brief Round value up to a power-of-two alignment. */
 uint64_t ark_backend_align_up(uint64_t value, uint64_t alignment);
+/** @brief Round a 32-bit value up to a power-of-two alignment. */
 uint32_t ark_backend_align_up_32(uint32_t value, uint32_t alignment);
-int      ark_backend_is_power_of_2(uint64_t value);
+/** @brief Return whether value is a nonzero power of two. */
+int ark_backend_is_power_of_2(uint64_t value);
 
 #ifdef __cplusplus
 }

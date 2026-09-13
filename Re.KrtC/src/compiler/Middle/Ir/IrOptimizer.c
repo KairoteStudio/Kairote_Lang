@@ -3,8 +3,9 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
+#include <limits.h>
 
-#define MAX_OPTIMIZATION_PASSES 10
+#define KRT_MAX_OPTIMIZATION_PASSES 10
 
 typedef struct {
     KrtIRValue* values;
@@ -24,7 +25,7 @@ typedef struct {
     int capacity;
 } ConstantTable;
 
-static double KrtGetTimeSec(void) {
+static double get_time_seconds(void) {
     return (double)clock() / CLOCKS_PER_SEC;
 }
 
@@ -34,7 +35,9 @@ IROptimizer* ir_optimizer_create(void) {
 }
 
 void ir_optimizer_destroy(IROptimizer* optimizer) {
-    if (!optimizer) return;
+    if (!optimizer) {
+        return;
+    }
     KRT_FREE(optimizer);
 }
 
@@ -43,108 +46,137 @@ static bool is_constant_value(KrtIRValue* value) {
 }
 
 static bool values_equal(KrtIRValue* a, KrtIRValue* b) {
-    if (a->type != b->type) return false;
+    if (a->type != b->type || a->value_type != b->value_type) {
+        return false;
+    }
     switch (a->type) {
-        case KRT_IR_VALUE_IMM:
-            return a->data.imm == b->data.imm;
-        case KRT_IR_VALUE_VAR:
-        case KRT_IR_VALUE_ARG:
-            return strcmp(a->data.name, b->data.name) == 0;
-        case KRT_IR_VALUE_TEMP:
-            return a->data.index == b->data.index;
-        default:
-            return false;
+    case KRT_IR_VALUE_IMM:
+        return a->data.imm == b->data.imm;
+    case KRT_IR_VALUE_INTEGER:
+        return a->data.integer == b->data.integer;
+    case KRT_IR_VALUE_VAR:
+        return strcmp(a->data.name, b->data.name) == 0;
+    case KRT_IR_VALUE_TEMP:
+    case KRT_IR_VALUE_ARG:
+        return a->data.index == b->data.index;
+    default:
+        return false;
     }
 }
 
 static bool is_pure_operation(KrtIROpcode opcode) {
     switch (opcode) {
-        case KRT_IR_ADD:
-        case KRT_IR_SUB:
-        case KRT_IR_MUL:
-        case KRT_IR_DIV:
-        case KRT_IR_MOD:
-        case KRT_IR_AND:
-        case KRT_IR_OR:
-        case KRT_IR_XOR:
-        case KRT_IR_LSHIFT:
-        case KRT_IR_RSHIFT:
-        case KRT_IR_LT:
-        case KRT_IR_GT:
-        case KRT_IR_EQ:
-        case KRT_IR_LE:
-        case KRT_IR_GE:
-        case KRT_IR_NE:
-        case KRT_IR_IMM:
-            return true;
-        default:
-            return false;
+    case KRT_IR_ADD:
+    case KRT_IR_SUB:
+    case KRT_IR_MUL:
+    case KRT_IR_DIV:
+    case KRT_IR_MOD:
+    case KRT_IR_AND:
+    case KRT_IR_OR:
+    case KRT_IR_XOR:
+    case KRT_IR_LSHIFT:
+    case KRT_IR_RSHIFT:
+    case KRT_IR_LT:
+    case KRT_IR_GT:
+    case KRT_IR_EQ:
+    case KRT_IR_LE:
+    case KRT_IR_GE:
+    case KRT_IR_NE:
+    case KRT_IR_IMM:
+        return true;
+    default:
+        return false;
     }
 }
 
 static bool is_side_effect_free(KrtIROpcode opcode) {
     switch (opcode) {
-        case KRT_IR_LOAD:
-        case KRT_IR_STORE:
-        case KRT_IR_ALLOC:
-        case KRT_IR_CALL:
-        case KRT_IR_SYSCALL:
-        case KRT_IR_STOREPTR:
-        case KRT_IR_ARRAY_STORE:
-        case KRT_IR_RETURN:
-        case KRT_IR_BRANCH:
-        case KRT_IR_JUMP:
-            return false;
-        default:
-            return true;
+    case KRT_IR_LOAD:
+    case KRT_IR_STORE:
+    case KRT_IR_ALLOC:
+    case KRT_IR_CALL_INDIRECT:
+    case KRT_IR_STACKALLOC:
+    case KRT_IR_CALL:
+    case KRT_IR_SYSCALL:
+    case KRT_IR_STOREPTR:
+    case KRT_IR_ARRAY_STORE:
+    case KRT_IR_RETURN:
+    case KRT_IR_BRANCH:
+    case KRT_IR_JUMP:
+        return false;
+    default:
+        return true;
     }
 }
 
 static double fold_binary_op(KrtIROpcode op, double left, double right) {
     switch (op) {
-        case KRT_IR_ADD: return left + right;
-        case KRT_IR_SUB: return left - right;
-        case KRT_IR_MUL: return left * right;
-        case KRT_IR_DIV: return right != 0 ? left / right : 0;
-        case KRT_IR_MOD: return right != 0 ? fmod(left, right) : 0;
-        case KRT_IR_AND: return (int64_t)left & (int64_t)right;
-        case KRT_IR_OR:  return (int64_t)left | (int64_t)right;
-        case KRT_IR_XOR: return (int64_t)left ^ (int64_t)right;
-        case KRT_IR_LSHIFT: return (int64_t)left << (int)right;
-        case KRT_IR_RSHIFT: return (int64_t)left >> (int)right;
-        case KRT_IR_LT: return left < right ? 1 : 0;
-        case KRT_IR_GT: return left > right ? 1 : 0;
-        case KRT_IR_EQ: return left == right ? 1 : 0;
-        case KRT_IR_LE: return left <= right ? 1 : 0;
-        case KRT_IR_GE: return left >= right ? 1 : 0;
-        case KRT_IR_NE: return left != right ? 1 : 0;
-        default: return 0;
+    case KRT_IR_ADD:
+        return left + right;
+    case KRT_IR_SUB:
+        return left - right;
+    case KRT_IR_MUL:
+        return left * right;
+    case KRT_IR_DIV:
+        return right != 0 ? left / right : 0;
+    case KRT_IR_MOD:
+        return right != 0 ? fmod(left, right) : 0;
+    case KRT_IR_AND:
+        return (int64_t)left & (int64_t)right;
+    case KRT_IR_OR:
+        return (int64_t)left | (int64_t)right;
+    case KRT_IR_XOR:
+        return (int64_t)left ^ (int64_t)right;
+    case KRT_IR_LSHIFT:
+        return (int64_t)left << (int)right;
+    case KRT_IR_RSHIFT:
+        return (int64_t)left >> (int)right;
+    case KRT_IR_LT:
+        return left < right ? 1 : 0;
+    case KRT_IR_GT:
+        return left > right ? 1 : 0;
+    case KRT_IR_EQ:
+        return left == right ? 1 : 0;
+    case KRT_IR_LE:
+        return left <= right ? 1 : 0;
+    case KRT_IR_GE:
+        return left >= right ? 1 : 0;
+    case KRT_IR_NE:
+        return left != right ? 1 : 0;
+    default:
+        return 0;
     }
 }
 
 static bool fold_constant_unary(KrtIROpcode op, double operand, double* result) {
     switch (op) {
-        case KRT_IR_SUB:
-            *result = -operand;
-            return true;
-        default:
-            return false;
+    case KRT_IR_SUB:
+        *result = -operand;
+        return true;
+    default:
+        return false;
     }
 }
 
 static bool fold_constant_binary(KrtIROpcode op, double left, double right, double* result) {
-    if (op == KRT_IR_DIV && right == 0) return false;
-    if (op == KRT_IR_MOD && right == 0) return false;
+    if (op == KRT_IR_DIV && right == 0) {
+        return false;
+    }
+    if (op == KRT_IR_MOD && right == 0) {
+        return false;
+    }
     *result = fold_binary_op(op, left, right);
     return true;
 }
 
 bool ir_optimize_constant_folding(KrtIRModule* module, IROptimizer* stats) {
-    if (!module) return false;
-    
+    if (!module) {
+        return false;
+    }
+
     bool changed = false;
     int fold_count = 0;
-    
+
     KrtIRFunction* func = module->functions;
     while (func) {
         KrtIRBasicBlock* block = func->entry_block;
@@ -152,11 +184,19 @@ bool ir_optimize_constant_folding(KrtIRModule* module, IROptimizer* stats) {
             KrtIRInst* inst = block->first_inst;
             while (inst) {
                 KrtIRInst* next = inst->next;
-                
-                if (inst->operand_count == 2 &&
-                    is_pure_operation(inst->opcode) &&
-                    is_constant_value(&inst->operands[0]) &&
-                    is_constant_value(&inst->operands[1])) {
+
+                KrtIRValue integer_result = {0};
+                if (inst->operand_count == 2 && is_pure_operation(inst->opcode) &&
+                    (inst->operands[0].type == KRT_IR_VALUE_INTEGER ||
+                     inst->operands[1].type == KRT_IR_VALUE_INTEGER) &&
+                    KrtIrFoldInteger(inst->opcode, inst->operands[0], inst->operands[1], &integer_result)) {
+                    inst->opcode = KRT_IR_IMM;
+                    inst->operands[0] = integer_result;
+                    inst->operand_count = 1;
+                    changed = true;
+                    fold_count++;
+                } else if (inst->operand_count == 2 && is_pure_operation(inst->opcode) &&
+                           is_constant_value(&inst->operands[0]) && is_constant_value(&inst->operands[1])) {
 
                     double left = inst->operands[0].data.imm;
                     double right = inst->operands[1].data.imm;
@@ -169,10 +209,8 @@ bool ir_optimize_constant_folding(KrtIRModule* module, IROptimizer* stats) {
                         changed = true;
                         fold_count++;
                     }
-                }
-                else if (inst->operand_count == 1 &&
-                         inst->opcode == KRT_IR_SUB &&
-                         is_constant_value(&inst->operands[0])) {
+                } else if (inst->operand_count == 1 && inst->opcode == KRT_IR_SUB &&
+                           is_constant_value(&inst->operands[0])) {
                     double result;
                     if (fold_constant_unary(inst->opcode, inst->operands[0].data.imm, &result)) {
                         inst->opcode = KRT_IR_IMM;
@@ -181,28 +219,30 @@ bool ir_optimize_constant_folding(KrtIRModule* module, IROptimizer* stats) {
                         fold_count++;
                     }
                 }
-                
+
                 inst = next;
             }
             block = block->next;
         }
         func = func->next;
     }
-    
+
     if (stats) {
         stats->constant_fold_count += fold_count;
         stats->optimization_count += fold_count;
     }
-    
+
     return changed;
 }
 
 bool ir_optimize_constant_propagation(KrtIRModule* module, IROptimizer* stats) {
-    if (!module) return false;
-    
+    if (!module) {
+        return false;
+    }
+
     bool changed = false;
     int prop_count = 0;
-    
+
     KrtIRFunction* func = module->functions;
     while (func) {
         ConstantTable constants = {0};
@@ -213,7 +253,7 @@ bool ir_optimize_constant_propagation(KrtIRModule* module, IROptimizer* stats) {
             func = func->next;
             continue;
         }
-        
+
         KrtIRBasicBlock* block = func->entry_block;
         while (block) {
             KrtIRInst* inst = block->first_inst;
@@ -235,7 +275,7 @@ bool ir_optimize_constant_propagation(KrtIRModule* module, IROptimizer* stats) {
                         constants.count++;
                     }
                 }
-                
+
                 for (int i = 0; i < inst->operand_count; i++) {
                     if (inst->operands[i].type == KRT_IR_VALUE_TEMP) {
                         for (int j = 0; j < constants.count; j++) {
@@ -249,53 +289,51 @@ bool ir_optimize_constant_propagation(KrtIRModule* module, IROptimizer* stats) {
                         }
                     }
                 }
-                
+
                 inst = inst->next;
             }
             block = block->next;
         }
-        
+
         KRT_FREE(constants.entries);
         func = func->next;
     }
-    
+
     if (stats) {
         stats->optimization_count += prop_count;
     }
-    
+
     return changed;
 }
 
 bool ir_optimize_dead_code_elimination(KrtIRModule* module, IROptimizer* stats) {
-    if (!module) return false;
-    
+    if (!module) {
+        return false;
+    }
+
     bool changed = false;
     int elim_count = 0;
-    
+
     KrtIRFunction* func = module->functions;
     while (func) {
         KrtIRBasicBlock* block = func->entry_block;
         while (block) {
             KrtIRInst* inst = block->first_inst;
             KrtIRInst* prev = NULL;
-            
+            int live_count = 0;
+
             while (inst) {
                 KrtIRInst* next = inst->next;
                 bool can_remove = false;
 
-                if (inst->opcode == KRT_IR_CALL)
-                {
-                    const char* fn = inst->operand_count > 0 ? inst->operands[0].data.function_name : "(null)";
-                }
-
                 if (is_side_effect_free(inst->opcode) && inst->result.type == KRT_IR_VALUE_VOID) {
                     can_remove = true;
                 }
-                
+
                 if (inst->opcode == KRT_IR_NOP) {
                     can_remove = true;
                 }
-                
+
                 if (can_remove) {
                     if (prev) {
                         prev->next = next;
@@ -305,25 +343,29 @@ bool ir_optimize_dead_code_elimination(KrtIRModule* module, IROptimizer* stats) 
                     if (block->last_inst == inst) {
                         block->last_inst = prev;
                     }
-                    block->inst_count--;
+                    KRT_FREE(inst->operands);
+                    KRT_FREE(inst);
                     inst = next;
                     changed = true;
                     elim_count++;
                 } else {
+                    block->insts[live_count++] = inst;
                     prev = inst;
                     inst = next;
                 }
             }
+            block->inst_count = live_count;
+            KrtIrBlockInvalidateCache(block);
             block = block->next;
         }
         func = func->next;
     }
-    
+
     if (stats) {
         stats->dead_code_count += elim_count;
         stats->optimization_count += elim_count;
     }
-    
+
     return changed;
 }
 
@@ -335,11 +377,13 @@ typedef struct {
 } Expression;
 
 bool ir_optimize_common_subexpression_elimination(KrtIRModule* module, IROptimizer* stats) {
-    if (!module) return false;
-    
+    if (!module) {
+        return false;
+    }
+
     bool changed = false;
     int cse_count = 0;
-    
+
     KrtIRFunction* func = module->functions;
     while (func) {
         int expr_capacity = 256;
@@ -349,7 +393,7 @@ bool ir_optimize_common_subexpression_elimination(KrtIRModule* module, IROptimiz
             continue;
         }
         int expr_count = 0;
-        
+
         KrtIRBasicBlock* block = func->entry_block;
         while (block) {
             KrtIRInst* inst = block->first_inst;
@@ -357,10 +401,9 @@ bool ir_optimize_common_subexpression_elimination(KrtIRModule* module, IROptimiz
                 if (is_pure_operation(inst->opcode) && inst->operand_count >= 2) {
                     bool found = false;
                     for (int i = 0; i < expr_count; i++) {
-                        if (exprs[i].opcode == inst->opcode &&
-                            values_equal(&exprs[i].left, &inst->operands[0]) &&
+                        if (exprs[i].opcode == inst->opcode && values_equal(&exprs[i].left, &inst->operands[0]) &&
                             values_equal(&exprs[i].right, &inst->operands[1])) {
-                            
+
                             inst->opcode = KRT_IR_COPY;
                             inst->operand_count = 1;
                             inst->operands[0].type = KRT_IR_VALUE_TEMP;
@@ -371,7 +414,7 @@ bool ir_optimize_common_subexpression_elimination(KrtIRModule* module, IROptimiz
                             break;
                         }
                     }
-                    
+
                     if (!found && expr_count < expr_capacity && inst->result.type == KRT_IR_VALUE_TEMP) {
                         exprs[expr_count].opcode = inst->opcode;
                         exprs[expr_count].left = inst->operands[0];
@@ -380,49 +423,49 @@ bool ir_optimize_common_subexpression_elimination(KrtIRModule* module, IROptimiz
                         expr_count++;
                     }
                 }
-                
+
                 inst = inst->next;
             }
             block = block->next;
         }
-        
+
         KRT_FREE(exprs);
         func = func->next;
     }
-    
+
     if (stats) {
         stats->cse_count += cse_count;
         stats->optimization_count += cse_count;
     }
-    
+
     return changed;
 }
 
 bool ir_optimize_copy_propagation(KrtIRModule* module, IROptimizer* stats) {
-    if (!module) return false;
-    
+    if (!module) {
+        return false;
+    }
+
     bool changed = false;
     int copy_count = 0;
-    
+
     KrtIRFunction* func = module->functions;
     while (func) {
         KrtIRBasicBlock* block = func->entry_block;
         while (block) {
             KrtIRInst* inst = block->first_inst;
             while (inst) {
-                if (inst->opcode == KRT_IR_COPY && inst->operand_count == 1 &&
-                    inst->result.type == KRT_IR_VALUE_TEMP) {
+                if (inst->opcode == KRT_IR_COPY && inst->operand_count == 1 && inst->result.type == KRT_IR_VALUE_TEMP) {
                     int copy_from = inst->operands[0].data.index;
                     int copy_to = inst->result.data.index;
-                    
+
                     KrtIRInst* use = inst->next;
                     while (use) {
                         if (use->result.type == KRT_IR_VALUE_TEMP && use->result.data.index == copy_to) {
                             break;
                         }
                         for (int i = 0; i < use->operand_count; i++) {
-                            if (use->operands[i].type == KRT_IR_VALUE_TEMP &&
-                                use->operands[i].data.index == copy_to) {
+                            if (use->operands[i].type == KRT_IR_VALUE_TEMP && use->operands[i].data.index == copy_to) {
                                 use->operands[i].data.index = copy_from;
                                 changed = true;
                                 copy_count++;
@@ -437,20 +480,22 @@ bool ir_optimize_copy_propagation(KrtIRModule* module, IROptimizer* stats) {
         }
         func = func->next;
     }
-    
+
     if (stats) {
         stats->optimization_count += copy_count;
     }
-    
+
     return changed;
 }
 
 bool ir_optimize_strength_reduction(KrtIRModule* module, IROptimizer* stats) {
-    if (!module) return false;
-    
+    if (!module) {
+        return false;
+    }
+
     bool changed = false;
     int reduce_count = 0;
-    
+
     KrtIRFunction* func = module->functions;
     while (func) {
         KrtIRBasicBlock* block = func->entry_block;
@@ -479,16 +524,14 @@ bool ir_optimize_strength_reduction(KrtIRModule* module, IROptimizer* stats) {
                             reduce_count++;
                         }
                     }
-                }
-                else if (inst->opcode == KRT_IR_DIV && inst->operand_count == 2) {
+                } else if (inst->opcode == KRT_IR_DIV && inst->operand_count == 2) {
                     if (is_constant_value(&inst->operands[1]) && inst->operands[1].data.imm == 1) {
                         inst->opcode = KRT_IR_COPY;
                         inst->operand_count = 1;
                         changed = true;
                         reduce_count++;
                     }
-                }
-                else if (inst->opcode == KRT_IR_POW && inst->operand_count == 2) {
+                } else if (inst->opcode == KRT_IR_POW && inst->operand_count == 2) {
                     if (is_constant_value(&inst->operands[1])) {
                         double exp = inst->operands[1].data.imm;
                         if (exp == 0) {
@@ -510,28 +553,30 @@ bool ir_optimize_strength_reduction(KrtIRModule* module, IROptimizer* stats) {
                         }
                     }
                 }
-                
+
                 inst = inst->next;
             }
             block = block->next;
         }
         func = func->next;
     }
-    
+
     if (stats) {
         stats->strength_reduce_count += reduce_count;
         stats->optimization_count += reduce_count;
     }
-    
+
     return changed;
 }
 
 bool ir_optimize_control_flow(KrtIRModule* module, IROptimizer* stats) {
-    if (!module) return false;
-    
+    if (!module) {
+        return false;
+    }
+
     bool changed = false;
     int cf_count = 0;
-    
+
     KrtIRFunction* func = module->functions;
     while (func) {
         KrtIRBasicBlock* block = func->entry_block;
@@ -558,12 +603,12 @@ bool ir_optimize_control_flow(KrtIRModule* module, IROptimizer* stats) {
         }
         func = func->next;
     }
-    
+
     if (stats) {
         stats->control_flow_count += cf_count;
         stats->optimization_count += cf_count;
     }
-    
+
     return changed;
 }
 
@@ -573,10 +618,18 @@ bool ir_optimize_loop_invariant_code_motion(KrtIRModule* module, IROptimizer* st
     return false;
 }
 
+#include "IrInline.inc"
+#include "IrPureCse.inc"
+#include "IrRecursiveInline.inc"
+
 bool ir_optimize_function_inlining(KrtIRModule* module, IROptimizer* stats) {
-    (void)module;
-    (void)stats;
-    return false;
+    bool changed = inline_small_functions(module, stats);
+    changed |= eliminate_pure_expressions(module, stats);
+    changed |= inline_recursive_functions(module, stats);
+    changed |= eliminate_pure_expressions(module, stats);
+    changed |= eliminate_unused_integers(module);
+    changed |= ir_optimize_dead_code_elimination(module, stats);
+    return changed;
 }
 
 bool ir_optimize_escape_analysis(KrtIRModule* module, IROptimizer* stats) {
@@ -586,46 +639,51 @@ bool ir_optimize_escape_analysis(KrtIRModule* module, IROptimizer* stats) {
 }
 
 void ir_optimize_module(IROptimizer* optimizer, KrtIRModule* module, OptimizationFlags flags) {
-    if (!optimizer || !module) return;
-    
-    double start_time = KrtGetTimeSec();
+    if (!optimizer || !module) {
+        return;
+    }
+
+    double start_time = get_time_seconds();
+    if (flags & OPT_FUNCTION_INLINING) {
+        ir_optimize_function_inlining(module, optimizer);
+    }
     int pass = 0;
     bool changed = true;
-    
-    while (changed && pass < MAX_OPTIMIZATION_PASSES) {
+
+    while (changed && pass < KRT_MAX_OPTIMIZATION_PASSES) {
         changed = false;
         pass++;
-        
+
         if (flags & OPT_CONSTANT_FOLDING) {
             changed |= ir_optimize_constant_folding(module, optimizer);
         }
-        
+
         if (flags & OPT_CONSTANT_PROPAGATION) {
             changed |= ir_optimize_constant_propagation(module, optimizer);
         }
-        
+
         if (flags & OPT_COPY_PROPAGATION) {
             changed |= ir_optimize_copy_propagation(module, optimizer);
         }
-        
+
         if (flags & OPT_COMMON_SUBEXPRESSION_ELIMINATION) {
             changed |= ir_optimize_common_subexpression_elimination(module, optimizer);
         }
-        
+
         if (flags & OPT_STRENGTH_REDUCTION) {
             changed |= ir_optimize_strength_reduction(module, optimizer);
         }
-        
+
         if (flags & OPT_DEAD_CODE_ELIMINATION) {
             changed |= ir_optimize_dead_code_elimination(module, optimizer);
         }
-        
+
         if (flags & OPT_CONTROL_FLOW_OPTIMIZATION) {
             changed |= ir_optimize_control_flow(module, optimizer);
         }
     }
-    
-    optimizer->time_spent += KrtGetTimeSec() - start_time;
+
+    optimizer->time_spent += get_time_seconds() - start_time;
 }
 
 int ir_optimizer_get_total_optimizations(IROptimizer* optimizer) {
@@ -637,8 +695,10 @@ double ir_optimizer_get_time_spent(IROptimizer* optimizer) {
 }
 
 void ir_optimizer_print_stats(IROptimizer* optimizer) {
-    if (!optimizer) return;
-    
+    if (!optimizer) {
+        return;
+    }
+
     printf("IR Optimization Statistics:\n");
     printf("  Total optimizations: %d\n", optimizer->optimization_count);
     printf("  Time spent: %.3f seconds\n", optimizer->time_spent);

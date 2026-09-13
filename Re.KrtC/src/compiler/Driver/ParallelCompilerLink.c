@@ -4,11 +4,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#ifndef _WIN32
+#include <sys/stat.h>
+#endif
 
 extern void FindRuntimeObj(const char* obj_name, char* result, size_t size);
 
 int ParallelCompilerLinkResults(ParallelCompiler* compiler, const char* final_output) {
-    if (!compiler || !final_output) return -1;
+    if (!compiler || !final_output) {
+        return -1;
+    }
 
     if (compiler->any_failed) {
         return -1;
@@ -39,20 +44,22 @@ int ParallelCompilerLinkResults(ParallelCompiler* compiler, const char* final_ou
         return -1;
     }
 
-    char runtime_obj[KRT_MAX_PATH];
-    char cache_obj[KRT_MAX_PATH];
-    char allocator_obj[KRT_MAX_PATH];
-    char KrtStringObj[KRT_MAX_PATH];
+    if (compiler->config->target_type != KRT_TARGET_KRO) {
+        char runtime_obj[KRT_MAX_PATH];
+        char cache_obj[KRT_MAX_PATH];
+        char allocator_obj[KRT_MAX_PATH];
+        char KrtStringObj[KRT_MAX_PATH];
 
-    FindRuntimeObj("runtime.o", runtime_obj, sizeof(runtime_obj));
-    FindRuntimeObj("output_cache.o", cache_obj, sizeof(cache_obj));
-    FindRuntimeObj("allocator.o", allocator_obj, sizeof(allocator_obj));
-    FindRuntimeObj("KrtString.o", KrtStringObj, sizeof(KrtStringObj));
+        FindRuntimeObj("runtime.o", runtime_obj, sizeof(runtime_obj));
+        FindRuntimeObj("output_cache.o", cache_obj, sizeof(cache_obj));
+        FindRuntimeObj("allocator.o", allocator_obj, sizeof(allocator_obj));
+        FindRuntimeObj("KrtString.o", KrtStringObj, sizeof(KrtStringObj));
 
-    KrtArkLinkAddObjectFile(ark_ctx, runtime_obj);
-    KrtArkLinkAddObjectFile(ark_ctx, cache_obj);
-    KrtArkLinkAddObjectFile(ark_ctx, allocator_obj);
-    KrtArkLinkAddObjectFile(ark_ctx, KrtStringObj);
+        KrtArkLinkAddObjectFile(ark_ctx, runtime_obj);
+        KrtArkLinkAddObjectFile(ark_ctx, cache_obj);
+        KrtArkLinkAddObjectFile(ark_ctx, allocator_obj);
+        KrtArkLinkAddObjectFile(ark_ctx, KrtStringObj);
+    }
 
     if (KrtArkLinkLoadProjectLibraries(ark_ctx, compiler->config) != 0) {
         KrtArkLinkContextDestroy(ark_ctx);
@@ -73,6 +80,12 @@ int ParallelCompilerLinkResults(ParallelCompiler* compiler, const char* final_ou
         KrtError("ArkLink linking failed");
         return -1;
     }
+#ifndef _WIN32
+    if (chmod(final_output, 0755) != 0) {
+        KrtError("Failed to make output executable: %s", final_output);
+        return -1;
+    }
+#endif
 
     return 0;
 }

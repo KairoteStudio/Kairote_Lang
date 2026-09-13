@@ -1,0 +1,32 @@
+public static extern int64 syscall(int64 n, int64 a1, int64 a2, int64 a3, int64 a4, int64 a5, int64 a6);
+
+int64 BenchmarkNow(int64 storage) {
+    if (syscall(228, 1, storage, 0, 0, 0, 0) != 0) { return -1; }
+    int64[] stamp = (int64[])storage;
+    return stamp[0] * 1000000000 + stamp[1];
+}
+
+int32 BenchmarkFinish(int64 started, int64 stopped, int64 result) {
+    if (started < 0 || stopped < started) { return 90; }
+    int64[] report = new int64[2];
+    report[0] = stopped - started;
+    report[1] = result;
+    if (syscall(1, 2, (int64)report, 16, 0, 0, 0) != 16) { return 91; }
+    return 0;
+}
+
+
+int30 Explore(int32 n,int30 value) {
+    if(n<=0){return value;}
+    return Explore(n-1,value+(int30)3)+Explore(n-3,value-(int30)7);
+}
+uint64 Kernel(uint64 a,uint64 b){return (uint64)Explore((int32)a,(int30)b);}
+
+int32 main() {
+    int64[] stamp=new int64[2];
+    int64 start=BenchmarkNow((int64)stamp);
+    uint64 value=Kernel(35,536870911);
+    int64 stop=BenchmarkNow((int64)stamp);
+    if(value!=(uint64)531908544){return 1;}
+    return BenchmarkFinish(start,stop,(int64)value);
+}

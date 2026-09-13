@@ -1,5 +1,5 @@
-#ifndef PARSER_STATEMENT_H
-#define PARSER_STATEMENT_H
+#ifndef KRT_PARSER_STATEMENT_H
+#define KRT_PARSER_STATEMENT_H
 
 #include "Parser.h"
 

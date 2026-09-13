@@ -1,5 +1,5 @@
-#ifndef LEXER_H
-#define LEXER_H
+#ifndef KRT_LEXER_H
+#define KRT_LEXER_H
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -43,6 +43,7 @@ typedef enum {
     TOKEN_PIPE,
     TOKEN_DOLLAR,
     TOKEN_FUNCTION,
+    TOKEN_FN,
     TOKEN_VAR,
     TOKEN_LET,
     TOKEN_IF,
@@ -89,14 +90,12 @@ typedef enum {
     TOKEN_MUL_ASSIGN,
     TOKEN_DIV_ASSIGN,
     TOKEN_MOD_ASSIGN,
-    TOKEN_INT8,
-    TOKEN_INT16,
-    TOKEN_INT32,
-    TOKEN_INT64,
-    TOKEN_UINT8,
-    TOKEN_UINT16,
-    TOKEN_UINT32,
-    TOKEN_UINT64,
+#define KRT_INTEGER_WIDTH(bits) TOKEN_INT##bits,
+#include "../../../Core/Utils/IntegerWidths.def"
+#undef KRT_INTEGER_WIDTH
+#define KRT_INTEGER_WIDTH(bits) TOKEN_UINT##bits,
+#include "../../../Core/Utils/IntegerWidths.def"
+#undef KRT_INTEGER_WIDTH
     TOKEN_FLOAT32,
     TOKEN_FLOAT64,
     TOKEN_BOOL,
@@ -132,20 +131,20 @@ typedef enum {
     TOKEN_CONTINUE,
     TOKEN_DEFAULT,
 
-    TOKEN_GET,           
-    TOKEN_SET,           
-    TOKEN_FROM,          
-    TOKEN_SELECT,        
-    
-    TOKEN_ORDERBY,       
-    TOKEN_GROUP,         
-    TOKEN_BY,            
-    TOKEN_JOIN,          
-    TOKEN_ON,            
-    TOKEN_EQUALS,        
-    TOKEN_INTO,          
-    TOKEN_LAMBDA,        
-    TOKEN_ATTRIBUTE,     
+    TOKEN_GET,
+    TOKEN_SET,
+    TOKEN_FROM,
+    TOKEN_SELECT,
+
+    TOKEN_ORDERBY,
+    TOKEN_GROUP,
+    TOKEN_BY,
+    TOKEN_JOIN,
+    TOKEN_ON,
+    TOKEN_EQUALS,
+    TOKEN_INTO,
+    TOKEN_LAMBDA,
+    TOKEN_ATTRIBUTE,
 
     TOKEN_IS,
     TOKEN_AS,
@@ -191,6 +190,12 @@ typedef enum {
 
     TOKEN_AUTO,
 
+    TOKEN_AND_ASSIGN,
+    TOKEN_OR_ASSIGN,
+    TOKEN_XOR_ASSIGN,
+    TOKEN_LSHIFT_ASSIGN,
+    TOKEN_RSHIFT_ASSIGN,
+
     TOKEN_UNKNOWN
 } KrtTokenType;
 
@@ -208,7 +213,7 @@ typedef struct {
     int line;
     int column;
     Token current_token;
-    KrtArena* arena;  
+    KrtArena* arena;
     int error_count;
     int error_line;
 } Lexer;
@@ -220,6 +225,21 @@ Token lexer_next_token(Lexer* lexer);
 Token lexer_peek_token(Lexer* lexer);
 Token lexer_peek_nth_token(Lexer* lexer, int n);
 void token_free(Token* token);
+/** @brief Return the even integer width, or zero for a non-integer token. */
+int KrtTokenIntegerBits(KrtTokenType type);
+/** @brief Return whether the token represents an unsigned integer type. */
+bool KrtTokenIsUnsigned(KrtTokenType type);
+/** @brief Return integer storage bytes, or zero for a non-integer token. */
+int KrtTokenIntegerSize(KrtTokenType type);
+/** @brief Return the requested integer type, or TOKEN_EOF for an unsupported width. */
+KrtTokenType KrtTokenIntegerType(int bits, bool is_unsigned);
+/** @brief Return the common fixed-width arithmetic type of two integer operands. */
+KrtTokenType KrtTokenIntegerCommon(KrtTokenType lhs, KrtTokenType rhs);
+/** @brief Return whether the token is a supported compound assignment operator. */
+bool KrtTokenIsCompoundAssignment(KrtTokenType type);
+/** @brief Return whether the token is a bitwise or shift compound assignment. */
+bool KrtTokenIsBitwiseAssignment(KrtTokenType type);
+
 const char* token_type_to_string(KrtTokenType type);
 
 #endif

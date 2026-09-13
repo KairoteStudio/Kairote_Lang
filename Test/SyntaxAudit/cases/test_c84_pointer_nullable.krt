@@ -1,0 +1,13 @@
+// nullable pattern scopes and single evaluation
+int*? findOnce(int* x, int* calls) { unsafe(using krt.mem;) { *calls += 1; } return x; }
+int main() { unsafe(using krt.mem;) {
+
+            var x = 3; var calls = 0;
+            let maybe: int*? = null;
+            if (maybe is int* hit) { return 1; } else { x = 4; }
+            if (findOnce(&x, &calls) is int* hit) { *hit = 8; } else { return 2; }
+            if (calls != 1 || x != 8) { return 3; }
+            let other: int*? = &x;
+            if (other is int* hit) { if (*hit != 8) { return 4; } }
+
+} return 0; }

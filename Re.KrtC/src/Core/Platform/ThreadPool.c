@@ -42,7 +42,9 @@ ThreadPool* thread_pool_create(int thread_count) {
     }
 
     ThreadPool* pool = (ThreadPool*)KRT_MALLOC(sizeof(ThreadPool));
-    if (!pool) return NULL;
+    if (!pool) {
+        return NULL;
+    }
 
     pool->threads = (pthread_t*)KRT_MALLOC(sizeof(pthread_t) * thread_count);
     if (!pool->threads) {
@@ -90,7 +92,9 @@ ThreadPool* thread_pool_create(int thread_count) {
 }
 
 void thread_pool_destroy(ThreadPool* pool) {
-    if (!pool) return;
+    if (!pool) {
+        return;
+    }
 
     pthread_mutex_lock(&pool->queue_mutex);
     pool->shutdown = 1;
@@ -115,10 +119,14 @@ void thread_pool_destroy(ThreadPool* pool) {
 }
 
 void thread_pool_submit(ThreadPool* pool, void (*function)(void* arg), void* arg) {
-    if (!pool || !function) return;
+    if (!pool || !function) {
+        return;
+    }
 
     ThreadTask* task = (ThreadTask*)KRT_MALLOC(sizeof(ThreadTask));
-    if (!task) return;
+    if (!task) {
+        return;
+    }
 
     task->function = function;
     task->arg = arg;
@@ -141,7 +149,9 @@ void thread_pool_submit(ThreadPool* pool, void (*function)(void* arg), void* arg
 }
 
 void thread_pool_wait(ThreadPool* pool) {
-    if (!pool) return;
+    if (!pool) {
+        return;
+    }
 
     pthread_mutex_lock(&pool->queue_mutex);
     while (pool->task_queue != NULL || pool->active_tasks > 0) {
@@ -151,7 +161,9 @@ void thread_pool_wait(ThreadPool* pool) {
 }
 
 int thread_pool_get_active_tasks(ThreadPool* pool) {
-    if (!pool) return 0;
+    if (!pool) {
+        return 0;
+    }
 
     pthread_mutex_lock(&pool->queue_mutex);
     int active = pool->active_tasks;

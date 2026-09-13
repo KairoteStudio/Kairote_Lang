@@ -15,4 +15,4 @@
 #include "Utils/StackCalculator.h"
 #include "Utils/KrtCommon.h"
 
-#endif 
+#endif

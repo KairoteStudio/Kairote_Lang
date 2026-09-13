@@ -23,14 +23,14 @@ typedef struct KrtIRPhi {
     char* var_name;
     int version;
     KrtIRType* type;
-    
+
     KrtIRBasicBlock** blocks;
     KrtIRValue* values;
     int pred_count;
-    
+
     KrtIRBasicBlock* parent_block;
     KrtIRInst* inst;
-    
+
     struct KrtIRPhi* next;
 } KrtIRPhi;
 
@@ -43,10 +43,10 @@ typedef struct {
     KrtIRBuilder* builder;
     KrtIRVarTable* var_table;
     KrtIRMemoryArena* arena;
-    
+
     int* version_counters;
     int var_capacity;
-    
+
     char** current_var_stack;
     int stack_capacity;
 } KrtIRSSABuilder;
@@ -66,15 +66,15 @@ KrtIRVarTable* KrtIrVarTableCreate(KrtIRMemoryArena* arena, int bucket_count);
 void KrtIrVarTableDestroy(KrtIRVarTable* table);
 
 KrtIRVarVersion* KrtIrVarGetVersion(KrtIRVarTable* table, const char* name);
-KrtIRVarVersion* KrtIrVarNewVersion(KrtIRSSABuilder* ssa_builder, const char* name, KrtIRType* type, 
-                                       KrtIRBasicBlock* block, KrtIRInst* def);
+KrtIRVarVersion* KrtIrVarNewVersion(KrtIRSSABuilder* ssa_builder, const char* name, KrtIRType* type,
+                                    KrtIRBasicBlock* block, KrtIRInst* def);
 
 KrtIRVarVersion* KrtIrVarFindVersion(KrtIRVarTable* table, const char* name, KrtIRBasicBlock* block);
 
 char* KrtIrVarVersionedName(KrtIRMemoryArena* arena, const char* name, int version);
 
-KrtIRPhi* KrtIrPhiCreate(KrtIRMemoryArena* arena, const char* var_name, KrtIRType* type, 
-                           int pred_count, KrtIRBasicBlock* parent);
+KrtIRPhi* KrtIrPhiCreate(KrtIRMemoryArena* arena, const char* var_name, KrtIRType* type, int pred_count,
+                         KrtIRBasicBlock* parent);
 
 void KrtIrPhiAddOperand(KrtIRPhi* phi, KrtIRBasicBlock* block, KrtIRValue value, int index);
 

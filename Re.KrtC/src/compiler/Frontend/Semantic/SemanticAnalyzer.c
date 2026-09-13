@@ -1,4 +1,5 @@
 #include "SemanticAnalyzer.h"
+#include "../../Pipeline/CompilerPipeline.h"
 #include "NameMangling.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,7 +10,7 @@
 #include <limits.h>
 #include <sys/stat.h>
 #include <dirent.h>
-static void import_krt_file(SemanticAnalyzer* analyzer, const char* file_path, const char* module_name);
+static void import_krt_file(SemanticAnalyzer* analyzer, const char* file_path);
 static void semantic_try_lazy_import_class(SemanticAnalyzer* analyzer, const char* class_name);
 
 #include "Core/Utils/OutputCache.h"
@@ -18,77 +19,65 @@ static void semantic_try_lazy_import_class(SemanticAnalyzer* analyzer, const cha
 #include "../Lexer/Tokenizer.h"
 #include "../Parser/Parser.h"
 
-#define DEBUG_SYMBOL_TABLE 1
-
-static void semantic_analyzer_register_builtins(SemanticAnalyzer* analyzer) {
-    if (!analyzer || !analyzer->symbol_table) return;
-
-    if (!symbol_table_lookup(analyzer->symbol_table, "timer_start")) {
-        symbol_table_define(analyzer->symbol_table, "timer_start", SYMBOL_FUNCTION, 0, NULL);
-        symbol_table_define(analyzer->symbol_table, "timer_start_int", SYMBOL_FUNCTION, 0, NULL);
-        symbol_table_define(analyzer->symbol_table, "timer_elapsed", SYMBOL_FUNCTION, 0, NULL);
-        symbol_table_define(analyzer->symbol_table, "timer_elapsed_int", SYMBOL_FUNCTION, 0, NULL);
-        symbol_table_define(analyzer->symbol_table, "timer_current", SYMBOL_FUNCTION, 0, NULL);
-        symbol_table_define(analyzer->symbol_table, "timer_current_int", SYMBOL_FUNCTION, 0, NULL);
+static bool semantic_analyzer_register_builtins(SemanticAnalyzer* analyzer) {
+    if (!analyzer || !analyzer->symbol_table) {
+        return false;
     }
+    if (symbol_table_lookup(analyzer->symbol_table, "timer_start")) {
+        return true;
+    }
+    static const char* const names[] = {"timer_start",       "timer_start_int", "timer_elapsed",
+                                        "timer_elapsed_int", "timer_current",   "timer_current_int"};
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        if (!symbol_table_define(analyzer->symbol_table, names[i], SYMBOL_FUNCTION, 0, NULL)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 SemanticAnalyzer* semantic_analyzer_create(void) {
-    SemanticAnalyzer* analyzer = KRT_MALLOC(sizeof(SemanticAnalyzer));
+    SemanticAnalyzer* analyzer = KRT_CALLOC(1, sizeof(*analyzer));
     if (!analyzer) {
         return NULL;
     }
-
     analyzer->symbol_table = symbol_table_create();
-    analyzer->global_symbol_table = analyzer->symbol_table;  
-    analyzer->ir_builder = NULL;
-    analyzer->error_count = 0;
-    analyzer->warning_count = 0;
-    analyzer->has_entry_point = false;
+    if (!analyzer->symbol_table) {
+        goto allocation_failed;
+    }
+    analyzer->global_symbol_table = analyzer->symbol_table;
     analyzer->require_entry_point = true;
-    analyzer->entry_point_name = NULL;
-
-    semantic_analyzer_register_builtins(analyzer);
-
-    analyzer->class_stack_size = 0;
-    analyzer->class_stack_capacity = 8;
-    analyzer->class_name_stack = (char**)KRT_CALLOC(analyzer->class_stack_capacity, sizeof(char*));
-    if (!analyzer->class_name_stack) {
-        KRT_FREE(analyzer);
-        return NULL;
+    if (!semantic_analyzer_register_builtins(analyzer)) {
+        goto allocation_failed;
     }
 
+    analyzer->class_stack_capacity = 8;
+    analyzer->class_name_stack = KRT_CALLOC(analyzer->class_stack_capacity, sizeof(*analyzer->class_name_stack));
+    if (!analyzer->class_name_stack) {
+        goto allocation_failed;
+    }
     analyzer->generic_registry = generics_create_registry();
     if (!analyzer->generic_registry) {
-        KRT_FREE(analyzer->class_name_stack);
-        KRT_FREE(analyzer);
-        return NULL;
+        goto allocation_failed;
     }
-    analyzer->generic_registry_shared = false;
-    analyzer->is_unsafe_mode = 0;
-    analyzer->point_depth = 0;
-    
-    analyzer->using_count = 0;
+    analyzer->type_arena = KrtArenaCreateLocal(KRT_ARENA_DEFAULT_BLOCK_SIZE);
+    if (!analyzer->type_arena) {
+        goto allocation_failed;
+    }
     analyzer->using_capacity = 16;
-    analyzer->using_directives = (UsingDirective**)KRT_CALLOC(analyzer->using_capacity, sizeof(UsingDirective*));
+    analyzer->using_directives = KRT_CALLOC(analyzer->using_capacity, sizeof(*analyzer->using_directives));
     if (!analyzer->using_directives) {
-        KRT_FREE(analyzer->class_name_stack);
-        KRT_FREE(analyzer);
-        return NULL;
+        goto allocation_failed;
     }
-
-    analyzer->input_file_path = NULL;
-    analyzer->libs_path = NULL;
-
     analyzer->error_report = KrtErrorReportCreate();
     if (!analyzer->error_report) {
-        KRT_FREE(analyzer->using_directives);
-        KRT_FREE(analyzer->class_name_stack);
-        KRT_FREE(analyzer);
-        return NULL;
+        goto allocation_failed;
     }
-
     return analyzer;
+
+allocation_failed:
+    semantic_analyzer_destroy(analyzer);
+    return NULL;
 }
 
 void semantic_analyzer_destroy(SemanticAnalyzer* analyzer) {
@@ -96,6 +85,7 @@ void semantic_analyzer_destroy(SemanticAnalyzer* analyzer) {
         return;
     }
 
+    KrtArenaDestroy(analyzer->type_arena);
     if (analyzer->symbol_table) {
         symbol_table_destroy(analyzer->symbol_table);
         analyzer->symbol_table = NULL;
@@ -118,12 +108,14 @@ void semantic_analyzer_destroy(SemanticAnalyzer* analyzer) {
         generics_destroy_registry(analyzer->generic_registry);
         analyzer->generic_registry = NULL;
     }
-    
+
     if (analyzer->using_directives) {
         for (int i = 0; i < analyzer->using_count; i++) {
             UsingDirective* directive = analyzer->using_directives[i];
             if (directive) {
-                if (directive->alias) KRT_FREE(directive->alias);
+                if (directive->alias) {
+                    KRT_FREE(directive->alias);
+                }
                 if (directive->namespace_path) {
                     for (int j = 0; j < directive->path_length; j++) {
                         KRT_FREE(directive->namespace_path[j]);
@@ -135,7 +127,7 @@ void semantic_analyzer_destroy(SemanticAnalyzer* analyzer) {
         }
         KRT_FREE(analyzer->using_directives);
     }
-    
+
     if (analyzer->error_report) {
         KrtErrorReportDestroy(analyzer->error_report);
         analyzer->error_report = NULL;
@@ -156,109 +148,134 @@ void semantic_analyzer_destroy(SemanticAnalyzer* analyzer) {
     KRT_FREE(analyzer);
 }
 
-void semantic_analyzer_set_pipeline(SemanticAnalyzer* analyzer, void* pipeline)
-{
-    if (!analyzer) return;
+void semantic_analyzer_set_pipeline(SemanticAnalyzer* analyzer, void* pipeline) {
+    if (!analyzer) {
+        return;
+    }
     analyzer->pipeline = pipeline;
 }
 
-void semantic_analyzer_register_imported_file(SemanticAnalyzer* analyzer, const char* file_path)
-{
-    if (!analyzer || !file_path || !analyzer->pipeline) return;
+void semantic_analyzer_register_imported_file(SemanticAnalyzer* analyzer, const char* file_path) {
+    if (!analyzer || !file_path || !analyzer->pipeline) {
+        return;
+    }
 
-    extern void KrtCompilePipelineAddImportedFile(void* pipeline, const char* file_path);
     KrtCompilePipelineAddImportedFile(analyzer->pipeline, file_path);
 }
 
-static void collect_exports_from_node(SemanticAnalyzer* analyzer, ASTNode* node)
-{
-    if (!analyzer || !node) return;
+static void collect_exports_from_node(SemanticAnalyzer* analyzer, ASTNode* node) {
+    if (!analyzer || !node) {
+        return;
+    }
 
     switch (node->type) {
-        case AST_FUNCTION_DECLARATION:
-        case AST_STATIC_FUNCTION_DECLARATION: {
-            const char* name = node->data.function_decl.name;
-            if (name) {
-                SymbolEntry* existing = symbol_table_lookup(analyzer->global_symbol_table, name);
-                if (!existing) {
-                    SymbolEntry* sym = symbol_table_define(analyzer->global_symbol_table, name, SYMBOL_FUNCTION, 0, NULL);
-                    /* M1: 预登记只算占位(FORWARD_REF), 不能是 DEFINED ——
-                     * 否则本体文件预登记时撞 "already defined"; 且跨文件
-                     * 引用方也能凭此条目通过查找 */
-                    if (sym) sym->state = SYMBOL_FORWARD_REF;
-                }
-            }
-            break;
-        }
-        case AST_CLASS_DECLARATION: {
-            const char* name = node->data.class_decl.name;
-            if (!name) break;
+    case AST_FUNCTION_DECLARATION:
+    case AST_STATIC_FUNCTION_DECLARATION: {
+        const char* name = node->data.function_decl.name;
+        if (name) {
             SymbolEntry* existing = symbol_table_lookup(analyzer->global_symbol_table, name);
             if (!existing) {
-                existing = symbol_table_define(analyzer->global_symbol_table, name, SYMBOL_CLASS, 0, NULL);
+                SymbolEntry* sym = symbol_table_define(analyzer->global_symbol_table, name, SYMBOL_FUNCTION, 0, NULL);
+                /* M1: 预登记只算占位(FORWARD_REF), 不能是 DEFINED ——
+                     * 否则本体文件预登记时撞 "already defined"; 且跨文件
+                     * 引用方也能凭此条目通过查找 */
+                if (sym) {
+                    sym->state = SYMBOL_FORWARD_REF;
+                    sym->source_type = KrtSourceTypeClone(
+                        analyzer->type_arena, (KrtSourceType){.token = TOKEN_FN, .function = node->function_type});
+                    sym->value_type = node->data.function_decl.return_type;
+                }
             }
-            ASTNode* cbody = node->data.class_decl.body;
-            if (existing && cbody && cbody->type == AST_BLOCK) {
-                struct SymbolScope* prev_scope =
-                    symbol_table_enter_nested_scope(analyzer->global_symbol_table, existing);
-                for (int i = 0; i < cbody->data.block.statement_count; i++) {
-                    ASTNode* m = cbody->data.block.statements[i];
-                    if (!m) continue;
-                    if (m->type == AST_ACCESS_MODIFIER) {
-                        m = m->data.access_modifier.member;
-                        if (!m) continue;
+        }
+        break;
+    }
+    case AST_CLASS_DECLARATION: {
+        const char* name = node->data.class_decl.name;
+        if (!name) {
+            break;
+        }
+        SymbolEntry* existing = symbol_table_lookup(analyzer->global_symbol_table, name);
+        if (!existing) {
+            existing = symbol_table_define(analyzer->global_symbol_table, name, SYMBOL_CLASS, 0, NULL);
+        }
+        ASTNode* cbody = node->data.class_decl.body;
+        if (existing && cbody && cbody->type == AST_BLOCK) {
+            struct SymbolScope* prev_scope = symbol_table_enter_nested_scope(analyzer->global_symbol_table, existing);
+            for (int i = 0; i < cbody->data.block.statement_count; i++) {
+                ASTNode* m = cbody->data.block.statements[i];
+                if (!m) {
+                    continue;
+                }
+                if (m->type == AST_ACCESS_MODIFIER) {
+                    m = m->data.access_modifier.member;
+                    if (!m) {
+                        continue;
                     }
-                    const char* mname = NULL;
-                    KrtTokenType* ptypes = NULL;
-                    int pcount = 0;
-                    if (m->type == AST_STATIC_FUNCTION_DECLARATION) {
-                        mname = m->data.static_function_decl.name;
-                        ptypes = m->data.static_function_decl.parameter_types;
-                        pcount = m->data.static_function_decl.parameter_count;
-                    } else if (m->type == AST_FUNCTION_DECLARATION) {
-                        mname = m->data.function_decl.name;
-                        ptypes = m->data.function_decl.parameter_types;
-                        pcount = m->data.function_decl.parameter_count;
-                    } else if (m->type == AST_CONSTRUCTOR_DECLARATION) {
-                        mname = name;
-                        ptypes = m->data.constructor_decl.parameter_types;
-                        pcount = m->data.constructor_decl.parameter_count;
-                    }
-                    if (!mname) continue;
+                }
+                const char* mname = NULL;
+                KrtTokenType* ptypes = NULL;
+                int pcount = 0;
+                if (m->type == AST_STATIC_FUNCTION_DECLARATION) {
+                    mname = m->data.static_function_decl.name;
+                    ptypes = m->data.static_function_decl.parameter_types;
+                    pcount = m->data.static_function_decl.parameter_count;
+                } else if (m->type == AST_FUNCTION_DECLARATION) {
+                    mname = m->data.function_decl.name;
+                    ptypes = m->data.function_decl.parameter_types;
+                    pcount = m->data.function_decl.parameter_count;
+                } else if (m->type == AST_CONSTRUCTOR_DECLARATION) {
+                    mname = name;
+                    ptypes = m->data.constructor_decl.parameter_types;
+                    pcount = m->data.constructor_decl.parameter_count;
+                }
+                if (!mname) {
+                    continue;
+                }
 
-                    const char* ns_path[2] = { name, NULL };
-                    char* key = name_mangle_function(ns_path, mname, ptypes, pcount);
-                    if (key) {
-                        if (!symbol_table_lookup_current_scope(analyzer->global_symbol_table, key)) {
+                const char* ns_path[2] = {name, NULL};
+                char* key = name_mangle_function(ns_path, mname, ptypes, pcount);
+                if (key) {
+                    if (!symbol_table_lookup_current_scope(analyzer->global_symbol_table, key)) {
+                        SymbolEntry* method =
                             symbol_table_define(analyzer->global_symbol_table, key, SYMBOL_FUNCTION, 0, NULL);
+                        if (method) {
+                            method->source_type = KrtSourceTypeClone(
+                                analyzer->type_arena, (KrtSourceType){.token = TOKEN_FN, .function = m->function_type});
                         }
-                        KRT_FREE(key);
                     }
-                    if (!symbol_table_lookup_current_scope(analyzer->global_symbol_table, mname)) {
+                    KRT_FREE(key);
+                }
+                if (!symbol_table_lookup_current_scope(analyzer->global_symbol_table, mname)) {
+                    SymbolEntry* method =
                         symbol_table_define(analyzer->global_symbol_table, mname, SYMBOL_FUNCTION, 0, NULL);
+                    if (method) {
+                        method->source_type = KrtSourceTypeClone(
+                            analyzer->type_arena, (KrtSourceType){.token = TOKEN_FN, .function = m->function_type});
                     }
                 }
-                symbol_table_exit_nested_scope(analyzer->global_symbol_table, prev_scope);
             }
-            break;
+            symbol_table_exit_nested_scope(analyzer->global_symbol_table, prev_scope);
         }
-        case AST_NAMESPACE_DECLARATION: {
-            ASTNode* body = node->data.namespace_decl.body;
-            if (body && body->type == AST_BLOCK) {
-                for (int i = 0; i < body->data.block.statement_count; i++) {
-                    collect_exports_from_node(analyzer, body->data.block.statements[i]);
-                }
+        break;
+    }
+    case AST_NAMESPACE_DECLARATION: {
+        ASTNode* body = node->data.namespace_decl.body;
+        if (body && body->type == AST_BLOCK) {
+            for (int i = 0; i < body->data.block.statement_count; i++) {
+                collect_exports_from_node(analyzer, body->data.block.statements[i]);
             }
-            break;
         }
-        default:
-            break;
+        break;
+    }
+    default:
+        break;
     }
 }
 
-void semantic_analyzer_collect_exports(SemanticAnalyzer* analyzer, ASTNode* ast)
-{
-    if (!analyzer || !ast) return;
+void semantic_analyzer_collect_exports(SemanticAnalyzer* analyzer, ASTNode* ast) {
+    if (!analyzer || !ast) {
+        return;
+    }
 
     if (ast->type == AST_PROGRAM || ast->type == AST_BLOCK) {
         for (int i = 0; i < ast->data.block.statement_count; i++) {
@@ -269,66 +286,55 @@ void semantic_analyzer_collect_exports(SemanticAnalyzer* analyzer, ASTNode* ast)
     }
 }
 
-void semantic_analyzer_set_input_file(SemanticAnalyzer* analyzer, const char* file_path)
-{
-    if (!analyzer) return;
+void semantic_analyzer_set_input_file(SemanticAnalyzer* analyzer, const char* file_path) {
+    if (!analyzer) {
+        return;
+    }
 
-    if (analyzer->input_file_path)
-    {
+    if (analyzer->input_file_path) {
         KRT_FREE(analyzer->input_file_path);
         analyzer->input_file_path = NULL;
     }
 
-    if (analyzer->libs_path)
-    {
+    if (analyzer->libs_path) {
         KRT_FREE(analyzer->libs_path);
         analyzer->libs_path = NULL;
     }
 
-    if (file_path)
-    {
+    if (file_path) {
         char abs_path[PATH_MAX];
-        if (file_path[0] == '/' || file_path[0] == '\\')
-        {
+        if (file_path[0] == '/' || file_path[0] == '\\') {
             analyzer->input_file_path = KRT_STRDUP(file_path);
-        }
-        else if (realpath(file_path, abs_path) != NULL)
-        {
+        } else if (realpath(file_path, abs_path) != NULL) {
             analyzer->input_file_path = KRT_STRDUP(abs_path);
-        }
-        else
-        {
+        } else {
             char cwd[PATH_MAX];
-            if (getcwd(cwd, sizeof(cwd)) != NULL)
-            {
-                snprintf(abs_path, sizeof(abs_path), "%s/%s", cwd, file_path);
-                analyzer->input_file_path = KRT_STRDUP(abs_path);
-            }
-            else
-            {
+            if (getcwd(cwd, sizeof(cwd)) != NULL) {
+                int length = snprintf(abs_path, sizeof(abs_path), "%s/%s", cwd, file_path);
+                analyzer->input_file_path =
+                    KRT_STRDUP(length >= 0 && (size_t)length < sizeof(abs_path) ? abs_path : file_path);
+            } else {
                 analyzer->input_file_path = KRT_STRDUP(file_path);
             }
         }
-
 
         analyzer->libs_path = NULL;
 
         char search[PATH_MAX];
         snprintf(search, sizeof(search), "%s", analyzer->input_file_path);
 
-        while (search[0])
-        {
+        while (search[0]) {
             char* last_slash = strrchr(search, '/');
-            if (!last_slash) break;
+            if (!last_slash) {
+                break;
+            }
 
             int dir_len = (int)(last_slash - search);
-            if (dir_len == 0)
-            {
+            if (dir_len == 0) {
                 char candidate[16];
                 snprintf(candidate, sizeof(candidate), "/libs");
                 struct stat st;
-                if (stat(candidate, &st) == 0 && S_ISDIR(st.st_mode))
-                {
+                if (stat(candidate, &st) == 0 && S_ISDIR(st.st_mode)) {
                     analyzer->libs_path = KRT_STRDUP(candidate);
                 }
                 break;
@@ -338,8 +344,7 @@ void semantic_analyzer_set_input_file(SemanticAnalyzer* analyzer, const char* fi
             snprintf(candidate, sizeof(candidate), "%.*s/libs", dir_len, search);
 
             struct stat st;
-            if (stat(candidate, &st) == 0 && S_ISDIR(st.st_mode))
-            {
+            if (stat(candidate, &st) == 0 && S_ISDIR(st.st_mode)) {
                 analyzer->libs_path = KRT_STRDUP(candidate);
                 break;
             }
@@ -347,11 +352,9 @@ void semantic_analyzer_set_input_file(SemanticAnalyzer* analyzer, const char* fi
             search[dir_len] = '\0';
         }
 
-        if (!analyzer->libs_path)
-        {
+        if (!analyzer->libs_path) {
             analyzer->libs_path = KRT_STRDUP("libs");
         }
-
     }
 }
 
@@ -385,52 +388,71 @@ void semantic_analyzer_pop_class_context(SemanticAnalyzer* analyzer) {
 }
 
 static void semantic_analyzer_add_using_directive(SemanticAnalyzer* analyzer, ASTNode* using_node) {
-    if (!analyzer || !using_node) return;
-    
-    if (analyzer->using_count >= analyzer->using_capacity) {
-        analyzer->using_capacity *= 2;
-        analyzer->using_directives = (UsingDirective**)KRT_REALLOC(
-            analyzer->using_directives, 
-            analyzer->using_capacity * sizeof(UsingDirective*)
-        );
+    if (!analyzer || !using_node) {
+        return;
     }
-    
-    UsingDirective* directive = (UsingDirective*)KRT_MALLOC(sizeof(UsingDirective));
-    if (!directive) return;
-    
-    directive->alias = NULL;
-    directive->namespace_path = NULL;
-    directive->path_length = 0;
-    directive->is_alias = 0;
-    
+    if (analyzer->using_count >= analyzer->using_capacity) {
+        if (analyzer->using_capacity > INT_MAX / 2) {
+            semantic_analyzer_add_error_at(analyzer, using_node, "Too many using directives");
+            return;
+        }
+        int capacity = analyzer->using_capacity * 2;
+        UsingDirective** directives = KRT_REALLOC(analyzer->using_directives, (size_t)capacity * sizeof(*directives));
+        if (!directives) {
+            semantic_analyzer_add_error_at(analyzer, using_node, "Out of memory while collecting using directives");
+            return;
+        }
+        analyzer->using_directives = directives;
+        analyzer->using_capacity = capacity;
+    }
+    UsingDirective* directive = KRT_CALLOC(1, sizeof(*directive));
+    if (!directive) {
+        semantic_analyzer_add_error_at(analyzer, using_node, "Out of memory while collecting using directive");
+        return;
+    }
     if (using_node->data.using_directive.alias) {
         directive->alias = KRT_STRDUP(using_node->data.using_directive.alias);
-    }
-    
-    directive->is_alias = using_node->data.using_directive.is_alias;
-    directive->path_length = using_node->data.using_directive.path_length;
-    
-    if (using_node->data.using_directive.namespace_path) {
-        directive->namespace_path = (char**)KRT_MALLOC(
-            directive->path_length * sizeof(char*)
-        );
-        for (int i = 0; i < directive->path_length; i++) {
-            directive->namespace_path[i] = KRT_STRDUP(
-                using_node->data.using_directive.namespace_path[i]
-            );
+        if (!directive->alias) {
+            goto allocation_failed;
         }
     }
-    
+    directive->is_alias = using_node->data.using_directive.is_alias;
+    directive->path_length = using_node->data.using_directive.path_length;
+    if (using_node->data.using_directive.namespace_path && directive->path_length > 0) {
+        directive->namespace_path = KRT_CALLOC(directive->path_length, sizeof(*directive->namespace_path));
+        if (!directive->namespace_path) {
+            goto allocation_failed;
+        }
+        for (int i = 0; i < directive->path_length; i++) {
+            directive->namespace_path[i] = KRT_STRDUP(using_node->data.using_directive.namespace_path[i]);
+            if (!directive->namespace_path[i]) {
+                goto allocation_failed;
+            }
+        }
+    }
     analyzer->using_directives[analyzer->using_count++] = directive;
+    return;
+
+allocation_failed:
+    if (directive->namespace_path) {
+        for (int i = 0; i < directive->path_length; i++) {
+            KRT_FREE(directive->namespace_path[i]);
+        }
+        KRT_FREE(directive->namespace_path);
+    }
+    KRT_FREE(directive->alias);
+    KRT_FREE(directive);
+    semantic_analyzer_add_error_at(analyzer, using_node, "Out of memory while copying using directive");
 }
 
-static SymbolEntry* semantic_analyzer_lookup_namespace(SemanticAnalyzer* analyzer,
-                                                       char** namespace_path,
+static SymbolEntry* semantic_analyzer_lookup_namespace(SemanticAnalyzer* analyzer, char** namespace_path,
                                                        int path_length) {
-    if (!analyzer || !namespace_path || path_length <= 0) return NULL;
+    if (!analyzer || !namespace_path || path_length <= 0) {
+        return NULL;
+    }
 
     SymbolEntry* current = NULL;
-    
+
     SymbolTable* current_table = analyzer->global_symbol_table ? analyzer->global_symbol_table : analyzer->symbol_table;
 
     for (int i = 0; i < path_length; i++) {
@@ -447,7 +469,7 @@ static SymbolEntry* semantic_analyzer_lookup_namespace(SemanticAnalyzer* analyze
             if (!current->nested_table) {
                 return NULL;
             }
-            
+
             current_table = current->nested_table;
         }
     }
@@ -459,18 +481,16 @@ static SymbolEntry* semantic_analyzer_lookup_namespace(SemanticAnalyzer* analyze
     return current;
 }
 
+SymbolEntry* semantic_analyzer_lookup_qualified_name(SemanticAnalyzer* analyzer, char** parts, int part_count) {
+    if (!analyzer || !parts || part_count <= 0) {
+        return NULL;
+    }
 
-
-SymbolEntry* semantic_analyzer_lookup_qualified_name(SemanticAnalyzer* analyzer, 
-                                                     char** parts, 
-                                                     int part_count) {
-    if (!analyzer || !parts || part_count <= 0) return NULL;
-    
     SymbolEntry* result = semantic_analyzer_lookup_namespace(analyzer, parts, part_count);
     if (result) {
         return result;
     }
-    
+
     if (part_count >= 2) {
         SymbolEntry* ns = semantic_analyzer_lookup_namespace(analyzer, parts, part_count - 1);
         if (ns && ns->nested_table) {
@@ -480,24 +500,33 @@ SymbolEntry* semantic_analyzer_lookup_qualified_name(SemanticAnalyzer* analyzer,
             }
         }
     }
-    
+
     return NULL;
 }
 
 static SymbolEntry* semantic_analyzer_lookup_with_usings(SemanticAnalyzer* analyzer, const char* name) {
-    if (!analyzer || !name) return NULL;
+    if (!analyzer || !name) {
+        return NULL;
+    }
 
     SymbolEntry* result = symbol_table_lookup(analyzer->symbol_table, name);
-    if (result) return result;
+    if (result) {
+        return result;
+    }
 
     for (int i = 0; i < analyzer->using_count; i++) {
         UsingDirective* directive = analyzer->using_directives[i];
-        if (!directive || directive->path_length <= 0) continue;
+        if (!directive || directive->path_length <= 0) {
+            continue;
+        }
 
-        SymbolEntry* ns = semantic_analyzer_lookup_namespace(analyzer, directive->namespace_path, directive->path_length);
+        SymbolEntry* ns =
+            semantic_analyzer_lookup_namespace(analyzer, directive->namespace_path, directive->path_length);
         if (ns && ns->nested_table) {
             result = symbol_table_lookup(ns->nested_table, name);
-            if (result) return result;
+            if (result) {
+                return result;
+            }
         }
     }
 
@@ -512,46 +541,56 @@ const char* semantic_analyzer_get_current_class_context(SemanticAnalyzer* analyz
 }
 
 static bool semantic_class_has_members(SymbolEntry* cls) {
-    if (!cls || !cls->nested_table) return false;
+    if (!cls || !cls->nested_table) {
+        return false;
+    }
     SymbolTable* nt = cls->nested_table;
     for (SymbolScope* sc = nt->current_scope; sc; sc = sc->parent) {
-        if (sc->symbols) return true;
+        if (sc->symbols) {
+            return true;
+        }
     }
     if (nt->hash_table) {
         for (int b = 0; b < nt->hash_size; b++) {
-            if (nt->hash_table[b]) return true;
+            if (nt->hash_table[b]) {
+                return true;
+            }
         }
     }
     return false;
 }
 
-static SymbolEntry* semantic_lookup_method_by_arity(SymbolTable* nested,
-                                                    const char* class_name,
-                                                    const char* method_name,
-                                                    int argc,
-                                                    ASTNode* const* args,
+static SymbolEntry* semantic_lookup_method_by_arity(SymbolTable* nested, const char* class_name,
+                                                    const char* method_name, int argc, ASTNode* const* args,
                                                     const KrtTokenType* inferred_types);
-static SymbolEntry* semantic_lookup_method_in_global_class(SemanticAnalyzer* analyzer,
-                                                           const char* class_name,
-                                                           const char* method_name,
-                                                           int argc,
-                                                           ASTNode* const* args) {
-    if (!analyzer || !analyzer->global_symbol_table || !class_name || !method_name) return NULL;
+static SymbolEntry* semantic_lookup_method_in_global_class(SemanticAnalyzer* analyzer, const char* class_name,
+                                                           const char* method_name, int argc, ASTNode* const* args) {
+    if (!analyzer || !analyzer->global_symbol_table || !class_name || !method_name) {
+        return NULL;
+    }
     SymbolEntry* gcls = symbol_table_lookup(analyzer->global_symbol_table, class_name);
-    if (!gcls || gcls->type != SYMBOL_CLASS || !gcls->nested_table) return NULL;
+    if (!gcls || gcls->type != SYMBOL_CLASS || !gcls->nested_table) {
+        return NULL;
+    }
     return semantic_lookup_method_by_arity(gcls->nested_table, class_name, method_name, argc, args, NULL);
 }
 
 static SymbolEntry* semantic_analyzer_lookup_class(SemanticAnalyzer* analyzer, const char* class_name) {
-    if (!analyzer || !class_name) return NULL;
+    if (!analyzer || !class_name) {
+        return NULL;
+    }
 
     SymbolEntry* fallback = NULL;
     SymbolTable* table = analyzer->symbol_table;
     while (table) {
         SymbolEntry* result = symbol_table_lookup(table, class_name);
         if (result && result->type == SYMBOL_CLASS) {
-            if (semantic_class_has_members(result)) return result;
-            if (!fallback) fallback = result;
+            if (semantic_class_has_members(result)) {
+                return result;
+            }
+            if (!fallback) {
+                fallback = result;
+            }
         }
         table = table->parent_table;
     }
@@ -559,8 +598,12 @@ static SymbolEntry* semantic_analyzer_lookup_class(SemanticAnalyzer* analyzer, c
     if (analyzer->global_symbol_table && analyzer->global_symbol_table != analyzer->symbol_table) {
         SymbolEntry* result = symbol_table_lookup(analyzer->global_symbol_table, class_name);
         if (result && result->type == SYMBOL_CLASS) {
-            if (semantic_class_has_members(result)) return result;
-            if (!fallback) fallback = result;
+            if (semantic_class_has_members(result)) {
+                return result;
+            }
+            if (!fallback) {
+                fallback = result;
+            }
         }
     }
 
@@ -568,60 +611,81 @@ static SymbolEntry* semantic_analyzer_lookup_class(SemanticAnalyzer* analyzer, c
 }
 
 static KrtTokenType semantic_analyzer_infer_expression_type(SemanticAnalyzer* analyzer, ASTNode* expr) {
-    if (!expr) return TOKEN_INT32;
+    if (!expr) {
+        return TOKEN_INT32;
+    }
+    if (expr->resolved_type.token) {
+        return KrtSourceStorage(expr->resolved_type);
+    }
 
     switch (expr->type) {
-        case AST_NUMBER: {
-            double v = expr->data.number_value;
-            int64_t iv = (int64_t)v;
-            if (v != (double)iv) return TOKEN_FLOAT64;
+    case AST_NUMBER: {
+        if (!expr->is_integer_literal) {
+            return TOKEN_FLOAT64;
+        }
+        if (expr->integer_value <= INT32_MAX) {
             return TOKEN_INT32;
         }
-        case AST_STRING:
+        if (expr->integer_value <= INT64_MAX) {
+            return TOKEN_INT64;
+        }
+        if (expr->integer_value <= KrtIntegerMask(127)) {
+            return TOKEN_INT128;
+        }
+        return TOKEN_UINT128;
+    }
+    case AST_STRING:
+        return TOKEN_STRING;
+    case AST_BOOLEAN:
+        return TOKEN_BOOL;
+    case AST_IDENTIFIER: {
+        SymbolEntry* sym = symbol_table_lookup_scope_chain(analyzer->symbol_table, expr->data.identifier_name);
+        if (sym && sym->value_type != TOKEN_EOF) {
+            return sym->value_type;
+        }
+        return TOKEN_INT32;
+    }
+    case AST_CAST_EXPRESSION:
+        return expr->data.cast_expr.target_type;
+    case AST_CALL: {
+        SymbolEntry* callee = NULL;
+        if (expr->data.call.resolved_mangled_name) {
+            callee = symbol_table_lookup_scope_chain(analyzer->symbol_table, expr->data.call.resolved_mangled_name);
+        }
+        if (!callee && expr->data.call.name) {
+            callee = symbol_table_lookup_scope_chain(analyzer->symbol_table, expr->data.call.name);
+            if (!callee && expr->data.call.resolved_class_name) {
+                char legacy[256];
+                snprintf(legacy, sizeof(legacy), "%s__%s", expr->data.call.resolved_class_name, expr->data.call.name);
+                callee = symbol_table_lookup_scope_chain(analyzer->symbol_table, legacy);
+            }
+        }
+        if (callee && callee->value_type != TOKEN_EOF) {
+            return callee->value_type;
+        }
+        return TOKEN_INT32;
+    }
+    case AST_UNARY_OPERATION:
+        return semantic_analyzer_infer_expression_type(analyzer, expr->data.unary_op.operand);
+    case AST_BINARY_OPERATION: {
+        KrtTokenType left = semantic_analyzer_infer_expression_type(analyzer, expr->data.binary_op.left);
+        KrtTokenType right = semantic_analyzer_infer_expression_type(analyzer, expr->data.binary_op.right);
+        if (left == TOKEN_FLOAT64 || right == TOKEN_FLOAT64) {
+            return TOKEN_FLOAT64;
+        }
+        if (left == TOKEN_FLOAT32 || right == TOKEN_FLOAT32) {
+            return TOKEN_FLOAT32;
+        }
+        if (left == TOKEN_STRING || right == TOKEN_STRING) {
             return TOKEN_STRING;
-        case AST_BOOLEAN:
-            return TOKEN_BOOL;
-        case AST_IDENTIFIER: {
-            SymbolEntry* sym = symbol_table_lookup_scope_chain(analyzer->symbol_table, expr->data.identifier_name);
-            if (sym && sym->value_type != TOKEN_EOF) {
-                return sym->value_type;
-            }
-            return TOKEN_INT32;
         }
-        case AST_CAST_EXPRESSION:
-            return expr->data.cast_expr.target_type;
-        case AST_CALL: {
-            SymbolEntry* callee = NULL;
-            if (expr->data.call.resolved_mangled_name) {
-                callee = symbol_table_lookup_scope_chain(analyzer->symbol_table,
-                                                          expr->data.call.resolved_mangled_name);
-            }
-            if (!callee && expr->data.call.name) {
-                callee = symbol_table_lookup_scope_chain(analyzer->symbol_table, expr->data.call.name);
-                if (!callee && expr->data.call.resolved_class_name) {
-                    char legacy[256];
-                    snprintf(legacy, sizeof(legacy), "%s__%s",
-                             expr->data.call.resolved_class_name, expr->data.call.name);
-                    callee = symbol_table_lookup_scope_chain(analyzer->symbol_table, legacy);
-                }
-            }
-            if (callee && callee->value_type != TOKEN_EOF) {
-                return callee->value_type;
-            }
-            return TOKEN_INT32;
+        if (expr->data.binary_op.operator == TOKEN_LSHIFT || expr->data.binary_op.operator == TOKEN_RSHIFT) {
+            return left;
         }
-        case AST_UNARY_OPERATION:
-            return semantic_analyzer_infer_expression_type(analyzer, expr->data.unary_op.operand);
-        case AST_BINARY_OPERATION: {
-            KrtTokenType left = semantic_analyzer_infer_expression_type(analyzer, expr->data.binary_op.left);
-            KrtTokenType right = semantic_analyzer_infer_expression_type(analyzer, expr->data.binary_op.right);
-            if (left == TOKEN_FLOAT64 || right == TOKEN_FLOAT64) return TOKEN_FLOAT64;
-            if (left == TOKEN_FLOAT32 || right == TOKEN_FLOAT32) return TOKEN_FLOAT32;
-            if (left == TOKEN_STRING || right == TOKEN_STRING) return TOKEN_STRING;
-            return TOKEN_INT32;
-        }
-        default:
-            return TOKEN_INT32;
+        return KrtTokenIntegerCommon(left, right);
+    }
+    default:
+        return TOKEN_INT32;
     }
 }
 
@@ -640,8 +704,8 @@ void semantic_analyzer_add_error(SemanticAnalyzer* analyzer, const char* format,
     va_end(args);
 }
 
-void semantic_analyzer_add_error_ex(SemanticAnalyzer* analyzer, int line, int column, 
-                                    const char* message, const char* hint) {
+void semantic_analyzer_add_error_ex(SemanticAnalyzer* analyzer, int line, int column, const char* message,
+                                    const char* hint) {
     if (!analyzer) {
         return;
     }
@@ -649,18 +713,16 @@ void semantic_analyzer_add_error_ex(SemanticAnalyzer* analyzer, int line, int co
     analyzer->error_count++;
 
     if (analyzer->error_report) {
-        KrtErrorReportAdd(analyzer->error_report, KRT_ERROR_ERROR, 
-                          KRT_ERROR_STAGE_SEMANTIC, line, column, 
-                          message, hint ? hint : "");
+        KrtErrorReportAdd(analyzer->error_report, KRT_ERROR_ERROR, KRT_ERROR_STAGE_SEMANTIC, line, column, message,
+                          hint ? hint : "");
     }
 
     KrtOutputCacheAddError("Error: ");
-    KrtOutputCacheAddError(message);
+    KrtOutputCacheAddError("%s", message);
     KrtOutputCacheAddError("\n");
 }
 
-void semantic_analyzer_add_error_at(SemanticAnalyzer* analyzer, ASTNode* node,
-                                    const char* format, ...) {
+void semantic_analyzer_add_error_at(SemanticAnalyzer* analyzer, ASTNode* node, const char* format, ...) {
     if (!analyzer) {
         return;
     }
@@ -677,9 +739,7 @@ void semantic_analyzer_add_error_at(SemanticAnalyzer* analyzer, ASTNode* node,
     int column = node ? node->col : 0;
 
     if (analyzer->error_report) {
-        KrtErrorReportAdd(analyzer->error_report, KRT_ERROR_ERROR, 
-                          KRT_ERROR_STAGE_SEMANTIC, line, column, 
-                          message, "");
+        KrtErrorReportAdd(analyzer->error_report, KRT_ERROR_ERROR, KRT_ERROR_STAGE_SEMANTIC, line, column, message, "");
     }
 }
 
@@ -692,77 +752,61 @@ void semantic_analyzer_add_warning(SemanticAnalyzer* analyzer, const char* forma
 
     va_list args;
     va_start(args, format);
-    
+
     char buffer[1024];
     vsnprintf(buffer, sizeof(buffer), format, args);
-    
+
     KrtOutputCacheAdd("[SEMANTIC WARNING] ");
-    KrtOutputCacheAdd(buffer);
+    KrtOutputCacheAdd("%s", buffer);
     KrtOutputCacheAdd("\n");
-    
+
     va_end(args);
 }
 
 static SymbolEntry* semantic_lookup_exact_in_class(SymbolTable* nested, const char* name) {
-    if (!nested || !name) return NULL;
-    for (SymbolScope* sc = nested->current_scope; sc; sc = sc->parent) {
-        for (SymbolEntry* e = sc->symbols; e; e = e->scope_next) {
-            if (e && e->name && strcmp(e->name, name) == 0) return e;
+    return symbol_table_lookup_scope_chain(nested, name);
+}
+
+static int semantic_parameter_score(const char* suffix, int argc, ASTNode* const* args,
+                                    const KrtTokenType* inferred_types) {
+    int score = 0;
+    for (int k = 0; k < argc; k++) {
+        if (!*suffix) {
+            return -10000;
         }
-    }
-    if (nested->hash_table) {
-        for (int b = 0; b < nested->hash_size; b++) {
-            for (SymbolEntry* e = nested->hash_table[b]; e; e = e->next) {
-                if (e && e->name && strcmp(e->name, name) == 0) return e;
+        KrtTokenType type = inferred_types ? inferred_types[k] : TOKEN_INT32;
+        if (args && args[k] && args[k]->type == AST_CHAR_LITERAL) {
+            type = TOKEN_CHAR;
+        }
+        const char* expected = KrtMangleTypeName(type);
+        int length = 1;
+        if ((suffix[0] == 'i' || suffix[0] == 'u') && suffix[1] >= '0' && suffix[1] <= '9') {
+            while (suffix[length] >= '0' && suffix[length] <= '9') {
+                length++;
             }
+            if (suffix[length] != '_') {
+                return -10000;
+            }
+            length++;
         }
+        if (strlen(expected) == (size_t)length && strncmp(suffix, expected, length) == 0) {
+            score += 2;
+        } else if (type == TOKEN_STRING || type == TOKEN_TYPE_STRING) {
+            score--;
+        }
+        suffix += length;
     }
-    return NULL;
+    return *suffix ? -10000 : score;
 }
 
-static char semantic_mangle_type_letter(KrtTokenType t) {
-    switch (t) {
-        case TOKEN_INT8:   return 'c';
-        case TOKEN_INT16:  return 's';
-        case TOKEN_INT32:  return 'i';
-        case TOKEN_INT64:  return 'l';
-        case TOKEN_UINT8:  return 'C';
-        case TOKEN_UINT16: return 'S';
-        case TOKEN_UINT32: return 'I';
-        case TOKEN_UINT64: return 'L';
-        case TOKEN_FLOAT32:return 'f';
-        case TOKEN_FLOAT64:return 'd';
-        case TOKEN_BOOL:   return 'b';
-        case TOKEN_STRING:
-        case TOKEN_TYPE_STRING: return 'r';
-        case TOKEN_VOID:   return 'v';
-        default:           return 'x';
-    }
-}
-
-static char semantic_expected_param_letter(const ASTNode* arg, KrtTokenType inferred) {
-    if (!arg) return semantic_mangle_type_letter(inferred);
-    switch (arg->type) {
-        case AST_STRING:       return 'r';
-        case AST_CHAR_LITERAL: return 'c';
-        case AST_BOOLEAN:      return 'b';
-        case AST_NUMBER:       return 'i';
-        default:               return semantic_mangle_type_letter(inferred);
-    }
-}
-
-static SymbolEntry* semantic_lookup_method_by_arity(SymbolTable* nested,
-                                                    const char* class_name,
-                                                    const char* method_name,
-                                                    int argc,
-                                                    ASTNode* const* args,
+static SymbolEntry* semantic_lookup_method_by_arity(SymbolTable* nested, const char* class_name,
+                                                    const char* method_name, int argc, ASTNode* const* args,
                                                     const KrtTokenType* inferred_types) {
     if (!nested || !class_name || !method_name) {
         return NULL;
     }
     char prefix[512];
-    snprintf(prefix, sizeof(prefix), "_ZN%u%s%u%sE",
-             (unsigned)strlen(class_name), class_name,
+    snprintf(prefix, sizeof(prefix), "_ZN%u%s%u%sE", (unsigned)strlen(class_name), class_name,
              (unsigned)strlen(method_name), method_name);
     size_t plen = strlen(prefix);
 
@@ -771,411 +815,447 @@ static SymbolEntry* semantic_lookup_method_by_arity(SymbolTable* nested,
 
     for (SymbolScope* sc = nested->current_scope; sc; sc = sc->parent) {
         for (SymbolEntry* e = sc->symbols; e; e = e->scope_next) {
-            if (!e || !e->name) continue;
-            if (strncmp(e->name, prefix, plen) != 0) continue;
-            int letters = (int)strlen(e->name) - (int)plen;
-            if (letters != argc) continue;
-            int score = 0;
-            for (int k = 0; k < argc && k < letters; k++) {
-                char want = semantic_expected_param_letter(args ? args[k] : NULL,
-                                                           inferred_types ? inferred_types[k] : TOKEN_INT32);
-                if (e->name[plen + k] == want) score += 2;
-                else if (want == 'r' && e->name[plen + k] != 'r') score -= 1;
+            if (!e || !e->name) {
+                continue;
             }
-            if (score > best_score) { best_score = score; best = e; }
+            if (strncmp(e->name, prefix, plen) != 0) {
+                continue;
+            }
+            int score = semantic_parameter_score(e->name + plen, argc, args, inferred_types);
+            if (score > best_score) {
+                best_score = score;
+                best = e;
+            }
         }
     }
     if (nested->hash_table) {
         for (int b = 0; b < nested->hash_size; b++) {
             for (SymbolEntry* e = nested->hash_table[b]; e; e = e->next) {
-                if (!e || !e->name) continue;
-                if (strncmp(e->name, prefix, plen) != 0) continue;
-                int letters = (int)strlen(e->name) - (int)plen;
-                if (letters != argc) continue;
-                int score = 0;
-                for (int k = 0; k < argc && k < letters; k++) {
-                    char want = semantic_expected_param_letter(args ? args[k] : NULL,
-                                                               inferred_types ? inferred_types[k] : TOKEN_INT32);
-                    if (e->name[plen + k] == want) score += 2;
-                    else if (want == 'r' && e->name[plen + k] != 'r') score -= 1;
+                if (!e || !e->name) {
+                    continue;
                 }
-                if (score > best_score) { best_score = score; best = e; }
+                if (strncmp(e->name, prefix, plen) != 0) {
+                    continue;
+                }
+                int score = semantic_parameter_score(e->name + plen, argc, args, inferred_types);
+                if (score > best_score) {
+                    best_score = score;
+                    best = e;
+                }
             }
         }
     }
     return best;
 }
 
-bool semantic_analyzer_analyze_expression(SemanticAnalyzer* analyzer, ASTNode* expr) {
+#include "PointerAnalysis.inc"
+
+static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) {
     if (!analyzer || !expr) {
         return false;
     }
 
     switch (expr->type) {
-        case AST_NUMBER:
-        case AST_BOOLEAN:
-            return true;
+    case AST_NUMBER:
+    case AST_BOOLEAN:
+        return true;
 
-        case AST_IDENTIFIER: {
-            const char* var_name = expr->data.identifier_name;
-            
-            if (!analyzer->is_unsafe_mode && var_name[0] == '_' && strncmp(var_name, "__lambda_", 9) != 0) {
-                semantic_analyzer_add_error_at(analyzer, expr, 
-                    "Direct access to internal symbol '%s' is restricted. Use unsafe(\"%s\", ...) instead.", 
-                    var_name, var_name);
-                return false;
-            }
-            
-            SymbolEntry* symbol = symbol_table_lookup_scope_chain(analyzer->symbol_table, var_name);
-            if (!symbol) {
-                semantic_analyzer_add_error_at(analyzer, expr,
-                    "Undefined identifier: %s", var_name);
-                return false;
-            }
-            
-            return true;
-        }
+    case AST_IDENTIFIER: {
+        const char* var_name = expr->data.identifier_name;
 
-        case AST_UNSAFE_CALL: {
-            int old_mode = analyzer->is_unsafe_mode;
-            analyzer->is_unsafe_mode = 1;
-            bool result = semantic_analyzer_analyze_expression(analyzer, expr->data.unsafe_call.expression);
-            analyzer->is_unsafe_mode = old_mode;
-            return result;
-        }
-
-        case AST_BINARY_OPERATION: {
-            bool left_ok = semantic_analyzer_analyze_expression(analyzer, expr->data.binary_op.left);
-            bool right_ok = semantic_analyzer_analyze_expression(analyzer, expr->data.binary_op.right);
-            return left_ok && right_ok;
-        }
-
-        case AST_UNARY_OPERATION:
-            return semantic_analyzer_analyze_expression(analyzer, expr->data.unary_op.operand);
-
-        case AST_CALL:
-            return semantic_analyzer_analyze_function_call(analyzer, expr);
-
-        case AST_ASSIGNMENT: {
-            const char* var_name = expr->data.assignment.name;
-            SymbolEntry* symbol = symbol_table_lookup_scope_chain(analyzer->symbol_table, var_name);
-            if (!symbol) {
-                semantic_analyzer_add_error_at(analyzer, expr, 
-                    "Undefined variable: %s", var_name);
-                return false;
-            }
-            return semantic_analyzer_analyze_expression(analyzer, expr->data.assignment.value);
-        }
-
-        case AST_COMPOUND_ASSIGNMENT: {
-            const char* var_name = expr->data.compound_assignment.name;
-            SymbolEntry* symbol = symbol_table_lookup_scope_chain(analyzer->symbol_table, var_name);
-            if (!symbol) {
-                semantic_analyzer_add_error_at(analyzer, expr, 
-                    "Undefined variable: %s", var_name);
-                return false;
-            }
-            return semantic_analyzer_analyze_expression(analyzer, expr->data.compound_assignment.value);
-        }
-
-        case AST_TERNARY_OPERATION: {
-            bool cond_ok = semantic_analyzer_analyze_expression(analyzer, expr->data.ternary_op.condition);
-            bool true_ok = semantic_analyzer_analyze_expression(analyzer, expr->data.ternary_op.true_value);
-            bool false_ok = semantic_analyzer_analyze_expression(analyzer, expr->data.ternary_op.false_value);
-            return cond_ok && true_ok && false_ok;
-        }
-
-        case AST_NEW_EXPRESSION: {
-            
-            if (!expr || !expr->data.new_expr.class_name) {
-                semantic_analyzer_add_error(analyzer, "Invalid new expression node");
-                return false;
-            }
-            
-            KrtTokenType type_token = expr->data.new_expr.type_token;
-            const char* class_name = expr->data.new_expr.class_name;
-            
-            if (type_token == TOKEN_INT32) {
-                
-                if (expr->data.new_expr.argument_count > 0 && !expr->data.new_expr.arguments) {
-                    return true; 
-                }
-                
-                for (int i = 0; i < expr->data.new_expr.argument_count; i++) {
-                    if (expr->data.new_expr.arguments[i] && 
-                        !semantic_analyzer_analyze_expression(analyzer, expr->data.new_expr.arguments[i])) {
-                        return false;
-                    }
-                }
-                return true;
-            }
-
-            if (!class_name || strlen(class_name) == 0) {
-                semantic_analyzer_add_error(analyzer, "Invalid class name for new expression");
-                return false;
-            }
-            
-            SymbolEntry* class_symbol = semantic_analyzer_lookup_with_usings(analyzer, class_name);
-            if (!class_symbol) {
-                semantic_analyzer_add_error(analyzer, "Undefined class: %s", class_name);
-                return false;
-            }
-
-            if (class_symbol->type != SYMBOL_CLASS) {
-                semantic_analyzer_add_error(analyzer, "%s is not a class", class_name);
-                return false;
-            }
-
-            for (int i = 0; i < expr->data.new_expr.argument_count; i++) {
-                if (!semantic_analyzer_analyze_expression(analyzer, expr->data.new_expr.arguments[i])) {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
-        case AST_NEW_ARRAY_EXPRESSION: {
-            
-            KrtTokenType type_token = expr->data.new_array_expr.type_token;
-            
-            if (type_token >= TOKEN_INT8 && type_token <= TOKEN_VOID) {
-                
-                if (!semantic_analyzer_analyze_expression(analyzer, expr->data.new_array_expr.size)) {
-                    return false;
-                }
-                return true;
-            }
-            
-            semantic_analyzer_add_error(analyzer, "Array creation only supported for built-in types");
+        if (!analyzer->is_unsafe_mode && var_name[0] == '_' && strncmp(var_name, "__lambda_", 9) != 0) {
+            semantic_analyzer_add_error_at(
+                analyzer, expr, "Direct access to internal symbol '%s' is restricted. Use unsafe(\"%s\", ...) instead.",
+                var_name, var_name);
             return false;
         }
 
-        case AST_STATIC_METHOD_CALL: {
-            const char* class_name = expr->data.static_call.class_name;
-            const char* method_name = expr->data.static_call.method_name;
+        SymbolEntry* symbol = symbol_table_lookup_scope_chain(analyzer->symbol_table, var_name);
+        if (!symbol) {
+            semantic_analyzer_add_error_at(analyzer, expr, "Undefined identifier: %s", var_name);
+            return false;
+        }
 
-            SymbolEntry* class_symbol = semantic_analyzer_lookup_class(analyzer, class_name);
-            if (!class_symbol) {
-                semantic_try_lazy_import_class(analyzer, class_name);
-                class_symbol = semantic_analyzer_lookup_class(analyzer, class_name);
-            }
-            if (!class_symbol || class_symbol->type != SYMBOL_CLASS) {
-                semantic_analyzer_add_error(analyzer, "Undefined class: %s", class_name);
+        return true;
+    }
+
+    case AST_UNSAFE_CALL: {
+        int old_mode = analyzer->is_unsafe_mode;
+        analyzer->is_unsafe_mode = 1;
+        bool result = semantic_analyzer_analyze_expression(analyzer, expr->data.unsafe_call.expression);
+        analyzer->is_unsafe_mode = old_mode;
+        return result;
+    }
+
+    case AST_BINARY_OPERATION: {
+        ASTNode* left = expr->data.binary_op.left;
+        if (expr->data.binary_op.operator == TOKEN_ASSIGN && left->type != AST_IDENTIFIER &&
+            left->type != AST_ARRAY_ACCESS && left->type != AST_MEMBER_ACCESS &&
+            left->type != AST_POINTER_DEREFERENCE) {
+            return pointer_error(analyzer, expr, "Assignment requires a writable lvalue");
+        }
+        bool left_ok = semantic_analyzer_analyze_expression(analyzer, expr->data.binary_op.left);
+        bool right_ok = semantic_analyzer_analyze_expression(analyzer, expr->data.binary_op.right);
+        return left_ok && right_ok;
+    }
+
+    case AST_UNARY_OPERATION:
+        return semantic_analyzer_analyze_expression(analyzer, expr->data.unary_op.operand);
+
+    case AST_ARRAY_LITERAL:
+        for (int i = 0; i < expr->data.array_literal.element_count; i++) {
+            if (!semantic_analyzer_analyze_expression(analyzer, expr->data.array_literal.elements[i])) {
                 return false;
             }
+        }
+        return true;
 
-            for (int i = 0; i < expr->data.static_call.argument_count; i++) {
-                if (!semantic_analyzer_analyze_expression(analyzer, expr->data.static_call.arguments[i])) {
+    case AST_TUPLE_EXPRESSION:
+        for (int i = 0; i < expr->data.tuple_expr.element_count; i++) {
+            if (!semantic_analyzer_analyze_expression(analyzer, expr->data.tuple_expr.elements[i])) {
+                return false;
+            }
+        }
+        return true;
+
+    case AST_CALL:
+        return semantic_analyzer_analyze_function_call(analyzer, expr);
+
+    case AST_ASSIGNMENT: {
+        const char* var_name = expr->data.assignment.name;
+        SymbolEntry* symbol = symbol_table_lookup_scope_chain(analyzer->symbol_table, var_name);
+        if (!symbol) {
+            semantic_analyzer_add_error_at(analyzer, expr, "Undefined variable: %s", var_name);
+            return false;
+        }
+        return semantic_analyzer_analyze_expression(analyzer, expr->data.assignment.value);
+    }
+
+    case AST_COMPOUND_ASSIGNMENT: {
+        const char* var_name = expr->data.compound_assignment.name;
+        SymbolEntry* symbol = symbol_table_lookup_scope_chain(analyzer->symbol_table, var_name);
+        if (!symbol) {
+            semantic_analyzer_add_error_at(analyzer, expr, "Undefined variable: %s", var_name);
+            return false;
+        }
+        return semantic_analyzer_analyze_expression(analyzer, expr->data.compound_assignment.value);
+    }
+
+    case AST_TERNARY_OPERATION: {
+        bool cond_ok = semantic_analyzer_analyze_expression(analyzer, expr->data.ternary_op.condition);
+        bool true_ok = semantic_analyzer_analyze_expression(analyzer, expr->data.ternary_op.true_value);
+        bool false_ok = semantic_analyzer_analyze_expression(analyzer, expr->data.ternary_op.false_value);
+        return cond_ok && true_ok && false_ok;
+    }
+
+    case AST_NEW_EXPRESSION: {
+
+        if (!expr || !expr->data.new_expr.class_name) {
+            semantic_analyzer_add_error(analyzer, "Invalid new expression node");
+            return false;
+        }
+
+        KrtTokenType type_token = expr->data.new_expr.type_token;
+        const char* class_name = expr->data.new_expr.class_name;
+
+        if (type_token == TOKEN_INT32) {
+
+            if (expr->data.new_expr.argument_count > 0 && !expr->data.new_expr.arguments) {
+                return true;
+            }
+
+            for (int i = 0; i < expr->data.new_expr.argument_count; i++) {
+                if (expr->data.new_expr.arguments[i] &&
+                    !semantic_analyzer_analyze_expression(analyzer, expr->data.new_expr.arguments[i])) {
                     return false;
                 }
             }
+            return true;
+        }
 
-            SymbolEntry* method_symbol = NULL;
-            char* mangled_name = NULL;
-            if (class_symbol->nested_table) {
-                KrtTokenType* arg_types = NULL;
-                if (expr->data.static_call.argument_count > 0) {
-                    arg_types = (KrtTokenType*)KRT_MALLOC(sizeof(KrtTokenType) * expr->data.static_call.argument_count);
-                    if (!arg_types) {
-                        semantic_analyzer_add_error(analyzer, "Memory allocation failed");
-                        return false;
-                    }
-                    for (int i = 0; i < expr->data.static_call.argument_count; i++) {
-                        arg_types[i] = semantic_analyzer_infer_expression_type(analyzer, expr->data.static_call.arguments[i]);
-                    }
-                }
-                const char* ns_path[2] = { class_name, NULL };
-                mangled_name = name_mangle_function(ns_path, method_name, arg_types,
-                                                       expr->data.static_call.argument_count);
-                if (arg_types) KRT_FREE(arg_types);
+        if (!class_name || strlen(class_name) == 0) {
+            semantic_analyzer_add_error(analyzer, "Invalid class name for new expression");
+            return false;
+        }
 
-                if (mangled_name) {
-                    method_symbol = semantic_lookup_exact_in_class(class_symbol->nested_table, mangled_name);
-                }
-                if (!method_symbol) {
-                    method_symbol = semantic_lookup_method_by_arity(
-                        class_symbol->nested_table, class_name, method_name,
-                        expr->data.static_call.argument_count,
-                        expr->data.static_call.arguments, NULL);
-                }
+        SymbolEntry* class_symbol = semantic_analyzer_lookup_with_usings(analyzer, class_name);
+        if (!class_symbol) {
+            semantic_analyzer_add_error(analyzer, "Undefined class: %s", class_name);
+            return false;
+        }
+
+        if (class_symbol->type != SYMBOL_CLASS) {
+            semantic_analyzer_add_error(analyzer, "%s is not a class", class_name);
+            return false;
+        }
+
+        for (int i = 0; i < expr->data.new_expr.argument_count; i++) {
+            if (!semantic_analyzer_analyze_expression(analyzer, expr->data.new_expr.arguments[i])) {
+                return false;
             }
+        }
 
-            if (!method_symbol) {
-                method_symbol = symbol_table_lookup_in_namespace(analyzer->symbol_table, class_name, method_name);
-                if (!method_symbol) {
-                    method_symbol = semantic_lookup_method_by_arity(
-                        analyzer->symbol_table, class_name, method_name,
-                        expr->data.static_call.argument_count,
-                        expr->data.static_call.arguments, NULL);
-                }
-                if (!method_symbol) {
-                    method_symbol = semantic_lookup_method_in_global_class(
-                        analyzer, class_name, method_name,
-                        expr->data.static_call.argument_count,
-                        expr->data.static_call.arguments);
-                }
-                if (!method_symbol) {
-                    semantic_analyzer_add_error(analyzer, "Undefined static method: %s::%s", class_name, method_name);
-                    if (mangled_name) KRT_FREE(mangled_name);
+        SymbolEntry* constructor =
+            semantic_lookup_method_by_arity(class_symbol->nested_table, class_name, class_name,
+                                            expr->data.new_expr.argument_count, expr->data.new_expr.arguments, NULL);
+        if (constructor && constructor->source_type.function) {
+            expr->function_type = constructor->source_type.function;
+            for (int i = 0; i < expr->data.new_expr.argument_count; i++) {
+                if (!call_argument_assignable(analyzer, expr->data.new_expr.arguments[i],
+                                              expr->function_type->parameters[i])) {
                     return false;
                 }
             }
+        }
+        return true;
+    }
 
-            if (method_symbol->type != SYMBOL_FUNCTION) {
-                semantic_analyzer_add_error(analyzer, "%s::%s is not a static method", class_name, method_name);
-                if (mangled_name) KRT_FREE(mangled_name);
+    case AST_NEW_ARRAY_EXPRESSION: {
+
+        KrtTokenType type_token = expr->data.new_array_expr.type_token;
+
+        if (type_token >= TOKEN_INT2 && type_token <= TOKEN_VOID) {
+
+            if (!semantic_analyzer_analyze_expression(analyzer, expr->data.new_array_expr.size)) {
                 return false;
             }
+            return true;
+        }
 
-            if (method_symbol->name &&
-                method_symbol->name[0] == '_' && method_symbol->name[1] == 'Z' &&
-                (!mangled_name || strcmp(method_symbol->name, mangled_name) != 0)) {
-                if (mangled_name) KRT_FREE(mangled_name);
-                mangled_name = KRT_STRDUP(method_symbol->name);
+        semantic_analyzer_add_error(analyzer, "Array creation only supported for built-in types");
+        return false;
+    }
+
+    case AST_STATIC_METHOD_CALL: {
+        const char* class_name = expr->data.static_call.class_name;
+        const char* method_name = expr->data.static_call.method_name;
+
+        SymbolEntry* class_symbol = semantic_analyzer_lookup_class(analyzer, class_name);
+        if (!class_symbol) {
+            semantic_try_lazy_import_class(analyzer, class_name);
+            class_symbol = semantic_analyzer_lookup_class(analyzer, class_name);
+        }
+        if (!class_symbol || class_symbol->type != SYMBOL_CLASS) {
+            semantic_analyzer_add_error(analyzer, "Undefined class: %s", class_name);
+            return false;
+        }
+
+        for (int i = 0; i < expr->data.static_call.argument_count; i++) {
+            if (!semantic_analyzer_analyze_expression(analyzer, expr->data.static_call.arguments[i])) {
+                return false;
+            }
+        }
+
+        SymbolEntry* method_symbol = NULL;
+        char* mangled_name = NULL;
+        if (class_symbol->nested_table) {
+            KrtTokenType* arg_types = NULL;
+            if (expr->data.static_call.argument_count > 0) {
+                arg_types = (KrtTokenType*)KRT_MALLOC(sizeof(KrtTokenType) * expr->data.static_call.argument_count);
+                if (!arg_types) {
+                    semantic_analyzer_add_error(analyzer, "Memory allocation failed");
+                    return false;
+                }
+                for (int i = 0; i < expr->data.static_call.argument_count; i++) {
+                    arg_types[i] =
+                        semantic_analyzer_infer_expression_type(analyzer, expr->data.static_call.arguments[i]);
+                }
+            }
+            const char* ns_path[2] = {class_name, NULL};
+            mangled_name = name_mangle_function(ns_path, method_name, arg_types, expr->data.static_call.argument_count);
+            if (arg_types) {
+                KRT_FREE(arg_types);
             }
 
             if (mangled_name) {
-                if (expr->data.static_call.resolved_mangled_name) {
-                    KRT_FREE(expr->data.static_call.resolved_mangled_name);
-                }
-                expr->data.static_call.resolved_mangled_name = mangled_name;
+                method_symbol = semantic_lookup_exact_in_class(class_symbol->nested_table, mangled_name);
             }
-
-            return true;
+            if (!method_symbol) {
+                method_symbol = semantic_lookup_method_by_arity(class_symbol->nested_table, class_name, method_name,
+                                                                expr->data.static_call.argument_count,
+                                                                expr->data.static_call.arguments, NULL);
+            }
         }
 
-        case AST_MEMBER_ACCESS: {
-            bool object_ok = semantic_analyzer_analyze_expression(analyzer, expr->data.member_access.object);
-            if (!object_ok) {
+        if (!method_symbol) {
+            method_symbol = symbol_table_lookup_in_namespace(analyzer->symbol_table, class_name, method_name);
+            if (!method_symbol) {
+                method_symbol = semantic_lookup_method_by_arity(analyzer->symbol_table, class_name, method_name,
+                                                                expr->data.static_call.argument_count,
+                                                                expr->data.static_call.arguments, NULL);
+            }
+            if (!method_symbol) {
+                method_symbol = semantic_lookup_method_in_global_class(analyzer, class_name, method_name,
+                                                                       expr->data.static_call.argument_count,
+                                                                       expr->data.static_call.arguments);
+            }
+            if (!method_symbol) {
+                semantic_analyzer_add_error(analyzer, "Undefined static method: %s::%s", class_name, method_name);
+                if (mangled_name) {
+                    KRT_FREE(mangled_name);
+                }
                 return false;
             }
-
-            ASTNode* object = expr->data.member_access.object;
-            const char* member_name = expr->data.member_access.member_name;
-
-            if (object && (object->type == AST_THIS ||
-                           (object->type == AST_IDENTIFIER && strcmp(object->data.identifier_name, "this") == 0))) {
-                const char* current_class = semantic_analyzer_get_current_class_context(analyzer);
-                if (current_class) {
-                    SymbolEntry* member = symbol_table_lookup_scope_chain(analyzer->symbol_table, member_name);
-                    if (member && (member->type == SYMBOL_FIELD || member->type == SYMBOL_FUNCTION ||
-                                   member->type == SYMBOL_STATIC_FIELD || member->type == SYMBOL_VARIABLE)) {
-                        if (expr->data.member_access.resolved_class_name) {
-                            KRT_FREE(expr->data.member_access.resolved_class_name);
-                        }
-                        expr->data.member_access.resolved_class_name = KRT_STRDUP(current_class);
-                        return true;
-                    }
-                    semantic_analyzer_add_error(analyzer, "Undefined member '%s' in class '%s'", member_name, current_class);
-                    return false;
-                }
-            }
-
-            if (object && object->type == AST_IDENTIFIER) {
-                const char* class_name = object->data.identifier_name;
-                SymbolEntry* class_symbol = semantic_analyzer_lookup_class(analyzer, class_name);
-                if (class_symbol && class_symbol->type == SYMBOL_CLASS) {
-                    char* mangled_name = name_mangle_simple(class_name, member_name);
-                    SymbolEntry* member = NULL;
-                    if (class_symbol->nested_table && mangled_name) {
-                        member = symbol_table_lookup(class_symbol->nested_table, mangled_name);
-                    }
-                    if (!member && class_symbol->nested_table) {
-                        member = symbol_table_lookup(class_symbol->nested_table, member_name);
-                    }
-                    if (member && (member->type == SYMBOL_STATIC_FIELD || member->type == SYMBOL_FUNCTION)) {
-                        if (expr->data.member_access.resolved_class_name) {
-                            KRT_FREE(expr->data.member_access.resolved_class_name);
-                        }
-                        if (expr->data.member_access.resolved_mangled_name) {
-                            KRT_FREE(expr->data.member_access.resolved_mangled_name);
-                        }
-                        expr->data.member_access.resolved_class_name = KRT_STRDUP(class_name);
-                        expr->data.member_access.resolved_mangled_name = mangled_name;
-                        return true;
-                    }
-                    if (mangled_name) KRT_FREE(mangled_name);
-                }
-            }
-
-            return object_ok;
         }
 
-        case AST_ARRAY_ACCESS: {
-            bool array_ok = semantic_analyzer_analyze_expression(analyzer, expr->data.array_access.array);
-            bool index_ok = semantic_analyzer_analyze_expression(analyzer, expr->data.array_access.index);
-            
-            if (array_ok && expr->data.array_access.array->type == AST_IDENTIFIER) {
-                const char* array_name = expr->data.array_access.array->data.identifier_name;
-                SymbolEntry* symbol = symbol_table_lookup(analyzer->symbol_table, array_name);
-                if (symbol && !symbol->is_array) {
-                    semantic_analyzer_add_error(analyzer, "Attempting to access non-array as array");
-                    return false;
-                }
+        if (method_symbol->type != SYMBOL_FUNCTION) {
+            semantic_analyzer_add_error(analyzer, "%s::%s is not a static method", class_name, method_name);
+            if (mangled_name) {
+                KRT_FREE(mangled_name);
             }
-            
-            return array_ok && index_ok;
+            return false;
         }
 
-        case AST_LAMBDA_EXPRESSION: {
-            
-            symbol_table_push_scope(analyzer->symbol_table);
-
-            for (int i = 0; i < expr->data.lambda_expr.parameter_count; i++) {
-                const char* param_name = expr->data.lambda_expr.parameters[i];
-                SymbolEntry* param = symbol_table_define(analyzer->symbol_table, param_name, SYMBOL_VARIABLE, 0, NULL);
-                if (!param) {
-                    semantic_analyzer_add_error(analyzer, "Failed to define lambda parameter: %s", param_name);
-                    symbol_table_pop_scope(analyzer->symbol_table);
-                    return false;
-                }
+        if (method_symbol->name && method_symbol->name[0] == '_' && method_symbol->name[1] == 'Z' &&
+            (!mangled_name || strcmp(method_symbol->name, mangled_name) != 0)) {
+            if (mangled_name) {
+                KRT_FREE(mangled_name);
             }
-
-            bool body_ok = false;
-            if (expr->data.lambda_expr.expression) {
-                body_ok = semantic_analyzer_analyze_expression(analyzer, expr->data.lambda_expr.expression);
-            } else if (expr->data.lambda_expr.body) {
-                body_ok = semantic_analyzer_analyze_statement(analyzer, expr->data.lambda_expr.body);
-            }
-
-            symbol_table_pop_scope(analyzer->symbol_table);
-
-            return body_ok;
+            mangled_name = KRT_STRDUP(method_symbol->name);
         }
 
-        case AST_LINQ_QUERY: {
-            bool ok = true;
-            
-            if (expr->data.linq_query.from_clause) {
-                ok = ok && semantic_analyzer_analyze_expression(analyzer, 
-                    expr->data.linq_query.from_clause->data.linq_from.source);
+        if (mangled_name) {
+            if (expr->data.static_call.resolved_mangled_name) {
+                KRT_FREE(expr->data.static_call.resolved_mangled_name);
             }
-            
-            for (int i = 0; i < expr->data.linq_query.clause_count; i++) {
-                ASTNode* clause = expr->data.linq_query.clauses[i];
-                if (clause->type == AST_LINQ_WHERE) {
-                    ok = ok && semantic_analyzer_analyze_expression(analyzer, 
-                        clause->data.linq_where.condition);
-                } else if (clause->type == AST_LINQ_ORDERBY) {
-                    ok = ok && semantic_analyzer_analyze_expression(analyzer, 
-                        clause->data.linq_orderby.expression);
-                }
-            }
-            
-            if (expr->data.linq_query.select_clause) {
-                ok = ok && semantic_analyzer_analyze_expression(analyzer, 
-                    expr->data.linq_query.select_clause->data.linq_select.expression);
-            }
-            
-            return ok;
+            expr->data.static_call.resolved_mangled_name = mangled_name;
         }
 
-        case AST_CAST_EXPRESSION:
-            return semantic_analyzer_analyze_expression(analyzer, expr->data.cast_expr.expression);
+        return true;
+    }
 
-        default:
-            return true;
+    case AST_MEMBER_ACCESS: {
+        bool object_ok = semantic_analyzer_analyze_expression(analyzer, expr->data.member_access.object);
+        if (!object_ok) {
+            return false;
+        }
+
+        ASTNode* object = expr->data.member_access.object;
+        const char* member_name = expr->data.member_access.member_name;
+
+        if (object && (object->type == AST_THIS ||
+                       (object->type == AST_IDENTIFIER && strcmp(object->data.identifier_name, "this") == 0))) {
+            const char* current_class = semantic_analyzer_get_current_class_context(analyzer);
+            if (current_class) {
+                SymbolEntry* member = symbol_table_lookup_scope_chain(analyzer->symbol_table, member_name);
+                if (member && (member->type == SYMBOL_FIELD || member->type == SYMBOL_FUNCTION ||
+                               member->type == SYMBOL_STATIC_FIELD || member->type == SYMBOL_VARIABLE)) {
+                    if (expr->data.member_access.resolved_class_name) {
+                        KRT_FREE(expr->data.member_access.resolved_class_name);
+                    }
+                    expr->data.member_access.resolved_class_name = KRT_STRDUP(current_class);
+                    return true;
+                }
+                semantic_analyzer_add_error(analyzer, "Undefined member '%s' in class '%s'", member_name,
+                                            current_class);
+                return false;
+            }
+        }
+
+        if (object && object->type == AST_IDENTIFIER) {
+            const char* class_name = object->data.identifier_name;
+            SymbolEntry* class_symbol = semantic_analyzer_lookup_class(analyzer, class_name);
+            if (class_symbol && class_symbol->type == SYMBOL_CLASS) {
+                char* mangled_name = name_mangle_simple(class_name, member_name);
+                SymbolEntry* member = NULL;
+                if (class_symbol->nested_table && mangled_name) {
+                    member = symbol_table_lookup(class_symbol->nested_table, mangled_name);
+                }
+                if (!member && class_symbol->nested_table) {
+                    member = symbol_table_lookup(class_symbol->nested_table, member_name);
+                }
+                if (member && (member->type == SYMBOL_STATIC_FIELD || member->type == SYMBOL_FUNCTION)) {
+                    if (expr->data.member_access.resolved_class_name) {
+                        KRT_FREE(expr->data.member_access.resolved_class_name);
+                    }
+                    if (expr->data.member_access.resolved_mangled_name) {
+                        KRT_FREE(expr->data.member_access.resolved_mangled_name);
+                    }
+                    expr->data.member_access.resolved_class_name = KRT_STRDUP(class_name);
+                    expr->data.member_access.resolved_mangled_name = mangled_name;
+                    return true;
+                }
+                if (mangled_name) {
+                    KRT_FREE(mangled_name);
+                }
+            }
+        }
+
+        return object_ok;
+    }
+
+    case AST_ARRAY_ACCESS: {
+        bool array_ok = semantic_analyzer_analyze_expression(analyzer, expr->data.array_access.array);
+        bool index_ok = semantic_analyzer_analyze_expression(analyzer, expr->data.array_access.index);
+
+        if (array_ok && expr->data.array_access.array->type == AST_IDENTIFIER) {
+            const char* array_name = expr->data.array_access.array->data.identifier_name;
+            SymbolEntry* symbol = symbol_table_lookup(analyzer->symbol_table, array_name);
+            if (symbol && !symbol->is_array && !KrtSourceIsPointer(symbol->source_type)) {
+                semantic_analyzer_add_error(analyzer, "Attempting to access non-array as array");
+                return false;
+            }
+        }
+
+        return array_ok && index_ok;
+    }
+
+    case AST_LAMBDA_EXPRESSION: {
+
+        symbol_table_push_scope(analyzer->symbol_table);
+
+        for (int i = 0; i < expr->data.lambda_expr.parameter_count; i++) {
+            const char* param_name = expr->data.lambda_expr.parameters[i];
+            SymbolEntry* param = symbol_table_define(analyzer->symbol_table, param_name, SYMBOL_VARIABLE, 0, NULL);
+            if (!param) {
+                semantic_analyzer_add_error(analyzer, "Failed to define lambda parameter: %s", param_name);
+                symbol_table_pop_scope(analyzer->symbol_table);
+                return false;
+            }
+        }
+
+        bool body_ok = false;
+        if (expr->data.lambda_expr.expression) {
+            body_ok = semantic_analyzer_analyze_expression(analyzer, expr->data.lambda_expr.expression);
+        } else if (expr->data.lambda_expr.body) {
+            body_ok = semantic_analyzer_analyze_statement(analyzer, expr->data.lambda_expr.body);
+        }
+
+        symbol_table_pop_scope(analyzer->symbol_table);
+
+        return body_ok;
+    }
+
+    case AST_LINQ_QUERY: {
+        bool ok = true;
+
+        if (expr->data.linq_query.from_clause) {
+            ok = ok && semantic_analyzer_analyze_expression(analyzer,
+                                                            expr->data.linq_query.from_clause->data.linq_from.source);
+        }
+
+        for (int i = 0; i < expr->data.linq_query.clause_count; i++) {
+            ASTNode* clause = expr->data.linq_query.clauses[i];
+            if (clause->type == AST_LINQ_WHERE) {
+                ok = ok && semantic_analyzer_analyze_expression(analyzer, clause->data.linq_where.condition);
+            } else if (clause->type == AST_LINQ_ORDERBY) {
+                ok = ok && semantic_analyzer_analyze_expression(analyzer, clause->data.linq_orderby.expression);
+            }
+        }
+
+        if (expr->data.linq_query.select_clause) {
+            ok = ok && semantic_analyzer_analyze_expression(
+                           analyzer, expr->data.linq_query.select_clause->data.linq_select.expression);
+        }
+
+        return ok;
+    }
+
+    case AST_CAST_EXPRESSION:
+        return semantic_analyzer_analyze_expression(analyzer, expr->data.cast_expr.expression);
+
+    default:
+        return true;
     }
 }
 
@@ -1185,11 +1265,10 @@ bool semantic_analyzer_analyze_function_call(SemanticAnalyzer* analyzer, ASTNode
     }
 
     if (!call_expr->data.call.object &&
-        (strcmp(call_expr->data.call.name, "KrtMalloc") == 0 ||
-         strcmp(call_expr->data.call.name, "KrtFree") == 0) &&
+        (strcmp(call_expr->data.call.name, "KrtMalloc") == 0 || strcmp(call_expr->data.call.name, "KrtFree") == 0) &&
         analyzer->point_depth == 0) {
-        semantic_analyzer_add_error_at(analyzer, call_expr,
-            "%s can only be used inside a Point block", call_expr->data.call.name);
+        semantic_analyzer_add_error_at(analyzer, call_expr, "%s can only be used inside a Point block",
+                                       call_expr->data.call.name);
         return false;
     }
 
@@ -1224,39 +1303,35 @@ bool semantic_analyzer_analyze_function_call(SemanticAnalyzer* analyzer, ASTNode
 
             KrtTokenType* arg_types = NULL;
             if (call_expr->data.call.argument_count > 0) {
-                arg_types = (KrtTokenType*)KRT_MALLOC(
-                    sizeof(KrtTokenType) * call_expr->data.call.argument_count);
+                arg_types = (KrtTokenType*)KRT_MALLOC(sizeof(KrtTokenType) * call_expr->data.call.argument_count);
                 if (!arg_types) {
                     semantic_analyzer_add_error(analyzer, "Memory allocation failed");
                     return false;
                 }
                 for (int i = 0; i < call_expr->data.call.argument_count; i++) {
-                    arg_types[i] = semantic_analyzer_infer_expression_type(
-                        analyzer, call_expr->data.call.arguments[i]);
+                    arg_types[i] = semantic_analyzer_infer_expression_type(analyzer, call_expr->data.call.arguments[i]);
                 }
             }
 
-            const char* ns_path[2] = { current_class, NULL };
-            char* mangled_name = name_mangle_function(ns_path, call_expr->data.call.name,
-                                                       arg_types,
-                                                       call_expr->data.call.argument_count);
+            const char* ns_path[2] = {current_class, NULL};
+            char* mangled_name = name_mangle_function(ns_path, call_expr->data.call.name, arg_types,
+                                                      call_expr->data.call.argument_count);
             KRT_FREE(arg_types);
             if (!mangled_name) {
-                semantic_analyzer_add_error(analyzer, "Failed to mangle method %s",
-                                            call_expr->data.call.name);
+                semantic_analyzer_add_error(analyzer, "Failed to mangle method %s", call_expr->data.call.name);
                 return false;
             }
 
             {
                 SymbolEntry* owner_class = semantic_analyzer_lookup_class(analyzer, current_class);
-                SymbolEntry* method_symbol = (owner_class && owner_class->nested_table)
-                    ? semantic_lookup_exact_in_class(owner_class->nested_table, mangled_name)
-                    : NULL;
+                SymbolEntry* method_symbol =
+                    (owner_class && owner_class->nested_table)
+                        ? semantic_lookup_exact_in_class(owner_class->nested_table, mangled_name)
+                        : NULL;
                 if (!method_symbol && owner_class && owner_class->nested_table) {
                     method_symbol = semantic_lookup_method_by_arity(
-                        owner_class->nested_table, current_class,
-                        call_expr->data.call.name, call_expr->data.call.argument_count,
-                        call_expr->data.call.arguments, NULL);
+                        owner_class->nested_table, current_class, call_expr->data.call.name,
+                        call_expr->data.call.argument_count, call_expr->data.call.arguments, NULL);
                 }
                 if (!method_symbol) {
                     KRT_FREE(mangled_name);
@@ -1273,7 +1348,7 @@ bool semantic_analyzer_analyze_function_call(SemanticAnalyzer* analyzer, ASTNode
             return true;
         }
     }
-    
+
     if (call_expr->data.call.object && call_expr->data.call.object->type == AST_IDENTIFIER) {
         const char* method_name = call_expr->data.call.name;
 
@@ -1283,8 +1358,7 @@ bool semantic_analyzer_analyze_function_call(SemanticAnalyzer* analyzer, ASTNode
             const char* inst_class = var_sym->class_type_name;
             SymbolEntry* cls = semantic_analyzer_lookup_class(analyzer, inst_class);
             if (!cls || !cls->nested_table) {
-                semantic_analyzer_add_error_at(analyzer, call_expr,
-                    "Undefined class: %s", inst_class);
+                semantic_analyzer_add_error_at(analyzer, call_expr, "Undefined class: %s", inst_class);
                 return false;
             }
 
@@ -1296,41 +1370,35 @@ bool semantic_analyzer_analyze_function_call(SemanticAnalyzer* analyzer, ASTNode
 
             KrtTokenType* arg_types = NULL;
             if (call_expr->data.call.argument_count > 0) {
-                arg_types = (KrtTokenType*)KRT_MALLOC(
-                    sizeof(KrtTokenType) * call_expr->data.call.argument_count);
+                arg_types = (KrtTokenType*)KRT_MALLOC(sizeof(KrtTokenType) * call_expr->data.call.argument_count);
                 if (!arg_types) {
                     semantic_analyzer_add_error(analyzer, "Memory allocation failed");
                     return false;
                 }
                 for (int i = 0; i < call_expr->data.call.argument_count; i++) {
-                    arg_types[i] = semantic_analyzer_infer_expression_type(
-                        analyzer, call_expr->data.call.arguments[i]);
+                    arg_types[i] = semantic_analyzer_infer_expression_type(analyzer, call_expr->data.call.arguments[i]);
                 }
             }
 
-            const char* ns_path[2] = { inst_class, NULL };
-            char* mangled_name = name_mangle_function(ns_path, method_name, arg_types,
-                                                       call_expr->data.call.argument_count);
+            const char* ns_path[2] = {inst_class, NULL};
+            char* mangled_name =
+                name_mangle_function(ns_path, method_name, arg_types, call_expr->data.call.argument_count);
             KRT_FREE(arg_types);
 
-            SymbolEntry* method_symbol = mangled_name
-                ? semantic_lookup_exact_in_class(cls->nested_table, mangled_name)
-                : NULL;
+            SymbolEntry* method_symbol =
+                mangled_name ? semantic_lookup_exact_in_class(cls->nested_table, mangled_name) : NULL;
             if (!method_symbol) {
-                method_symbol = semantic_lookup_method_by_arity(
-                    cls->nested_table, inst_class, method_name,
-                    call_expr->data.call.argument_count,
-                    call_expr->data.call.arguments, NULL);
+                method_symbol = semantic_lookup_method_by_arity(cls->nested_table, inst_class, method_name,
+                                                                call_expr->data.call.argument_count,
+                                                                call_expr->data.call.arguments, NULL);
             }
             if (!method_symbol) {
-                method_symbol = semantic_lookup_method_in_global_class(
-                    analyzer, inst_class, method_name,
-                    call_expr->data.call.argument_count,
-                    call_expr->data.call.arguments);
+                method_symbol = semantic_lookup_method_in_global_class(analyzer, inst_class, method_name,
+                                                                       call_expr->data.call.argument_count,
+                                                                       call_expr->data.call.arguments);
             }
             if (!method_symbol || method_symbol->type != SYMBOL_FUNCTION) {
-                semantic_analyzer_add_error_at(analyzer, call_expr,
-                    "Undefined method: %s.%s", inst_class, method_name);
+                semantic_analyzer_add_error_at(analyzer, call_expr, "Undefined method: %s.%s", inst_class, method_name);
                 KRT_FREE(mangled_name);
                 return false;
             }
@@ -1365,50 +1433,47 @@ bool semantic_analyzer_analyze_function_call(SemanticAnalyzer* analyzer, ASTNode
 
             KrtTokenType* arg_types = NULL;
             if (call_expr->data.call.argument_count > 0) {
-                arg_types = (KrtTokenType*)KRT_MALLOC(
-                    sizeof(KrtTokenType) * call_expr->data.call.argument_count);
+                arg_types = (KrtTokenType*)KRT_MALLOC(sizeof(KrtTokenType) * call_expr->data.call.argument_count);
                 if (!arg_types) {
                     semantic_analyzer_add_error(analyzer, "Memory allocation failed");
                     return false;
                 }
                 for (int i = 0; i < call_expr->data.call.argument_count; i++) {
-                    arg_types[i] = semantic_analyzer_infer_expression_type(
-                        analyzer, call_expr->data.call.arguments[i]);
+                    arg_types[i] = semantic_analyzer_infer_expression_type(analyzer, call_expr->data.call.arguments[i]);
                 }
             }
 
-            const char* ns_path[2] = { class_name, NULL };
-            char* mangled_name = name_mangle_function(ns_path, method_name, arg_types,
-                                                       call_expr->data.call.argument_count);
+            const char* ns_path[2] = {class_name, NULL};
+            char* mangled_name =
+                name_mangle_function(ns_path, method_name, arg_types, call_expr->data.call.argument_count);
             KRT_FREE(arg_types);
 
             SymbolEntry* method_symbol = NULL;
             if (mangled_name && class_symbol->nested_table) {
                 method_symbol = semantic_lookup_exact_in_class(class_symbol->nested_table, mangled_name);
                 if (!method_symbol) {
-                    method_symbol = semantic_lookup_method_by_arity(
-                        class_symbol->nested_table, class_name, method_name,
-                        call_expr->data.call.argument_count,
-                        call_expr->data.call.arguments, NULL);
+                    method_symbol = semantic_lookup_method_by_arity(class_symbol->nested_table, class_name, method_name,
+                                                                    call_expr->data.call.argument_count,
+                                                                    call_expr->data.call.arguments, NULL);
                 }
             }
             if (!method_symbol) {
-                SymbolTable* gtable = analyzer->global_symbol_table
-                    ? analyzer->global_symbol_table : analyzer->symbol_table;
-                method_symbol = semantic_lookup_method_by_arity(
-                    gtable, class_name, method_name,
-                    call_expr->data.call.argument_count,
-                    call_expr->data.call.arguments, NULL);
+                SymbolTable* gtable =
+                    analyzer->global_symbol_table ? analyzer->global_symbol_table : analyzer->symbol_table;
+                method_symbol = semantic_lookup_method_by_arity(gtable, class_name, method_name,
+                                                                call_expr->data.call.argument_count,
+                                                                call_expr->data.call.arguments, NULL);
             }
             if (!method_symbol) {
-                method_symbol = semantic_lookup_method_in_global_class(
-                    analyzer, class_name, method_name,
-                    call_expr->data.call.argument_count,
-                    call_expr->data.call.arguments);
+                method_symbol = semantic_lookup_method_in_global_class(analyzer, class_name, method_name,
+                                                                       call_expr->data.call.argument_count,
+                                                                       call_expr->data.call.arguments);
             }
-            if (method_symbol && method_symbol->type == SYMBOL_FUNCTION &&
-                method_symbol->name && method_symbol->name[0] == '_' && method_symbol->name[1] == 'Z') {
-                if (mangled_name) KRT_FREE(mangled_name);
+            if (method_symbol && method_symbol->type == SYMBOL_FUNCTION && method_symbol->name &&
+                method_symbol->name[0] == '_' && method_symbol->name[1] == 'Z') {
+                if (mangled_name) {
+                    KRT_FREE(mangled_name);
+                }
                 mangled_name = KRT_STRDUP(method_symbol->name);
 
                 KRT_FREE(call_expr->data.call.resolved_class_name);
@@ -1417,30 +1482,32 @@ bool semantic_analyzer_analyze_function_call(SemanticAnalyzer* analyzer, ASTNode
                 call_expr->data.call.resolved_mangled_name = mangled_name;
                 return true;
             }
-            if (mangled_name) KRT_FREE(mangled_name);
-            semantic_analyzer_add_error_at(analyzer, call_expr,
-                "Undefined method: %s.%s (names are case-sensitive)", class_name, method_name);
+            if (mangled_name) {
+                KRT_FREE(mangled_name);
+            }
+            semantic_analyzer_add_error_at(analyzer, call_expr, "Undefined method: %s.%s (names are case-sensitive)",
+                                           class_name, method_name);
             return false;
         }
 
         if (strstr(method_name, "__") != NULL) {
-            
+
             func_name = KRT_STRDUP(method_name);
         } else {
-            
-            size_t total_len = strlen(class_name) + strlen(method_name) + 3; 
+
+            size_t total_len = strlen(class_name) + strlen(method_name) + 3;
             func_name = KRT_MALLOC(total_len);
             if (func_name) {
                 snprintf(func_name, total_len, "%s__%s", class_name, method_name);
-                
+
                 call_expr->data.call.resolved_class_name = KRT_STRDUP(class_name);
             }
         }
     } else {
-        
+
         func_name = KRT_STRDUP(call_expr->data.call.name);
     }
-    
+
     if (!func_name) {
         semantic_analyzer_add_error(analyzer, "Memory allocation failed for function name");
         return false;
@@ -1449,12 +1516,12 @@ bool semantic_analyzer_analyze_function_call(SemanticAnalyzer* analyzer, ASTNode
     SymbolEntry* symbol = symbol_table_lookup_scope_chain(analyzer->symbol_table, func_name);
 
     if (!symbol) {
-        
+
         SymbolEntry* var_symbol = symbol_table_lookup_scope_chain(analyzer->symbol_table, func_name);
         if (var_symbol && var_symbol->type == SYMBOL_VARIABLE) {
-            
+
             KRT_FREE(func_name);
-            
+
             for (int i = 0; i < call_expr->data.call.argument_count; i++) {
                 if (!semantic_analyzer_analyze_expression(analyzer, call_expr->data.call.arguments[i])) {
                     return false;
@@ -1463,18 +1530,17 @@ bool semantic_analyzer_analyze_function_call(SemanticAnalyzer* analyzer, ASTNode
             return true;
         }
 
-        semantic_analyzer_add_error_at(analyzer, call_expr,
-            "Undefined function: %s", func_name);
+        semantic_analyzer_add_error_at(analyzer, call_expr, "Undefined function: %s", func_name);
         KRT_FREE(func_name);
         return false;
     }
 
     if (symbol->type != SYMBOL_FUNCTION) {
-        
+
         if (symbol->type == SYMBOL_VARIABLE) {
-            
+
             KRT_FREE(func_name);
-            
+
             for (int i = 0; i < call_expr->data.call.argument_count; i++) {
                 if (!semantic_analyzer_analyze_expression(analyzer, call_expr->data.call.arguments[i])) {
                     return false;
@@ -1482,15 +1548,14 @@ bool semantic_analyzer_analyze_function_call(SemanticAnalyzer* analyzer, ASTNode
             }
             return true;
         }
-        
-        semantic_analyzer_add_error_at(analyzer, call_expr, 
-            "%s is not a function", func_name);
+
+        semantic_analyzer_add_error_at(analyzer, call_expr, "%s is not a function", func_name);
         KRT_FREE(func_name);
         return false;
     }
-    
+
     if (!call_expr->data.call.object) {
-        call_expr->data.call.name = func_name;  
+        call_expr->data.call.name = func_name;
     } else {
         KRT_FREE(func_name);
     }
@@ -1512,41 +1577,39 @@ bool semantic_analyzer_analyze_variable_decl(SemanticAnalyzer* analyzer, ASTNode
     const char* var_name = var_decl->data.variable_decl.name;
     int is_let = var_decl->data.variable_decl.is_let;
 
-    if (var_decl->data.variable_decl.pointer_depth > 0 && analyzer->point_depth == 0) {
-        semantic_analyzer_add_error_at(analyzer, var_decl,
-            "Pointer variable '%s' can only be declared inside a Point block", var_name);
+    if (var_decl->data.variable_decl.pointer_depth > 0 && !analyzer->unsafe_mem && analyzer->point_depth == 0) {
+        semantic_analyzer_add_error_at(
+            analyzer, var_decl, "Pointer variable '%s' requires unsafe(using krt.mem;) or a Point block", var_name);
         return false;
     }
 
     if (is_let) {
-        
+
         if (analyzer->symbol_table->current_scope->scope_level == 1) {
-            semantic_analyzer_add_error_at(analyzer, var_decl, 
-                "let cannot be used at global scope, use var instead");
+            semantic_analyzer_add_error_at(analyzer, var_decl, "let cannot be used at global scope, use var instead");
             return false;
         }
     }
 
     SymbolEntry* existing = symbol_table_lookup_current_scope(analyzer->symbol_table, var_name);
     if (existing) {
-        semantic_analyzer_add_error_at(analyzer, var_decl, 
-            "Variable %s already declared", var_name);
+        semantic_analyzer_add_error_at(analyzer, var_decl, "Variable %s already declared", var_name);
         return false;
     }
 
     if (var_decl->data.variable_decl.template_instantiation_type) {
-        
+
         char* template_type = var_decl->data.variable_decl.template_instantiation_type;
-        
+
         char* bracket_pos = strchr(template_type, '<');
-        if (bracket_pos) {
-            
+        if (bracket_pos && !semantic_analyzer_lookup_class(analyzer, template_type)) {
+
             int base_type_len = bracket_pos - template_type;
             char* base_type = KRT_MALLOC(base_type_len + 1);
             if (base_type) {
                 strncpy(base_type, template_type, base_type_len);
                 base_type[base_type_len] = '\0';
-                
+
                 char* args_start = bracket_pos + 1;
                 char* args_end = strrchr(args_start, '>');
                 if (args_end) {
@@ -1555,18 +1618,18 @@ bool semantic_analyzer_analyze_variable_decl(SemanticAnalyzer* analyzer, ASTNode
                     if (args_str) {
                         strncpy(args_str, args_start, args_len);
                         args_str[args_len] = '\0';
-                        
+
                         char** type_args = KRT_MALLOC(sizeof(char*));
                         int arg_count = 0;
-                        
+
                         if (args_str && strlen(args_str) > 0) {
                             type_args[0] = KRT_STRDUP(args_str);
                             arg_count = 1;
                         }
-                        
-                        bool valid = semantic_analyzer_analyze_generic_instantiation(analyzer, base_type, 
-                                                                                    (const char**)type_args, arg_count);
-                        
+
+                        bool valid = semantic_analyzer_analyze_generic_instantiation(
+                            analyzer, base_type, (const char**)type_args, arg_count);
+
                         for (int i = 0; i < arg_count; i++) {
                             if (type_args[i]) {
                                 KRT_FREE(type_args[i]);
@@ -1575,7 +1638,7 @@ bool semantic_analyzer_analyze_variable_decl(SemanticAnalyzer* analyzer, ASTNode
                         KRT_FREE(type_args);
                         KRT_FREE(args_str);
                         KRT_FREE(base_type);
-                        
+
                         if (!valid) {
                             semantic_analyzer_add_error(analyzer, "Invalid template instantiation: %s", template_type);
                             return false;
@@ -1595,9 +1658,8 @@ bool semantic_analyzer_analyze_variable_decl(SemanticAnalyzer* analyzer, ASTNode
     if (current_class) {
         symbol_type = SYMBOL_FIELD;
     }
-    
-    SymbolEntry* symbol = symbol_table_define(analyzer->symbol_table, var_name,
-                                             symbol_type, 0, NULL);
+
+    SymbolEntry* symbol = symbol_table_define(analyzer->symbol_table, var_name, symbol_type, 0, NULL);
     if (!symbol) {
         semantic_analyzer_add_error(analyzer, "Failed to declare variable %s", var_name);
         return false;
@@ -1607,8 +1669,8 @@ bool semantic_analyzer_analyze_variable_decl(SemanticAnalyzer* analyzer, ASTNode
 
     if (var_decl->data.variable_decl.type == TOKEN_IDENTIFIER &&
         var_decl->data.variable_decl.template_instantiation_type) {
-        SymbolEntry* cls_sym = semantic_analyzer_lookup_class(analyzer,
-                                        var_decl->data.variable_decl.template_instantiation_type);
+        SymbolEntry* cls_sym =
+            semantic_analyzer_lookup_class(analyzer, var_decl->data.variable_decl.template_instantiation_type);
         if (cls_sym && cls_sym->type == SYMBOL_CLASS) {
             symbol->class_type_name = KRT_STRDUP(var_decl->data.variable_decl.template_instantiation_type);
         }
@@ -1622,15 +1684,44 @@ bool semantic_analyzer_analyze_variable_decl(SemanticAnalyzer* analyzer, ASTNode
                 return false;
             }
         }
-    } else if (var_decl->data.variable_decl.value &&
-               var_decl->data.variable_decl.value->type == AST_ARRAY_LITERAL) {
+    } else if (var_decl->data.variable_decl.value && var_decl->data.variable_decl.value->type == AST_ARRAY_LITERAL) {
         symbol->is_array = 1;
     }
 
-    if (var_decl->data.variable_decl.value) {
-        return semantic_analyzer_analyze_expression(analyzer, var_decl->data.variable_decl.value);
+    KrtSourceType type = var_decl->declared_type;
+    if (!type.token) {
+        type.token = var_decl->data.variable_decl.type;
     }
-
+    if (var_decl->data.variable_decl.value) {
+        ASTNode* value = var_decl->data.variable_decl.value;
+        if (!semantic_analyzer_analyze_expression(analyzer, value)) {
+            return false;
+        }
+        if (type.token == TOKEN_AUTO) {
+            type = value->resolved_type;
+        } else if (!pointer_assignable(analyzer, var_decl, type, value->resolved_type)) {
+            return false;
+        }
+    } else if (KrtSourceIsPointer(type) && !type.nullable) {
+        return pointer_error(analyzer, var_decl, "Non-nullable pointer requires an initializer");
+    }
+    if (KrtSourceIsPointer(type) && !require_memory_permission(analyzer, var_decl)) {
+        return false;
+    }
+    if (type.token == TOKEN_IDENTIFIER && type.type_name && !KrtSourceIsPointer(type)) {
+        if (!symbol->class_type_name) {
+            symbol->class_type_name = KRT_STRDUP(type.type_name);
+        }
+        var_decl->data.variable_decl.type = TOKEN_IDENTIFIER;
+    }
+    var_decl->resolved_type = symbol->source_type = type;
+    if (KrtSourceIsPointer(type) ||
+        (var_decl->data.variable_decl.type == TOKEN_AUTO && !symbol->is_array && var_decl->data.variable_decl.value &&
+         var_decl->data.variable_decl.value->type != AST_NEW_ARRAY_EXPRESSION &&
+         (KrtTokenIntegerBits(type.token) || type.token == TOKEN_BOOL))) {
+        var_decl->data.variable_decl.type = KrtSourceStorage(type);
+    }
+    symbol->value_type = KrtSourceStorage(type);
     return true;
 }
 
@@ -1640,14 +1731,15 @@ bool semantic_analyzer_analyze_static_variable_decl(SemanticAnalyzer* analyzer, 
     }
 
     const char* var_name = var_decl->data.static_variable_decl.name;
-    SymbolEntry* symbol = symbol_table_define(analyzer->symbol_table, var_name,
-                                              SYMBOL_STATIC_FIELD, 0, NULL);
+    SymbolEntry* symbol = symbol_table_define(analyzer->symbol_table, var_name, SYMBOL_STATIC_FIELD, 0, NULL);
 
     if (!symbol) {
         semantic_analyzer_add_error(analyzer, "Failed to declare static variable %s", var_name);
         return false;
     }
     symbol->value_type = var_decl->data.static_variable_decl.type;
+    symbol->source_type =
+        var_decl->declared_type.token ? var_decl->declared_type : (KrtSourceType){.token = symbol->value_type};
 
     if (var_decl->data.static_variable_decl.value) {
         return semantic_analyzer_analyze_expression(analyzer, var_decl->data.static_variable_decl.value);
@@ -1656,700 +1748,799 @@ bool semantic_analyzer_analyze_static_variable_decl(SemanticAnalyzer* analyzer, 
     return true;
 }
 
+static bool semantic_analyze_stmt_assignment(SemanticAnalyzer* analyzer, ASTNode* stmt) {
+    const char* var_name = stmt->data.assignment.name;
+    SymbolEntry* symbol = symbol_table_lookup_scope_chain(analyzer->symbol_table, var_name);
+    if (!symbol) {
+        semantic_analyzer_add_error_at(analyzer, stmt, "Undefined variable: %s", var_name);
+        return false;
+    }
+    stmt->is_ref_binding = symbol->source_type.is_ref;
+    stmt->resolved_type = symbol->source_type;
+    stmt->resolved_type.is_ref = false;
+    return semantic_analyzer_analyze_expression(analyzer, stmt->data.assignment.value) &&
+           pointer_assignable(analyzer, stmt, symbol->source_type, stmt->data.assignment.value->resolved_type);
+}
+static bool semantic_analyze_stmt_compound_assignment(SemanticAnalyzer* analyzer, ASTNode* stmt) {
+    const char* var_name = stmt->data.compound_assignment.name;
+    SymbolEntry* symbol = symbol_table_lookup_scope_chain(analyzer->symbol_table, var_name);
+    if (!symbol) {
+        semantic_analyzer_add_error_at(analyzer, stmt, "Undefined variable: %s", var_name);
+        return false;
+    }
+    if (!semantic_analyzer_analyze_expression(analyzer, stmt->data.compound_assignment.value)) {
+        return false;
+    }
+    stmt->is_ref_binding = symbol->source_type.is_ref;
+    stmt->resolved_type = symbol->source_type;
+    stmt->resolved_type.is_ref = false;
+    if (symbol->is_array) {
+        return pointer_error(analyzer, stmt, "Compound assignment requires a scalar or array element");
+    }
+    return pointer_update_assignable(analyzer, stmt, stmt->resolved_type,
+                                     stmt->data.compound_assignment.value->resolved_type,
+                                     stmt->data.compound_assignment.operator);
+}
+static bool semantic_analyze_stmt_array_assignment(SemanticAnalyzer* analyzer, ASTNode* stmt) {
+    bool array_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.array_assignment.array);
+    bool index_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.array_assignment.index);
+    bool value_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.array_assignment.value);
 
-static bool semantic_analyze_stmt_Assignment(SemanticAnalyzer* analyzer, ASTNode* stmt) {
-            const char* var_name = stmt->data.assignment.name;
-            SymbolEntry* symbol = symbol_table_lookup_scope_chain(analyzer->symbol_table, var_name);
-            if (!symbol) {
-                semantic_analyzer_add_error_at(analyzer, stmt, 
-                    "Undefined variable: %s", var_name);
-                return false;
-            }
-            return semantic_analyzer_analyze_expression(analyzer, stmt->data.assignment.value);
+    if (array_ok && stmt->data.array_assignment.array->type == AST_IDENTIFIER) {
+        const char* array_name = stmt->data.array_assignment.array->data.identifier_name;
+        SymbolEntry* symbol = symbol_table_lookup(analyzer->symbol_table, array_name);
+        if (symbol && !symbol->is_array && !KrtSourceIsPointer(symbol->source_type)) {
+            semantic_analyzer_add_error(analyzer, "Attempting to assign to non-array as array");
+            return false;
+        }
+    }
+
+    if (array_ok && index_ok && value_ok && KrtSourceIsPointer(stmt->data.array_assignment.array->resolved_type)) {
+        return analyze_pointer_index(analyzer, stmt, stmt->data.array_assignment.array,
+                                     stmt->data.array_assignment.index, stmt->data.array_assignment.value);
+    }
+    return array_ok && index_ok && value_ok;
 }
-static bool semantic_analyze_stmt_CompoundAssignment(SemanticAnalyzer* analyzer, ASTNode* stmt) {
-            const char* var_name = stmt->data.compound_assignment.name;
-            SymbolEntry* symbol = symbol_table_lookup_scope_chain(analyzer->symbol_table, var_name);
-            if (!symbol) {
-                semantic_analyzer_add_error_at(analyzer, stmt, 
-                    "Undefined variable: %s", var_name);
-                return false;
-            }
-            return semantic_analyzer_analyze_expression(analyzer, stmt->data.compound_assignment.value);
+static bool semantic_analyze_stmt_array_compound_assignment(SemanticAnalyzer* analyzer, ASTNode* stmt) {
+    bool array_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.array_compound_assignment.array);
+    bool index_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.array_compound_assignment.index);
+    bool value_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.array_compound_assignment.value);
+
+    if (array_ok && stmt->data.array_compound_assignment.array->type == AST_IDENTIFIER) {
+        const char* array_name = stmt->data.array_compound_assignment.array->data.identifier_name;
+        SymbolEntry* symbol = symbol_table_lookup(analyzer->symbol_table, array_name);
+        if (symbol && !symbol->is_array && !KrtSourceIsPointer(symbol->source_type)) {
+            semantic_analyzer_add_error(analyzer, "Attempting to compound assign to non-array as array");
+            return false;
+        }
+    }
+
+    if (array_ok && index_ok && value_ok &&
+        KrtSourceIsPointer(stmt->data.array_compound_assignment.array->resolved_type)) {
+        return analyze_pointer_index(analyzer, stmt, stmt->data.array_compound_assignment.array,
+                                     stmt->data.array_compound_assignment.index, NULL) &&
+               pointer_update_assignable(analyzer, stmt, stmt->resolved_type,
+                                         stmt->data.array_compound_assignment.value->resolved_type,
+                                         stmt->data.array_compound_assignment.operator);
+    }
+    if (!array_ok || !index_ok || !value_ok) {
+        return false;
+    }
+    stmt->resolved_type = stmt->data.array_compound_assignment.array->resolved_type;
+    return pointer_update_assignable(analyzer, stmt, stmt->resolved_type,
+                                     stmt->data.array_compound_assignment.value->resolved_type,
+                                     stmt->data.array_compound_assignment.operator);
 }
-static bool semantic_analyze_stmt_ArrayAssignment(SemanticAnalyzer* analyzer, ASTNode* stmt) {
-            bool array_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.array_assignment.array);
-            bool index_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.array_assignment.index);
-            bool value_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.array_assignment.value);
-            
-            if (array_ok && stmt->data.array_assignment.array->type == AST_IDENTIFIER) {
-                const char* array_name = stmt->data.array_assignment.array->data.identifier_name;
-                SymbolEntry* symbol = symbol_table_lookup(analyzer->symbol_table, array_name);
-                if (symbol && !symbol->is_array) {
-                    semantic_analyzer_add_error(analyzer, "Attempting to assign to non-array as array");
-                    return false;
+static bool semantic_analyze_stmt_return_statement(SemanticAnalyzer* analyzer, ASTNode* stmt) {
+    if (stmt->data.return_stmt.value) {
+        ASTNode* value = stmt->data.return_stmt.value;
+        return semantic_analyzer_analyze_expression(analyzer, value) &&
+               pointer_assignable(analyzer, stmt, analyzer->current_return_type, value->resolved_type);
+    }
+    return true;
+}
+static bool semantic_analyze_stmt_if_statement(SemanticAnalyzer* analyzer, ASTNode* stmt) {
+    bool cond_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.if_stmt.condition);
+    symbol_table_push_scope(analyzer->symbol_table);
+    ASTNode* pattern = stmt->data.if_stmt.condition;
+    if (cond_ok && pattern->type == AST_IS_EXPRESSION && pattern->data.is_expr.binding_name) {
+        SymbolEntry* hit =
+            symbol_table_define(analyzer->symbol_table, pattern->data.is_expr.binding_name, SYMBOL_VARIABLE, 0, NULL);
+        if (hit) {
+            hit->source_type = pattern->declared_type;
+            hit->value_type = KrtSourceStorage(hit->source_type);
+        }
+    }
+    bool then_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.if_stmt.then_branch);
+    symbol_table_pop_scope(analyzer->symbol_table);
+    bool else_ok = true;
+    if (stmt->data.if_stmt.else_branch) {
+        symbol_table_push_scope(analyzer->symbol_table);
+        else_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.if_stmt.else_branch);
+        symbol_table_pop_scope(analyzer->symbol_table);
+    }
+    return cond_ok && then_ok && else_ok;
+}
+static bool semantic_analyze_stmt_while_statement(SemanticAnalyzer* analyzer, ASTNode* stmt) {
+    bool cond_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.while_stmt.condition);
+    symbol_table_push_scope(analyzer->symbol_table);
+    bool body_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.while_stmt.body);
+    symbol_table_pop_scope(analyzer->symbol_table);
+    return cond_ok && body_ok;
+}
+static bool semantic_analyze_stmt_for_statement(SemanticAnalyzer* analyzer, ASTNode* stmt) {
+    symbol_table_push_scope(analyzer->symbol_table);
+    bool init_ok = true;
+    if (stmt->data.for_stmt.init) {
+        init_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.for_stmt.init);
+    }
+    bool cond_ok = true;
+    if (stmt->data.for_stmt.condition) {
+        cond_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.for_stmt.condition);
+    }
+    bool increment_ok = true;
+    if (stmt->data.for_stmt.increment) {
+        if (stmt->data.for_stmt.increment->type == AST_ASSIGNMENT ||
+            stmt->data.for_stmt.increment->type == AST_COMPOUND_ASSIGNMENT ||
+            stmt->data.for_stmt.increment->type == AST_VARIABLE_DECLARATION ||
+            stmt->data.for_stmt.increment->type == AST_STATIC_VARIABLE_DECLARATION ||
+            stmt->data.for_stmt.increment->type == AST_BLOCK) {
+            increment_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.for_stmt.increment);
+        } else {
+            increment_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.for_stmt.increment);
+        }
+    }
+    bool body_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.for_stmt.body);
+    symbol_table_pop_scope(analyzer->symbol_table);
+    return init_ok && cond_ok && increment_ok && body_ok;
+}
+static bool semantic_analyze_stmt_foreach_statement(SemanticAnalyzer* analyzer, ASTNode* stmt) {
+    symbol_table_push_scope(analyzer->symbol_table);
+
+    SymbolEntry* loop_var =
+        symbol_table_define(analyzer->symbol_table, stmt->data.foreach_stmt.var_name, SYMBOL_VARIABLE, 0, NULL);
+    if (!loop_var) {
+        semantic_analyzer_add_error(analyzer, "Failed to define loop variable: %s", stmt->data.foreach_stmt.var_name);
+        symbol_table_pop_scope(analyzer->symbol_table);
+        return false;
+    }
+    bool iterable_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.foreach_stmt.iterable);
+    bool body_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.foreach_stmt.body);
+    symbol_table_pop_scope(analyzer->symbol_table);
+    return iterable_ok && body_ok;
+}
+static bool semantic_analyze_stmt_using_directive(SemanticAnalyzer* analyzer, ASTNode* stmt) {
+
+    if (stmt->data.using_directive.path_length == 0) {
+        semantic_analyzer_add_error(analyzer, "Using directive must have at least one namespace part");
+        return false;
+    }
+
+    if (stmt->data.using_directive.is_alias) {
+        if (!stmt->data.using_directive.alias) {
+            semantic_analyzer_add_error(analyzer, "Using alias must have an alias name");
+            return false;
+        }
+    }
+
+    semantic_analyzer_add_using_directive(analyzer, stmt);
+
+    return true;
+}
+static bool semantic_analyze_stmt_namespace_declaration(SemanticAnalyzer* analyzer, ASTNode* stmt) {
+    const char* namespace_name = stmt->data.namespace_decl.name;
+
+    SymbolEntry* ns_entry = symbol_table_lookup_current_scope(analyzer->symbol_table, namespace_name);
+    bool is_new_namespace = false;
+    SymbolTable* prev_table = analyzer->symbol_table;
+    if (!ns_entry) {
+        ns_entry = symbol_table_define(analyzer->symbol_table, namespace_name, SYMBOL_NAMESPACE, 0, NULL);
+        if (ns_entry && !ns_entry->nested_table) {
+            ns_entry->nested_table = symbol_table_create();
+            if (ns_entry->nested_table) {
+                ns_entry->nested_table->parent_table = prev_table;
+            }
+        }
+        is_new_namespace = true;
+    } else if (ns_entry->type != SYMBOL_NAMESPACE) {
+        semantic_analyzer_add_error(analyzer, "'%s' is already declared as a different symbol type", namespace_name);
+        return false;
+    }
+
+    SymbolScope* prev_scope = analyzer->symbol_table->current_scope;
+    if (ns_entry && ns_entry->nested_table) {
+
+        analyzer->symbol_table = ns_entry->nested_table;
+        analyzer->symbol_table->current_scope = ns_entry->nested_table->global_scope;
+    }
+
+    bool body_ok = true;
+    ASTNode* body_node = stmt->data.namespace_decl.body;
+
+    if (body_node && body_node->type == AST_BLOCK) {
+
+        if (body_node->type == AST_BLOCK) {
+            for (int i = 0; i < body_node->data.block.statement_count; i++) {
+                ASTNode* decl = body_node->data.block.statements[i];
+                if (decl && decl->type == AST_ACCESS_MODIFIER) {
+                    decl = decl->data.access_modifier.member;
                 }
-            }
-            
-            return array_ok && index_ok && value_ok;
-}
-static bool semantic_analyze_stmt_ArrayCompoundAssignment(SemanticAnalyzer* analyzer, ASTNode* stmt) {
-            bool array_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.array_compound_assignment.array);
-            bool index_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.array_compound_assignment.index);
-            bool value_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.array_compound_assignment.value);
-            
-            if (array_ok && stmt->data.array_compound_assignment.array->type == AST_IDENTIFIER) {
-                const char* array_name = stmt->data.array_compound_assignment.array->data.identifier_name;
-                SymbolEntry* symbol = symbol_table_lookup(analyzer->symbol_table, array_name);
-                if (symbol && !symbol->is_array) {
-                    semantic_analyzer_add_error(analyzer, "Attempting to compound assign to non-array as array");
-                    return false;
-                }
-            }
-            
-            return array_ok && index_ok && value_ok;
-}
-static bool semantic_analyze_stmt_ReturnStatement(SemanticAnalyzer* analyzer, ASTNode* stmt) {
-            if (stmt->data.return_stmt.value) {
-                return semantic_analyzer_analyze_expression(analyzer, stmt->data.return_stmt.value);
-            }
-            return true;
-}
-static bool semantic_analyze_stmt_IfStatement(SemanticAnalyzer* analyzer, ASTNode* stmt) {
-            bool cond_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.if_stmt.condition);
-            symbol_table_push_scope(analyzer->symbol_table);
-            bool then_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.if_stmt.then_branch);
-            symbol_table_pop_scope(analyzer->symbol_table);
-            bool else_ok = true;
-            if (stmt->data.if_stmt.else_branch) {
-                symbol_table_push_scope(analyzer->symbol_table);
-                else_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.if_stmt.else_branch);
-                symbol_table_pop_scope(analyzer->symbol_table);
-            }
-            return cond_ok && then_ok && else_ok;
-}
-static bool semantic_analyze_stmt_WhileStatement(SemanticAnalyzer* analyzer, ASTNode* stmt) {
-            bool cond_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.while_stmt.condition);
-            symbol_table_push_scope(analyzer->symbol_table);
-            bool body_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.while_stmt.body);
-            symbol_table_pop_scope(analyzer->symbol_table);
-            return cond_ok && body_ok;
-}
-static bool semantic_analyze_stmt_ForStatement(SemanticAnalyzer* analyzer, ASTNode* stmt) {
-            symbol_table_push_scope(analyzer->symbol_table);
-            bool init_ok = true;
-            if (stmt->data.for_stmt.init) {
-                init_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.for_stmt.init);
-            }
-            bool cond_ok = true;
-            if (stmt->data.for_stmt.condition) {
-                cond_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.for_stmt.condition);
-            }
-            bool increment_ok = true;
-            if (stmt->data.for_stmt.increment) {
-                if (stmt->data.for_stmt.increment->type == AST_ASSIGNMENT ||
-                    stmt->data.for_stmt.increment->type == AST_COMPOUND_ASSIGNMENT ||
-                    stmt->data.for_stmt.increment->type == AST_VARIABLE_DECLARATION ||
-                    stmt->data.for_stmt.increment->type == AST_STATIC_VARIABLE_DECLARATION ||
-                    stmt->data.for_stmt.increment->type == AST_BLOCK) {
-                    increment_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.for_stmt.increment);
-                } else {
-                    increment_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.for_stmt.increment);
-                }
-            }
-            bool body_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.for_stmt.body);
-            symbol_table_pop_scope(analyzer->symbol_table);
-            return init_ok && cond_ok && increment_ok && body_ok;
-}
-static bool semantic_analyze_stmt_ForeachStatement(SemanticAnalyzer* analyzer, ASTNode* stmt) {
-            symbol_table_push_scope(analyzer->symbol_table);
-            
-            SymbolEntry* loop_var = symbol_table_define(analyzer->symbol_table, stmt->data.foreach_stmt.var_name, SYMBOL_VARIABLE, 0, NULL);
-            if (!loop_var) {
-                semantic_analyzer_add_error(analyzer, "Failed to define loop variable: %s", stmt->data.foreach_stmt.var_name);
-                symbol_table_pop_scope(analyzer->symbol_table);
-                return false;
-            }
-            bool iterable_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.foreach_stmt.iterable);
-            bool body_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.foreach_stmt.body);
-            symbol_table_pop_scope(analyzer->symbol_table);
-            return iterable_ok && body_ok;
-}
-static bool semantic_analyze_stmt_UsingDirective(SemanticAnalyzer* analyzer, ASTNode* stmt) {
-            
-            if (stmt->data.using_directive.path_length == 0) {
-                semantic_analyzer_add_error(analyzer, "Using directive must have at least one namespace part");
-                return false;
-            }
-            
-            if (stmt->data.using_directive.is_alias) {
-                if (!stmt->data.using_directive.alias) {
-                    semantic_analyzer_add_error(analyzer, "Using alias must have an alias name");
-                    return false;
-                }
-            }
-            
-            semantic_analyzer_add_using_directive(analyzer, stmt);
-            
-            return true;
-}
-static bool semantic_analyze_stmt_NamespaceDeclaration(SemanticAnalyzer* analyzer, ASTNode* stmt) {
-            const char* namespace_name = stmt->data.namespace_decl.name;
-            
-            SymbolEntry* ns_entry = symbol_table_lookup_current_scope(analyzer->symbol_table, namespace_name);
-            bool is_new_namespace = false;
-            SymbolTable* prev_table = analyzer->symbol_table;
-            if (!ns_entry) {
-                ns_entry = symbol_table_define(analyzer->symbol_table, namespace_name, SYMBOL_NAMESPACE, 0, NULL);
-                if (ns_entry && !ns_entry->nested_table) {
-                    ns_entry->nested_table = symbol_table_create();
-                    if (ns_entry->nested_table) {
-                        ns_entry->nested_table->parent_table = prev_table;
-                    }
-                }
-                is_new_namespace = true;
-            } else if (ns_entry->type != SYMBOL_NAMESPACE) {
-                semantic_analyzer_add_error(analyzer, "'%s' is already declared as a different symbol type", namespace_name);
-                return false;
-            }
-            
-            SymbolScope* prev_scope = analyzer->symbol_table->current_scope;
-            if (ns_entry && ns_entry->nested_table) {
-                
-                analyzer->symbol_table = ns_entry->nested_table;
-                analyzer->symbol_table->current_scope = ns_entry->nested_table->global_scope;
-            }
-            
-            bool body_ok = true;
-            ASTNode* body_node = stmt->data.namespace_decl.body;
-                   
-            if (body_node && body_node->type == AST_BLOCK) {
-                
-                if (body_node->type == AST_BLOCK) {
-                    for (int i = 0; i < body_node->data.block.statement_count; i++) {
-                        ASTNode* decl = body_node->data.block.statements[i];
-                        if (decl && decl->type == AST_ACCESS_MODIFIER) {
-                            decl = decl->data.access_modifier.member;
+                if (decl && decl->type == AST_CLASS_DECLARATION) {
+                    const char* class_name = decl->data.class_decl.name;
+                    SymbolEntry* existing = symbol_table_lookup_current_scope(analyzer->symbol_table, class_name);
+                    if (!existing) {
+                        SymbolEntry* class_sym =
+                            symbol_table_declare(analyzer->symbol_table, class_name, SYMBOL_CLASS, 0);
+                        if (class_sym && !class_sym->nested_table) {
+                            class_sym->nested_table = symbol_table_create();
                         }
-                        if (decl && decl->type == AST_CLASS_DECLARATION) {
-                            const char* class_name = decl->data.class_decl.name;
-                            SymbolEntry* existing = symbol_table_lookup_current_scope(analyzer->symbol_table, class_name);
-                            if (!existing) {
-                                SymbolEntry* class_sym = symbol_table_declare(analyzer->symbol_table, class_name, SYMBOL_CLASS, 0);
-                                if (class_sym && !class_sym->nested_table) {
-                                    class_sym->nested_table = symbol_table_create();
-                                }
-                            }
-                        }
-                    }
-                    if (is_new_namespace) {
-                        for (int i = 0; i < body_node->data.block.statement_count; i++) {
-                            ASTNode* decl = body_node->data.block.statements[i];
-                            if (!decl) continue;
-                            bool stmt_ok = semantic_analyzer_analyze_statement(analyzer, decl);
-                            if (!stmt_ok) {
-                                body_ok = false;
-                            }
-                        }
-                    }
-                } else if (body_node->type == AST_ACCESS_MODIFIER) {
-                    ASTNode* inner_decl = body_node->data.access_modifier.member;
-                    if (inner_decl && inner_decl->type == AST_CLASS_DECLARATION) {
-                        const char* class_name = inner_decl->data.class_decl.name;
-                        SymbolEntry* existing = symbol_table_lookup_current_scope(analyzer->symbol_table, class_name);
-                        if (!existing) {
-                            SymbolEntry* class_sym = symbol_table_declare(analyzer->symbol_table, class_name, SYMBOL_CLASS, 0);
-                            if (class_sym && !class_sym->nested_table) {
-                                class_sym->nested_table = symbol_table_create();
-                            }
-                        }
-                    }
-                    if (is_new_namespace) {
-                        body_ok = semantic_analyzer_analyze_statement(analyzer, body_node);
-                    }
-                } else if (is_new_namespace) {
-                    body_ok = semantic_analyzer_analyze_statement(analyzer, body_node);
-                }
-            }
-            
-            analyzer->symbol_table = prev_table;
-            analyzer->symbol_table->current_scope = prev_scope;
-            
-            return body_ok;
-}
-static bool semantic_analyze_stmt_ClassDeclaration(SemanticAnalyzer* analyzer, ASTNode* stmt) {
-            const char* class_name = stmt->data.class_decl.name;
-            
-            SymbolEntry* existing = symbol_table_lookup_current_scope(analyzer->symbol_table, class_name);
-            if (existing && existing->state == SYMBOL_DEFINED) {
-                semantic_analyzer_add_error_at(analyzer, stmt, 
-                    "Class %s already declared", class_name);
-                return false;
-            }
-
-            if (stmt->data.class_decl.template_params && stmt->data.class_decl.template_param_count > 0) {
-                
-                GenericParameter* params_list = NULL;
-                for (int i = 0; i < stmt->data.class_decl.template_param_count; i++) {
-                    generics_add_parameter(&params_list, stmt->data.class_decl.template_params[i]);
-                }
-                
-                if (params_list) {
-                    
-                    bool registered = generics_register_type(analyzer->generic_registry, class_name, 
-                                                           params_list, stmt->data.class_decl.template_param_count,
-                                                           stmt); 
-                    
-                    if (!registered) {
-                        generics_free_parameters(params_list); 
-                        semantic_analyzer_add_error_at(analyzer, stmt, 
-                            "Failed to register template class %s", class_name);
-                        return false;
                     }
                 }
             }
-
-            SymbolEntry* class_sym = symbol_table_define(analyzer->symbol_table, class_name, SYMBOL_CLASS, 0, NULL);
-            if (!class_sym) {
-                semantic_analyzer_add_error_at(analyzer, stmt, 
-                    "Failed to define class %s", class_name);
-                return false;
-            }
-            SymbolTable* prev_table = analyzer->symbol_table;
-            if (!class_sym->nested_table) {
-                class_sym->nested_table = symbol_table_create();
-                if (class_sym->nested_table) {
-                    class_sym->nested_table->parent_table = prev_table;
-                }
-            }
-
-            analyzer->symbol_table = class_sym->nested_table;
-
-            if (!analyzer->symbol_table->current_scope) {
-                symbol_table_push_scope(analyzer->symbol_table);
-            }
-
-            SymbolEntry* self_class_symbol = symbol_table_define(analyzer->symbol_table, class_name, SYMBOL_CLASS, 0, NULL);
-            if (self_class_symbol) {
-                self_class_symbol->nested_table = class_sym->nested_table;
-            }
-
-            semantic_analyzer_push_class_context(analyzer, class_name);
-
-            bool body_ok = true;
-            ASTNode* body_node = stmt->data.class_decl.body;
-
-            if (body_node && body_node->type == AST_BLOCK) {
+            if (is_new_namespace) {
                 for (int i = 0; i < body_node->data.block.statement_count; i++) {
-                    ASTNode* member = body_node->data.block.statements[i];
-                    if (!member) continue;
-                    if (member->type == AST_ACCESS_MODIFIER) {
-                        member = member->data.access_modifier.member;
-                        if (!member) continue;
+                    ASTNode* decl = body_node->data.block.statements[i];
+                    if (!decl) {
+                        continue;
                     }
-                    const char* mname = NULL;
-                    KrtTokenType* ptypes = NULL;
-                    int pcount = 0;
-                    if (member->type == AST_STATIC_FUNCTION_DECLARATION) {
-                        mname = member->data.static_function_decl.name;
-                        ptypes = member->data.static_function_decl.parameter_types;
-                        pcount = member->data.static_function_decl.parameter_count;
-                    } else if (member->type == AST_FUNCTION_DECLARATION) {
-                        mname = member->data.function_decl.name;
-                        ptypes = member->data.function_decl.parameter_types;
-                        pcount = member->data.function_decl.parameter_count;
+                    bool stmt_ok = semantic_analyzer_analyze_statement(analyzer, decl);
+                    if (!stmt_ok) {
+                        body_ok = false;
                     }
-                    if (!mname) continue;
-
-                    const char* ns_path[2] = { class_name, NULL };
-                    char* key = name_mangle_function(ns_path, mname, ptypes, pcount);
-                    if (!key) continue;
-                    SymbolEntry* existing_m = symbol_table_lookup_current_scope(analyzer->symbol_table, key);
-                    if (!existing_m) {
-                        SymbolEntry* m_sym = symbol_table_define(analyzer->symbol_table, key, SYMBOL_FUNCTION, 0, NULL);
-                        if (m_sym) m_sym->state = SYMBOL_DECLARED;
-                    }
-                    KRT_FREE(key);
                 }
             }
-
-            if (body_node && body_node->type == AST_BLOCK) {
-                for (int i = 0; i < body_node->data.block.statement_count && body_ok; i++) {
-                    ASTNode* member = body_node->data.block.statements[i];
-                    
-                    if (!member) continue;
-                    
-                    if (member->type == AST_ACCESS_MODIFIER) {
-                        member = member->data.access_modifier.member;
-                        if (!member) continue;
+        } else if (body_node->type == AST_ACCESS_MODIFIER) {
+            ASTNode* inner_decl = body_node->data.access_modifier.member;
+            if (inner_decl && inner_decl->type == AST_CLASS_DECLARATION) {
+                const char* class_name = inner_decl->data.class_decl.name;
+                SymbolEntry* existing = symbol_table_lookup_current_scope(analyzer->symbol_table, class_name);
+                if (!existing) {
+                    SymbolEntry* class_sym = symbol_table_declare(analyzer->symbol_table, class_name, SYMBOL_CLASS, 0);
+                    if (class_sym && !class_sym->nested_table) {
+                        class_sym->nested_table = symbol_table_create();
                     }
-                    
-                    body_ok = semantic_analyzer_analyze_statement(analyzer, member);
                 }
-            } else if (body_node) {
+            }
+            if (is_new_namespace) {
                 body_ok = semantic_analyzer_analyze_statement(analyzer, body_node);
             }
+        } else if (is_new_namespace) {
+            body_ok = semantic_analyzer_analyze_statement(analyzer, body_node);
+        }
+    }
 
-            semantic_analyzer_pop_class_context(analyzer);
+    analyzer->symbol_table = prev_table;
+    analyzer->symbol_table->current_scope = prev_scope;
 
-            analyzer->symbol_table = prev_table;
-
-            return body_ok;
+    return body_ok;
 }
-static bool semantic_analyze_stmt_SwitchStatement(SemanticAnalyzer* analyzer, ASTNode* stmt) {
-            bool cond_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.switch_stmt.expression);
-            bool cases_ok = true;
+static bool semantic_analyze_stmt_class_declaration(SemanticAnalyzer* analyzer, ASTNode* stmt) {
+    const char* class_name = stmt->data.class_decl.name;
 
-            for (int i = 0; i < stmt->data.switch_stmt.case_count && cases_ok; i++) {
-                cases_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.switch_stmt.cases[i]);
-            }
+    SymbolEntry* existing = symbol_table_lookup_current_scope(analyzer->symbol_table, class_name);
+    if (existing && existing->state == SYMBOL_DEFINED) {
+        semantic_analyzer_add_error_at(analyzer, stmt, "Class %s already declared", class_name);
+        return false;
+    }
 
-            bool default_ok = true;
-            if (stmt->data.switch_stmt.default_case) {
-                default_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.switch_stmt.default_case);
-            }
+    if (stmt->data.class_decl.template_params && stmt->data.class_decl.template_param_count > 0) {
 
-            return cond_ok && cases_ok && default_ok;
-}
-static bool semantic_analyze_stmt_CaseClause(SemanticAnalyzer* analyzer, ASTNode* stmt) {
-            bool value_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.case_clause.value);
-            bool stmts_ok = true;
+        GenericParameter* params_list = NULL;
+        for (int i = 0; i < stmt->data.class_decl.template_param_count; i++) {
+            generics_add_parameter(&params_list, stmt->data.class_decl.template_params[i]);
+        }
 
-            for (int i = 0; i < stmt->data.case_clause.statement_count && stmts_ok; i++) {
-                stmts_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.case_clause.statements[i]);
-            }
+        if (params_list) {
 
-            return value_ok && stmts_ok;
-}
-static bool semantic_analyze_stmt_DefaultClause(SemanticAnalyzer* analyzer, ASTNode* stmt) {
-            bool stmts_ok = true;
+            bool registered = generics_register_type(analyzer->generic_registry, class_name, params_list,
+                                                     stmt->data.class_decl.template_param_count, stmt);
 
-            for (int i = 0; i < stmt->data.default_clause.statement_count && stmts_ok; i++) {
-                stmts_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.default_clause.statements[i]);
-            }
-
-            return stmts_ok;
-}
-static bool semantic_analyze_stmt_PrintStatement(SemanticAnalyzer* analyzer, ASTNode* stmt) {
-            bool all_ok = true;
-            for (int i = 0; i < stmt->data.print_stmt.value_count; i++) {
-                if (!semantic_analyzer_analyze_expression(analyzer, stmt->data.print_stmt.values[i])) {
-                    all_ok = false;
-                }
-            }
-            return all_ok;
-}
-static bool semantic_analyze_stmt_UnsafeCall(SemanticAnalyzer* analyzer, ASTNode* stmt) {
-            int old_mode = analyzer->is_unsafe_mode;
-            analyzer->is_unsafe_mode = 1;
-            bool result = semantic_analyzer_analyze_expression(analyzer, stmt->data.unsafe_call.expression);
-            analyzer->is_unsafe_mode = old_mode;
-            return result;
-}
-static bool semantic_analyze_stmt_AccessModifier(SemanticAnalyzer* analyzer, ASTNode* stmt) {
-
-            if (stmt->data.access_modifier.member) {
-                return semantic_analyzer_analyze_statement(analyzer, stmt->data.access_modifier.member);
-            }
-            return true;
-}
-static bool semantic_analyze_stmt_FunctionDeclaration(SemanticAnalyzer* analyzer, ASTNode* stmt) {
-            const char* func_name = stmt->data.function_decl.name;
-            const char* current_class = semantic_analyzer_get_current_class_context(analyzer);
-            char* mangled_name = NULL;
-            const char* symbol_name = func_name;
-
-            if (current_class) {
-                const char* ns_path[2] = { current_class, NULL };
-                mangled_name = name_mangle_function(ns_path, func_name,
-                                                    stmt->data.function_decl.parameter_types,
-                                                    stmt->data.function_decl.parameter_count);
-                if (!mangled_name) {
-                    semantic_analyzer_add_error_at(analyzer, stmt,
-                        "Failed to mangle method %s", func_name);
-                    return false;
-                }
-                symbol_name = mangled_name;
-            }
-
-            SymbolEntry* existing = symbol_table_lookup_current_scope(analyzer->symbol_table, symbol_name);
-            if (existing && existing->state == SYMBOL_DEFINED) {
-                semantic_analyzer_add_error_at(analyzer, stmt, 
-                    "Function %s already defined", func_name);
-                KRT_FREE(mangled_name);
+            if (!registered) {
+                generics_free_parameters(params_list);
+                semantic_analyzer_add_error_at(analyzer, stmt, "Failed to register template class %s", class_name);
                 return false;
             }
+        }
+    }
 
-            SymbolEntry* func_sym = symbol_table_define(analyzer->symbol_table, symbol_name, SYMBOL_FUNCTION, 0, NULL);
-            if (func_sym) {
-                func_sym->value_type = stmt->data.function_decl.return_type;
-            }
-            if (!func_sym) {
-                semantic_analyzer_add_error_at(analyzer, stmt, 
-                    "Failed to define function %s", func_name);
-                KRT_FREE(mangled_name);
-                return false;
-            }
-            func_sym->state = SYMBOL_DEFINED;
+    SymbolEntry* class_sym = symbol_table_define(analyzer->symbol_table, class_name, SYMBOL_CLASS, 0, NULL);
+    if (!class_sym) {
+        semantic_analyzer_add_error_at(analyzer, stmt, "Failed to define class %s", class_name);
+        return false;
+    }
+    SymbolTable* prev_table = analyzer->symbol_table;
+    if (!class_sym->nested_table) {
+        class_sym->nested_table = symbol_table_create();
+        if (class_sym->nested_table) {
+            class_sym->nested_table->parent_table = prev_table;
+        }
+    }
 
-            if (!current_class && strcmp(func_name, "main") == 0) {
-                analyzer->has_entry_point = true;
-                if (analyzer->entry_point_name) KRT_FREE(analyzer->entry_point_name);
-                analyzer->entry_point_name = KRT_STRDUP(func_name);
-                func_sym->is_entry_point = true;
-            }
+    analyzer->symbol_table = class_sym->nested_table;
 
-            if (stmt->data.function_decl.body) {
-                symbol_table_push_scope(analyzer->symbol_table);
-                for (int i = 0; i < stmt->data.function_decl.parameter_count; i++) {
-                    SymbolEntry* param = symbol_table_define(analyzer->symbol_table, stmt->data.function_decl.parameters[i], SYMBOL_VARIABLE, 0, NULL);
-                    if (param) {
-                        param->value_type = stmt->data.function_decl.parameter_types[i];
-                        param->is_array = stmt->data.function_decl.parameter_is_array &&
-                                          stmt->data.function_decl.parameter_is_array[i];
-                    }
+    if (!analyzer->symbol_table->current_scope) {
+        symbol_table_push_scope(analyzer->symbol_table);
+    }
+
+    SymbolEntry* self_class_symbol = symbol_table_define(analyzer->symbol_table, class_name, SYMBOL_CLASS, 0, NULL);
+    if (self_class_symbol) {
+        self_class_symbol->nested_table = class_sym->nested_table;
+    }
+
+    semantic_analyzer_push_class_context(analyzer, class_name);
+
+    bool body_ok = true;
+    ASTNode* body_node = stmt->data.class_decl.body;
+
+    if (body_node && body_node->type == AST_BLOCK) {
+        for (int i = 0; i < body_node->data.block.statement_count; i++) {
+            ASTNode* member = body_node->data.block.statements[i];
+            if (!member) {
+                continue;
+            }
+            if (member->type == AST_ACCESS_MODIFIER) {
+                member = member->data.access_modifier.member;
+                if (!member) {
+                    continue;
                 }
-                bool body_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.function_decl.body);
-                symbol_table_pop_scope(analyzer->symbol_table);
-                KRT_FREE(mangled_name);
-                return body_ok;
             }
+            const char* mname = NULL;
+            KrtTokenType* ptypes = NULL;
+            int pcount = 0;
+            if (member->type == AST_STATIC_FUNCTION_DECLARATION) {
+                mname = member->data.static_function_decl.name;
+                ptypes = member->data.static_function_decl.parameter_types;
+                pcount = member->data.static_function_decl.parameter_count;
+            } else if (member->type == AST_FUNCTION_DECLARATION) {
+                mname = member->data.function_decl.name;
+                ptypes = member->data.function_decl.parameter_types;
+                pcount = member->data.function_decl.parameter_count;
+            }
+            if (!mname) {
+                continue;
+            }
+
+            const char* ns_path[2] = {class_name, NULL};
+            char* key = name_mangle_function(ns_path, mname, ptypes, pcount);
+            if (!key) {
+                continue;
+            }
+            SymbolEntry* existing_m = symbol_table_lookup_current_scope(analyzer->symbol_table, key);
+            if (!existing_m) {
+                SymbolEntry* m_sym = symbol_table_define(analyzer->symbol_table, key, SYMBOL_FUNCTION, 0, NULL);
+                if (m_sym) {
+                    m_sym->state = SYMBOL_DECLARED;
+                    m_sym->value_type = member->data.function_decl.return_type;
+                    m_sym->source_type = KrtSourceTypeClone(
+                        analyzer->type_arena, (KrtSourceType){.token = TOKEN_FN, .function = member->function_type});
+                }
+            }
+            KRT_FREE(key);
+        }
+    }
+
+    if (body_node && body_node->type == AST_BLOCK) {
+        for (int i = 0; i < body_node->data.block.statement_count && body_ok; i++) {
+            ASTNode* member = body_node->data.block.statements[i];
+
+            if (!member) {
+                continue;
+            }
+
+            if (member->type == AST_ACCESS_MODIFIER) {
+                member = member->data.access_modifier.member;
+                if (!member) {
+                    continue;
+                }
+            }
+
+            body_ok = semantic_analyzer_analyze_statement(analyzer, member);
+        }
+    } else if (body_node) {
+        body_ok = semantic_analyzer_analyze_statement(analyzer, body_node);
+    }
+
+    semantic_analyzer_pop_class_context(analyzer);
+
+    analyzer->symbol_table = prev_table;
+
+    return body_ok;
+}
+static bool semantic_analyze_stmt_switch_statement(SemanticAnalyzer* analyzer, ASTNode* stmt) {
+    bool cond_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.switch_stmt.expression);
+    bool cases_ok = true;
+
+    for (int i = 0; i < stmt->data.switch_stmt.case_count && cases_ok; i++) {
+        cases_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.switch_stmt.cases[i]);
+    }
+
+    bool default_ok = true;
+    if (stmt->data.switch_stmt.default_case) {
+        default_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.switch_stmt.default_case);
+    }
+
+    return cond_ok && cases_ok && default_ok;
+}
+static bool semantic_analyze_stmt_case_clause(SemanticAnalyzer* analyzer, ASTNode* stmt) {
+    bool value_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.case_clause.value);
+    bool stmts_ok = true;
+
+    for (int i = 0; i < stmt->data.case_clause.statement_count && stmts_ok; i++) {
+        stmts_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.case_clause.statements[i]);
+    }
+
+    return value_ok && stmts_ok;
+}
+static bool semantic_analyze_stmt_default_clause(SemanticAnalyzer* analyzer, ASTNode* stmt) {
+    bool stmts_ok = true;
+
+    for (int i = 0; i < stmt->data.default_clause.statement_count && stmts_ok; i++) {
+        stmts_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.default_clause.statements[i]);
+    }
+
+    return stmts_ok;
+}
+static bool semantic_analyze_stmt_print_statement(SemanticAnalyzer* analyzer, ASTNode* stmt) {
+    bool all_ok = true;
+    for (int i = 0; i < stmt->data.print_stmt.value_count; i++) {
+        if (!semantic_analyzer_analyze_expression(analyzer, stmt->data.print_stmt.values[i])) {
+            all_ok = false;
+        }
+    }
+    return all_ok;
+}
+static bool semantic_analyze_stmt_unsafe_call(SemanticAnalyzer* analyzer, ASTNode* stmt) {
+    int old_mode = analyzer->is_unsafe_mode, old_mem = analyzer->unsafe_mem;
+    analyzer->is_unsafe_mode = 1;
+    for (int i = 0; i < stmt->data.unsafe_call.permission_count; i++) {
+        if (!strcmp(stmt->data.unsafe_call.permissions[i], "krt.mem")) {
+            analyzer->unsafe_mem = 1;
+        }
+    }
+    bool result = stmt->data.unsafe_call.is_block
+                      ? semantic_analyzer_analyze_statement(analyzer, stmt->data.unsafe_call.expression)
+                      : semantic_analyzer_analyze_expression(analyzer, stmt->data.unsafe_call.expression);
+    analyzer->is_unsafe_mode = old_mode;
+    analyzer->unsafe_mem = old_mem;
+    return result;
+}
+static bool semantic_analyze_stmt_access_modifier(SemanticAnalyzer* analyzer, ASTNode* stmt) {
+
+    if (stmt->data.access_modifier.member) {
+        return semantic_analyzer_analyze_statement(analyzer, stmt->data.access_modifier.member);
+    }
+    return true;
+}
+static bool semantic_analyze_stmt_function_declaration(SemanticAnalyzer* analyzer, ASTNode* stmt) {
+    const char* func_name = stmt->data.function_decl.name;
+    const char* current_class = semantic_analyzer_get_current_class_context(analyzer);
+    char* mangled_name = NULL;
+    const char* symbol_name = func_name;
+
+    if (current_class) {
+        const char* ns_path[2] = {current_class, NULL};
+        mangled_name = name_mangle_function(ns_path, func_name, stmt->data.function_decl.parameter_types,
+                                            stmt->data.function_decl.parameter_count);
+        if (!mangled_name) {
+            semantic_analyzer_add_error_at(analyzer, stmt, "Failed to mangle method %s", func_name);
+            return false;
+        }
+        symbol_name = mangled_name;
+    }
+
+    SymbolEntry* existing = symbol_table_lookup_current_scope(analyzer->symbol_table, symbol_name);
+    if (existing && existing->state == SYMBOL_DEFINED) {
+        semantic_analyzer_add_error_at(analyzer, stmt, "Function %s already defined", func_name);
+        KRT_FREE(mangled_name);
+        return false;
+    }
+
+    SymbolEntry* func_sym = symbol_table_define(analyzer->symbol_table, symbol_name, SYMBOL_FUNCTION, 0, NULL);
+    if (func_sym) {
+        func_sym->value_type = stmt->data.function_decl.return_type;
+        func_sym->source_type = KrtSourceTypeClone(analyzer->type_arena,
+                                                   (KrtSourceType){.token = TOKEN_FN, .function = stmt->function_type});
+    }
+    if (!func_sym) {
+        semantic_analyzer_add_error_at(analyzer, stmt, "Failed to define function %s", func_name);
+        KRT_FREE(mangled_name);
+        return false;
+    }
+    func_sym->state = SYMBOL_DEFINED;
+
+    if (!current_class && strcmp(func_name, "main") == 0) {
+        analyzer->has_entry_point = true;
+        if (analyzer->entry_point_name) {
+            KRT_FREE(analyzer->entry_point_name);
+        }
+        analyzer->entry_point_name = KRT_STRDUP(func_name);
+        func_sym->is_entry_point = true;
+    }
+
+    if (stmt->data.function_decl.body) {
+        symbol_table_push_scope(analyzer->symbol_table);
+        for (int i = 0; i < stmt->data.function_decl.parameter_count; i++) {
+            SymbolEntry* param = symbol_table_define(analyzer->symbol_table, stmt->data.function_decl.parameters[i],
+                                                     SYMBOL_VARIABLE, 0, NULL);
+            if (param) {
+                param->value_type = stmt->data.function_decl.parameter_types[i];
+                if (stmt->function_type) {
+                    param->source_type = stmt->function_type->parameters[i];
+                }
+                if (param->source_type.token == TOKEN_IDENTIFIER && param->source_type.type_name) {
+                    param->class_type_name = KRT_STRDUP(param->source_type.type_name);
+                }
+                param->is_array =
+                    stmt->data.function_decl.parameter_is_array && stmt->data.function_decl.parameter_is_array[i];
+            }
+        }
+        KrtSourceType saved_return = analyzer->current_return_type;
+        analyzer->current_return_type = stmt->function_type
+                                            ? stmt->function_type->result
+                                            : (KrtSourceType){.token = stmt->data.function_decl.return_type};
+        bool body_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.function_decl.body);
+        analyzer->current_return_type = saved_return;
+        symbol_table_pop_scope(analyzer->symbol_table);
+        KRT_FREE(mangled_name);
+        return body_ok;
+    }
+    KRT_FREE(mangled_name);
+    return true;
+}
+static bool semantic_analyze_stmt_static_function_declaration(SemanticAnalyzer* analyzer, ASTNode* stmt) {
+    const char* method_name = stmt->data.static_function_decl.name;
+
+    const char* current_class = semantic_analyzer_get_current_class_context(analyzer);
+
+    char* mangled_name = NULL;
+    const char* function_name = method_name;
+    if (current_class) {
+        const char* ns_path[2] = {current_class, NULL};
+        mangled_name = name_mangle_function(ns_path, method_name, stmt->data.static_function_decl.parameter_types,
+                                            stmt->data.static_function_decl.parameter_count);
+        if (mangled_name) {
+            function_name = mangled_name;
+        }
+    }
+
+    SymbolEntry* existing = symbol_table_lookup_scope_chain(analyzer->symbol_table, function_name);
+    if (existing && existing->state == SYMBOL_DEFINED) {
+        semantic_analyzer_add_error_at(analyzer, stmt, "Static method %s already defined", method_name);
+        if (mangled_name) {
             KRT_FREE(mangled_name);
-            return true;
-}
-static bool semantic_analyze_stmt_StaticFunctionDeclaration(SemanticAnalyzer* analyzer, ASTNode* stmt) {
-            const char* method_name = stmt->data.static_function_decl.name;
+        }
+        return false;
+    }
 
-            const char* current_class = semantic_analyzer_get_current_class_context(analyzer);
-
-            char* mangled_name = NULL;
-            const char* function_name = method_name;
-            if (current_class) {
-                const char* ns_path[2] = { current_class, NULL };
-                mangled_name = name_mangle_function(ns_path, method_name,
-                                                      stmt->data.static_function_decl.parameter_types,
-                                                      stmt->data.static_function_decl.parameter_count);
-                if (mangled_name) {
-                    function_name = mangled_name;
-                }
-            }
-
-            SymbolEntry* existing = symbol_table_lookup_scope_chain(analyzer->symbol_table, function_name);
-            if (existing && existing->state == SYMBOL_DEFINED) {
-                semantic_analyzer_add_error_at(analyzer, stmt,
-                    "Static method %s already defined", method_name);
-                if (mangled_name) {
-                    KRT_FREE(mangled_name);
-                }
-                return false;
-            }
-
-            SymbolEntry* func_sym = existing;
-            if (!func_sym) {
-                func_sym = symbol_table_define(analyzer->symbol_table, function_name, SYMBOL_FUNCTION, 0, NULL);
-            }
-            if (!func_sym) {
-                semantic_analyzer_add_error_at(analyzer, stmt,
-                    "Failed to define static method %s", method_name);
-                if (mangled_name) {
-                    KRT_FREE(mangled_name);
-                }
-                return false;
-            }
-            func_sym->state = SYMBOL_DEFINED;
-            func_sym->value_type = stmt->data.static_function_decl.return_type;
-
-            symbol_table_push_scope(analyzer->symbol_table);
-            
-            for (int i = 0; i < stmt->data.static_function_decl.parameter_count; i++) {
-                const char* param_name = stmt->data.static_function_decl.parameters[i];
-                
-                SymbolEntry* param = symbol_table_define(analyzer->symbol_table, param_name, SYMBOL_VARIABLE, 0, NULL);
-                if (param) {
-                    param->value_type = stmt->data.static_function_decl.parameter_types[i];
-                    param->is_array = stmt->data.static_function_decl.parameter_is_array &&
-                                      stmt->data.static_function_decl.parameter_is_array[i];
-                }
-            }
-            
-            bool body_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.static_function_decl.body);
-            
-            symbol_table_pop_scope(analyzer->symbol_table);
-
-            if (mangled_name) {
-                KRT_FREE(mangled_name);
-            }
-            return body_ok;
-}
-static bool semantic_analyze_stmt_ConstructorDeclaration(SemanticAnalyzer* analyzer, ASTNode* stmt) {
-            const char* current_class = semantic_analyzer_get_current_class_context(analyzer);
-            if (!current_class) {
-                return false;
-            }
-
-            int parameter_count = stmt->data.constructor_decl.parameter_count;
-            char* mangled_name = name_mangle_constructor(current_class, parameter_count);
-            if (!mangled_name) {
-                return false;
-            }
-
-            SymbolEntry* existing = symbol_table_lookup_current_scope(analyzer->symbol_table, mangled_name);
-            if (existing && existing->state == SYMBOL_DEFINED) {
-                semantic_analyzer_add_error(analyzer, "Constructor %s already defined", current_class);
-                KRT_FREE(mangled_name);
-                return false;
-            }
-
-            SymbolEntry* ctor_sym = symbol_table_define(analyzer->symbol_table, mangled_name, SYMBOL_FUNCTION, 0, NULL);
-            if (!ctor_sym) {
-                semantic_analyzer_add_error(analyzer, "Failed to define constructor %s", current_class);
-                KRT_FREE(mangled_name);
-                return false;
-            }
-            ctor_sym->state = SYMBOL_DEFINED;
+    SymbolEntry* func_sym = existing;
+    if (!func_sym) {
+        func_sym = symbol_table_define(analyzer->symbol_table, function_name, SYMBOL_FUNCTION, 0, NULL);
+    }
+    if (!func_sym) {
+        semantic_analyzer_add_error_at(analyzer, stmt, "Failed to define static method %s", method_name);
+        if (mangled_name) {
             KRT_FREE(mangled_name);
+        }
+        return false;
+    }
+    func_sym->state = SYMBOL_DEFINED;
+    func_sym->value_type = stmt->data.static_function_decl.return_type;
+    func_sym->source_type =
+        KrtSourceTypeClone(analyzer->type_arena, (KrtSourceType){.token = TOKEN_FN, .function = stmt->function_type});
 
-            if (stmt->data.constructor_decl.body) {
-                symbol_table_push_scope(analyzer->symbol_table);
-                for (int i = 0; i < stmt->data.constructor_decl.parameter_count; i++) {
-                    SymbolEntry* param = symbol_table_define(analyzer->symbol_table, stmt->data.constructor_decl.parameters[i], SYMBOL_VARIABLE, 0, NULL);
-                    if (param) {
-                        param->value_type = stmt->data.constructor_decl.parameter_types[i];
-                    }
-                }
+    symbol_table_push_scope(analyzer->symbol_table);
 
-                bool base_ok = true;
-                for (int i = 0; i < stmt->data.constructor_decl.base_argument_count && base_ok; i++) {
-                    base_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.constructor_decl.base_arguments[i]);
-                }
+    for (int i = 0; i < stmt->data.static_function_decl.parameter_count; i++) {
+        const char* param_name = stmt->data.static_function_decl.parameters[i];
 
-                bool body_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.constructor_decl.body);
-                symbol_table_pop_scope(analyzer->symbol_table);
-                return base_ok && body_ok;
+        SymbolEntry* param = symbol_table_define(analyzer->symbol_table, param_name, SYMBOL_VARIABLE, 0, NULL);
+        if (param) {
+            param->value_type = stmt->data.static_function_decl.parameter_types[i];
+            if (stmt->function_type) {
+                param->source_type = stmt->function_type->parameters[i];
             }
-            return true;
-}
-static bool semantic_analyze_stmt_Block(SemanticAnalyzer* analyzer, ASTNode* stmt) {
-            symbol_table_push_scope(analyzer->symbol_table);
-            bool overall_result = true;
-            for (int i = 0; i < stmt->data.block.statement_count; i++) {
-                ASTNode* current_stmt = stmt->data.block.statements[i];
-                bool stmt_result = semantic_analyzer_analyze_statement(analyzer, current_stmt);
-                if (!stmt_result) {
-                    overall_result = false;
-                }
+            if (param->source_type.token == TOKEN_IDENTIFIER && param->source_type.type_name) {
+                param->class_type_name = KRT_STRDUP(param->source_type.type_name);
             }
-            symbol_table_pop_scope(analyzer->symbol_table);
-            return overall_result;
+            param->is_array = stmt->data.static_function_decl.parameter_is_array &&
+                              stmt->data.static_function_decl.parameter_is_array[i];
+        }
+    }
+
+    KrtSourceType saved_return = analyzer->current_return_type;
+    analyzer->current_return_type = stmt->function_type
+                                        ? stmt->function_type->result
+                                        : (KrtSourceType){.token = stmt->data.static_function_decl.return_type};
+    bool body_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.static_function_decl.body);
+    analyzer->current_return_type = saved_return;
+
+    symbol_table_pop_scope(analyzer->symbol_table);
+
+    if (mangled_name) {
+        KRT_FREE(mangled_name);
+    }
+    return body_ok;
 }
-static bool semantic_analyze_stmt_PointBlock(SemanticAnalyzer* analyzer, ASTNode* stmt) {
-            analyzer->point_depth++;
-            bool result = semantic_analyzer_analyze_statement(
-                analyzer, stmt->data.point_block.body);
-            analyzer->point_depth--;
-            return result;
+static bool semantic_analyze_stmt_constructor_declaration(SemanticAnalyzer* analyzer, ASTNode* stmt) {
+    const char* current_class = semantic_analyzer_get_current_class_context(analyzer);
+    if (!current_class) {
+        return false;
+    }
+
+    int parameter_count = stmt->data.constructor_decl.parameter_count;
+    char* mangled_name = name_mangle_constructor(current_class, parameter_count);
+    if (!mangled_name) {
+        return false;
+    }
+
+    SymbolEntry* existing = symbol_table_lookup_current_scope(analyzer->symbol_table, mangled_name);
+    if (existing && existing->state == SYMBOL_DEFINED) {
+        semantic_analyzer_add_error(analyzer, "Constructor %s already defined", current_class);
+        KRT_FREE(mangled_name);
+        return false;
+    }
+
+    SymbolEntry* ctor_sym = symbol_table_define(analyzer->symbol_table, mangled_name, SYMBOL_FUNCTION, 0, NULL);
+    if (!ctor_sym) {
+        semantic_analyzer_add_error(analyzer, "Failed to define constructor %s", current_class);
+        KRT_FREE(mangled_name);
+        return false;
+    }
+    ctor_sym->state = SYMBOL_DEFINED;
+    KRT_FREE(mangled_name);
+
+    if (stmt->data.constructor_decl.body) {
+        symbol_table_push_scope(analyzer->symbol_table);
+        for (int i = 0; i < stmt->data.constructor_decl.parameter_count; i++) {
+            SymbolEntry* param = symbol_table_define(analyzer->symbol_table, stmt->data.constructor_decl.parameters[i],
+                                                     SYMBOL_VARIABLE, 0, NULL);
+            if (param) {
+                param->value_type = stmt->data.constructor_decl.parameter_types[i];
+            }
+        }
+
+        bool base_ok = true;
+        for (int i = 0; i < stmt->data.constructor_decl.base_argument_count && base_ok; i++) {
+            base_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.constructor_decl.base_arguments[i]);
+        }
+
+        bool body_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.constructor_decl.body);
+        symbol_table_pop_scope(analyzer->symbol_table);
+        return base_ok && body_ok;
+    }
+    return true;
+}
+static bool semantic_analyze_stmt_block(SemanticAnalyzer* analyzer, ASTNode* stmt) {
+    symbol_table_push_scope(analyzer->symbol_table);
+    bool overall_result = true;
+    for (int i = 0; i < stmt->data.block.statement_count; i++) {
+        ASTNode* current_stmt = stmt->data.block.statements[i];
+        bool stmt_result = semantic_analyzer_analyze_statement(analyzer, current_stmt);
+        if (!stmt_result) {
+            overall_result = false;
+        }
+    }
+    symbol_table_pop_scope(analyzer->symbol_table);
+    return overall_result;
+}
+static bool semantic_analyze_stmt_point_block(SemanticAnalyzer* analyzer, ASTNode* stmt) {
+    analyzer->point_depth++;
+    bool result = semantic_analyzer_analyze_statement(analyzer, stmt->data.point_block.body);
+    analyzer->point_depth--;
+    return result;
 }
 
 bool semantic_analyzer_analyze_statement(SemanticAnalyzer* analyzer, ASTNode* stmt) {
-    if (!analyzer || !stmt) return false;
+    if (!analyzer || !stmt) {
+        return false;
+    }
 
     switch (stmt->type) {
-        case AST_VARIABLE_DECLARATION:
-            return semantic_analyzer_analyze_variable_decl(analyzer, stmt);
+    case AST_VARIABLE_DECLARATION:
+        return semantic_analyzer_analyze_variable_decl(analyzer, stmt);
 
-        case AST_STATIC_VARIABLE_DECLARATION:
-            return semantic_analyzer_analyze_static_variable_decl(analyzer, stmt);
+    case AST_STATIC_VARIABLE_DECLARATION:
+        return semantic_analyzer_analyze_static_variable_decl(analyzer, stmt);
 
-        case AST_ASSIGNMENT:
-            return semantic_analyze_stmt_Assignment(analyzer, stmt);
-            break;
-        case AST_COMPOUND_ASSIGNMENT:
-            return semantic_analyze_stmt_CompoundAssignment(analyzer, stmt);
-            break;
-        case AST_ARRAY_ASSIGNMENT:
-            return semantic_analyze_stmt_ArrayAssignment(analyzer, stmt);
-            break;
-        case AST_ARRAY_COMPOUND_ASSIGNMENT:
-            return semantic_analyze_stmt_ArrayCompoundAssignment(analyzer, stmt);
-            break;
-        case AST_RETURN_STATEMENT:
-            return semantic_analyze_stmt_ReturnStatement(analyzer, stmt);
-            break;
-        case AST_IF_STATEMENT:
-            return semantic_analyze_stmt_IfStatement(analyzer, stmt);
-            break;
-        case AST_WHILE_STATEMENT:
-            return semantic_analyze_stmt_WhileStatement(analyzer, stmt);
-            break;
-        case AST_FOR_STATEMENT:
-            return semantic_analyze_stmt_ForStatement(analyzer, stmt);
-            break;
-        case AST_FOREACH_STATEMENT:
-            return semantic_analyze_stmt_ForeachStatement(analyzer, stmt);
-            break;
-        case AST_USING_DIRECTIVE:
-            return semantic_analyze_stmt_UsingDirective(analyzer, stmt);
-            break;
-        case AST_NAMESPACE_DECLARATION:
-            return semantic_analyze_stmt_NamespaceDeclaration(analyzer, stmt);
-            break;
-        case AST_CLASS_DECLARATION:
-            return semantic_analyze_stmt_ClassDeclaration(analyzer, stmt);
-            break;
-        case AST_TEMPLATE_DECLARATION:
-            
-            return semantic_analyzer_analyze_generic_decl(analyzer, stmt);
+    case AST_ASSIGNMENT:
+        return semantic_analyze_stmt_assignment(analyzer, stmt);
+        break;
+    case AST_COMPOUND_ASSIGNMENT:
+        return semantic_analyze_stmt_compound_assignment(analyzer, stmt);
+        break;
+    case AST_ARRAY_ASSIGNMENT:
+        return semantic_analyze_stmt_array_assignment(analyzer, stmt);
+        break;
+    case AST_ARRAY_COMPOUND_ASSIGNMENT:
+        return semantic_analyze_stmt_array_compound_assignment(analyzer, stmt);
+        break;
+    case AST_RETURN_STATEMENT:
+        return semantic_analyze_stmt_return_statement(analyzer, stmt);
+        break;
+    case AST_IF_STATEMENT:
+        return semantic_analyze_stmt_if_statement(analyzer, stmt);
+        break;
+    case AST_DO_WHILE_STATEMENT: {
+        bool body_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.do_while_stmt.body);
+        bool condition_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.do_while_stmt.condition);
+        return body_ok && condition_ok;
+    }
+    case AST_WHILE_STATEMENT:
+        return semantic_analyze_stmt_while_statement(analyzer, stmt);
+        break;
+    case AST_FOR_STATEMENT:
+        return semantic_analyze_stmt_for_statement(analyzer, stmt);
+        break;
+    case AST_FOREACH_STATEMENT:
+        return semantic_analyze_stmt_foreach_statement(analyzer, stmt);
+        break;
+    case AST_USING_DIRECTIVE:
+        return semantic_analyze_stmt_using_directive(analyzer, stmt);
+        break;
+    case AST_NAMESPACE_DECLARATION:
+        return semantic_analyze_stmt_namespace_declaration(analyzer, stmt);
+        break;
+    case AST_CLASS_DECLARATION:
+        return semantic_analyze_stmt_class_declaration(analyzer, stmt);
+        break;
+    case AST_TEMPLATE_DECLARATION:
 
-        case AST_SWITCH_STATEMENT:
-            return semantic_analyze_stmt_SwitchStatement(analyzer, stmt);
-            break;
-        case AST_CASE_CLAUSE:
-            return semantic_analyze_stmt_CaseClause(analyzer, stmt);
-            break;
-        case AST_DEFAULT_CLAUSE:
-            return semantic_analyze_stmt_DefaultClause(analyzer, stmt);
-            break;
-        case AST_BREAK_STATEMENT:
-        case AST_CONTINUE_STATEMENT:
-            return true;
+        return semantic_analyzer_analyze_generic_decl(analyzer, stmt);
 
-        case AST_PRINT_STATEMENT:
-            return semantic_analyze_stmt_PrintStatement(analyzer, stmt);
-            break;
-        case AST_UNSAFE_CALL:
-            return semantic_analyze_stmt_UnsafeCall(analyzer, stmt);
-            break;
-        case AST_ACCESS_MODIFIER:
-            return semantic_analyze_stmt_AccessModifier(analyzer, stmt);
-            break;
-        case AST_FUNCTION_DECLARATION:
-            return semantic_analyze_stmt_FunctionDeclaration(analyzer, stmt);
-            break;
-        case AST_STATIC_FUNCTION_DECLARATION:
-            return semantic_analyze_stmt_StaticFunctionDeclaration(analyzer, stmt);
-            break;
-        case AST_CONSTRUCTOR_DECLARATION:
-            return semantic_analyze_stmt_ConstructorDeclaration(analyzer, stmt);
-            break;
-        case AST_BLOCK:
-            return semantic_analyze_stmt_Block(analyzer, stmt);
-            break;
-        case AST_POINT_BLOCK:
-            return semantic_analyze_stmt_PointBlock(analyzer, stmt);
-            break;
-        case AST_BINARY_OPERATION:
-        case AST_UNARY_OPERATION:
-        case AST_TERNARY_OPERATION:
-        case AST_CALL:
-        case AST_IDENTIFIER:
-        case AST_NUMBER:
-        case AST_STRING:
-        case AST_BOOLEAN:
+    case AST_SWITCH_STATEMENT:
+        return semantic_analyze_stmt_switch_statement(analyzer, stmt);
+        break;
+    case AST_CASE_CLAUSE:
+        return semantic_analyze_stmt_case_clause(analyzer, stmt);
+        break;
+    case AST_DEFAULT_CLAUSE:
+        return semantic_analyze_stmt_default_clause(analyzer, stmt);
+        break;
+    case AST_BREAK_STATEMENT:
+    case AST_CONTINUE_STATEMENT:
+        return true;
 
-            return semantic_analyzer_analyze_expression(analyzer, stmt);
+    case AST_PRINT_STATEMENT:
+        return semantic_analyze_stmt_print_statement(analyzer, stmt);
+        break;
+    case AST_UNSAFE_CALL:
+        return semantic_analyze_stmt_unsafe_call(analyzer, stmt);
+        break;
+    case AST_ACCESS_MODIFIER:
+        return semantic_analyze_stmt_access_modifier(analyzer, stmt);
+        break;
+    case AST_FUNCTION_DECLARATION:
+        return semantic_analyze_stmt_function_declaration(analyzer, stmt);
+        break;
+    case AST_STATIC_FUNCTION_DECLARATION:
+        return semantic_analyze_stmt_static_function_declaration(analyzer, stmt);
+        break;
+    case AST_CONSTRUCTOR_DECLARATION:
+        return semantic_analyze_stmt_constructor_declaration(analyzer, stmt);
+        break;
+    case AST_BLOCK:
+        return semantic_analyze_stmt_block(analyzer, stmt);
+        break;
+    case AST_POINT_BLOCK:
+        return semantic_analyze_stmt_point_block(analyzer, stmt);
+        break;
+    case AST_POINTER_ASSIGNMENT:
+    case AST_POINTER_DEREFERENCE:
+    case AST_ADDRESS_OF:
+    case AST_STACKALLOC_EXPRESSION:
+    case AST_BINARY_OPERATION:
+    case AST_UNARY_OPERATION:
+    case AST_TERNARY_OPERATION:
+    case AST_CALL:
+    case AST_IDENTIFIER:
+    case AST_NUMBER:
+    case AST_STRING:
+    case AST_BOOLEAN:
 
-        default:
-            return true;
+        return semantic_analyzer_analyze_expression(analyzer, stmt);
+
+    default:
+        return true;
     }
 }
 
@@ -2357,75 +2548,89 @@ FunctionAnalysisResult semantic_analyzer_analyze_function(SemanticAnalyzer* anal
     FunctionAnalysisResult result = {0};
     result.success = false;
 
-    if (!analyzer || !function_node || (function_node->type != AST_FUNCTION_DECLARATION && function_node->type != AST_STATIC_FUNCTION_DECLARATION)) {
+    if (!analyzer || !function_node ||
+        (function_node->type != AST_FUNCTION_DECLARATION && function_node->type != AST_STATIC_FUNCTION_DECLARATION)) {
         return result;
     }
 
-    const char* func_name = (function_node->type == AST_FUNCTION_DECLARATION) ? 
-                            function_node->data.function_decl.name : 
-                            function_node->data.static_function_decl.name;
+    const char* func_name = (function_node->type == AST_FUNCTION_DECLARATION)
+                                ? function_node->data.function_decl.name
+                                : function_node->data.static_function_decl.name;
 
     SymbolEntry* existing = symbol_table_lookup(analyzer->symbol_table, func_name);
     if (existing && existing->state == SYMBOL_DEFINED) {
-        semantic_analyzer_add_error_at(analyzer, function_node, 
-            "Function %s already defined", func_name);
+        semantic_analyzer_add_error_at(analyzer, function_node, "Function %s already defined", func_name);
         return result;
     }
 
     SymbolEntry* func_symbol;
     /* M1: 复用任何未定义的既有函数条目 —— 覆盖两类来源:
      * 前向引用(本文件后置定义) 与 collect_exports 预登记(跨文件) */
-    if (existing && existing->type == SYMBOL_FUNCTION &&
-        existing->state != SYMBOL_DEFINED) {
+    if (existing && existing->type == SYMBOL_FUNCTION && existing->state != SYMBOL_DEFINED) {
         func_symbol = existing;
     } else {
-        func_symbol = symbol_table_define(analyzer->symbol_table, func_name,
-                                          SYMBOL_FUNCTION, 0, NULL);
+        func_symbol = symbol_table_define(analyzer->symbol_table, func_name, SYMBOL_FUNCTION, 0, NULL);
         if (!func_symbol) {
-            semantic_analyzer_add_error_at(analyzer, function_node, 
-                "Failed to define function %s", func_name);
+            semantic_analyzer_add_error_at(analyzer, function_node, "Failed to define function %s", func_name);
             return result;
         }
     }
     func_symbol->state = SYMBOL_DEFINED;
+    func_symbol->source_type = KrtSourceTypeClone(
+        analyzer->type_arena, (KrtSourceType){.token = TOKEN_FN, .function = function_node->function_type});
+    func_symbol->value_type = function_node->data.function_decl.return_type;
 
     if (strcmp(func_name, "main") == 0) {
         analyzer->has_entry_point = true;
-        if (analyzer->entry_point_name) KRT_FREE(analyzer->entry_point_name);
+        if (analyzer->entry_point_name) {
+            KRT_FREE(analyzer->entry_point_name);
+        }
         analyzer->entry_point_name = KRT_STRDUP(func_name);
         func_symbol->is_entry_point = true;
     }
 
     symbol_table_push_scope(analyzer->symbol_table);
 
-    int param_count = (function_node->type == AST_FUNCTION_DECLARATION) ? 
-                      function_node->data.function_decl.parameter_count : 
-                      function_node->data.static_function_decl.parameter_count;
+    int param_count = (function_node->type == AST_FUNCTION_DECLARATION)
+                          ? function_node->data.function_decl.parameter_count
+                          : function_node->data.static_function_decl.parameter_count;
     for (int i = 0; i < param_count; i++) {
-        const char* param_name = (function_node->type == AST_FUNCTION_DECLARATION) ? 
-                                 function_node->data.function_decl.parameters[i] : 
-                                 function_node->data.static_function_decl.parameters[i];
-        KrtTokenType param_type = (function_node->type == AST_FUNCTION_DECLARATION) ?
-                                   function_node->data.function_decl.parameter_types[i] :
-                                   function_node->data.static_function_decl.parameter_types[i];
-        SymbolEntry* param_symbol = symbol_table_define(analyzer->symbol_table, param_name,
-                           SYMBOL_VARIABLE, 0, NULL);
+        const char* param_name = (function_node->type == AST_FUNCTION_DECLARATION)
+                                     ? function_node->data.function_decl.parameters[i]
+                                     : function_node->data.static_function_decl.parameters[i];
+        KrtTokenType param_type = (function_node->type == AST_FUNCTION_DECLARATION)
+                                      ? function_node->data.function_decl.parameter_types[i]
+                                      : function_node->data.static_function_decl.parameter_types[i];
+        SymbolEntry* param_symbol = symbol_table_define(analyzer->symbol_table, param_name, SYMBOL_VARIABLE, 0, NULL);
         if (param_symbol) {
             param_symbol->value_type = param_type;
-            int is_array = (function_node->type == AST_FUNCTION_DECLARATION) ?
-                           (function_node->data.function_decl.parameter_is_array ? function_node->data.function_decl.parameter_is_array[i] : 0) :
-                           (function_node->data.static_function_decl.parameter_is_array ? function_node->data.static_function_decl.parameter_is_array[i] : 0);
+            param_symbol->source_type = function_node->function_type ? function_node->function_type->parameters[i]
+                                                                     : (KrtSourceType){.token = param_type};
+            if (param_symbol->source_type.token == TOKEN_IDENTIFIER && param_symbol->source_type.type_name) {
+                param_symbol->class_type_name = KRT_STRDUP(param_symbol->source_type.type_name);
+            }
+            int is_array = (function_node->type == AST_FUNCTION_DECLARATION)
+                               ? (function_node->data.function_decl.parameter_is_array
+                                      ? function_node->data.function_decl.parameter_is_array[i]
+                                      : 0)
+                               : (function_node->data.static_function_decl.parameter_is_array
+                                      ? function_node->data.static_function_decl.parameter_is_array[i]
+                                      : 0);
             if (is_array) {
                 param_symbol->is_array = 1;
             }
         }
     }
 
-    ASTNode* body = (function_node->type == AST_FUNCTION_DECLARATION) ? 
-                    function_node->data.function_decl.body : 
-                    function_node->data.static_function_decl.body;
-    
+    ASTNode* body = (function_node->type == AST_FUNCTION_DECLARATION) ? function_node->data.function_decl.body
+                                                                      : function_node->data.static_function_decl.body;
+
+    KrtSourceType saved_return = analyzer->current_return_type;
+    analyzer->current_return_type = function_node->function_type
+                                        ? function_node->function_type->result
+                                        : (KrtSourceType){.token = function_node->data.function_decl.return_type};
     bool body_ok = semantic_analyzer_analyze_statement(analyzer, body);
+    analyzer->current_return_type = saved_return;
 
     symbol_table_pop_scope(analyzer->symbol_table);
 
@@ -2441,30 +2646,30 @@ bool semantic_analyzer_analyze_generic_decl(SemanticAnalyzer* analyzer, ASTNode*
     if (!analyzer || !generic_decl || generic_decl->type != AST_TEMPLATE_DECLARATION) {
         return false;
     }
-    
+
     ASTNode* declaration = generic_decl->data.template_decl.declaration;
     if (!declaration) {
         semantic_analyzer_add_error(analyzer, "Template declaration missing declaration");
         return false;
     }
-    
+
     const char* type_name = NULL;
     if (declaration->type == AST_CLASS_DECLARATION) {
         type_name = declaration->data.class_decl.name;
     } else if (declaration->type == AST_FUNCTION_DECLARATION) {
         type_name = declaration->data.function_decl.name;
     }
-    
+
     if (!type_name) {
         semantic_analyzer_add_error(analyzer, "Template declaration missing name");
         return false;
     }
-    
+
     GenericParameter* params = NULL;
     int param_count = 0;
-    
+
     if (generic_decl->data.template_decl.parameters) {
-        
+
         for (int i = 0; i < generic_decl->data.template_decl.parameter_count; i++) {
             ASTNode* param_node = generic_decl->data.template_decl.parameters[i];
             if (param_node && param_node->type == AST_TEMPLATE_PARAMETER) {
@@ -2476,42 +2681,39 @@ bool semantic_analyzer_analyze_generic_decl(SemanticAnalyzer* analyzer, ASTNode*
             }
         }
     }
-    
-    bool success = generics_register_type(analyzer->generic_registry, type_name, 
-                                          params, param_count, declaration);
-    
+
+    bool success = generics_register_type(analyzer->generic_registry, type_name, params, param_count, declaration);
+
     if (!success) {
         semantic_analyzer_add_error(analyzer, "Failed to register generic type: %s", type_name);
         generics_free_parameters(params);
         return false;
     }
-    
+
     return true;
 }
 
-bool semantic_analyzer_analyze_generic_instantiation(SemanticAnalyzer* analyzer, 
-                                                       const char* base_type, 
-                                                       const char** type_args, 
-                                                       int arg_count) {
+bool semantic_analyzer_analyze_generic_instantiation(SemanticAnalyzer* analyzer, const char* base_type,
+                                                     const char** type_args, int arg_count) {
     if (!analyzer || !base_type || !type_args || arg_count <= 0) {
         return false;
     }
-    
+
     if (!generics_is_generic_type(analyzer->generic_registry, base_type)) {
         semantic_analyzer_add_error(analyzer, "Unknown generic type: %s", base_type);
         return false;
     }
-    
+
     GenericTypeInfo* type_info = generics_get_type_info(analyzer->generic_registry, base_type);
-    
+
     ASTNode* declaration = NULL;
     if (type_info && type_info->declaration) {
         declaration = type_info->declaration;
     } else {
-        
+
         if (type_info) {
             KRT_FREE(type_info);
-            return true; 
+            return true;
         } else {
             semantic_analyzer_add_error(analyzer, "Unknown generic type: %s", base_type);
             if (type_info) {
@@ -2520,7 +2722,7 @@ bool semantic_analyzer_analyze_generic_instantiation(SemanticAnalyzer* analyzer,
             return false;
         }
     }
-    
+
     if (!declaration || declaration->type != AST_CLASS_DECLARATION) {
         semantic_analyzer_add_error(analyzer, "Invalid template declaration for: %s", base_type);
         if (type_info) {
@@ -2528,60 +2730,61 @@ bool semantic_analyzer_analyze_generic_instantiation(SemanticAnalyzer* analyzer,
         }
         return false;
     }
-    
+
     if (!semantic_analyzer_validate_constraints(analyzer, declaration, type_args, arg_count)) {
         semantic_analyzer_add_error(analyzer, "Constraint validation failed for generic type: %s", base_type);
         KRT_FREE(type_info);
         return false;
     }
-    
+
     KRT_FREE(type_info);
-    
-    bool success = generics_instantiate_type(analyzer->generic_registry, base_type,
-                                          type_args, arg_count, analyzer->symbol_table);
-    
+
+    bool success =
+        generics_instantiate_type(analyzer->generic_registry, base_type, type_args, arg_count, analyzer->symbol_table);
+
     if (!success) {
         semantic_analyzer_add_error(analyzer, "Failed to instantiate generic type: %s", base_type);
         return false;
     }
-    
+
     return true;
 }
 
-bool semantic_analyzer_validate_constraints(SemanticAnalyzer* analyzer, ASTNode* class_decl, const char** type_args, int arg_count) {
+bool semantic_analyzer_validate_constraints(SemanticAnalyzer* analyzer, ASTNode* class_decl, const char** type_args,
+                                            int arg_count) {
     if (!analyzer || !class_decl || class_decl->type != AST_CLASS_DECLARATION) {
         return false;
     }
-    
+
     if (class_decl->data.class_decl.constraint_count == 0) {
-        return true; 
+        return true;
     }
-    
+
     char** template_params = class_decl->data.class_decl.template_params;
     int template_param_count = class_decl->data.class_decl.template_param_count;
-    
+
     if (!template_params || template_param_count == 0) {
         semantic_analyzer_add_error(analyzer, "Class has constraints but no template parameters");
         return false;
     }
-    
+
     if (arg_count != template_param_count) {
-        semantic_analyzer_add_error(analyzer, "Wrong number of type arguments: expected %d, got %d", 
-                                   template_param_count, arg_count);
+        semantic_analyzer_add_error(analyzer, "Wrong number of type arguments: expected %d, got %d",
+                                    template_param_count, arg_count);
         return false;
     }
-    
+
     for (int param_idx = 0; param_idx < template_param_count; param_idx++) {
         const char* param_name = template_params[param_idx];
         bool has_class_constraint = false;
         bool has_struct_constraint = false;
-        
+
         for (int i = 0; i < class_decl->data.class_decl.constraint_count; i++) {
             ASTNode* constraint = class_decl->data.class_decl.constraints[i];
             if (!constraint || constraint->type != AST_GENERIC_CONSTRAINT) {
                 continue;
             }
-            
+
             if (strcmp(constraint->data.generic_constraint.param_name, param_name) == 0) {
                 const char* constraint_type = constraint->data.generic_constraint.constraint_type;
                 if (strcmp(constraint_type, "class") == 0) {
@@ -2591,27 +2794,28 @@ bool semantic_analyzer_validate_constraints(SemanticAnalyzer* analyzer, ASTNode*
                 }
             }
         }
-        
+
         if (has_class_constraint && has_struct_constraint) {
-            semantic_analyzer_add_error(analyzer, "Parameter '%s' has conflicting class and struct constraints", param_name);
+            semantic_analyzer_add_error(analyzer, "Parameter '%s' has conflicting class and struct constraints",
+                                        param_name);
             return false;
         }
     }
-    
+
     for (int i = 0; i < class_decl->data.class_decl.constraint_count; i++) {
         ASTNode* constraint = class_decl->data.class_decl.constraints[i];
         if (!constraint || constraint->type != AST_GENERIC_CONSTRAINT) {
             continue;
         }
-        
+
         const char* param_name = constraint->data.generic_constraint.param_name;
         const char* constraint_type = constraint->data.generic_constraint.constraint_type;
-        
+
         if (!param_name || !constraint_type) {
             semantic_analyzer_add_error(analyzer, "Invalid constraint: missing parameter or type");
             return false;
         }
-        
+
         int param_index = -1;
         for (int j = 0; j < template_param_count; j++) {
             if (strcmp(template_params[j], param_name) == 0) {
@@ -2619,53 +2823,57 @@ bool semantic_analyzer_validate_constraints(SemanticAnalyzer* analyzer, ASTNode*
                 break;
             }
         }
-        
+
         if (param_index == -1) {
-            semantic_analyzer_add_error(analyzer, "Constraint parameter '%s' not found in template parameters", param_name);
+            semantic_analyzer_add_error(analyzer, "Constraint parameter '%s' not found in template parameters",
+                                        param_name);
             return false;
         }
-        
+
         const char* type_arg = type_args[param_index];
-        
+
         if (strcmp(constraint_type, "class") == 0) {
-            
-            if (strcmp(type_arg, "int") == 0 || strcmp(type_arg, "float") == 0 || 
-                strcmp(type_arg, "string") == 0 || strcmp(type_arg, "bool") == 0) {
-                semantic_analyzer_add_error(analyzer, "Type argument '%s' for parameter '%s' violates class constraint (must be reference type)", 
-                                           type_arg, param_name);
+
+            if (strcmp(type_arg, "int") == 0 || strcmp(type_arg, "float") == 0 || strcmp(type_arg, "string") == 0 ||
+                strcmp(type_arg, "bool") == 0) {
+                semantic_analyzer_add_error(
+                    analyzer,
+                    "Type argument '%s' for parameter '%s' violates class constraint (must be reference type)",
+                    type_arg, param_name);
                 return false;
             }
-        }
-        else if (strcmp(constraint_type, "struct") == 0) {
-            
-            if (strcmp(type_arg, "int") != 0 && strcmp(type_arg, "float") != 0 && 
-                strcmp(type_arg, "bool") != 0 && strcmp(type_arg, "char") != 0) {
-                semantic_analyzer_add_error(analyzer, "Type argument '%s' for parameter '%s' violates struct constraint (must be value type)", 
-                                           type_arg, param_name);
+        } else if (strcmp(constraint_type, "struct") == 0) {
+
+            if (strcmp(type_arg, "int") != 0 && strcmp(type_arg, "float") != 0 && strcmp(type_arg, "bool") != 0 &&
+                strcmp(type_arg, "char") != 0) {
+                semantic_analyzer_add_error(
+                    analyzer, "Type argument '%s' for parameter '%s' violates struct constraint (must be value type)",
+                    type_arg, param_name);
                 return false;
             }
-        }
-        else if (strcmp(constraint_type, "new()") == 0) {
+        } else if (strcmp(constraint_type, "new()") == 0) {
             continue;
-        }
-        else {
-            
+        } else {
+
             if (strcmp(constraint_type, "IDisposable") == 0 && strcmp(type_arg, "string") == 0) {
-                semantic_analyzer_add_error(analyzer, "Type argument '%s' for parameter '%s' does not implement interface '%s'", 
-                                           type_arg, param_name, constraint_type);
+                semantic_analyzer_add_error(analyzer,
+                                            "Type argument '%s' for parameter '%s' does not implement interface '%s'",
+                                            type_arg, param_name, constraint_type);
                 return false;
             }
-            
+
             continue;
         }
     }
-    
+
     return true;
 }
 
 SymbolTable* semantic_analyzer_get_symbol_table(SemanticAnalyzer* analyzer) {
     return analyzer ? analyzer->symbol_table : NULL;
 }
+
+#include "TypeExpansion.inc"
 
 SemanticAnalysisResult* semantic_analyzer_analyze(SemanticAnalyzer* analyzer, ASTNode* ast) {
     if (!analyzer || !ast) {
@@ -2685,7 +2893,10 @@ SemanticAnalysisResult* semantic_analyzer_analyze(SemanticAnalyzer* analyzer, AS
 
     analyzer->error_count = 0;
     analyzer->warning_count = 0;
-    
+    if (!semantic_expand_types(analyzer, ast)) {
+        result->success = false;
+    }
+
     if (ast->type == AST_PROGRAM || ast->type == AST_BLOCK) {
         for (int i = 0; i < ast->data.block.statement_count; i++) {
             ASTNode* decl = ast->data.block.statements[i];
@@ -2706,7 +2917,7 @@ SemanticAnalysisResult* semantic_analyzer_analyze(SemanticAnalyzer* analyzer, AS
                 }
             }
         }
-        
+
         for (int i = 0; i < ast->data.block.statement_count; i++) {
             ASTNode* decl = ast->data.block.statements[i];
             if (decl && decl->type == AST_CLASS_DECLARATION) {
@@ -2734,7 +2945,7 @@ SemanticAnalysisResult* semantic_analyzer_analyze(SemanticAnalyzer* analyzer, AS
                 }
             }
         }
-        
+
         for (int i = 0; i < ast->data.block.statement_count; i++) {
             ASTNode* decl = ast->data.block.statements[i];
             if (decl && decl->type == AST_STATIC_VARIABLE_DECLARATION) {
@@ -2747,7 +2958,8 @@ SemanticAnalysisResult* semantic_analyzer_analyze(SemanticAnalyzer* analyzer, AS
         for (int i = 0; i < ast->data.block.statement_count; i++) {
             ASTNode* decl = ast->data.block.statements[i];
             if (decl && decl->type == AST_VARIABLE_DECLARATION) {
-                semantic_analyzer_add_error_at(analyzer, decl,
+                semantic_analyzer_add_error_at(
+                    analyzer, decl,
                     "Top-level variable '%s' must be declared 'static' (file-scope variables require 'static')",
                     decl->data.variable_decl.name);
                 result->success = false;
@@ -2757,13 +2969,15 @@ SemanticAnalysisResult* semantic_analyzer_analyze(SemanticAnalyzer* analyzer, AS
         for (int i = 0; i < ast->data.block.statement_count; i++) {
             ASTNode* decl = ast->data.block.statements[i];
             if (decl && (decl->type == AST_FUNCTION_DECLARATION || decl->type == AST_STATIC_FUNCTION_DECLARATION)) {
-                const char* fn = (decl->type == AST_FUNCTION_DECLARATION) ?
-                                 decl->data.function_decl.name :
-                                 decl->data.static_function_decl.name;
+                const char* fn = (decl->type == AST_FUNCTION_DECLARATION) ? decl->data.function_decl.name
+                                                                          : decl->data.static_function_decl.name;
                 if (!symbol_table_lookup(analyzer->symbol_table, fn)) {
                     SymbolEntry* pre = symbol_table_define(analyzer->symbol_table, fn, SYMBOL_FUNCTION, 0, NULL);
                     if (pre) {
                         pre->state = SYMBOL_FORWARD_REF;
+                        pre->source_type = KrtSourceTypeClone(
+                            analyzer->type_arena, (KrtSourceType){.token = TOKEN_FN, .function = decl->function_type});
+                        pre->value_type = decl->data.function_decl.return_type;
                     }
                 }
             }
@@ -2781,17 +2995,16 @@ SemanticAnalysisResult* semantic_analyzer_analyze(SemanticAnalyzer* analyzer, AS
 
         for (int i = 0; i < ast->data.block.statement_count; i++) {
             ASTNode* stmt = ast->data.block.statements[i];
-            if (!stmt) continue;
+            if (!stmt) {
+                continue;
+            }
             if (stmt->type == AST_VARIABLE_DECLARATION) {
                 semantic_analyzer_analyze_statement(analyzer, stmt);
                 continue;
             }
-            if (stmt->type != AST_FUNCTION_DECLARATION &&
-                stmt->type != AST_STATIC_FUNCTION_DECLARATION &&
-                stmt->type != AST_CLASS_DECLARATION &&
-                stmt->type != AST_TEMPLATE_DECLARATION &&
-                stmt->type != AST_STATIC_VARIABLE_DECLARATION &&
-                stmt->type != AST_NAMESPACE_DECLARATION &&
+            if (stmt->type != AST_FUNCTION_DECLARATION && stmt->type != AST_STATIC_FUNCTION_DECLARATION &&
+                stmt->type != AST_CLASS_DECLARATION && stmt->type != AST_TEMPLATE_DECLARATION &&
+                stmt->type != AST_STATIC_VARIABLE_DECLARATION && stmt->type != AST_NAMESPACE_DECLARATION &&
                 stmt->type != AST_USING_DIRECTIVE) {
                 if (!semantic_analyzer_analyze_statement(analyzer, stmt)) {
                     result->success = false;
@@ -2833,7 +3046,9 @@ SemanticAnalysisResult* semantic_analyzer_analyze(SemanticAnalyzer* analyzer, AS
     }
 
     if (!analyzer->has_entry_point && analyzer->require_entry_point) {
-        semantic_analyzer_add_warning(analyzer, "No entry point (main function) defined. The program will not have a valid starting point for execution.");
+        semantic_analyzer_add_warning(
+            analyzer,
+            "No entry point (main function) defined. The program will not have a valid starting point for execution.");
     }
 
     result->error_count = analyzer->error_count;
@@ -2849,9 +3064,10 @@ SemanticAnalysisResult* semantic_analyzer_analyze(SemanticAnalyzer* analyzer, AS
     return result;
 }
 
-static char* resolve_using_path(char** path_parts, int path_length, bool* is_wildcard)
-{
-    if (!path_parts || path_length <= 0) return NULL;
+static char* resolve_using_path(char** path_parts, int path_length, bool* is_wildcard) {
+    if (!path_parts || path_length <= 0) {
+        return NULL;
+    }
 
     *is_wildcard = false;
 
@@ -2860,23 +3076,19 @@ static char* resolve_using_path(char** path_parts, int path_length, bool* is_wil
     int len = 0;
     resolved[0] = '\0';
 
-    for (int i = 0; i < path_length; i++)
-    {
-        if (strcmp(path_parts[i], "*") == 0)
-        {
+    for (int i = 0; i < path_length; i++) {
+        if (strcmp(path_parts[i], "*") == 0) {
             *is_wildcard = true;
             break;
         }
 
         int part_len = (int)strlen(path_parts[i]);
-        if (len + part_len + 2 > capacity)
-        {
+        if (len + part_len + 2 > capacity) {
             capacity = (len + part_len + 2) * 2;
             resolved = (char*)KRT_REALLOC(resolved, capacity);
         }
 
-        if (i > 0)
-        {
+        if (i > 0) {
             resolved[len++] = '/';
             resolved[len] = '\0';
         }
@@ -2888,105 +3100,83 @@ static char* resolve_using_path(char** path_parts, int path_length, bool* is_wil
     return resolved;
 }
 
-static char* try_file_path(const char* path)
-{
-    if (!path) return NULL;
+static char* try_file_path(const char* path) {
+    if (!path) {
+        return NULL;
+    }
 
     FILE* fp = fopen(path, "r");
-    if (fp)
-    {
+    if (fp) {
         fclose(fp);
         return KRT_STRDUP(path);
     }
     return NULL;
 }
 
-static char* find_file_in_libs(SemanticAnalyzer* analyzer, const char* relative_path)
-{
-    if (!relative_path) return NULL;
+static void import_krt_file(SemanticAnalyzer* analyzer, const char* file_path);
 
-    int capacity = 1024;
-    char* full_path = (char*)KRT_MALLOC(capacity);
-    char* result = NULL;
-
-    if (analyzer && analyzer->libs_path)
-    {
-        snprintf(full_path, capacity, "%s/%s", analyzer->libs_path, relative_path);
-        result = try_file_path(full_path);
-        if (result)
-        {
-            KRT_FREE(full_path);
-            return result;
-        }
+static void semantic_try_lazy_import_class(SemanticAnalyzer* analyzer, const char* class_name) {
+    if (!analyzer || !class_name || !analyzer->libs_path) {
+        return;
     }
-
-    if (analyzer && analyzer->input_file_path)
-    {
-        const char* last_slash = strrchr(analyzer->input_file_path, '/');
-        if (last_slash)
-        {
-            int dir_len = (int)(last_slash - analyzer->input_file_path);
-            snprintf(full_path, capacity, "%.*s/libs/%s", dir_len, analyzer->input_file_path, relative_path);
-            result = try_file_path(full_path);
-            if (result)
-            {
-                KRT_FREE(full_path);
-                return result;
-            }
-        }
-    }
-
-    snprintf(full_path, capacity, "libs/%s", relative_path);
-    result = try_file_path(full_path);
-    KRT_FREE(full_path);
-    return result;
-}
-
-static void import_krt_file(SemanticAnalyzer* analyzer, const char* file_path, const char* module_name);
-
-static void semantic_try_lazy_import_class(SemanticAnalyzer* analyzer, const char* class_name)
-{
-    if (!analyzer || !class_name || !analyzer->libs_path) return;
 
     char path[1024];
     snprintf(path, sizeof(path), "%s/%s.krt", analyzer->libs_path, class_name);
     FILE* fp = fopen(path, "r");
     if (fp) {
         fclose(fp);
-        import_krt_file(analyzer, path, class_name);
+        import_krt_file(analyzer, path);
         return;
     }
 
     DIR* dir = opendir(analyzer->libs_path);
-    if (!dir) return;
+    if (!dir) {
+        return;
+    }
     struct dirent* ent;
     while ((ent = readdir(dir)) != NULL) {
-        if (ent->d_name[0] == '.') continue;
+        if (ent->d_name[0] == '.') {
+            continue;
+        }
         char sub[1024];
         snprintf(sub, sizeof(sub), "%s/%s", analyzer->libs_path, ent->d_name);
         struct stat st;
-        if (stat(sub, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
-        snprintf(path, sizeof(path), "%s/%s.krt", sub, class_name);
+        if (stat(sub, &st) != 0 || !S_ISDIR(st.st_mode)) {
+            continue;
+        }
+        int length = snprintf(path, sizeof(path), "%s/%s.krt", sub, class_name);
+        if (length < 0 || (size_t)length >= sizeof(path)) {
+            continue;
+        }
         fp = fopen(path, "r");
         if (fp) {
             fclose(fp);
-            import_krt_file(analyzer, path, ent->d_name);
+            import_krt_file(analyzer, path);
             closedir(dir);
             return;
         }
         DIR* sub_dir = opendir(sub);
-        if (!sub_dir) continue;
+        if (!sub_dir) {
+            continue;
+        }
         struct dirent* sub_ent;
         while ((sub_ent = readdir(sub_dir)) != NULL) {
-            if (sub_ent->d_name[0] == '.') continue;
+            if (sub_ent->d_name[0] == '.') {
+                continue;
+            }
             char deep[1280];
             snprintf(deep, sizeof(deep), "%s/%s", sub, sub_ent->d_name);
-            if (stat(deep, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
-            snprintf(path, sizeof(path), "%s/%s.krt", deep, class_name);
+            if (stat(deep, &st) != 0 || !S_ISDIR(st.st_mode)) {
+                continue;
+            }
+            length = snprintf(path, sizeof(path), "%s/%s.krt", deep, class_name);
+            if (length < 0 || (size_t)length >= sizeof(path)) {
+                continue;
+            }
             fp = fopen(path, "r");
             if (fp) {
                 fclose(fp);
-                import_krt_file(analyzer, path, sub_ent->d_name);
+                import_krt_file(analyzer, path);
                 closedir(sub_dir);
                 closedir(dir);
                 return;
@@ -2997,11 +3187,10 @@ static void semantic_try_lazy_import_class(SemanticAnalyzer* analyzer, const cha
     closedir(dir);
 }
 
-
-
-static void import_krt_file(SemanticAnalyzer* analyzer, const char* file_path, const char* module_name)
-{
-    if (!analyzer || !file_path) return;
+static void import_krt_file(SemanticAnalyzer* analyzer, const char* file_path) {
+    if (!analyzer || !file_path) {
+        return;
+    }
 
     if (analyzer->input_file_path && strcmp(analyzer->input_file_path, file_path) == 0) {
         return;
@@ -3009,79 +3198,64 @@ static void import_krt_file(SemanticAnalyzer* analyzer, const char* file_path, c
 
     semantic_analyzer_register_imported_file(analyzer, file_path);
 
-    FILE* fp = fopen(file_path, "r");
-    if (!fp) return;
-
-    fseek(fp, 0, SEEK_END);
-    long file_size = ftell(fp);
-    fseek(fp, 0, SEEK_SET);
-
-    char* source = (char*)KRT_MALLOC(file_size + 1);
-    if (!source)
-    {
-        fclose(fp);
+    KrtArena* import_arena = KrtArenaCreateLocal(KRT_ARENA_DEFAULT_BLOCK_SIZE);
+    if (!import_arena) {
+        return;
+    }
+    ASTNode* imported_ast = KrtStdlibCacheClone(file_path, import_arena, false);
+    if (!imported_ast) {
+        KrtArenaDestroy(import_arena);
         return;
     }
 
-    size_t read_size = fread(source, 1, file_size, fp);
-    source[read_size] = '\0';
-    fclose(fp);
-
-    Lexer* lexer = lexer_create(source);
-    Parser* parser = parser_create(lexer);
-    ASTNode* imported_ast = parser_parse(parser);
-
-    if (!imported_ast)
-    {
-        parser_destroy(parser);
-        lexer_destroy(lexer);
-        KRT_FREE(source);
-        return;
-    }
-
-    if (imported_ast->type == AST_PROGRAM || imported_ast->type == AST_BLOCK)
-    {
-        for (int j = 0; j < imported_ast->data.block.statement_count; j++)
-        {
+    if (imported_ast->type == AST_PROGRAM || imported_ast->type == AST_BLOCK) {
+        for (int j = 0; j < imported_ast->data.block.statement_count; j++) {
             ASTNode* stmt = imported_ast->data.block.statements[j];
-            if (!stmt) continue;
-            if (stmt->type == AST_USING_DIRECTIVE) continue;
+            if (!stmt) {
+                continue;
+            }
+            if (stmt->type == AST_USING_DIRECTIVE) {
+                continue;
+            }
 
-            if (stmt->type == AST_FUNCTION_DECLARATION)
-            {
+            if (stmt->type == AST_FUNCTION_DECLARATION) {
                 const char* func_name = stmt->data.function_decl.name;
-                if (func_name && strcmp(func_name, "main") != 0)
-                {
+                if (func_name && strcmp(func_name, "main") != 0) {
                     SymbolEntry* existing = symbol_table_lookup(analyzer->global_symbol_table, func_name);
-                    if (!existing)
-                    {
-                        symbol_table_define(analyzer->global_symbol_table, func_name, SYMBOL_FUNCTION, 0, NULL);
+                    if (!existing) {
+                        existing =
+                            symbol_table_define(analyzer->global_symbol_table, func_name, SYMBOL_FUNCTION, 0, NULL);
+                        if (existing) {
+                            existing->source_type =
+                                KrtSourceTypeClone(analyzer->type_arena,
+                                                   (KrtSourceType){.token = TOKEN_FN, .function = stmt->function_type});
+                            existing->value_type = stmt->data.function_decl.return_type;
+                        }
                     }
                 }
-            }
-            else if (stmt->type == AST_CLASS_DECLARATION)
-            {
+            } else if (stmt->type == AST_CLASS_DECLARATION) {
                 const char* class_name = stmt->data.class_decl.name;
-                if (class_name)
-                {
+                if (class_name) {
                     SymbolEntry* existing = symbol_table_lookup(analyzer->global_symbol_table, class_name);
-                    if (!existing)
-                    {
-                        existing = symbol_table_define(analyzer->global_symbol_table, class_name, SYMBOL_CLASS, 0, NULL);
+                    if (!existing) {
+                        existing =
+                            symbol_table_define(analyzer->global_symbol_table, class_name, SYMBOL_CLASS, 0, NULL);
                     }
 
                     ASTNode* body = stmt->data.class_decl.body;
-                    if (existing && body && body->type == AST_BLOCK)
-                    {
+                    if (existing && body && body->type == AST_BLOCK) {
                         struct SymbolScope* prev_scope =
                             symbol_table_enter_nested_scope(analyzer->global_symbol_table, existing);
-                        for (int k = 0; k < body->data.block.statement_count; k++)
-                        {
+                        for (int k = 0; k < body->data.block.statement_count; k++) {
                             ASTNode* member = body->data.block.statements[k];
-                            if (!member) continue;
+                            if (!member) {
+                                continue;
+                            }
                             if (member->type == AST_ACCESS_MODIFIER) {
                                 member = member->data.access_modifier.member;
-                                if (!member) continue;
+                                if (!member) {
+                                    continue;
+                                }
                             }
                             const char* mname = NULL;
                             KrtTokenType* ptypes = NULL;
@@ -3099,7 +3273,9 @@ static void import_krt_file(SemanticAnalyzer* analyzer, const char* file_path, c
                                 ptypes = member->data.constructor_decl.parameter_types;
                                 pcount = member->data.constructor_decl.parameter_count;
                             }
-                            if (!mname) continue;
+                            if (!mname) {
+                                continue;
+                            }
 
                             KrtTokenType ret_type = TOKEN_INT32;
                             if (member->type == AST_STATIC_FUNCTION_DECLARATION) {
@@ -3108,28 +3284,49 @@ static void import_krt_file(SemanticAnalyzer* analyzer, const char* file_path, c
                                 ret_type = member->data.function_decl.return_type;
                             }
 
-                            const char* ns_path[2] = { class_name, NULL };
+                            const char* ns_path[2] = {class_name, NULL};
                             char* key = name_mangle_function(ns_path, mname, ptypes, pcount);
                             if (key) {
-                                SymbolEntry* fsym = symbol_table_lookup_current_scope(analyzer->global_symbol_table, key);
+                                SymbolEntry* fsym =
+                                    symbol_table_lookup_current_scope(analyzer->global_symbol_table, key);
                                 if (!fsym) {
-                                    fsym = symbol_table_define(analyzer->global_symbol_table, key, SYMBOL_FUNCTION, 0, NULL);
+                                    fsym = symbol_table_define(analyzer->global_symbol_table, key, SYMBOL_FUNCTION, 0,
+                                                               NULL);
                                 }
-                                if (fsym) fsym->value_type = ret_type;
+                                if (fsym) {
+                                    fsym->value_type = ret_type;
+                                    fsym->source_type = KrtSourceTypeClone(
+                                        analyzer->type_arena,
+                                        (KrtSourceType){.token = TOKEN_FN, .function = member->function_type});
+                                }
                                 KRT_FREE(key);
                             }
                             char full_name[256];
                             snprintf(full_name, sizeof(full_name), "%s__%s", class_name, mname);
-                            SymbolEntry* alias_sym = symbol_table_lookup_current_scope(analyzer->global_symbol_table, full_name);
+                            SymbolEntry* alias_sym =
+                                symbol_table_lookup_current_scope(analyzer->global_symbol_table, full_name);
                             if (!alias_sym) {
-                                alias_sym = symbol_table_define(analyzer->global_symbol_table, full_name, SYMBOL_FUNCTION, 0, NULL);
+                                alias_sym = symbol_table_define(analyzer->global_symbol_table, full_name,
+                                                                SYMBOL_FUNCTION, 0, NULL);
                             }
-                            if (alias_sym) alias_sym->value_type = ret_type;
-                            SymbolEntry* bare_sym = symbol_table_lookup_current_scope(analyzer->global_symbol_table, mname);
+                            if (alias_sym) {
+                                alias_sym->value_type = ret_type;
+                                alias_sym->source_type = KrtSourceTypeClone(
+                                    analyzer->type_arena,
+                                    (KrtSourceType){.token = TOKEN_FN, .function = member->function_type});
+                            }
+                            SymbolEntry* bare_sym =
+                                symbol_table_lookup_current_scope(analyzer->global_symbol_table, mname);
                             if (!bare_sym) {
-                                bare_sym = symbol_table_define(analyzer->global_symbol_table, mname, SYMBOL_FUNCTION, 0, NULL);
+                                bare_sym =
+                                    symbol_table_define(analyzer->global_symbol_table, mname, SYMBOL_FUNCTION, 0, NULL);
                             }
-                            if (bare_sym) bare_sym->value_type = ret_type;
+                            if (bare_sym) {
+                                bare_sym->value_type = ret_type;
+                                bare_sym->source_type = KrtSourceTypeClone(
+                                    analyzer->type_arena,
+                                    (KrtSourceType){.token = TOKEN_FN, .function = member->function_type});
+                            }
                         }
                         symbol_table_exit_nested_scope(analyzer->global_symbol_table, prev_scope);
                     }
@@ -3138,58 +3335,52 @@ static void import_krt_file(SemanticAnalyzer* analyzer, const char* file_path, c
         }
     }
 
-    parser_destroy(parser);
-    lexer_destroy(lexer);
-    KRT_FREE(source);
+    KrtArenaDestroy(import_arena);
 }
 
-static void import_namespace_folder(SemanticAnalyzer* analyzer, const char* folder_path, const char* namespace_name)
-{
-    if (!analyzer || !folder_path) return;
-
+static void import_namespace_folder(SemanticAnalyzer* analyzer, const char* folder_path) {
+    if (!analyzer || !folder_path) {
+        return;
+    }
 
     char cmd[1024];
     snprintf(cmd, sizeof(cmd), "ls '%s'/*.krt 2>/dev/null", folder_path);
 
     FILE* pipe = popen(cmd, "r");
-    if (!pipe)
-    {
+    if (!pipe) {
         return;
     }
 
     char line[512];
-    while (fgets(line, sizeof(line), pipe))
-    {
+    while (fgets(line, sizeof(line), pipe)) {
         int len = (int)strlen(line);
-        while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r' || line[len-1] == ' '))
-        {
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r' || line[len - 1] == ' ')) {
             line[--len] = '\0';
         }
 
-        if (len > 0)
-        {
-            import_krt_file(analyzer, line, namespace_name);
+        if (len > 0) {
+            import_krt_file(analyzer, line);
         }
     }
 
     pclose(pipe);
 }
 
-bool semantic_analyzer_analyze_dependencies(SemanticAnalyzer* analyzer)
-{
-    if (!analyzer || analyzer->using_count == 0) return true;
+bool semantic_analyzer_analyze_dependencies(SemanticAnalyzer* analyzer) {
+    if (!analyzer || analyzer->using_count == 0) {
+        return true;
+    }
 
     bool success = true;
 
-    for (int i = 0; i < analyzer->using_count; i++)
-    {
+    for (int i = 0; i < analyzer->using_count; i++) {
         UsingDirective* directive = analyzer->using_directives[i];
-        if (!directive || !directive->namespace_path || directive->path_length == 0)
+        if (!directive || !directive->namespace_path || directive->path_length == 0) {
             continue;
+        }
         bool is_wildcard = false;
         char* relative_path = resolve_using_path(directive->namespace_path, directive->path_length, &is_wildcard);
-        if (!relative_path)
-        {
+        if (!relative_path) {
             semantic_analyzer_add_warning(analyzer, "Could not resolve using path");
             continue;
         }
@@ -3198,17 +3389,15 @@ bool semantic_analyzer_analyze_dependencies(SemanticAnalyzer* analyzer)
         char folder_path_resolved[1024];
         snprintf(folder_path_resolved, sizeof(folder_path_resolved), "%s/%s", libs_dir, relative_path);
 
-        if (is_wildcard)
-        {
-            import_namespace_folder(analyzer, folder_path_resolved, relative_path);
+        if (is_wildcard) {
+            import_namespace_folder(analyzer, folder_path_resolved);
             KRT_FREE(relative_path);
             continue;
         }
 
         struct stat st;
-        if (stat(folder_path_resolved, &st) == 0 && S_ISDIR(st.st_mode))
-        {
-            import_namespace_folder(analyzer, folder_path_resolved, relative_path);
+        if (stat(folder_path_resolved, &st) == 0 && S_ISDIR(st.st_mode)) {
+            import_namespace_folder(analyzer, folder_path_resolved);
             KRT_FREE(relative_path);
             continue;
         }
@@ -3217,21 +3406,14 @@ bool semantic_analyzer_analyze_dependencies(SemanticAnalyzer* analyzer)
         snprintf(file_path_with_ext, sizeof(file_path_with_ext), "%s/%s.krt", libs_dir, relative_path);
         char* file_path = try_file_path(file_path_with_ext);
 
-        if (!file_path)
-        {
+        if (!file_path) {
             semantic_analyzer_add_error(analyzer, "Using: cannot find '%s'", relative_path);
             KRT_FREE(relative_path);
             success = false;
             continue;
         }
 
-        const char* module_name = NULL;
-        if (directive->path_length > 0)
-        {
-            module_name = directive->namespace_path[directive->path_length - 1];
-        }
-
-        import_krt_file(analyzer, file_path, module_name);
+        import_krt_file(analyzer, file_path);
 
         KRT_FREE(relative_path);
         KRT_FREE(file_path);

@@ -17,4 +17,4 @@ char* KrtReadFile(const char* filename, size_t* length);
 int KrtWriteFile(const char* filename, const char* content, size_t length);
 int KrtGetExecutableDirectory(char* result, size_t size);
 
-#endif 
+#endif

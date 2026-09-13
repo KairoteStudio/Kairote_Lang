@@ -4,90 +4,92 @@
 #include "Ir.h"
 
 typedef enum {
-    KRT_IR_TYPE_VOID,      
-    KRT_IR_TYPE_INT8,      
-    KRT_IR_TYPE_INT16,     
-    KRT_IR_TYPE_INT32,     
-    KRT_IR_TYPE_INT64,     
-    KRT_IR_TYPE_UINT8,     
-    KRT_IR_TYPE_UINT16,    
-    KRT_IR_TYPE_UINT32,    
-    KRT_IR_TYPE_UINT64,    
-    KRT_IR_TYPE_FLOAT32,   
-    KRT_IR_TYPE_FLOAT64,   
-    KRT_IR_TYPE_BOOL,      
-    KRT_IR_TYPE_CHAR,      
-    KRT_IR_TYPE_STRING,    
-    KRT_IR_TYPE_POINTER,   
-    KRT_IR_TYPE_ARRAY,     
-    KRT_IR_TYPE_FUNCTION,  
-    KRT_IR_TYPE_STRUCT,    
-    KRT_IR_TYPE_CLASS,     
-    KRT_IR_TYPE_ANY,       
-    KRT_IR_TYPE_UNKNOWN,   
+    KRT_IR_TYPE_VOID,
+#define KRT_INTEGER_WIDTH(bits) KRT_IR_TYPE_INT##bits,
+#include "../../../Core/Utils/IntegerWidths.def"
+#undef KRT_INTEGER_WIDTH
+#define KRT_INTEGER_WIDTH(bits) KRT_IR_TYPE_UINT##bits,
+#include "../../../Core/Utils/IntegerWidths.def"
+#undef KRT_INTEGER_WIDTH
+    KRT_IR_TYPE_FLOAT32,
+    KRT_IR_TYPE_FLOAT64,
+    KRT_IR_TYPE_BOOL,
+    KRT_IR_TYPE_CHAR,
+    KRT_IR_TYPE_STRING,
+    KRT_IR_TYPE_POINTER,
+    KRT_IR_TYPE_ARRAY,
+    KRT_IR_TYPE_FUNCTION,
+    KRT_IR_TYPE_STRUCT,
+    KRT_IR_TYPE_CLASS,
+    KRT_IR_TYPE_ANY,
+    KRT_IR_TYPE_UNKNOWN,
 } KrtIRTypeKind;
 
 typedef enum {
     KRT_IR_TYPE_MOD_NONE = 0,
-    KRT_IR_TYPE_MOD_CONST = 1 << 0,      
-    KRT_IR_TYPE_MOD_VOLATILE = 1 << 1,   
-    KRT_IR_TYPE_MOD_REFERENCE = 1 << 2,  
+    KRT_IR_TYPE_MOD_CONST = 1 << 0,
+    KRT_IR_TYPE_MOD_VOLATILE = 1 << 1,
+    KRT_IR_TYPE_MOD_REFERENCE = 1 << 2,
 } KrtIRTypeModifier;
 
 struct KrtIRType;
 typedef struct KrtIRType KrtIRType;
 
 struct KrtIRType {
-    KrtIRTypeKind kind;           
-    int modifiers;               
-    int size;                    
-    int align;                   
-    
+    KrtIRTypeKind kind;
+    int modifiers;
+    int size;
+    int bit_width;
+    int align;
+
     union {
-        
+
         struct {
-            KrtIRType* pointee;   
+            KrtIRType* pointee;
         } pointer;
-        
+
         struct {
-            KrtIRType* element;   
-            int size;            
+            KrtIRType* element;
+            int size;
         } array;
-        
+
         struct {
-            KrtIRType** params;   
-            int param_count;     
-            KrtIRType* ret;       
+            KrtIRType** params;
+            int param_count;
+            KrtIRType* ret;
         } function;
-        
+
         struct {
-            char* name;          
-            KrtIRType** fields;   
-            char** field_names;  
-            int field_count;     
+            char* name;
+            KrtIRType** fields;
+            char** field_names;
+            int field_count;
         } compound;
     } data;
-    
+
     KrtIRType* next;
 };
 
 typedef struct {
-    KrtIRType* types;             
-    int count;                   
+    KrtIRType* types;
+    int count;
 } KrtIRTypePool;
 
 void KrtIrTypePoolInit(KrtIRTypePool* pool);
 void KrtIrTypePoolDestroy(KrtIRTypePool* pool);
 
+/**
+ * @brief Get or create a pool-owned integer type with an even width from 2 through 128 bits.
+ * @return The type, or NULL for an unsupported width or allocation failure.
+ */
+KrtIRType* KrtIrTypeInteger(KrtIRTypePool* pool, int bits, bool is_unsigned);
+
 KrtIRType* KrtIrTypeVoid(KrtIRTypePool* pool);
-KrtIRType* KrtIrTypeInt8(KrtIRTypePool* pool);
-KrtIRType* KrtIrTypeInt16(KrtIRTypePool* pool);
-KrtIRType* KrtIrTypeInt32(KrtIRTypePool* pool);
-KrtIRType* KrtIrTypeInt64(KrtIRTypePool* pool);
-KrtIRType* KrtIrTypeUint8(KrtIRTypePool* pool);
-KrtIRType* KrtIrTypeUint16(KrtIRTypePool* pool);
-KrtIRType* KrtIrTypeUint32(KrtIRTypePool* pool);
-KrtIRType* KrtIrTypeUint64(KrtIRTypePool* pool);
+#define KRT_INTEGER_WIDTH(bits)                                                                                        \
+    KrtIRType* KrtIrTypeInt##bits(KrtIRTypePool* pool);                                                                \
+    KrtIRType* KrtIrTypeUint##bits(KrtIRTypePool* pool);
+#include "../../../Core/Utils/IntegerWidths.def"
+#undef KRT_INTEGER_WIDTH
 KrtIRType* KrtIrTypeFloat32(KrtIRTypePool* pool);
 KrtIRType* KrtIrTypeFloat64(KrtIRTypePool* pool);
 KrtIRType* KrtIrTypeBool(KrtIRTypePool* pool);
@@ -142,4 +144,4 @@ bool KrtIrTypeSupportsOp(KrtIRType* type, KrtIROpcode op);
 
 KrtIRValue KrtIrTypeDefaultValue(KrtIRType* type);
 
-#endif 
+#endif

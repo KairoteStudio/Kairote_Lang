@@ -6,12 +6,17 @@
 typedef struct {
     char* name;
     char* replacement;
+    size_t name_length;
+    size_t replacement_length;
+    unsigned hash;
 } Macro;
 
 typedef struct {
     Macro* macros;
     int macro_count;
     int macro_capacity;
+    int* buckets;
+    int bucket_count;
 } Preprocessor;
 
 Preprocessor* PreprocessorCreate(void);

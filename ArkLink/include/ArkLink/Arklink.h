@@ -54,18 +54,31 @@ typedef void (*ArkLinkLogger)(ArkLogLevel level, const char* message, void* user
 
 typedef struct ArkLinkSession ArkLinkSession;
 
+/** @brief Create a linking session, or return NULL on allocation failure. */
 ArkLinkSession* arklink_session_create(void);
+/** @brief Release a session and its owned inputs and configuration. */
 void arklink_session_destroy(ArkLinkSession* session);
+/** @brief Select the output object format for session. */
 ArkLinkResult arklink_session_set_target(ArkLinkSession* session, ArkLinkTarget target);
+/** @brief Copy output_path into the session configuration. */
 ArkLinkResult arklink_session_set_output(ArkLinkSession* session, const char* output_path);
+/** @brief Select executable, shared library, or static library output. */
 ArkLinkResult arklink_session_set_output_kind(ArkLinkSession* session, ArkLinkOutputKind kind);
+/** @brief Set the symbol used as the executable entry point. */
 ArkLinkResult arklink_session_set_entry_point(ArkLinkSession* session, const char* entry_point);
+/** @brief Select the PE subsystem for session. */
 ArkLinkResult arklink_session_set_subsystem(ArkLinkSession* session, ArkSubsystem subsystem);
+/** @brief Set the preferred image base address. */
 ArkLinkResult arklink_session_set_image_base(ArkLinkSession* session, uint64_t image_base);
+/** @brief Set the reserved stack size in bytes. */
 ArkLinkResult arklink_session_set_stack_size(ArkLinkSession* session, uint64_t stack_size);
+/** @brief Add an input path to session. */
 ArkLinkResult arklink_session_add_input(ArkLinkSession* session, const char* path);
+/** @brief Install the diagnostic callback and its user data. */
 ArkLinkResult arklink_session_set_logger(ArkLinkSession* session, ArkLinkLogger logger, void* user_data);
+/** @brief Load and link the configured inputs; return the linking status. */
 ArkLinkResult arklink_session_link(ArkLinkSession* session);
+/** @brief Return the current session error message, owned by session. */
 const char* arklink_session_get_error(ArkLinkSession* session);
 
 #ifdef __cplusplus

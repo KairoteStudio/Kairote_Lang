@@ -1,3 +1,4 @@
+#include "Attributes.h"
 #include "OutputCache.h"
 #include <stdlib.h>
 #include <string.h>
@@ -33,7 +34,8 @@ void KrtOutputCacheClear(void) {
     g_output_cache.count = 0;
 }
 
-static void KrtOutputCacheAddInternal(OutputCacheStream stream, const char* format, va_list args) {
+static KRT_PRINTF_FORMAT(2, 0) void output_cache_add_internal(OutputCacheStream stream, const char* format,
+                                                              va_list args) {
     if (!format) {
         return;
     }
@@ -89,11 +91,11 @@ static void KrtOutputCacheAddInternal(OutputCacheStream stream, const char* form
             result = fputs("\n", target);
         }
         if (result == EOF) {
-            
+
             const char* error_msg = "[输出错误: 无法写入输出流]\n";
             fputs(error_msg, stderr);
         }
-        fflush(target);  
+        fflush(target);
         KRT_FREE(buffer);
         return;
     }
@@ -134,7 +136,7 @@ void KrtOutputCacheAdd(const char* format, ...) {
     va_start(args, format);
     va_list copy;
     va_copy(copy, args);
-    KrtOutputCacheAddInternal(OUTPUT_CACHE_STDOUT, format, copy);
+    output_cache_add_internal(OUTPUT_CACHE_STDOUT, format, copy);
     va_end(copy);
     va_end(args);
 }
@@ -142,7 +144,7 @@ void KrtOutputCacheAdd(const char* format, ...) {
 void KrtOutputCacheAddv(const char* format, va_list args) {
     va_list copy;
     va_copy(copy, args);
-    KrtOutputCacheAddInternal(OUTPUT_CACHE_STDOUT, format, copy);
+    output_cache_add_internal(OUTPUT_CACHE_STDOUT, format, copy);
     va_end(copy);
 }
 
@@ -151,7 +153,7 @@ void KrtOutputCacheAddError(const char* format, ...) {
     va_start(args, format);
     va_list copy;
     va_copy(copy, args);
-    KrtOutputCacheAddInternal(OUTPUT_CACHE_STDERR, format, copy);
+    output_cache_add_internal(OUTPUT_CACHE_STDERR, format, copy);
     va_end(copy);
     va_end(args);
 }
@@ -159,7 +161,7 @@ void KrtOutputCacheAddError(const char* format, ...) {
 void KrtOutputCacheAddErrorv(const char* format, va_list args) {
     va_list copy;
     va_copy(copy, args);
-    KrtOutputCacheAddInternal(OUTPUT_CACHE_STDERR, format, copy);
+    output_cache_add_internal(OUTPUT_CACHE_STDERR, format, copy);
     va_end(copy);
 }
 
@@ -175,7 +177,7 @@ void KrtOutputCacheFlush(void) {
                 result = fputs("\n", target);
             }
             if (result == EOF) {
-                
+
                 const char* error_msg = "[警告: 缓存条目写入失败]\n";
                 fputs(error_msg, stderr);
             }

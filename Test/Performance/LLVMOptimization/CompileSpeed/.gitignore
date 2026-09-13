@@ -1,0 +1,4 @@
+Work/
+__pycache__/
+Sources/**/*.kro
+Sources/*.kro
