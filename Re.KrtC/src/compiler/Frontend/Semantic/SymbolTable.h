@@ -1,5 +1,7 @@
-#ifndef SYMBOL_TABLE_H
-#define SYMBOL_TABLE_H
+#ifndef KRT_SYMBOL_TABLE_H
+#define KRT_SYMBOL_TABLE_H
+
+#include "Core/Utils/Attributes.h"
 
 #include "../../Middle/Ir/Ir.h"
 #include <stdbool.h>
@@ -15,11 +17,7 @@ typedef enum {
     SYMBOL_NAMESPACE
 } SymbolType;
 
-typedef enum {
-    SYMBOL_DECLARED,
-    SYMBOL_DEFINED,
-    SYMBOL_FORWARD_REF
-} SymbolState;
+typedef enum { SYMBOL_DECLARED, SYMBOL_DEFINED, SYMBOL_FORWARD_REF } SymbolState;
 
 typedef struct SymbolEntry {
     char* name;
@@ -30,12 +28,14 @@ typedef struct SymbolEntry {
     int stack_offset;
     struct SymbolEntry* next;
     struct SymbolEntry* scope_next;
+    struct SymbolEntry* scope_hash_next;
     int declaration_line;
     int definition_line;
     bool is_entry_point;
     bool is_array;
     struct SymbolTable* nested_table;
     KrtTokenType value_type;
+    KrtSourceType source_type;
     char* class_type_name;
 } SymbolEntry;
 
@@ -43,6 +43,9 @@ typedef struct SymbolScope {
     struct SymbolScope* parent;
     SymbolEntry* symbols;
     int scope_level;
+    SymbolEntry** hash_table;
+    int hash_size;
+    int symbol_count;
 } SymbolScope;
 
 typedef struct SymbolTable {
@@ -62,19 +65,17 @@ SymbolTable* symbol_table_create(void);
 void symbol_table_destroy(SymbolTable* table);
 void symbol_table_push_scope(SymbolTable* table);
 void symbol_table_pop_scope(SymbolTable* table);
-SymbolEntry* symbol_table_declare(SymbolTable* table, const char* name,
-                                  SymbolType type, int line);
-SymbolEntry* symbol_table_define(SymbolTable* table, const char* name,
-                                SymbolType type, int line, void* data);
+SymbolEntry* symbol_table_declare(SymbolTable* table, const char* name, SymbolType type, int line);
+SymbolEntry* symbol_table_define(SymbolTable* table, const char* name, SymbolType type, int line, void* data);
 SymbolEntry* symbol_table_lookup(SymbolTable* table, const char* name);
 SymbolEntry* symbol_table_lookup_current_scope(SymbolTable* table, const char* name);
 SymbolEntry* symbol_table_lookup_scope_chain(SymbolTable* table, const char* name);
-bool symbol_table_query_var_type(SymbolTable* table, const char* name,
-                                 KrtTokenType* out_value_type, bool* out_is_array);
+bool symbol_table_query_var_type(SymbolTable* table, const char* name, KrtTokenType* out_value_type,
+                                 bool* out_is_array);
 void symbol_table_mark_defined(SymbolTable* table, const char* name, int line);
 void symbol_table_check_undefined(SymbolTable* table);
-void symbol_table_register_forward_ref(SymbolTable* table, const char* name,
-                                     ForwardRefCallback callback, void* context);
+void symbol_table_register_forward_ref(SymbolTable* table, const char* name, ForwardRefCallback callback,
+                                       void* context);
 void symbol_table_resolve_forward_refs(SymbolTable* table);
 bool symbol_table_check_entry_point_conflict(SymbolTable* table);
 SymbolEntry* symbol_table_get_entry_point(SymbolTable* table);
@@ -82,7 +83,7 @@ void symbol_table_set_entry_point(SymbolTable* table, const char* name);
 const char* symbol_type_to_string(SymbolType type);
 const char* symbol_state_to_string(SymbolState state);
 void symbol_table_print_stats(SymbolTable* table);
-void symbol_table_add_error(SymbolTable* table, const char* format, ...);
+void symbol_table_add_error(SymbolTable* table, const char* format, ...) KRT_PRINTF_FORMAT(2, 3);
 int symbol_table_get_error_count(SymbolTable* table);
 void symbol_table_define_namespace(SymbolTable* table, const char* namespace_name);
 SymbolEntry* symbol_table_lookup_in_namespace(SymbolTable* table, const char* namespace_name, const char* symbol_name);

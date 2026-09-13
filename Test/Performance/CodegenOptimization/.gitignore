@@ -1,0 +1,6 @@
+__pycache__/
+Artifacts/*.elf
+Artifacts/*.o
+Artifacts/*.bin
+Artifacts/*.kro
+FirstPass/

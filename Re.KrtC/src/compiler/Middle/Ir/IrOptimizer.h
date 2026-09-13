@@ -73,4 +73,4 @@ int ir_optimizer_get_function_inline_count(IROptimizer* optimizer);
 int ir_optimizer_get_control_flow_count(IROptimizer* optimizer);
 int ir_optimizer_get_escape_analysis_count(IROptimizer* optimizer);
 
-#endif 
+#endif

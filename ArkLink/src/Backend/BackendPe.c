@@ -94,7 +94,6 @@ typedef struct {
     uint32_t Characteristics;
 } PE_SECTION_HEADER;
 
-#pragma pack(pop)
 #define PE_MACHINE_AMD64 0x8664
 #define PE_CHAR_EXECUTABLE_IMAGE 0x0002
 #define PE_CHAR_LARGE_ADDRESS_AWARE 0x0020
@@ -142,13 +141,13 @@ typedef struct {
 
 typedef struct {
     uint16_t Hint;
-    char Name[1];  
+    char Name[1];
 } PE_HINT_NAME_ENTRY;
 
 typedef struct {
     uint32_t PageRVA;
     uint32_t BlockSize;
-    
+
 } PE_BASE_RELOCATION_BLOCK;
 
 typedef struct {
@@ -165,10 +164,12 @@ typedef struct {
     uint32_t OrdinalTableRVA;
 } PE_EXPORT_DIRECTORY_ENTRY;
 
+#pragma pack(pop)
+
 static void write_dos_header(uint8_t* data) {
     PE_DOS_HEADER* dos = (PE_DOS_HEADER*)data;
-    
-    dos->e_magic = 0x5A4D; 
+
+    dos->e_magic = 0x5A4D;
     dos->e_cblp = 0x0090;
     dos->e_cp = 0x0003;
     dos->e_cparhdr = 0x0004;
@@ -181,35 +182,31 @@ static void write_dos_header(uint8_t* data) {
     dos->e_cs = 0x0000;
     dos->e_lfarlc = 0x0040;
     dos->e_ovno = 0x0000;
-    dos->e_lfanew = 0x00000080; 
-    
-    static const uint8_t dos_stub[] = {
-        0x0E, 0x1F, 0xBA, 0x0E, 0x00, 0xB4, 0x09, 0xCD,
-        0x21, 0xB8, 0x01, 0x4C, 0xCD, 0x21, 0x54, 0x68,
-        0x69, 0x73, 0x20, 0x70, 0x72, 0x6F, 0x67, 0x72,
-        0x61, 0x6D, 0x20, 0x63, 0x61, 0x6E, 0x6E, 0x6F,
-        0x74, 0x20, 0x62, 0x65, 0x20, 0x72, 0x75, 0x6E,
-        0x20, 0x69, 0x6E, 0x20, 0x44, 0x4F, 0x53, 0x20,
-        0x6D, 0x6F, 0x64, 0x65, 0x2E, 0x0D, 0x0D, 0x0A,
-        0x24, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-    };
+    dos->e_lfanew = 0x00000080;
+
+    static const uint8_t dos_stub[] = {0x0E, 0x1F, 0xBA, 0x0E, 0x00, 0xB4, 0x09, 0xCD, 0x21, 0xB8, 0x01, 0x4C, 0xCD,
+                                       0x21, 0x54, 0x68, 0x69, 0x73, 0x20, 0x70, 0x72, 0x6F, 0x67, 0x72, 0x61, 0x6D,
+                                       0x20, 0x63, 0x61, 0x6E, 0x6E, 0x6F, 0x74, 0x20, 0x62, 0x65, 0x20, 0x72, 0x75,
+                                       0x6E, 0x20, 0x69, 0x6E, 0x20, 0x44, 0x4F, 0x53, 0x20, 0x6D, 0x6F, 0x64, 0x65,
+                                       0x2E, 0x0D, 0x0D, 0x0A, 0x24, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
     memcpy(data + sizeof(PE_DOS_HEADER), dos_stub, sizeof(dos_stub));
 }
 
-static void write_section_header(uint8_t* data, size_t index, const char* name,
-                                  uint32_t virtual_size, uint32_t virtual_address,
-                                  uint32_t size_of_raw_data, uint32_t pointer_to_raw_data,
-                                  uint32_t characteristics) {
+static void write_section_header(uint8_t* data, size_t index, const char* name, uint32_t virtual_size,
+                                 uint32_t virtual_address, uint32_t size_of_raw_data, uint32_t pointer_to_raw_data,
+                                 uint32_t characteristics) {
     uint32_t pe_offset = 0x80;
     uint32_t section_table_offset = pe_offset + 4 + sizeof(PE_COFF_HEADER) + sizeof(PE_OPTIONAL_HEADER_64);
-    
+
     PE_SECTION_HEADER* sec = (PE_SECTION_HEADER*)(data + section_table_offset + index * sizeof(PE_SECTION_HEADER));
-    
+
     memset(sec->Name, 0, 8);
     size_t name_len = strlen(name);
-    if (name_len > 8) name_len = 8;
+    if (name_len > 8) {
+        name_len = 8;
+    }
     memcpy(sec->Name, name, name_len);
-    
+
     sec->VirtualSize = virtual_size;
     sec->VirtualAddress = virtual_address;
     sec->SizeOfRawData = size_of_raw_data;
@@ -221,27 +218,33 @@ static void write_section_header(uint8_t* data, size_t index, const char* name,
     sec->Characteristics = characteristics;
 }
 
-static uint8_t* generate_relocation_table(ArkBackendInput* input, ArkSectionRvaMap* section_maps, 
-                                          size_t* out_size) {
+static uint8_t* generate_relocation_table(ArkBackendInput* input, ArkSectionRvaMap* section_maps, size_t* out_size) {
+    *out_size = SIZE_MAX;
     if (!input->relocs || input->reloc_count == 0) {
         *out_size = 0;
         return NULL;
     }
 
-    #define PAGE_SIZE 0x1000
+#define KRT_PE_PAGE_SIZE 0x1000
 
     uint32_t* page_rvas = (uint32_t*)malloc(input->reloc_count * sizeof(uint32_t));
-    if (!page_rvas) return NULL;
+    if (!page_rvas) {
+        return NULL;
+    }
 
     size_t page_count = 0;
     for (size_t i = 0; i < input->reloc_count; i++) {
         ArkResolverReloc* reloc = &input->relocs[i];
-        if (!reloc->symbol) continue;
-        
-        if (reloc->type == ARK_RELOC_PC32) continue;
+        if (!reloc->symbol) {
+            continue;
+        }
+
+        if (reloc->type == ARK_RELOC_PC32) {
+            continue;
+        }
 
         uint32_t reloc_rva = section_maps[reloc->section_index].rva + reloc->offset;
-        uint32_t page_rva = reloc_rva & ~(PAGE_SIZE - 1);
+        uint32_t page_rva = reloc_rva & ~(KRT_PE_PAGE_SIZE - 1);
 
         int found = 0;
         for (size_t j = 0; j < page_count; j++) {
@@ -266,16 +269,20 @@ static uint8_t* generate_relocation_table(ArkBackendInput* input, ArkSectionRvaM
         size_t count = 0;
         for (size_t i = 0; i < input->reloc_count; i++) {
             ArkResolverReloc* reloc = &input->relocs[i];
-            if (!reloc->symbol) continue;
-            
-            if (reloc->type == ARK_RELOC_PC32) continue;
+            if (!reloc->symbol) {
+                continue;
+            }
+
+            if (reloc->type == ARK_RELOC_PC32) {
+                continue;
+            }
             uint32_t reloc_rva = section_maps[reloc->section_index].rva + reloc->offset;
-            uint32_t page_rva = reloc_rva & ~(PAGE_SIZE - 1);
+            uint32_t page_rva = reloc_rva & ~(KRT_PE_PAGE_SIZE - 1);
             if (page_rva == page_rvas[p]) {
                 count++;
             }
         }
-        size_t block_size = 8 + ((count + 1) & ~1) * 2; 
+        size_t block_size = 8 + ((count + 1) & ~1) * 2;
         total_size += block_size;
     }
 
@@ -290,22 +297,27 @@ static uint8_t* generate_relocation_table(ArkBackendInput* input, ArkSectionRvaM
         PE_BASE_RELOCATION_BLOCK* block = (PE_BASE_RELOCATION_BLOCK*)(reloc_data + offset);
         block->PageRVA = page_rvas[p];
 
-        uint16_t* type_offset = (uint16_t*)(reloc_data + offset + 8);
+        uint8_t* type_offset = reloc_data + offset + 8;
         size_t count = 0;
         for (size_t i = 0; i < input->reloc_count; i++) {
             ArkResolverReloc* reloc = &input->relocs[i];
-            if (!reloc->symbol) continue;
-            
-            if (reloc->type == ARK_RELOC_PC32) continue;
+            if (!reloc->symbol) {
+                continue;
+            }
+
+            if (reloc->type == ARK_RELOC_PC32) {
+                continue;
+            }
             uint32_t reloc_rva = section_maps[reloc->section_index].rva + reloc->offset;
-            uint32_t page_rva = reloc_rva & ~(PAGE_SIZE - 1);
+            uint32_t page_rva = reloc_rva & ~(KRT_PE_PAGE_SIZE - 1);
             if (page_rva == page_rvas[p]) {
                 uint16_t offset_in_page = reloc_rva - page_rva;
-                uint16_t type = PE_REL_BASED_DIR64; 
+                uint16_t type = PE_REL_BASED_DIR64;
                 if (reloc->type == ARK_RELOC_ADDR32) {
-                    type = PE_REL_BASED_HIGHLOW; 
+                    type = PE_REL_BASED_HIGHLOW;
                 }
-                type_offset[count++] = (type << 12) | (offset_in_page & 0xFFF);
+                uint16_t entry = (type << 12) | (offset_in_page & 0xFFF);
+                memcpy(type_offset + count++ * sizeof(entry), &entry, sizeof(entry));
             }
         }
 
@@ -337,20 +349,23 @@ static uint32_t import_builder_get_rva(ImportTableBuilder* builder, size_t offse
     return ark_buffer_get_rva(builder, offset);
 }
 
-static uint8_t* generate_import_table(ArkBackendInput* input, uint32_t idata_rva, 
-                                       size_t* out_size, uint32_t* out_iat_rva,
-                                       size_t* out_iat_total_entries) {
+static uint8_t* generate_import_table(ArkBackendInput* input, uint32_t idata_rva, size_t* out_size,
+                                      uint32_t* out_iat_rva, size_t* out_iat_total_entries) {
     if (!input->imports || input->import_count == 0) {
         *out_size = 0;
         *out_iat_rva = 0;
-        if (out_iat_total_entries) *out_iat_total_entries = 0;
+        if (out_iat_total_entries) {
+            *out_iat_total_entries = 0;
+        }
         return NULL;
     }
 
     size_t module_count = 0;
     const char** modules = (const char**)calloc(input->import_count, sizeof(char*));
-    if (!modules) return NULL;
-    
+    if (!modules) {
+        return NULL;
+    }
+
     for (size_t i = 0; i < input->import_count; i++) {
         const char* mod = input->imports[i].module;
         int found = 0;
@@ -371,80 +386,68 @@ static uint8_t* generate_import_table(ArkBackendInput* input, uint32_t idata_rva
         return NULL;
     }
 
-    size_t idt_offset = import_builder_append(builder, NULL, 
-        (module_count + 1) * sizeof(PE_IMPORT_DIRECTORY_ENTRY));
-    if (idt_offset == (size_t)-1) goto fail;
+    size_t idt_offset = import_builder_append(builder, NULL, (module_count + 1) * sizeof(PE_IMPORT_DIRECTORY_ENTRY));
+    if (idt_offset == (size_t)-1) {
+        goto fail;
+    }
 
-    PE_IMPORT_DIRECTORY_ENTRY* idt = (PE_IMPORT_DIRECTORY_ENTRY*)(builder->data + idt_offset);
-    
+    if (input->import_count > SIZE_MAX - module_count) {
+        goto fail;
+    }
+    size_t total_entries = input->import_count + module_count;
+    if (total_entries > SIZE_MAX / sizeof(PE_IMPORT_LOOKUP_ENTRY)) {
+        goto fail;
+    }
+    size_t table_size = total_entries * sizeof(PE_IMPORT_LOOKUP_ENTRY);
+    size_t padding = (8 - builder->size % 8) % 8;
+    if (padding && import_builder_append(builder, NULL, padding) == (size_t)-1) {
+        goto fail;
+    }
+    size_t all_ilt_offset = import_builder_append(builder, NULL, table_size);
+    if (all_ilt_offset == (size_t)-1) {
+        goto fail;
+    }
+    size_t all_iat_offset = import_builder_append(builder, NULL, table_size);
+    if (all_iat_offset == (size_t)-1) {
+        goto fail;
+    }
+    size_t table_index = 0;
+    PE_IMPORT_DIRECTORY_ENTRY descriptor;
+
     for (size_t m = 0; m < module_count; m++) {
         const char* module_name = modules[m];
-        
+
         size_t sym_count = 0;
         for (size_t i = 0; i < input->import_count; i++) {
             if (strcmp(input->imports[i].module, module_name) == 0) {
                 sym_count++;
             }
         }
-        
+
         size_t* sym_indices = (size_t*)malloc(sym_count * sizeof(size_t));
-        if (!sym_indices) goto fail;
-        
+        if (!sym_indices) {
+            goto fail;
+        }
+
         size_t sym_idx = 0;
         for (size_t i = 0; i < input->import_count; i++) {
             if (strcmp(input->imports[i].module, module_name) == 0) {
                 sym_indices[sym_idx++] = i;
             }
         }
-        
+
         size_t name_len = strlen(module_name) + 1;
-        size_t name_padded_len = (name_len + 1) & ~1;
-        size_t total_hint_name_size = 0;
-        for (size_t i = 0; i < sym_count; i++) {
-            size_t sym_name_len = strlen(input->imports[sym_indices[i]].symbol) + 1;
-            total_hint_name_size += sizeof(uint16_t) + ((sym_name_len + 1) & ~1);
-        }
-        
-        size_t ilt_size = (sym_count + 1) * sizeof(PE_IMPORT_LOOKUP_ENTRY);
-        size_t total_size = ilt_size * 2 + name_padded_len + total_hint_name_size;
-        
-        if (builder->size + total_size > builder->capacity) {
-            size_t new_capacity = builder->capacity;
-            while (new_capacity < builder->size + total_size) {
-                new_capacity *= 2;
-            }
-            uint8_t* new_data = (uint8_t*)realloc(builder->data, new_capacity);
-            if (!new_data) {
-                free(sym_indices);
-                goto fail;
-            }
-            builder->data = new_data;
-            builder->capacity = new_capacity;
-            
-            idt = (PE_IMPORT_DIRECTORY_ENTRY*)(builder->data + idt_offset);
-        }
-        
-        size_t ilt_offset = builder->size;
-        if (import_builder_append(builder, NULL, ilt_size) == (size_t)-1) {
-            free(sym_indices);
-            goto fail;
-        }
-        PE_IMPORT_LOOKUP_ENTRY* ilt = (PE_IMPORT_LOOKUP_ENTRY*)(builder->data + ilt_offset);
-        
-        size_t iat_offset = builder->size;
-        if (import_builder_append(builder, NULL, ilt_size) == (size_t)-1) {
-            free(sym_indices);
-            goto fail;
-        }
-        PE_IMPORT_LOOKUP_ENTRY* iat = (PE_IMPORT_LOOKUP_ENTRY*)(builder->data + iat_offset);
-        
+        size_t ilt_offset = all_ilt_offset + table_index * sizeof(PE_IMPORT_LOOKUP_ENTRY);
+        size_t iat_offset = all_iat_offset + table_index * sizeof(PE_IMPORT_LOOKUP_ENTRY);
+        table_index += sym_count + 1;
+
         size_t name_offset = builder->size;
-        
+
         if (import_builder_append(builder, module_name, name_len) == (size_t)-1) {
             free(sym_indices);
             goto fail;
         }
-        
+
         if (name_len % 2 != 0) {
             uint8_t pad = 0;
             if (import_builder_append(builder, &pad, 1) == (size_t)-1) {
@@ -452,15 +455,9 @@ static uint8_t* generate_import_table(ArkBackendInput* input, uint32_t idata_rva
                 goto fail;
             }
         }
-        
+
         for (size_t i = 0; i < sym_count; i++) {
             size_t import_idx = sym_indices[i];
-
-            fprintf(stderr, "[PeBackend]   Import[%zu]: %s.%s (%s)\n",
-                    import_idx,
-                    module_name,
-                    input->imports[import_idx].symbol,
-                    input->imports[import_idx].is_function ? "FUNC" : "DATA");
 
             size_t hint_name_offset = builder->size;
             uint16_t hint = 0;
@@ -486,50 +483,35 @@ static uint8_t* generate_import_table(ArkBackendInput* input, uint32_t idata_rva
 
             uint64_t entry_value = import_builder_get_rva(builder, hint_name_offset);
 
-            ilt[i].Value = entry_value;
+            memcpy(builder->data + ilt_offset + i * sizeof(entry_value), &entry_value, sizeof(entry_value));
 
-            if (input->imports[import_idx].is_function) {
-
-                iat[i].Value = entry_value;
-            } else {
-
-                iat[i].Value = 0;
-            }
+            memcpy(builder->data + iat_offset + i * sizeof(entry_value), &entry_value, sizeof(entry_value));
         }
-        
+
         free(sym_indices);
-        
-        idt[m].ImportLookupTableRVA = import_builder_get_rva(builder, ilt_offset);
-        idt[m].TimeDateStamp = 0;
-        idt[m].ForwarderChain = 0;
-        idt[m].NameRVA = import_builder_get_rva(builder, name_offset);
-        idt[m].ImportAddressTableRVA = import_builder_get_rva(builder, iat_offset);
+
+        descriptor.ImportLookupTableRVA = import_builder_get_rva(builder, ilt_offset);
+        descriptor.TimeDateStamp = 0;
+        descriptor.ForwarderChain = 0;
+        descriptor.NameRVA = import_builder_get_rva(builder, name_offset);
+        descriptor.ImportAddressTableRVA = import_builder_get_rva(builder, iat_offset);
+        memcpy(builder->data + idt_offset + m * sizeof(descriptor), &descriptor, sizeof(descriptor));
     }
-    
-    memset(&idt[module_count], 0, sizeof(PE_IMPORT_DIRECTORY_ENTRY));
-    
+
+    memcpy(&descriptor, builder->data + idt_offset, sizeof(descriptor));
+
     *out_size = builder->size;
-    *out_iat_rva = idt[0].ImportAddressTableRVA;  
-    
+    *out_iat_rva = descriptor.ImportAddressTableRVA;
+
     if (out_iat_total_entries) {
-        *out_iat_total_entries = 0;
-        for (size_t m = 0; m < module_count; m++) {
-            const char* module_name = modules[m];
-            size_t sym_count = 0;
-            for (size_t i = 0; i < input->import_count; i++) {
-                if (strcmp(input->imports[i].module, module_name) == 0) {
-                    sym_count++;
-                }
-            }
-            *out_iat_total_entries += sym_count + 1;  
-        }
+        *out_iat_total_entries = total_entries;
     }
-    
+
     uint8_t* result = (uint8_t*)malloc(builder->size);
     if (result) {
         memcpy(result, builder->data, builder->size);
     }
-    
+
     import_builder_free(builder);
     free(modules);
     return result;
@@ -564,18 +546,22 @@ static int compare_export_entries(const void* a, const void* b) {
     return strcmp(ea->name, eb->name);
 }
 
-static uint8_t* generate_export_table(ArkBackendInput* input, uint32_t edata_rva,
-                                       size_t* out_size, ArkSectionRvaMap* section_maps) {
+static uint8_t* generate_export_table(ArkBackendInput* input, uint32_t edata_rva, size_t* out_size,
+                                      ArkSectionRvaMap* section_maps) {
     if (!input->exports || input->export_count == 0) {
         *out_size = 0;
         return NULL;
     }
 
     ExportTableBuilder* builder = export_builder_create(4096, edata_rva);
-    if (!builder) return NULL;
+    if (!builder) {
+        return NULL;
+    }
 
     ArkExportEntry* sorted_exports = (ArkExportEntry*)malloc(input->export_count * sizeof(ArkExportEntry));
-    if (!sorted_exports) goto fail;
+    if (!sorted_exports) {
+        goto fail;
+    }
     memcpy(sorted_exports, input->exports, input->export_count * sizeof(ArkExportEntry));
     qsort(sorted_exports, input->export_count, sizeof(ArkExportEntry), compare_export_entries);
 
@@ -588,20 +574,21 @@ static uint8_t* generate_export_table(ArkBackendInput* input, uint32_t edata_rva
     const char* dll_name = input->export_name ? input->export_name : "exported.dll";
     size_t dll_name_len = strlen(dll_name) + 1;
 
-    size_t edt_offset      = export_builder_append(builder, NULL, edt_size);
-    size_t eat_offset      = export_builder_append(builder, NULL, eat_size);
-    size_t ent_offset      = export_builder_append(builder, NULL, ent_size);
-    size_t eot_offset      = export_builder_append(builder, NULL, eot_size);
+    size_t edt_offset = export_builder_append(builder, NULL, edt_size);
+    size_t eat_offset = export_builder_append(builder, NULL, eat_size);
+    size_t ent_offset = export_builder_append(builder, NULL, ent_size);
+    size_t eot_offset = export_builder_append(builder, NULL, eot_size);
     size_t dll_name_offset = export_builder_append(builder, dll_name, dll_name_len);
 
-    if (edt_offset == (size_t)-1 || eat_offset == (size_t)-1 ||
-        ent_offset == (size_t)-1 || eot_offset == (size_t)-1 ||
+    if (edt_offset == (size_t)-1 || eat_offset == (size_t)-1 || ent_offset == (size_t)-1 || eot_offset == (size_t)-1 ||
         dll_name_offset == (size_t)-1) {
         goto fail;
     }
 
     size_t* name_lens = (size_t*)malloc(count * sizeof(size_t));
-    if (!name_lens) goto fail;
+    if (!name_lens) {
+        goto fail;
+    }
     for (size_t i = 0; i < count; i++) {
         name_lens[i] = strlen(sorted_exports[i].name) + 1;
     }
@@ -620,23 +607,26 @@ static uint8_t* generate_export_table(ArkBackendInput* input, uint32_t edata_rva
         }
     }
 
-    uint32_t* eat = (uint32_t*)(builder->data + eat_offset);
-    uint32_t* ent = (uint32_t*)(builder->data + ent_offset);
-    uint16_t* eot = (uint16_t*)(builder->data + eot_offset);
+    uint8_t* eat = builder->data + eat_offset;
+    uint8_t* ent = builder->data + ent_offset;
+    uint8_t* eot = builder->data + eot_offset;
 
     for (size_t i = 0; i < count; i++) {
         ArkExportEntry* exp = &sorted_exports[i];
         memcpy(builder->data + name_offsets[i], exp->name, name_lens[i]);
 
-        ent[i] = export_builder_get_rva(builder, name_offsets[i]);
-        eot[i] = (uint16_t)(exp->ordinal - input->export_ordinal_base);
+        uint32_t name_rva = export_builder_get_rva(builder, name_offsets[i]);
+        uint16_t ordinal = (uint16_t)(exp->ordinal - input->export_ordinal_base);
+        memcpy(ent + i * sizeof(name_rva), &name_rva, sizeof(name_rva));
+        memcpy(eot + i * sizeof(ordinal), &ordinal, sizeof(ordinal));
+        uint32_t address;
 
-        if (exp->section_index >= 0 && exp->section_index <= input->section_count) {
-            eat[exp->ordinal - input->export_ordinal_base] =
-                section_maps[exp->section_index].rva + exp->offset;
+        if (exp->section_index < input->section_count) {
+            address = section_maps[exp->section_index].rva + exp->offset;
         } else {
-            eat[exp->ordinal - input->export_ordinal_base] = (uint32_t)exp->value;
+            address = (uint32_t)exp->value;
         }
+        memcpy(eat + (exp->ordinal - input->export_ordinal_base) * sizeof(address), &address, sizeof(address));
     }
 
     free(name_lens);
@@ -656,12 +646,12 @@ static uint8_t* generate_export_table(ArkBackendInput* input, uint32_t edata_rva
     edt->OrdinalTableRVA = export_builder_get_rva(builder, eot_offset);
 
     *out_size = builder->size;
-    
+
     uint8_t* result = (uint8_t*)malloc(builder->size);
     if (result) {
         memcpy(result, builder->data, builder->size);
     }
-    
+
     free(sorted_exports);
     export_builder_free(builder);
     return result;
@@ -691,13 +681,13 @@ ArkLinkResult ark_backend_pe_link(ArkLinkContext* ctx, ArkBackendInput* input, A
 
     size_t reloc_data_size = 0;
     uint8_t* reloc_data = NULL;
-    
+
     ArkSectionRvaMap* temp_maps = (ArkSectionRvaMap*)calloc(input->section_count, sizeof(ArkSectionRvaMap));
     if (!temp_maps) {
         ark_layout_destroy(layout);
         return ARK_LINK_ERR_MEMORY;
     }
-    
+
     for (size_t i = 0; i < input->section_count; i++) {
         const ArkSectionLayout* sec = ark_layout_get_section(layout, i);
         if (sec) {
@@ -705,37 +695,58 @@ ArkLinkResult ark_backend_pe_link(ArkLinkContext* ctx, ArkBackendInput* input, A
             temp_maps[i].size = (uint32_t)input->sections[i].size;
         }
     }
-    
+
     reloc_data = generate_relocation_table(input, temp_maps, &reloc_data_size);
-    
+    if (!reloc_data && reloc_data_size != 0) {
+        free(temp_maps);
+        ark_layout_destroy(layout);
+        return ARK_LINK_ERR_MEMORY;
+    }
+
     size_t import_data_size = 0;
     uint32_t import_iat_rva = 0;
     size_t import_iat_total_entries = 0;
     uint8_t* import_data = NULL;
-    
+
     uint32_t idata_rva = (uint32_t)(layout->data_segment_end - layout->image_base);
     if (input->imports && input->import_count > 0) {
-        import_data = generate_import_table(input, idata_rva, &import_data_size, &import_iat_rva, &import_iat_total_entries);
+        import_data =
+            generate_import_table(input, idata_rva, &import_data_size, &import_iat_rva, &import_iat_total_entries);
+        if (!import_data) {
+            free(reloc_data);
+            free(temp_maps);
+            ark_layout_destroy(layout);
+            return ARK_LINK_ERR_MEMORY;
+        }
     }
-    
+
     size_t export_data_size = 0;
     uint8_t* export_data = NULL;
-    
-    uint32_t edata_rva = idata_rva + (import_data_size > 0 ? 
-        (uint32_t)((import_data_size + section_alignment - 1) & ~(section_alignment - 1)) : 0);
+
+    uint32_t edata_rva =
+        idata_rva +
+        (import_data_size > 0 ? (uint32_t)((import_data_size + section_alignment - 1) & ~(section_alignment - 1)) : 0);
     if (input->exports && input->export_count > 0) {
         export_data = generate_export_table(input, edata_rva, &export_data_size, temp_maps);
+        if (!export_data) {
+            free(import_data);
+            free(reloc_data);
+            free(temp_maps);
+            ark_layout_destroy(layout);
+            return ARK_LINK_ERR_MEMORY;
+        }
     }
-    
+
     int has_reloc_section = (reloc_data_size > 0);
     int has_idata_section = (import_data_size > 0);
     int has_edata_section = (export_data_size > 0);
-    size_t total_sections = input->section_count + (has_idata_section ? 1 : 0) + (has_edata_section ? 1 : 0) + (has_reloc_section ? 1 : 0);
-    
+    size_t total_sections =
+        input->section_count + (has_idata_section ? 1 : 0) + (has_edata_section ? 1 : 0) + (has_reloc_section ? 1 : 0);
+
     uint32_t pe_header_size = pe_signature_size + sizeof(PE_COFF_HEADER) + sizeof(PE_OPTIONAL_HEADER_64);
     uint32_t section_table_size = (uint32_t)(total_sections * sizeof(PE_SECTION_HEADER));
     uint32_t total_header_size = dos_header_size + pe_header_size + section_table_size;
-    
+
     uint32_t headers_size = ark_backend_align_up_32(total_header_size, file_alignment);
     uint32_t image_size = (uint32_t)ark_layout_calc_total_size(layout, 1);
 
@@ -760,9 +771,15 @@ ArkLinkResult ark_backend_pe_link(ArkLinkContext* ctx, ArkBackendInput* input, A
     if (!output->data) {
         free(temp_maps);
         ark_layout_destroy(layout);
-        if (reloc_data) free(reloc_data);
-        if (import_data) free(import_data);
-        if (export_data) free(export_data);
+        if (reloc_data) {
+            free(reloc_data);
+        }
+        if (import_data) {
+            free(import_data);
+        }
+        if (export_data) {
+            free(export_data);
+        }
         return ARK_LINK_ERR_MEMORY;
     }
 
@@ -774,9 +791,14 @@ ArkLinkResult ark_backend_pe_link(ArkLinkContext* ctx, ArkBackendInput* input, A
         free(output->data);
         free(temp_maps);
         ark_layout_destroy(layout);
-        if (reloc_data) free(reloc_data);
-        if (import_data) free(import_data);
-        output->data = NULL;
+        if (reloc_data) {
+            free(reloc_data);
+        }
+        if (import_data) {
+            free(import_data);
+        }
+        free(export_data);
+        memset(output, 0, sizeof(*output));
         return ARK_LINK_ERR_MEMORY;
     }
 
@@ -785,7 +807,7 @@ ArkLinkResult ark_backend_pe_link(ArkLinkContext* ctx, ArkBackendInput* input, A
     write_dos_header(output->data);
 
     uint32_t entry_point_rva = section_alignment;
-    if (input->entry_section >= 0 && input->entry_section <= input->section_count) {
+    if (input->entry_section < input->section_count) {
         const ArkSectionLayout* sec = ark_layout_get_section(layout, input->entry_section);
         if (sec) {
             entry_point_rva = (uint32_t)(sec->virtual_address - layout->image_base) + input->entry_offset;
@@ -794,8 +816,9 @@ ArkLinkResult ark_backend_pe_link(ArkLinkContext* ctx, ArkBackendInput* input, A
 
     uint32_t reloc_rva = 0;
     if (has_reloc_section) {
-        reloc_rva = edata_rva + (export_data_size > 0 ?
-            (uint32_t)((export_data_size + section_alignment - 1) & ~(section_alignment - 1)) : 0);
+        reloc_rva = edata_rva + (export_data_size > 0
+                                     ? (uint32_t)((export_data_size + section_alignment - 1) & ~(section_alignment - 1))
+                                     : 0);
     }
 
     uint32_t idata_virtual_size = 0;
@@ -808,21 +831,22 @@ ArkLinkResult ark_backend_pe_link(ArkLinkContext* ctx, ArkBackendInput* input, A
         idata_virtual_size = (uint32_t)ark_backend_align_up(import_data_size, section_alignment);
         idata_raw_size = (uint32_t)ark_backend_align_up(import_data_size, file_alignment);
     }
-    
+
     if (has_edata_section) {
         edata_virtual_size = (uint32_t)ark_backend_align_up(export_data_size, section_alignment);
         edata_raw_size = (uint32_t)ark_backend_align_up(export_data_size, file_alignment);
     }
-    
+
     if (has_reloc_section) {
         reloc_raw_size = (uint32_t)ark_backend_align_up(reloc_data_size, file_alignment);
     }
 
     uint32_t pe_offset = 0x80;
-    
+
     uint8_t* pe_sig_ptr = output->data + pe_offset;
-    *(uint32_t*)pe_sig_ptr = PE_SIGNATURE;
-    
+    const uint32_t signature = PE_SIGNATURE;
+    memcpy(pe_sig_ptr, &signature, sizeof(signature));
+
     PE_COFF_HEADER* coff = (PE_COFF_HEADER*)(output->data + pe_offset + 4);
     coff->Machine = PE_MACHINE_AMD64;
     coff->NumberOfSections = (uint16_t)total_sections;
@@ -835,10 +859,15 @@ ArkLinkResult ark_backend_pe_link(ArkLinkContext* ctx, ArkBackendInput* input, A
     size_t opt_offset = pe_offset + 4 + sizeof(PE_COFF_HEADER);
     if (opt_offset + sizeof(PE_OPTIONAL_HEADER_64) > total_file_size) {
         free(temp_maps);
-        if (reloc_data) free(reloc_data);
-        if (import_data) free(import_data);
+        if (reloc_data) {
+            free(reloc_data);
+        }
+        if (import_data) {
+            free(import_data);
+        }
         free(output->data);
-        output->data = NULL;
+        free(export_data);
+        memset(output, 0, sizeof(*output));
         return ARK_LINK_ERR_MEMORY;
     }
     uint8_t* opt_ptr = output->data + opt_offset;
@@ -846,33 +875,35 @@ ArkLinkResult ark_backend_pe_link(ArkLinkContext* ctx, ArkBackendInput* input, A
     opt->Magic = PE_OPT_HDR_MAGIC_PE32_PLUS;
     opt->MajorLinkerVersion = 1;
     opt->MinorLinkerVersion = 0;
-    
+
     uint32_t size_of_code = 0;
     for (size_t i = 0; i < input->section_count; i++) {
         if (input->sections[i].kind == ARK_SECTION_CODE) {
-            uint32_t aligned_size = (uint32_t)((input->sections[i].size + section_alignment - 1) & ~(section_alignment - 1));
+            uint32_t aligned_size =
+                (uint32_t)((input->sections[i].size + section_alignment - 1) & ~(section_alignment - 1));
             size_of_code += aligned_size;
         }
     }
     opt->SizeOfCode = size_of_code;
-    
+
     uint32_t size_of_initialized_data = 0;
     for (size_t i = 0; i < input->section_count; i++) {
         if (input->sections[i].kind == ARK_SECTION_DATA) {
-            uint32_t aligned_size = (uint32_t)((input->sections[i].size + section_alignment - 1) & ~(section_alignment - 1));
+            uint32_t aligned_size =
+                (uint32_t)((input->sections[i].size + section_alignment - 1) & ~(section_alignment - 1));
             size_of_initialized_data += aligned_size;
         }
     }
-    
+
     if (has_idata_section) {
         size_of_initialized_data += idata_virtual_size;
     }
-    
+
     if (has_edata_section) {
         size_of_initialized_data += edata_virtual_size;
     }
     opt->SizeOfInitializedData = size_of_initialized_data;
-    
+
     opt->SizeOfUninitializedData = 0;
     opt->AddressOfEntryPoint = entry_point_rva;
     opt->BaseOfCode = section_alignment;
@@ -887,12 +918,12 @@ ArkLinkResult ark_backend_pe_link(ArkLinkContext* ctx, ArkBackendInput* input, A
     opt->MinorSubsystemVersion = 0;
     opt->Win32VersionValue = 0;
     opt->SizeOfImage = image_size;
-    
+
     size_t headers_size_calc = 0x80 + 4 + sizeof(PE_COFF_HEADER) + sizeof(PE_OPTIONAL_HEADER_64) + total_sections * 40;
     opt->SizeOfHeaders = (uint32_t)((headers_size_calc + file_alignment - 1) & ~(file_alignment - 1));
     opt->CheckSum = 0;
     opt->Subsystem = PE_SUBSYSTEM_WINDOWS_CUI;
-    
+
     opt->DllCharacteristics = 0x0120;
     opt->SizeOfStackReserve = 0x100000;
     opt->SizeOfStackCommit = 0x1000;
@@ -914,7 +945,7 @@ ArkLinkResult ark_backend_pe_link(ArkLinkContext* ctx, ArkBackendInput* input, A
     if (has_idata_section) {
         opt->DataDirectory[PE_DD_IMPORT].VirtualAddress = idata_rva;
         opt->DataDirectory[PE_DD_IMPORT].Size = (uint32_t)import_data_size;
-        
+
         size_t actual_iat_entries = import_iat_total_entries > 0 ? import_iat_total_entries - 1 : 0;
         opt->DataDirectory[PE_DD_IAT].VirtualAddress = import_iat_rva;
         opt->DataDirectory[PE_DD_IAT].Size = (uint32_t)(actual_iat_entries * sizeof(PE_IMPORT_LOOKUP_ENTRY));
@@ -960,8 +991,8 @@ ArkLinkResult ark_backend_pe_link(ArkLinkContext* ctx, ArkBackendInput* input, A
             snprintf(section_name, sizeof(section_name), "sect%lu", (unsigned long)i);
 #pragma GCC diagnostic pop
         }
-        write_section_header(output->data, i, section_name, virtual_size, virtual_address,
-                            raw_size, raw_offset, characteristics);
+        write_section_header(output->data, i, section_name, virtual_size, virtual_address, raw_size, raw_offset,
+                             characteristics);
 
         output->section_maps[i].rva = virtual_address;
         output->section_maps[i].size = virtual_size;
@@ -980,10 +1011,8 @@ ArkLinkResult ark_backend_pe_link(ArkLinkContext* ctx, ArkBackendInput* input, A
         uint32_t idata_section_idx = (uint32_t)input->section_count;
         uint32_t idata_file_offset = current_file_offset;
 
-        write_section_header(output->data, idata_section_idx, ".idata",
-                            (uint32_t)import_data_size, idata_rva,
-                            idata_raw_size, idata_file_offset,
-                            PE_SCN_CNT_INITIALIZED_DATA | PE_SCN_MEM_READ);
+        write_section_header(output->data, idata_section_idx, ".idata", (uint32_t)import_data_size, idata_rva,
+                             idata_raw_size, idata_file_offset, PE_SCN_CNT_INITIALIZED_DATA | PE_SCN_MEM_READ);
 
         output->section_maps[idata_section_idx].rva = idata_rva;
         output->section_maps[idata_section_idx].size = (uint32_t)import_data_size;
@@ -1001,10 +1030,8 @@ ArkLinkResult ark_backend_pe_link(ArkLinkContext* ctx, ArkBackendInput* input, A
         uint32_t edata_section_idx = (uint32_t)(input->section_count + (has_idata_section ? 1 : 0));
         uint32_t edata_file_offset = current_file_offset;
 
-        write_section_header(output->data, edata_section_idx, ".edata",
-                            (uint32_t)export_data_size, edata_rva,
-                            edata_raw_size, edata_file_offset,
-                            PE_SCN_CNT_INITIALIZED_DATA | PE_SCN_MEM_READ);
+        write_section_header(output->data, edata_section_idx, ".edata", (uint32_t)export_data_size, edata_rva,
+                             edata_raw_size, edata_file_offset, PE_SCN_CNT_INITIALIZED_DATA | PE_SCN_MEM_READ);
 
         output->section_maps[edata_section_idx].rva = edata_rva;
         output->section_maps[edata_section_idx].size = (uint32_t)export_data_size;
@@ -1019,13 +1046,12 @@ ArkLinkResult ark_backend_pe_link(ArkLinkContext* ctx, ArkBackendInput* input, A
     }
 
     if (has_reloc_section) {
-        uint32_t reloc_section_idx = (uint32_t)(input->section_count + (has_idata_section ? 1 : 0) + (has_edata_section ? 1 : 0));
+        uint32_t reloc_section_idx =
+            (uint32_t)(input->section_count + (has_idata_section ? 1 : 0) + (has_edata_section ? 1 : 0));
         uint32_t reloc_file_offset = current_file_offset;
 
-        write_section_header(output->data, reloc_section_idx, ".reloc",
-                            (uint32_t)reloc_data_size, reloc_rva,
-                            reloc_raw_size, reloc_file_offset,
-                            PE_SCN_CNT_INITIALIZED_DATA | PE_SCN_MEM_READ);
+        write_section_header(output->data, reloc_section_idx, ".reloc", (uint32_t)reloc_data_size, reloc_rva,
+                             reloc_raw_size, reloc_file_offset, PE_SCN_CNT_INITIALIZED_DATA | PE_SCN_MEM_READ);
 
         output->section_maps[reloc_section_idx].rva = reloc_rva;
         output->section_maps[reloc_section_idx].size = (uint32_t)reloc_data_size;
@@ -1046,7 +1072,7 @@ ArkLinkResult ark_backend_pe_link(ArkLinkContext* ctx, ArkBackendInput* input, A
 
             uint64_t symbol_addr;
             if (reloc->symbol->import_module != NULL) {
-                
+
                 uint32_t import_idx = 0;
                 for (size_t j = 0; j < input->import_count; j++) {
                     if (strcmp(input->imports[j].symbol, reloc->symbol->name) == 0) {
@@ -1056,53 +1082,58 @@ ArkLinkResult ark_backend_pe_link(ArkLinkContext* ctx, ArkBackendInput* input, A
                 }
                 symbol_addr = output->image_base + import_iat_rva + import_idx * sizeof(PE_IMPORT_LOOKUP_ENTRY);
             } else {
-                
-                symbol_addr = output->image_base + output->section_maps[reloc->symbol->section_index].rva + reloc->symbol->value;
+
+                symbol_addr =
+                    output->image_base + output->section_maps[reloc->symbol->section_index].rva + reloc->symbol->value;
             }
 
             uint32_t reloc_file_offset = output->section_maps[reloc->section_index].file_offset + reloc->offset;
 
             ArkRelocProcessor proc = {0};
-            
+
             switch (reloc->type) {
-                case ARK_RELOC_ABS64:
-                    proc.action = ARK_RELOC_APPLY_ABSOLUTE;
-                    proc.field_size = ARK_RELOC_FIELD_64;
-                    break;
-                case ARK_RELOC_ADDR32:
-                    proc.action = ARK_RELOC_APPLY_ABSOLUTE;
-                    proc.field_size = ARK_RELOC_FIELD_32;
-                    break;
-                case ARK_RELOC_PC32:
-                    proc.action = ARK_RELOC_APPLY_RELATIVE;
-                    proc.field_size = ARK_RELOC_FIELD_32;
-                    proc.is_pc_relative = 1;
-                    break;
-                default:
-                    continue;
+            case ARK_RELOC_ABS64:
+                proc.action = ARK_RELOC_APPLY_ABSOLUTE;
+                proc.field_size = ARK_RELOC_FIELD_64;
+                break;
+            case ARK_RELOC_ADDR32:
+                proc.action = ARK_RELOC_APPLY_ABSOLUTE;
+                proc.field_size = ARK_RELOC_FIELD_32;
+                break;
+            case ARK_RELOC_PC32:
+                proc.action = ARK_RELOC_APPLY_RELATIVE;
+                proc.field_size = ARK_RELOC_FIELD_32;
+                proc.is_pc_relative = 1;
+                break;
+            default:
+                continue;
             }
-            
+
             proc.target_section = reloc->section_index;
             proc.offset = reloc->offset;
             proc.symbol_value = symbol_addr;
             proc.addend = reloc->addend;
-            
+
             uint64_t p_vaddr = 0;
             if (proc.is_pc_relative) {
                 p_vaddr = output->image_base + output->section_maps[reloc->section_index].rva + reloc->offset;
             }
-            
-            ark_reloc_apply_pe_base(output->data + reloc_file_offset,
-                                    output->size - reloc_file_offset,
-                                    &proc, p_vaddr);
+
+            ark_reloc_apply_pe_base(output->data + reloc_file_offset, output->size - reloc_file_offset, &proc, p_vaddr);
         }
     }
 
     ark_layout_destroy(layout);
     free(temp_maps);
-    if (reloc_data) free(reloc_data);
-    if (import_data) free(import_data);
-    if (export_data) free(export_data);
+    if (reloc_data) {
+        free(reloc_data);
+    }
+    if (import_data) {
+        free(import_data);
+    }
+    if (export_data) {
+        free(export_data);
+    }
 
     return ARK_LINK_OK;
 }

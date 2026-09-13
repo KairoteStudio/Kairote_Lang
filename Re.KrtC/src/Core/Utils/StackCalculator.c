@@ -30,7 +30,9 @@ KrtStackAnalyzer* KrtStackAnalyzerInit(void) {
 }
 
 void KrtStackAnalyzerDestroy(KrtStackAnalyzer* analyzer) {
-    if (!analyzer) return;
+    if (!analyzer) {
+        return;
+    }
 
     for (size_t i = 0; i < analyzer->frame_count; i++) {
         KrtStackFrame* frame = &analyzer->frames[i];
@@ -44,11 +46,9 @@ void KrtStackAnalyzerDestroy(KrtStackAnalyzer* analyzer) {
     }
 
     KRT_FREE(analyzer);
-    
 }
 
-KrtStackFrame* KrtStackAnalyzerBeginFunction(KrtStackAnalyzer* analyzer,
-                                             const char* function_name) {
+KrtStackFrame* KrtStackAnalyzerBeginFunction(KrtStackAnalyzer* analyzer, const char* function_name) {
     if (!analyzer || !function_name) {
         KrtError("Invalid parameters for stack analyzer begin function");
         return NULL;
@@ -56,8 +56,7 @@ KrtStackFrame* KrtStackAnalyzerBeginFunction(KrtStackAnalyzer* analyzer,
 
     if (analyzer->frame_count >= analyzer->frame_capacity) {
         size_t new_capacity = analyzer->frame_capacity * 2;
-        KrtStackFrame* new_frames = KRT_REALLOC(analyzer->frames,
-                                         sizeof(KrtStackFrame) * new_capacity);
+        KrtStackFrame* new_frames = KRT_REALLOC(analyzer->frames, sizeof(KrtStackFrame) * new_capacity);
         if (!new_frames) {
             KrtError("Failed to expand stack frames array");
             return NULL;
@@ -94,9 +93,8 @@ void KrtStackAnalyzerEndFunction(KrtStackAnalyzer* analyzer) {
     analyzer->current_depth--;
 }
 
-void KrtStackFrameAddUsage(KrtStackFrame* frame, size_t size,
-                             KrtStackUsageType type, const char* description,
-                             const char* file, int line) {
+void KrtStackFrameAddUsage(KrtStackFrame* frame, size_t size, KrtStackUsageType type, const char* description,
+                           const char* file, int line) {
     if (!frame || size == 0) {
         KrtError("Invalid parameters for stack frame add usage");
         return;
@@ -104,8 +102,7 @@ void KrtStackFrameAddUsage(KrtStackFrame* frame, size_t size,
 
     if (frame->usage_count >= frame->usage_capacity) {
         size_t new_capacity = frame->usage_capacity * 2;
-        KrtStackUsage* new_usages = KRT_REALLOC(frame->usages,
-                                          sizeof(KrtStackUsage) * new_capacity);
+        KrtStackUsage* new_usages = KRT_REALLOC(frame->usages, sizeof(KrtStackUsage) * new_capacity);
         if (!new_usages) {
             KrtError("Failed to expand stack usage array");
             return;
@@ -126,11 +123,12 @@ void KrtStackFrameAddUsage(KrtStackFrame* frame, size_t size,
     if (frame->used_size > frame->max_usage) {
         frame->max_usage = frame->used_size;
     }
-
 }
 
 void KrtStackFrameOptimizeLayout(KrtStackFrame* frame) {
-    if (!frame) return;
+    if (!frame) {
+        return;
+    }
 
     size_t aligned_size = frame->used_size;
     if (aligned_size % KRT_STACK_ALIGNMENT != 0) {
@@ -142,11 +140,12 @@ void KrtStackFrameOptimizeLayout(KrtStackFrame* frame) {
     }
 
     frame->total_size = aligned_size;
-
 }
 
 size_t KrtStackFrameGetTotalSize(const KrtStackFrame* frame) {
-    if (!frame) return KRT_MIN_STACK_SIZE;
+    if (!frame) {
+        return KRT_MIN_STACK_SIZE;
+    }
 
     if (frame->total_size == 0) {
         size_t aligned_size = frame->used_size;
@@ -163,11 +162,12 @@ void KrtStackFrameGenerateReport(const KrtStackFrame* frame) {
     if (!frame) {
         return;
     }
-
 }
 
 int KrtStackFrameCheckOverflow(const KrtStackFrame* frame, size_t stack_limit) {
-    if (!frame) return 0;
+    if (!frame) {
+        return 0;
+    }
 
     size_t required_size = KrtStackFrameGetTotalSize(frame);
 
@@ -190,7 +190,9 @@ size_t KrtCalculateDynamicStackSize(const char* ir_code) {
     size_t instruction_count = 0;
     const char* ptr = ir_code;
     while (*ptr) {
-        if (*ptr == '\n') instruction_count++;
+        if (*ptr == '\n') {
+            instruction_count++;
+        }
         ptr++;
     }
 
@@ -206,8 +208,8 @@ size_t KrtCalculateDynamicStackSize(const char* ir_code) {
     return total_size;
 }
 
-size_t KrtPredictStackUsage(const char* function_signature __attribute__((unused)),
-                             size_t param_count, size_t local_var_count) {
+size_t KrtPredictStackUsage(const char* function_signature __attribute__((unused)), size_t param_count,
+                            size_t local_var_count) {
 
     size_t base_size = 16;
     size_t param_size = param_count > 6 ? (param_count - 6) * 8 : 0;

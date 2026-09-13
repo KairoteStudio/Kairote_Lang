@@ -1,0 +1,12 @@
+// pointer operand evaluation order
+int advance(int** p) { unsafe(using krt.mem;) { *p=*p+2; } return 1; }
+int main() { unsafe(using krt.mem;) {
+
+            var buf=stackalloc int[4]; buf[0]=10; buf[1]=20; buf[2]=30; buf[3]=40;
+            var p=buf;
+            let q=p+advance(&p);
+            if (q!=buf+1 || p!=buf+2) { return 1; }
+            p=buf; let x=p[advance(&p)]; if (x!=20) { return 2; }
+            p=buf; let y=&p[advance(&p)]; if (y!=buf+1) { return 3; }
+
+} return 0; }

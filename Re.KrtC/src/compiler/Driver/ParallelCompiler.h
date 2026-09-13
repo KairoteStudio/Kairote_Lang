@@ -11,13 +11,13 @@
 typedef struct CompileTask {
     char* input_file;
     char* output_file;
-    char* obj_file; 
+    char* obj_file;
     int target_type;
     int show_ir;
     int result;
     char* error_message;
     double duration;
-    void* compiler_context;  
+    void* compiler_context;
 } CompileTask;
 
 typedef struct ParallelCompiler {
@@ -25,22 +25,24 @@ typedef struct ParallelCompiler {
     CompileTask** tasks;
     int task_count;
     int max_threads;
+    int next_task;
     pthread_mutex_t result_mutex;
-    pthread_mutex_t registry_mutex;  
+    pthread_mutex_t registry_mutex;
     int any_failed;
-    KrtConfig* config; 
+    KrtConfig* config;
     struct {
         int total_files;
         int succeeded;
         int failed;
         double total_time;
     } stats;
-    GenericRegistry* shared_generic_registry;  
+    GenericRegistry* shared_generic_registry;
 } ParallelCompiler;
 
 ParallelCompiler* ParallelCompilerCreate(int max_threads, KrtConfig* config);
 void ParallelCompilerDestroy(ParallelCompiler* compiler);
-int ParallelCompilerAddFile(ParallelCompiler* compiler, const char* input_file, const char* output_file, const char* obj_file, int target_type, int show_ir);
+int ParallelCompilerAddFile(ParallelCompiler* compiler, const char* input_file, const char* output_file,
+                            const char* obj_file, int target_type, int show_ir);
 int ParallelCompilerExecute(ParallelCompiler* compiler);
 
 void ParallelCompilerGetStats(ParallelCompiler* compiler, int* total, int* succeeded, int* failed);

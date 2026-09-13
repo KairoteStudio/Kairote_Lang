@@ -1,0 +1,2 @@
+# Expected output fixtures must preserve significant whitespace exactly.
+Test/SyntaxAudit/cases/*.exp -text -whitespace

@@ -8,10 +8,11 @@
 extern "C" {
 #endif
 
+/** @brief Build a PE image in output; the caller owns successful image and section-map allocations. */
 ArkLinkResult ark_backend_pe_link(ArkLinkContext* ctx, ArkBackendInput* input, ArkBackendOutput* output);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif 
+#endif

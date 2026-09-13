@@ -1,0 +1,15 @@
+// stack pages calls and multiple allocations
+int touch(int n) { return n + 1; }
+int main() { unsafe(using krt.mem;) {
+
+            var count = 4097;
+            var a = stackalloc int[count];
+            var b = stackalloc byte[4097];
+            a[0] = 17; a[count - 1] = 29; b[0] = 33; b[4096] = 55;
+            if (touch(11) != 12) { return 1; }
+            if (a[0] != 17 || a[count - 1] != 29 || b[0] != 33 || b[4096] != 55) { return 2; }
+            var marker = 0;
+            if ((usize)&marker - (usize)a > 1048576) { return 3; }
+            if (((usize)a % 16) != 0 || ((usize)b % 16) != 0) { return 4; }
+
+} return 0; }

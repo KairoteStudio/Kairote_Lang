@@ -2,13 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <sys/stat.h>
 #include "../../Core/Utils/Path.h"
 #include "ArkLinkIntegration.h"
-
-extern void *memset(void *s, int c, size_t n);
-extern size_t strlen(const char *s);
-extern char *strstr(const char *haystack, const char *needle);
-extern char *strncpy(char *dest, const char *src, size_t n);
 
 #include "../Pipeline/CompilerPipeline.h"
 
@@ -16,8 +12,10 @@ extern char *strncpy(char *dest, const char *src, size_t n);
 #define KRT_USE_ARKLINK 1
 #endif
 
-static void CollectCompileError(CompileTask* task, const char* error_msg) {
-    if (!task || !error_msg) return;
+static void collect_compile_error(CompileTask* task, const char* error_msg) {
+    if (!task || !error_msg) {
+        return;
+    }
 
     if (task->error_message) {
         KRT_FREE(task->error_message);
@@ -26,60 +24,74 @@ static void CollectCompileError(CompileTask* task, const char* error_msg) {
     task->error_message = KRT_STRDUP(error_msg);
 }
 
-static void CompileTaskWorker(void* arg) {
-    CompileTask* task = (CompileTask*)arg;
+static void compile_task(CompileTask* task, KrtCompilePipeline* pipeline) {
     double start_time = KrtTimeNowSeconds();
 
     ParallelCompiler* compiler = (ParallelCompiler*)task->compiler_context;
     int result;
-    
-    KrtCompilePipeline* pipeline = KrtCompilePipelineCreate(compiler->config, NULL);
+
     if (!pipeline) {
         result = -1;
     } else {
-        
+
         result = KrtCompilePipelineExecute(pipeline, task->input_file, task->output_file);
-        
-        KrtCompilePipelineDestroy(pipeline);
-        
+
         if (result == 1 && task->obj_file) {
             char assemble_cmd[1024];
-            const char* format = NULL;
             KrtPlatformType platform = compiler->config ? compiler->config->platform : KRT_CONFIG_PLATFORM_WINDOWS;
-            
-            if (platform == KRT_CONFIG_PLATFORM_WINDOWS) {
-                format = "nasm -f win64 %s -o %s";
-            } else {
-                format = "nasm -f elf64 %s -o %s";
-            }
-            
-            snprintf(assemble_cmd, sizeof(assemble_cmd), format, task->output_file, task->obj_file);
+
+            snprintf(assemble_cmd, sizeof(assemble_cmd), "nasm -f %s %s -o %s",
+                     platform == KRT_CONFIG_PLATFORM_WINDOWS ? "win64" : "elf64", task->output_file, task->obj_file);
             int assemble_res = system(assemble_cmd);
             if (assemble_res != 0) {
                 result = -1;
                 char error_msg[512];
                 snprintf(error_msg, sizeof(error_msg), "汇编失败: %s -> %s", task->output_file, task->obj_file);
-                CollectCompileError(task, error_msg);
-            } else {
-                
+                collect_compile_error(task, error_msg);
             }
         }
-        
     }
-    
+
     task->duration = KrtTimeNowSeconds() - start_time;
 
-    if (result != 1) { 
+    if (result != 1) {
         if (!task->error_message) {
             char error_msg[512];
-            snprintf(error_msg, sizeof(error_msg), "编译失败: %s (耗时: %.2fs)",
-                     task->input_file, task->duration);
-            CollectCompileError(task, error_msg);
+            snprintf(error_msg, sizeof(error_msg), "编译失败: %s (耗时: %.2fs)", task->input_file, task->duration);
+            collect_compile_error(task, error_msg);
         }
         task->result = -1;
     } else {
         task->result = 0;
     }
+}
+
+static void compile_batch_worker(void* arg) {
+    ParallelCompiler* compiler = (ParallelCompiler*)arg;
+    KrtConfig config = compiler->config ? *compiler->config : (KrtConfig){0};
+    config.imported_files = NULL;
+    config.imported_file_count = config.imported_file_capacity = 0;
+    KrtCompilePipeline* pipeline = KrtCompilePipelineCreate(&config, NULL);
+    for (;;) {
+        pthread_mutex_lock(&compiler->result_mutex);
+        int index = compiler->next_task++;
+        pthread_mutex_unlock(&compiler->result_mutex);
+        if (index >= compiler->task_count) {
+            break;
+        }
+        CompileTask* task = compiler->tasks[index];
+        KRT_FREE(task->error_message);
+        task->error_message = NULL;
+        config.target_type = (KrtTargetType)task->target_type;
+        config.show_ir = task->show_ir;
+        compile_task(task, pipeline);
+        KrtCompilePipelineReset(pipeline);
+    }
+    KrtCompilePipelineDestroy(pipeline);
+    for (int i = 0; i < config.imported_file_count; i++) {
+        KRT_FREE(config.imported_files[i]);
+    }
+    KRT_FREE(config.imported_files);
 }
 
 ParallelCompiler* ParallelCompilerCreate(int max_threads, KrtConfig* config) {
@@ -88,17 +100,16 @@ ParallelCompiler* ParallelCompilerCreate(int max_threads, KrtConfig* config) {
     }
 
     ParallelCompiler* compiler = (ParallelCompiler*)KRT_MALLOC(sizeof(ParallelCompiler));
-    if (!compiler) return NULL;
-
-    compiler->thread_pool = thread_pool_create(max_threads);
-    if (!compiler->thread_pool) {
-        KRT_FREE(compiler);
+    if (!compiler) {
         return NULL;
     }
+
+    compiler->thread_pool = NULL;
 
     compiler->tasks = NULL;
     compiler->task_count = 0;
     compiler->max_threads = max_threads;
+    compiler->next_task = 0;
     compiler->any_failed = 0;
     compiler->config = config;
     memset(&compiler->stats, 0, sizeof(compiler->stats));
@@ -129,13 +140,17 @@ ParallelCompiler* ParallelCompilerCreate(int max_threads, KrtConfig* config) {
 }
 
 void ParallelCompilerDestroy(ParallelCompiler* compiler) {
-    if (!compiler) return;
+    if (!compiler) {
+        return;
+    }
 
     for (int i = 0; i < compiler->task_count; i++) {
         if (compiler->tasks[i]) {
             KRT_FREE(compiler->tasks[i]->input_file);
             KRT_FREE(compiler->tasks[i]->output_file);
-            if (compiler->tasks[i]->obj_file) KRT_FREE(compiler->tasks[i]->obj_file);
+            if (compiler->tasks[i]->obj_file) {
+                KRT_FREE(compiler->tasks[i]->obj_file);
+            }
             KRT_FREE(compiler->tasks[i]->error_message);
             KRT_FREE(compiler->tasks[i]);
         }
@@ -145,19 +160,24 @@ void ParallelCompilerDestroy(ParallelCompiler* compiler) {
     pthread_mutex_destroy(&compiler->result_mutex);
     pthread_mutex_destroy(&compiler->registry_mutex);
     thread_pool_destroy(compiler->thread_pool);
-    
+
     if (compiler->shared_generic_registry) {
         generics_destroy_registry(compiler->shared_generic_registry);
     }
-    
+
     KRT_FREE(compiler);
 }
 
-int ParallelCompilerAddFile(ParallelCompiler* compiler, const char* input_file, const char* output_file, const char* obj_file, int target_type, int show_ir) {
-    if (!compiler || !input_file || !output_file) return -1;
+int ParallelCompilerAddFile(ParallelCompiler* compiler, const char* input_file, const char* output_file,
+                            const char* obj_file, int target_type, int show_ir) {
+    if (!compiler || !input_file || !output_file) {
+        return -1;
+    }
 
     CompileTask* task = (CompileTask*)KRT_MALLOC(sizeof(CompileTask));
-    if (!task) return -1;
+    if (!task) {
+        return -1;
+    }
 
     task->input_file = KRT_STRDUP(input_file);
     task->output_file = KRT_STRDUP(output_file);
@@ -167,7 +187,7 @@ int ParallelCompilerAddFile(ParallelCompiler* compiler, const char* input_file, 
     task->result = -1;
     task->error_message = NULL;
     task->duration = 0.0;
-    task->compiler_context = compiler;  
+    task->compiler_context = compiler;
 
     compiler->tasks = (CompileTask**)KRT_REALLOC(compiler->tasks, (compiler->task_count + 1) * sizeof(CompileTask*));
     if (!compiler->tasks) {
@@ -184,7 +204,9 @@ int ParallelCompilerAddFile(ParallelCompiler* compiler, const char* input_file, 
 }
 
 int ParallelCompilerExecute(ParallelCompiler* compiler) {
-    if (!compiler || compiler->task_count == 0) return 0;
+    if (!compiler || compiler->task_count == 0) {
+        return 0;
+    }
 
     compiler->stats.total_files = compiler->task_count;
     compiler->stats.succeeded = 0;
@@ -193,13 +215,38 @@ int ParallelCompilerExecute(ParallelCompiler* compiler) {
 
     double total_start_time = KrtTimeNowSeconds();
 
+    compiler->next_task = 0;
+    size_t source_bytes = 0;
     for (int i = 0; i < compiler->task_count; i++) {
-        thread_pool_submit(compiler->thread_pool, CompileTaskWorker, compiler->tasks[i]);
+        struct stat file;
+        if (stat(compiler->tasks[i]->input_file, &file) == 0 && file.st_size > 0) {
+            source_bytes += (size_t)file.st_size;
+        }
+    }
+    int workers = (int)(source_bytes / (64u * 1024u));
+    if (workers > compiler->max_threads) {
+        workers = compiler->max_threads;
+    }
+    if (workers > compiler->task_count) {
+        workers = compiler->task_count;
+    }
+    if (workers < 2) {
+        compile_batch_worker(compiler);
+    } else {
+        if (!compiler->thread_pool) {
+            compiler->thread_pool = thread_pool_create(compiler->max_threads);
+        }
+        if (!compiler->thread_pool) {
+            compile_batch_worker(compiler);
+        } else {
+            for (int i = 0; i < workers; i++) {
+                thread_pool_submit(compiler->thread_pool, compile_batch_worker, compiler);
+            }
+            thread_pool_wait(compiler->thread_pool);
+        }
     }
 
-    thread_pool_wait(compiler->thread_pool);
-
-    (void)(KrtTimeNowSeconds() - total_start_time);
+    compiler->stats.total_time = KrtTimeNowSeconds() - total_start_time;
 
     pthread_mutex_lock(&compiler->result_mutex);
     for (int i = 0; i < compiler->task_count; i++) {
@@ -225,24 +272,26 @@ void FindRuntimeObj(const char* obj_name, char* result, size_t size) {
 
     if (KrtPathExists(obj_name)) {
         KRT_STRCPY_S(result, size, obj_name);
-        if (current_dir) KRT_FREE(current_dir);
+        if (current_dir) {
+            KRT_FREE(current_dir);
+        }
         return;
     }
 
-    const char* subdirs[] = {
-        "obj" KRT_PATH_SEPARATOR_STR "runtime",
-        "obj" KRT_PATH_SEPARATOR_STR "core" KRT_PATH_SEPARATOR_STR "utils",
-        "obj" KRT_PATH_SEPARATOR_STR "core" KRT_PATH_SEPARATOR_STR "memory",
-        "obj" KRT_PATH_SEPARATOR_STR "compiler",
-        "obj" KRT_PATH_SEPARATOR_STR "common",
-        "build"
-    };
-    for (size_t i = 0; i < sizeof(subdirs)/sizeof(subdirs[0]); i++) {
+    const char* subdirs[] = {"obj" KRT_PATH_SEPARATOR_STR "runtime",
+                             "obj" KRT_PATH_SEPARATOR_STR "core" KRT_PATH_SEPARATOR_STR "utils",
+                             "obj" KRT_PATH_SEPARATOR_STR "core" KRT_PATH_SEPARATOR_STR "memory",
+                             "obj" KRT_PATH_SEPARATOR_STR "compiler",
+                             "obj" KRT_PATH_SEPARATOR_STR "common",
+                             "build"};
+    for (size_t i = 0; i < sizeof(subdirs) / sizeof(subdirs[0]); i++) {
         char temp[KRT_MAX_PATH];
         KrtPathJoin(temp, sizeof(temp), subdirs[i], obj_name);
         if (KrtPathExists(temp)) {
             KRT_STRCPY_S(result, size, temp);
-            if (current_dir) KRT_FREE(current_dir);
+            if (current_dir) {
+                KRT_FREE(current_dir);
+            }
             return;
         }
     }
@@ -251,7 +300,7 @@ void FindRuntimeObj(const char* obj_name, char* result, size_t size) {
         char parent_obj[KRT_MAX_PATH];
         KrtPathJoin(parent_obj, sizeof(parent_obj), current_dir, "..");
 
-        for (size_t i = 0; i < sizeof(subdirs)/sizeof(subdirs[0]); i++) {
+        for (size_t i = 0; i < sizeof(subdirs) / sizeof(subdirs[0]); i++) {
             char full_path[KRT_MAX_PATH];
             char temp_path[KRT_MAX_PATH];
             KrtPathJoin(full_path, sizeof(full_path), parent_obj, subdirs[i]);
@@ -267,7 +316,7 @@ void FindRuntimeObj(const char* obj_name, char* result, size_t size) {
 
     char exe_dir[KRT_MAX_PATH];
     if (KrtGetExecutableDirectory(exe_dir, sizeof(exe_dir)) == 0) {
-        
+
         char temp[KRT_MAX_PATH];
         KrtPathJoin(temp, sizeof(temp), exe_dir, obj_name);
         if (KrtPathExists(temp)) {
@@ -277,13 +326,14 @@ void FindRuntimeObj(const char* obj_name, char* result, size_t size) {
 
         const char* exe_rel_base[] = {
             ".." KRT_PATH_SEPARATOR_STR ".." KRT_PATH_SEPARATOR_STR "obj" KRT_PATH_SEPARATOR_STR "runtime",
-            ".." KRT_PATH_SEPARATOR_STR ".." KRT_PATH_SEPARATOR_STR "obj" KRT_PATH_SEPARATOR_STR "core" KRT_PATH_SEPARATOR_STR "utils",
-            ".." KRT_PATH_SEPARATOR_STR ".." KRT_PATH_SEPARATOR_STR "obj" KRT_PATH_SEPARATOR_STR "core" KRT_PATH_SEPARATOR_STR "memory",
+            ".." KRT_PATH_SEPARATOR_STR ".." KRT_PATH_SEPARATOR_STR "obj" KRT_PATH_SEPARATOR_STR
+            "core" KRT_PATH_SEPARATOR_STR "utils",
+            ".." KRT_PATH_SEPARATOR_STR ".." KRT_PATH_SEPARATOR_STR "obj" KRT_PATH_SEPARATOR_STR
+            "core" KRT_PATH_SEPARATOR_STR "memory",
             ".." KRT_PATH_SEPARATOR_STR ".." KRT_PATH_SEPARATOR_STR "obj" KRT_PATH_SEPARATOR_STR "compiler",
             ".." KRT_PATH_SEPARATOR_STR ".." KRT_PATH_SEPARATOR_STR "obj" KRT_PATH_SEPARATOR_STR "common",
-            ".." KRT_PATH_SEPARATOR_STR ".." KRT_PATH_SEPARATOR_STR "build"
-        };
-        for (size_t i = 0; i < sizeof(exe_rel_base)/sizeof(exe_rel_base[0]); i++) {
+            ".." KRT_PATH_SEPARATOR_STR ".." KRT_PATH_SEPARATOR_STR "build"};
+        for (size_t i = 0; i < sizeof(exe_rel_base) / sizeof(exe_rel_base[0]); i++) {
             char rel_path[KRT_MAX_PATH];
             char temp2[KRT_MAX_PATH];
             KrtPathJoin(rel_path, sizeof(rel_path), exe_dir, exe_rel_base[i]);
@@ -299,35 +349,45 @@ void FindRuntimeObj(const char* obj_name, char* result, size_t size) {
 }
 
 void ParallelCompilerGetStats(ParallelCompiler* compiler, int* total, int* succeeded, int* failed) {
-    if (!compiler) return;
+    if (!compiler) {
+        return;
+    }
 
-    if (total) *total = compiler->stats.total_files;
-    if (succeeded) *succeeded = compiler->stats.succeeded;
-    if (failed) *failed = compiler->stats.failed;
+    if (total) {
+        *total = compiler->stats.total_files;
+    }
+    if (succeeded) {
+        *succeeded = compiler->stats.succeeded;
+    }
+    if (failed) {
+        *failed = compiler->stats.failed;
+    }
 }
 
 int ParallelCompilerCollectGenericTypes(ParallelCompiler* compiler) {
-    if (!compiler || !compiler->shared_generic_registry) return -1;
-    
+    if (!compiler || !compiler->shared_generic_registry) {
+        return -1;
+    }
+
     for (int i = 0; i < compiler->task_count; i++) {
         CompileTask* task = compiler->tasks[i];
-        
+
         FILE* fp = fopen(task->input_file, "r");
         if (!fp) {
             continue;
         }
-        
+
         if (fseek(fp, 0, SEEK_END) != 0) {
             fclose(fp);
             continue;
         }
-        
+
         long file_size = ftell(fp);
         if (file_size <= 0) {
             fclose(fp);
             continue;
         }
-        
+
         rewind(fp);
         char* source = (char*)KRT_MALLOC(file_size + 1);
         if (!source) {
@@ -335,58 +395,57 @@ int ParallelCompilerCollectGenericTypes(ParallelCompiler* compiler) {
             fclose(fp);
             continue;
         }
-        
+
         size_t read_bytes = fread(source, 1, file_size, fp);
         fclose(fp);
         source[read_bytes] = '\0';
-        
+
         char* pos = source;
         while ((pos = strstr(pos, "template")) != NULL) {
-            
-            char* search_pos = pos + 8; 
+
+            char* search_pos = pos + 8;
             char* class_pos = NULL;
-            
+
             while ((class_pos = strstr(search_pos, "class")) != NULL) {
-                
+
                 char* where_pos = strstr(search_pos, "where");
                 char* brace_pos = strstr(search_pos, "{");
-                
+
                 if (where_pos && where_pos < class_pos && brace_pos && class_pos < brace_pos) {
                     search_pos = class_pos + 5;
-                    continue; 
+                    continue;
                 }
-                
+
                 break;
             }
-            
+
             if (!class_pos) {
                 pos++;
                 continue;
             }
-            
+
             char* name_start = class_pos + 5;
             while (*name_start && (*name_start == ' ' || *name_start == '\t')) {
                 name_start++;
             }
-            
+
             char* name_end = name_start;
-            while (*name_end && 
-                   (*name_end != '{' && *name_end != '<' && *name_end != ' ' && 
-                    *name_end != '\n' && *name_end != '\t' && *name_end != ',')) {
+            while (*name_end && (*name_end != '{' && *name_end != '<' && *name_end != ' ' && *name_end != '\n' &&
+                                 *name_end != '\t' && *name_end != ',')) {
                 name_end++;
             }
-            
+
             if (name_end > name_start) {
                 char* test = name_start;
                 bool valid_name = true;
-                
+
                 if (!((*test >= 'a' && *test <= 'z') || (*test >= 'A' && *test <= 'Z') || *test == '_')) {
                     valid_name = false;
                 } else {
-                    
+
                     test++;
                     while (test < name_end) {
-                        if (!((*test >= 'a' && *test <= 'z') || (*test >= 'A' && *test <= 'Z') || 
+                        if (!((*test >= 'a' && *test <= 'z') || (*test >= 'A' && *test <= 'Z') ||
                               (*test >= '0' && *test <= '9') || *test == '_')) {
                             valid_name = false;
                             break;
@@ -394,49 +453,51 @@ int ParallelCompilerCollectGenericTypes(ParallelCompiler* compiler) {
                         test++;
                     }
                 }
-                
+
                 if (!valid_name) {
                     pos = name_end;
                     continue;
                 }
             }
-            
+
             if (name_end > name_start) {
                 int name_len = name_end - name_start;
                 char* type_name = (char*)KRT_MALLOC(name_len + 1);
                 strncpy(type_name, name_start, name_len);
                 type_name[name_len] = '\0';
-                
-                int param_count = 1; 
+
+                int param_count = 1;
                 char* template_decl_start = strstr(pos, "<");
                 if (template_decl_start && template_decl_start < class_pos) {
                     char* template_decl_end = strstr(template_decl_start, ">");
                     if (template_decl_end && template_decl_end < class_pos) {
-                        
+
                         param_count = 1;
                         char* p = template_decl_start + 1;
                         while (p < template_decl_end) {
-                            if (*p == ',') param_count++;
+                            if (*p == ',') {
+                                param_count++;
+                            }
                             p++;
                         }
                     }
                 }
-                
+
                 pthread_mutex_lock(&compiler->registry_mutex);
                 if (!generics_lookup_type(compiler->shared_generic_registry, type_name)) {
-                    
+
                     generics_register_type(compiler->shared_generic_registry, type_name, NULL, param_count, NULL);
                 }
                 pthread_mutex_unlock(&compiler->registry_mutex);
-                
+
                 KRT_FREE(type_name);
             }
-            
-            pos = name_end; 
+
+            pos = name_end;
         }
-        
+
         KRT_FREE(source);
     }
-    
+
     return 0;
 }

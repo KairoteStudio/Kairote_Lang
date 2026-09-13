@@ -1,0 +1,15 @@
+// narrow binding restores shadowed pointer
+int shadow(int* p) { unsafe(using krt.mem;) {
+                var x=7; let p=&x; return *p;
+            } }
+
+int main() { unsafe(using krt.mem;) {
+
+            var x=1; var y=2; let hit=&x;
+            let maybe: int*?=&y;
+            if (maybe is int* hit) { *hit=8; }
+            *hit=9;
+            if (x!=9 || y!=8) { return 1; }
+            if (shadow(hit)!=7 || x!=9) { return 2; }
+
+} return 0; }

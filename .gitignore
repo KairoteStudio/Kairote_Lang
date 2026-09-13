@@ -19,6 +19,18 @@ lsp/bin/
 lsp/obj/
 lsp/build/
 *.o
+*.kro
+# Generated test results and disassembly are retained locally.
+/Test/**/*.json
+/Test/**/*.asm
+/Test/Performance/**/Artifacts/
+/Test/Performance/**/CompilerIR/
+/Test/Performance/**/CompileSpeed/Sources/
+/Test/Performance/CompileSpeed/FinalSources/
+/Test/Performance/CompileSpeed/InitialTiming/
+/Test/Performance/LLVMOptimization/Analysis/*/
+/Test/Performance/LLVMOptimization/Analysis/*.txt
+/Test/Quality/StandardsValidation/
 *.a
 *.so
 *.dll

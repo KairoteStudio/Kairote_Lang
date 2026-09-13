@@ -1,0 +1,26 @@
+// float pointer operations aliases and calls
+static float32 global=1.25;
+            float32 modify(float32 x) { unsafe(using krt.mem;) { let p=&x; *p=2.5; return x; } }
+            float32 readOnce(float32* p, int* calls) { unsafe(using krt.mem;) { *calls+=1; return *p; } }
+
+int main() { unsafe(using krt.mem;) {
+
+            float32 x=1.25; let p=&x;
+            *p+=1.25; if (*p!=2.5) { return 1; }
+            (*p)++; if (x!=3.5) { return 2; }
+            *p=2; if (x!=2.0) { return 3; }
+            if (modify(1.25)!=2.5) { return 4; }
+            let f: fn(float32) -> float32=&modify;
+            if (f(1.25)!=2.5) { return 5; }
+            if (global!=1.25) { return 6; } *(&global)=2.5;
+            if (global!=2.5) { return 7; }
+            let bits=(uint32*)p; *bits=1069547520;
+            if (x!=1.5 || *p!=1.5) { return 8; }
+            var calls=0;
+            if (readOnce(p,&calls)+readOnce(p,&calls)!=3.0 || calls!=2) { return 9; }
+            *bits=2147483648;
+            if (*p!=0.0) { return 10; }
+            *bits=2143289344;
+            if (*p==*p || !(*p!=*p) || *p<0.0 || *p>=0.0) { return 11; }
+
+} return 0; }
