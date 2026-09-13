@@ -1,0 +1,12 @@
+// call argument evaluation order
+int redirect(int** p, int* next) { unsafe(using krt.mem;) { *p=next; } return 0; }
+            int check(int* p, int ignored) { unsafe(using krt.mem;) { return *p; } }
+
+int main() { unsafe(using krt.mem;) {
+
+            var x=1; var y=2; var p=&x;
+            if (check(p, redirect(&p, &y))!=1) { return 1; }
+            let f: fn(int*, int) -> int=&check;
+            p=&x; if (f(p, redirect(&p, &y))!=1) { return 2; }
+
+} return 0; }

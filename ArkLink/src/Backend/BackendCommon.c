@@ -4,40 +4,47 @@
 #include <stdlib.h>
 #include <string.h>
 
-
 uint64_t ark_backend_calc_pc_relative(uint64_t p_vaddr, ArkRelocFieldSize field_size) {
     switch (field_size) {
-        case ARK_RELOC_FIELD_8:   return p_vaddr + 1;
-        case ARK_RELOC_FIELD_16:  return p_vaddr + 2;
-        case ARK_RELOC_FIELD_32:  return p_vaddr + 4;
-        case ARK_RELOC_FIELD_64:  return p_vaddr + 8;
-        default:                   return p_vaddr + 4;
+    case ARK_RELOC_FIELD_8:
+        return p_vaddr + 1;
+    case ARK_RELOC_FIELD_16:
+        return p_vaddr + 2;
+    case ARK_RELOC_FIELD_32:
+        return p_vaddr + 4;
+    case ARK_RELOC_FIELD_64:
+        return p_vaddr + 8;
+    default:
+        return p_vaddr + 4;
     }
 }
 
 uint64_t ark_backend_align_up(uint64_t value, uint64_t alignment) {
-    if (alignment == 0) return value;
-    if (!ark_backend_is_power_of_2(alignment)) {
-        return ((value + alignment - 1) / alignment) * alignment;
+    if (alignment == 0) {
+        return value;
     }
-    return (value + alignment - 1) & ~(alignment - 1);
+    uint64_t remainder = ark_backend_is_power_of_2(alignment) ? value & (alignment - 1) : value % alignment;
+    uint64_t padding = remainder ? alignment - remainder : 0;
+    return value > UINT64_MAX - padding ? UINT64_MAX : value + padding;
 }
 
 uint32_t ark_backend_align_up_32(uint32_t value, uint32_t alignment) {
-    if (alignment == 0) return value;
-    if (!ark_backend_is_power_of_2(alignment)) {
-        return ((value + alignment - 1) / alignment) * alignment;
-    }
-    return (value + alignment - 1) & ~(alignment - 1);
+    uint64_t aligned = ark_backend_align_up(value, alignment);
+    return aligned > UINT32_MAX ? UINT32_MAX : (uint32_t)aligned;
 }
 
 int ark_backend_should_use_dynamic_elf(const ArkBackendInput* input) {
-    if (!input) return 0;
+    if (!input) {
+        return 0;
+    }
 
     switch (input->output_type) {
-        case ARK_OUTPUT_SHARED_LIB:  return 1;
-        case ARK_OUTPUT_OBJECT:      return 0;
-        case ARK_OUTPUT_EXECUTABLE:  break;
+    case ARK_OUTPUT_SHARED_LIB:
+        return 1;
+    case ARK_OUTPUT_OBJECT:
+        return 0;
+    case ARK_OUTPUT_EXECUTABLE:
+        break;
     }
 
     return (input->import_count > 0) ? 1 : 0;
@@ -47,12 +54,15 @@ int ark_backend_is_power_of_2(uint64_t value) {
     return value != 0 && (value & (value - 1)) == 0;
 }
 
-
 ArkBuffer* ark_buffer_create(size_t initial_capacity, uint32_t base_rva) {
     ArkBuffer* buf = (ArkBuffer*)calloc(1, sizeof(ArkBuffer));
-    if (!buf) return NULL;
+    if (!buf) {
+        return NULL;
+    }
 
-    if (initial_capacity == 0) initial_capacity = 64;
+    if (initial_capacity == 0) {
+        initial_capacity = 64;
+    }
 
     buf->data = (uint8_t*)malloc(initial_capacity);
     if (!buf->data) {
@@ -63,29 +73,36 @@ ArkBuffer* ark_buffer_create(size_t initial_capacity, uint32_t base_rva) {
     buf->size = 0;
     buf->capacity = initial_capacity;
     buf->base_rva = base_rva;
-    
+
     return buf;
 }
 
 void ark_buffer_destroy(ArkBuffer* buf) {
-    if (!buf) return;
+    if (!buf) {
+        return;
+    }
     free(buf->data);
     free(buf);
 }
 
 static int ark_buffer_ensure_capacity(ArkBuffer* buf, size_t needed) {
-    if (!buf || !buf->data) return 0;
-    
-    if (needed <= buf->capacity) return 1;
+    if (!buf || !buf->data) {
+        return 0;
+    }
 
-    size_t new_cap = buf->capacity;
-    while (new_cap < needed) {
-        new_cap *= 2;
-        if (new_cap < needed) new_cap = needed + needed / 2;
+    if (needed <= buf->capacity) {
+        return 1;
+    }
+
+    size_t new_cap = buf->capacity <= SIZE_MAX / 2 ? buf->capacity * 2 : needed;
+    if (new_cap < needed) {
+        new_cap = needed;
     }
 
     uint8_t* new_data = (uint8_t*)realloc(buf->data, new_cap);
-    if (!new_data) return 0;
+    if (!new_data) {
+        return 0;
+    }
 
     buf->data = new_data;
     buf->capacity = new_cap;
@@ -93,20 +110,36 @@ static int ark_buffer_ensure_capacity(ArkBuffer* buf, size_t needed) {
 }
 
 size_t ark_buffer_append(ArkBuffer* buf, const void* data, size_t len) {
-    if (!buf || len == 0) return (size_t)-1;
-    
+    if (!buf || len == 0 || len > SIZE_MAX - buf->size) {
+        return (size_t)-1;
+    }
+
+    /* Appending an existing slice must survive realloc and overlapping ranges. */
+    size_t source_offset = 0;
+    int internal =
+        data && (uintptr_t)data >= (uintptr_t)buf->data && (uintptr_t)data - (uintptr_t)buf->data < buf->size;
+    if (internal) {
+        source_offset = (uintptr_t)data - (uintptr_t)buf->data;
+        if (len > buf->size - source_offset) {
+            return (size_t)-1;
+        }
+    }
+
     if (!ark_buffer_ensure_capacity(buf, buf->size + len)) {
         return (size_t)-1;
     }
 
     size_t offset = buf->size;
     if (data) {
-        memcpy(buf->data + offset, data, len);
+        if (internal) {
+            data = buf->data + source_offset;
+        }
+        memmove(buf->data + offset, data, len);
     } else {
         memset(buf->data + offset, 0, len);
     }
     buf->size += len;
-    
+
     return offset;
 }
 
@@ -115,58 +148,81 @@ size_t ark_buffer_append_zero(ArkBuffer* buf, size_t len) {
 }
 
 uint32_t ark_buffer_add_string(ArkBuffer* buf, const char* str) {
-    if (!buf || !str) return (uint32_t)-1;
+    if (!buf || !str) {
+        return (uint32_t)-1;
+    }
 
     size_t len = strlen(str) + 1;
+    if (buf->size > UINT32_MAX || len > UINT32_MAX - buf->size) {
+        return UINT32_MAX;
+    }
     uint32_t offset = (uint32_t)buf->size;
-    
+
     if (ark_buffer_append(buf, str, len) == (size_t)-1) {
         return (uint32_t)-1;
     }
-    
+
     return offset;
 }
 
 char* ark_buffer_get_string(ArkBuffer* buf, uint32_t offset) {
-    if (!buf || !buf->data || offset >= buf->size) return NULL;
+    if (!buf || !buf->data || offset >= buf->size) {
+        return NULL;
+    }
     return (char*)(buf->data + offset);
 }
 
 uint32_t ark_buffer_get_rva(ArkBuffer* buf, size_t offset) {
-    if (!buf) return 0;
+    if (!buf) {
+        return 0;
+    }
+    if (offset > UINT32_MAX - buf->base_rva) {
+        return UINT32_MAX;
+    }
     return buf->base_rva + (uint32_t)offset;
 }
 
 void ark_buffer_align(ArkBuffer* buf, size_t alignment) {
-    if (!buf || alignment <= 1) return;
-    
+    if (!buf || alignment <= 1) {
+        return;
+    }
+
     size_t current = buf->size;
     size_t aligned = ark_backend_align_up(current, alignment);
-    
-    if (aligned > current) {
+
+    if (aligned != SIZE_MAX && aligned > current) {
         ark_buffer_append_zero(buf, aligned - current);
     }
 }
 
 static ArkSegmentType classify_section_kind(ArkSectionKind kind) {
     switch (kind) {
-        case ARK_SECTION_CODE:   return ARK_SEGMENT_CODE;
-        case ARK_SECTION_RODATA: return ARK_SEGMENT_RODATA;
-        case ARK_SECTION_DATA:   return ARK_SEGMENT_DATA;
-        case ARK_SECTION_BSS:    return ARK_SEGMENT_BSS;
-        case ARK_SECTION_TDATA:  return ARK_SEGMENT_TLS;
-        case ARK_SECTION_TBSS:   return ARK_SEGMENT_TLS;
-        default:                 return ARK_SEGMENT_DATA;
+    case ARK_SECTION_CODE:
+        return ARK_SEGMENT_CODE;
+    case ARK_SECTION_RODATA:
+        return ARK_SEGMENT_RODATA;
+    case ARK_SECTION_DATA:
+        return ARK_SEGMENT_DATA;
+    case ARK_SECTION_BSS:
+        return ARK_SEGMENT_BSS;
+    case ARK_SECTION_TDATA:
+        return ARK_SEGMENT_TLS;
+    case ARK_SECTION_TBSS:
+        return ARK_SEGMENT_TLS;
+    default:
+        return ARK_SEGMENT_DATA;
     }
 }
 
-ArkImageLayout* ark_layout_create(const ArkBackendInput* input,
-                                   uint32_t section_alignment,
-                                   uint32_t file_alignment) {
-    if (!input) return NULL;
+ArkImageLayout* ark_layout_create(const ArkBackendInput* input, uint32_t section_alignment, uint32_t file_alignment) {
+    if (!input) {
+        return NULL;
+    }
 
     ArkImageLayout* layout = (ArkImageLayout*)calloc(1, sizeof(ArkImageLayout));
-    if (!layout) return NULL;
+    if (!layout) {
+        return NULL;
+    }
 
     layout->section_count = input->section_count;
     layout->section_alignment = section_alignment ? section_alignment : 0x1000;
@@ -204,14 +260,13 @@ ArkImageLayout* ark_layout_create(const ArkBackendInput* input,
         sec->file_offset = current_file_offset;
         sec->virtual_size = input_sec->size;
         int is_bss = (sec->segment_type == ARK_SEGMENT_BSS ||
-                      (sec->segment_type == ARK_SEGMENT_TLS &&
-                       input_sec->kind == ARK_SECTION_TBSS));
+                      (sec->segment_type == ARK_SEGMENT_TLS && input_sec->kind == ARK_SECTION_TBSS));
         sec->file_size = is_bss ? 0 : input_sec->size;
         sec->flags = 0;
 
         uint64_t aligned_size = ark_backend_align_up(input_sec->size, section_alignment);
         current_va += aligned_size;
-        
+
         if (!is_bss) {
             current_file_offset += ark_backend_align_up(input_sec->size, layout->file_alignment);
         }
@@ -227,31 +282,31 @@ ArkImageLayout* ark_layout_create(const ArkBackendInput* input,
         uint64_t sec_end = sec->virtual_address + ark_backend_align_up(sec->virtual_size, section_alignment);
 
         switch (sec->segment_type) {
-            case ARK_SEGMENT_CODE:
-            case ARK_SEGMENT_RODATA:
-                if (sec_end > layout->code_segment_end) {
-                    layout->code_segment_end = sec_end;
-                }
-                break;
-            
-            case ARK_SEGMENT_DATA:
-            case ARK_SEGMENT_BSS:
-                if (sec->virtual_address < layout->data_segment_start) {
-                    layout->data_segment_start = sec->virtual_address;
-                }
-                if (sec_end > layout->data_segment_end) {
-                    layout->data_segment_end = sec_end;
-                }
-                break;
-            
-            case ARK_SEGMENT_TLS:
-                if (sec->virtual_address < layout->data_segment_start) {
-                    layout->data_segment_start = sec->virtual_address;
-                }
-                if (sec_end > layout->data_segment_end) {
-                    layout->data_segment_end = sec_end;
-                }
-                break;
+        case ARK_SEGMENT_CODE:
+        case ARK_SEGMENT_RODATA:
+            if (sec_end > layout->code_segment_end) {
+                layout->code_segment_end = sec_end;
+            }
+            break;
+
+        case ARK_SEGMENT_DATA:
+        case ARK_SEGMENT_BSS:
+            if (sec->virtual_address < layout->data_segment_start) {
+                layout->data_segment_start = sec->virtual_address;
+            }
+            if (sec_end > layout->data_segment_end) {
+                layout->data_segment_end = sec_end;
+            }
+            break;
+
+        case ARK_SEGMENT_TLS:
+            if (sec->virtual_address < layout->data_segment_start) {
+                layout->data_segment_start = sec->virtual_address;
+            }
+            if (sec_end > layout->data_segment_end) {
+                layout->data_segment_end = sec_end;
+            }
+            break;
         }
     }
 
@@ -267,23 +322,31 @@ ArkImageLayout* ark_layout_create(const ArkBackendInput* input,
 }
 
 void ark_layout_destroy(ArkImageLayout* layout) {
-    if (!layout) return;
+    if (!layout) {
+        return;
+    }
     free(layout->sections);
     free(layout);
 }
 
 const ArkSectionLayout* ark_layout_get_section(const ArkImageLayout* layout, size_t index) {
-    if (!layout || !layout->sections || index >= layout->section_count) return NULL;
+    if (!layout || !layout->sections || index >= layout->section_count) {
+        return NULL;
+    }
     return &layout->sections[index];
 }
 
 uint64_t ark_layout_calc_total_size(const ArkImageLayout* layout, int include_bss) {
-    if (!layout) return 0;
+    if (!layout) {
+        return 0;
+    }
     return include_bss ? layout->image_size : layout->file_size;
 }
 
 void ark_reloc_apply_elf(uint8_t* data, size_t size, const ArkRelocProcessor* proc, uint64_t p_vaddr) {
-    if (!data || !proc || proc->offset >= size) return;
+    if (!data || !proc || proc->offset >= size) {
+        return;
+    }
 
     uint64_t result = 0;
 
@@ -291,107 +354,107 @@ void ark_reloc_apply_elf(uint8_t* data, size_t size, const ArkRelocProcessor* pr
 #endif
 
     switch (proc->action) {
-        case ARK_RELOC_APPLY_ABSOLUTE:
-            result = proc->symbol_value + (uint64_t)proc->addend;
-            break;
+    case ARK_RELOC_APPLY_ABSOLUTE:
+        result = proc->symbol_value + (uint64_t)proc->addend;
+        break;
 
-        case ARK_RELOC_APPLY_RELATIVE:
-        case ARK_RELOC_APPLY_GOT: {
-            uint64_t pc_addr = ark_backend_calc_pc_relative(p_vaddr, proc->field_size);
+    case ARK_RELOC_APPLY_RELATIVE:
+    case ARK_RELOC_APPLY_GOT: {
+        uint64_t pc_addr = ark_backend_calc_pc_relative(p_vaddr, proc->field_size);
 #ifdef ARK_DEBUG
 #endif
-            result = proc->symbol_value + (uint64_t)proc->addend - pc_addr;
-            break;
-        }
-        
-        case ARK_RELOC_APPLY_SECREL:
-            result = proc->symbol_value + (uint64_t)proc->addend;
-            break;
-        
-        default:
-            return;
+        result = proc->symbol_value + (uint64_t)proc->addend - pc_addr;
+        break;
+    }
+
+    case ARK_RELOC_APPLY_SECREL:
+        result = proc->symbol_value + (uint64_t)proc->addend;
+        break;
+
+    default:
+        return;
     }
 
     switch (proc->field_size) {
-        case ARK_RELOC_FIELD_8:
-            if (proc->offset < size) {
-                data[proc->offset] = (uint8_t)(result & 0xFF);
-            }
-            break;
-        
-        case ARK_RELOC_FIELD_16:
-            if (proc->offset + 2 <= size) {
-                uint16_t val = (uint16_t)(result & 0xFFFF);
-                memcpy(data + proc->offset, &val, 2);
-            }
-            break;
-        
-        case ARK_RELOC_FIELD_32:
-            if (proc->offset + 4 <= size) {
-                uint32_t val = (uint32_t)(result & 0xFFFFFFFF);
-                memcpy(data + proc->offset, &val, 4);
-            }
-            break;
-        
-        case ARK_RELOC_FIELD_64:
-            if (proc->offset + 8 <= size) {
-                uint64_t val = result;
-                memcpy(data + proc->offset, &val, 8);
-            }
-            break;
+    case ARK_RELOC_FIELD_8:
+        if (proc->offset < size) {
+            data[proc->offset] = (uint8_t)(result & 0xFF);
+        }
+        break;
+
+    case ARK_RELOC_FIELD_16:
+        if (proc->offset + 2 <= size) {
+            uint16_t val = (uint16_t)(result & 0xFFFF);
+            memcpy(data + proc->offset, &val, 2);
+        }
+        break;
+
+    case ARK_RELOC_FIELD_32:
+        if (proc->offset + 4 <= size) {
+            uint32_t val = (uint32_t)(result & 0xFFFFFFFF);
+            memcpy(data + proc->offset, &val, 4);
+        }
+        break;
+
+    case ARK_RELOC_FIELD_64:
+        if (proc->offset + 8 <= size) {
+            uint64_t val = result;
+            memcpy(data + proc->offset, &val, 8);
+        }
+        break;
     }
 }
 
 void ark_reloc_apply_pe_base(uint8_t* data, size_t size, const ArkRelocProcessor* proc, uint64_t p_vaddr) {
-    if (!data || !proc || !size) return;
+    if (!data || !proc || !size) {
+        return;
+    }
 
     uint64_t result = 0;
 
     switch (proc->action) {
-        case ARK_RELOC_APPLY_ABSOLUTE:
-            result = proc->symbol_value + (uint64_t)proc->addend;
-            break;
+    case ARK_RELOC_APPLY_ABSOLUTE:
+        result = proc->symbol_value + (uint64_t)proc->addend;
+        break;
 
-        case ARK_RELOC_APPLY_RELATIVE: {
-            uint64_t pc_addr = ark_backend_calc_pc_relative(p_vaddr, proc->field_size);
-            result = proc->symbol_value + (uint64_t)proc->addend - pc_addr;
-            break;
-        }
+    case ARK_RELOC_APPLY_RELATIVE: {
+        uint64_t pc_addr = ark_backend_calc_pc_relative(p_vaddr, proc->field_size);
+        result = proc->symbol_value + (uint64_t)proc->addend - pc_addr;
+        break;
+    }
 
-        case ARK_RELOC_GENERATE_BASE_REL:
-            return;
+    case ARK_RELOC_GENERATE_BASE_REL:
+        return;
 
-        default:
-            return;
+    default:
+        return;
     }
 
     switch (proc->field_size) {
-        case ARK_RELOC_FIELD_32:
-            if (size >= 4) {
-                uint32_t val = (uint32_t)(result & 0xFFFFFFFF);
-                memcpy(data, &val, 4);
-            }
-            break;
+    case ARK_RELOC_FIELD_32:
+        if (size >= 4) {
+            uint32_t val = (uint32_t)(result & 0xFFFFFFFF);
+            memcpy(data, &val, 4);
+        }
+        break;
 
-        case ARK_RELOC_FIELD_64:
-            if (size >= 8) {
-                memcpy(data, &result, 8);
-            }
-            break;
+    case ARK_RELOC_FIELD_64:
+        if (size >= 8) {
+            memcpy(data, &result, 8);
+        }
+        break;
 
-        default:
-            break;
+    default:
+        break;
     }
 }
 
-void ark_reloc_process_all(ArkResolverReloc* relocs, size_t count,
-                           ArkRelocApplyFn apply_fn,
-                           ArkRelocShouldProcessFn filter_fn,
-                           void* user_data,
-                           uint8_t* section_data,
-                           size_t section_size,
-                           const ArkImageLayout* layout) {
-    if (!relocs || count == 0 || !apply_fn || !section_data) return;
+void ark_reloc_process_all(ArkResolverReloc* relocs, size_t count, ArkRelocApplyFn apply_fn,
+                           ArkRelocShouldProcessFn filter_fn, void* user_data, uint8_t* section_data,
+                           size_t section_size, const ArkImageLayout* layout) {
+    if (!relocs || count == 0 || !apply_fn || !section_data) {
+        return;
+    }
 
     for (size_t i = 0; i < count; i++) {
         ArkResolverReloc* reloc = &relocs[i];
@@ -407,30 +470,30 @@ void ark_reloc_process_all(ArkResolverReloc* relocs, size_t count,
         proc.addend = reloc->addend;
 
         switch (reloc->type) {
-            case ARK_RELOC_ABS64:
-                proc.action = ARK_RELOC_APPLY_ABSOLUTE;
-                proc.field_size = ARK_RELOC_FIELD_64;
-                break;
-            
-            case ARK_RELOC_ADDR32:
-                proc.action = ARK_RELOC_APPLY_ABSOLUTE;
-                proc.field_size = ARK_RELOC_FIELD_32;
-                break;
-            
-            case ARK_RELOC_PC32:
-            case ARK_RELOC_GOTPC32:
-                proc.action = ARK_RELOC_APPLY_RELATIVE;
-                proc.field_size = ARK_RELOC_FIELD_32;
-                proc.is_pc_relative = 1;
-                break;
-            
-            case ARK_RELOC_SECREL32:
-                proc.action = ARK_RELOC_APPLY_SECREL;
-                proc.field_size = ARK_RELOC_FIELD_32;
-                break;
-            
-            default:
-                continue;
+        case ARK_RELOC_ABS64:
+            proc.action = ARK_RELOC_APPLY_ABSOLUTE;
+            proc.field_size = ARK_RELOC_FIELD_64;
+            break;
+
+        case ARK_RELOC_ADDR32:
+            proc.action = ARK_RELOC_APPLY_ABSOLUTE;
+            proc.field_size = ARK_RELOC_FIELD_32;
+            break;
+
+        case ARK_RELOC_PC32:
+        case ARK_RELOC_GOTPC32:
+            proc.action = ARK_RELOC_APPLY_RELATIVE;
+            proc.field_size = ARK_RELOC_FIELD_32;
+            proc.is_pc_relative = 1;
+            break;
+
+        case ARK_RELOC_SECREL32:
+            proc.action = ARK_RELOC_APPLY_SECREL;
+            proc.field_size = ARK_RELOC_FIELD_32;
+            break;
+
+        default:
+            continue;
         }
 
         uint64_t p_vaddr = 0;
@@ -446,17 +509,23 @@ void ark_reloc_process_all(ArkResolverReloc* relocs, size_t count,
 }
 
 ArkImportGroup* ark_import_group_create(const ArkImportEntry* imports, size_t count) {
-    if (!imports || count == 0) return NULL;
+    if (!imports || count == 0) {
+        return NULL;
+    }
 
     ArkImportGroup* group = (ArkImportGroup*)calloc(1, sizeof(ArkImportGroup));
-    if (!group) return NULL;
+    if (!group) {
+        return NULL;
+    }
     const char** unique_modules = (const char**)calloc(count, sizeof(char*));
     size_t unique_count = 0;
-    
+
     for (size_t i = 0; i < count; i++) {
         const char* mod = imports[i].module;
-        if (!mod) continue;
-        
+        if (!mod) {
+            continue;
+        }
+
         int found = 0;
         for (size_t j = 0; j < unique_count; j++) {
             if (strcmp(unique_modules[j], mod) == 0) {
@@ -464,7 +533,7 @@ ArkImportGroup* ark_import_group_create(const ArkImportEntry* imports, size_t co
                 break;
             }
         }
-        
+
         if (!found) {
             unique_modules[unique_count++] = mod;
         }
@@ -486,7 +555,7 @@ ArkImportGroup* ark_import_group_create(const ArkImportEntry* imports, size_t co
 
     for (size_t m = 0; m < unique_count; m++) {
         group->modules[m].module_name = unique_modules[m];
-        
+
         size_t sym_count = 0;
         for (size_t i = 0; i < count; i++) {
             if (strcmp(imports[i].module, unique_modules[m]) == 0) {
@@ -495,12 +564,13 @@ ArkImportGroup* ark_import_group_create(const ArkImportEntry* imports, size_t co
         }
 
         group->modules[m].symbols = (const char**)calloc(sym_count, sizeof(char*));
-        if (!group->modules[m].symbols) continue;
-        
+        if (!group->modules[m].symbols) {
+            continue;
+        }
+
         group->modules[m].symbol_count = 0;
         for (size_t i = 0; i < count; i++) {
-            if (strcmp(imports[i].module, unique_modules[m]) == 0 &&
-                imports[i].symbol) {
+            if (strcmp(imports[i].module, unique_modules[m]) == 0 && imports[i].symbol) {
                 group->modules[m].symbols[group->modules[m].symbol_count++] = imports[i].symbol;
             }
         }
@@ -511,7 +581,9 @@ ArkImportGroup* ark_import_group_create(const ArkImportEntry* imports, size_t co
 }
 
 void ark_import_group_destroy(ArkImportGroup* group) {
-    if (!group) return;
+    if (!group) {
+        return;
+    }
 
     if (group->modules) {
         for (size_t i = 0; i < group->module_count; i++) {
@@ -519,6 +591,6 @@ void ark_import_group_destroy(ArkImportGroup* group) {
         }
         free(group->modules);
     }
-    
+
     free(group);
 }

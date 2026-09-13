@@ -39,16 +39,16 @@ typedef enum ArkSymbolType {
 } ArkSymbolType;
 
 typedef enum ArkRelocationType {
-    ARK_RELOC_ABS64 = 1,   
-    ARK_RELOC_ADDR32 = 2,  
-    ARK_RELOC_PC32 = 3,    
+    ARK_RELOC_ABS64 = 1,
+    ARK_RELOC_ADDR32 = 2,
+    ARK_RELOC_PC32 = 3,
     ARK_RELOC_GOTPC32 = 4,
     ARK_RELOC_SECREL32 = 5,
 } ArkRelocationType;
 
-#define ARK_SECTION_READ  0x01
+#define ARK_SECTION_READ 0x01
 #define ARK_SECTION_WRITE 0x02
-#define ARK_SECTION_EXEC  0x04
+#define ARK_SECTION_EXEC 0x04
 
 typedef enum ArkSectionKind {
     ARK_SECTION_UNKNOWN = 0,
@@ -57,7 +57,7 @@ typedef enum ArkSectionKind {
     ARK_SECTION_RODATA = 3,
     ARK_SECTION_BSS = 4,
     ARK_SECTION_TDATA = 5,
-    ARK_SECTION_TBSS  = 6,
+    ARK_SECTION_TBSS = 6,
 } ArkSectionKind;
 
 typedef struct ArkSectionRange {
@@ -129,29 +129,41 @@ typedef struct ArkLinkUnit {
     size_t symbol_count;
     ArkLinkRelocList relocations;
     uint64_t entry_point;
-    
+
     uint8_t* file_data;
     size_t file_size;
 } ArkLinkUnit;
 
+/** @brief Create a link unit for path, or return NULL on allocation failure. */
 ArkLinkUnit* ark_link_unit_create(const char* path);
+/** @brief Release a link unit and its owned storage, accepting NULL. */
 void ark_link_unit_destroy(ArkLinkUnit* unit);
+/** @brief Append a section described by desc, or return NULL on failure. */
 ArkLinkSection* ark_link_unit_add_section(ArkLinkUnit* unit, const ArkSectionDesc* desc);
+/** @brief Append a symbol to unit and report success. */
 int ark_link_unit_add_symbol(ArkLinkUnit* unit, const ArkSymbolDesc* desc);
 
+/** @brief Create an owned section descriptor for the supplied bytes. */
 ArkLinkSection* ark_link_section_create(const char* name, const uint8_t* data, size_t size);
+/** @brief Append a relocation to section and report success. */
 int ark_link_section_add_reloc(ArkLinkSection* section, const ArkRelocationDesc* desc);
 
+/** @brief Load a KRO file into a caller-owned unit and return the load status. */
 ArkLinkResult ark_link_load_kro(const char* path, ArkLinkUnit** unit);
+/** @brief Load a COFF file into a caller-owned unit and return the load status. */
 ArkLinkResult ark_link_load_coff(const char* path, ArkLinkUnit** unit);
+/** @brief Load an ELF file into a caller-owned unit and return the load status. */
 ArkLinkResult ark_link_load_elf(const char* path, ArkLinkUnit** unit);
 
+/** @brief Append a relocation to unit and report success. */
 int ark_link_unit_add_reloc(ArkLinkUnit* unit, const ArkRelocationDesc* desc);
 
-ArkLinkResult ark_loader_load_unit(ArkLinkContext* ctx, const char* path, const ArkLoaderOptions* opts, ArkLinkUnit** out_unit, ArkLoaderDiagnostics* diag);
+/** @brief Detect and load an object into out_unit, reporting failures through diag. */
+ArkLinkResult ark_loader_load_unit(ArkLinkContext* ctx, const char* path, const ArkLoaderOptions* opts,
+                                   ArkLinkUnit** out_unit, ArkLoaderDiagnostics* diag);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif 
+#endif

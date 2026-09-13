@@ -31,10 +31,12 @@ typedef struct MemoryBlock {
     uint32_t magic;
     MemoryProtectionFlags protection;
     bool is_freed;
+    bool has_canary;
     const char* file;
     int line;
     struct MemoryBlock* next;
     struct MemoryBlock* prev;
+    struct MemoryBlock* hash_next;
 } MemoryBlock;
 
 typedef struct MemorySafetyManager {
@@ -43,6 +45,9 @@ typedef struct MemorySafetyManager {
     KrtMutexT mutex;
     bool poison_enabled;
     bool canary_enabled;
+    MemoryBlock** buckets;
+    size_t bucket_count;
+    size_t total_used;
 } MemorySafetyManager;
 
 extern MemorySafetyManager* g_memory_safety;
@@ -83,8 +88,7 @@ size_t KrtMemoryGetTotalUsage(void);
 size_t KrtMemoryGetBlockCount(void);
 void KrtMemoryDumpStats(void);
 
-void KrtMemoryReportError(const char* error_type, const void* ptr,
-                           const char* file, int line, const char* format, ...);
+void KrtMemoryReportError(const char* error_type, const void* ptr, const char* file, int line, const char* format, ...);
 
 bool KrtMemoryValidateHeap(void);
 bool KrtMemoryCheckIntegrity(void);
@@ -96,25 +100,21 @@ void KrtMemoryScanCorruption(void);
 #define KRT_SAFE_STRDUP(str) KrtSafeStrdup(str, __FILE__, __LINE__)
 #define KRT_SAFE_FREE(ptr) KrtSafeFree(ptr, __FILE__, __LINE__)
 
-#define KRT_BOUNDS_CHECK(array, index, array_size) \
-    KrtBoundsCheck(array, index, sizeof(*(array)), array_size)
+#define KRT_BOUNDS_CHECK(array, index, array_size) KrtBoundsCheck(array, index, sizeof(*(array)), array_size)
 
-#define KRT_BUFFER_CHECK(buffer, offset, size, buffer_size) \
-    KrtBufferCheck(buffer, offset, size, buffer_size)
+#define KRT_BUFFER_CHECK(buffer, offset, size, buffer_size) KrtBufferCheck(buffer, offset, size, buffer_size)
 
-#define KRT_ARRAY_GET(array, index, array_size) \
-    (KRT_BOUNDS_CHECK(array, index, array_size) ? &((array)[index]) : NULL)
+#define KRT_ARRAY_GET(array, index, array_size) (KRT_BOUNDS_CHECK(array, index, array_size) ? &((array)[index]) : NULL)
 
-#define KRT_ARRAY_SET(array, index, value, array_size) \
-    do { \
-        if (KRT_BOUNDS_CHECK(array, index, array_size)) { \
-            (array)[index] = (value); \
-        } else { \
-            KrtMemoryReportError("ARRAY_BOUNDS", array, __FILE__, __LINE__, \
-                                 "Index %zu out of bounds [0, %zu)", \
-                                 (size_t)(index), (size_t)(array_size)); \
-        } \
-    } while(0)
+#define KRT_ARRAY_SET(array, index, value, array_size)                                                                 \
+    do {                                                                                                               \
+        if (KRT_BOUNDS_CHECK(array, index, array_size)) {                                                              \
+            (array)[index] = (value);                                                                                  \
+        } else {                                                                                                       \
+            KrtMemoryReportError("ARRAY_BOUNDS", array, __FILE__, __LINE__, "Index %zu out of bounds [0, %zu)",        \
+                                 (size_t)(index), (size_t)(array_size));                                               \
+        }                                                                                                              \
+    } while (0)
 
 #define KRT_MEMORY_PTR_VALID(ptr) KrtMemoryPtrIsValid(ptr)
 #define KRT_PTR_NOT_FREED(ptr) (!KrtPtrIsFreed(ptr))

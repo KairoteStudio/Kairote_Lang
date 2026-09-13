@@ -2,122 +2,190 @@
 #include <string.h>
 #include <ctype.h>
 
+static bool is_identifier_char(unsigned char c) {
+    return isalnum(c) || c == '_' || c >= 128;
+}
+
+static unsigned macro_hash(const char* name, size_t length) {
+    unsigned hash = 2166136261u;
+    for (size_t i = 0; i < length; i++) {
+        hash = (hash ^ (unsigned char)name[i]) * 16777619u;
+    }
+    return hash;
+}
+
 Preprocessor* PreprocessorCreate(void) {
-    Preprocessor* preprocessor = (Preprocessor*)KRT_MALLOC(sizeof(Preprocessor));
-    if (!preprocessor) return NULL;
-    
-    preprocessor->macros = NULL;
-    preprocessor->macro_count = 0;
-    preprocessor->macro_capacity = 0;
-    
-    return preprocessor;
+    return (Preprocessor*)KRT_CALLOC(1, sizeof(Preprocessor));
 }
 
 void PreprocessorDestroy(Preprocessor* preprocessor) {
-    if (!preprocessor) return;
-    
+    if (!preprocessor) {
+        return;
+    }
     for (int i = 0; i < preprocessor->macro_count; i++) {
         KRT_FREE(preprocessor->macros[i].name);
         KRT_FREE(preprocessor->macros[i].replacement);
     }
     KRT_FREE(preprocessor->macros);
+    KRT_FREE(preprocessor->buckets);
     KRT_FREE(preprocessor);
 }
 
-bool PreprocessorAddMacro(Preprocessor* preprocessor, const char* name, const char* replacement) {
-    if (!preprocessor || !name || !replacement) return false;
-    
-    for (int i = 0; i < preprocessor->macro_count; i++) {
-        if (strcmp(preprocessor->macros[i].name, name) == 0) {
-            
-            KRT_FREE(preprocessor->macros[i].replacement);
-            preprocessor->macros[i].replacement = KRT_STRDUP(replacement);
-            return true;
+static int find_macro(Preprocessor* preprocessor, const char* name, size_t length, unsigned hash) {
+    if (!preprocessor->bucket_count) {
+        return -1;
+    }
+    unsigned bucket = hash & (preprocessor->bucket_count - 1);
+    while (preprocessor->buckets[bucket]) {
+        int index = preprocessor->buckets[bucket] - 1;
+        Macro* macro = &preprocessor->macros[index];
+        if (macro->hash == hash && macro->name_length == length && memcmp(macro->name, name, length) == 0) {
+            return index;
         }
+        bucket = (bucket + 1) & (preprocessor->bucket_count - 1);
     }
-    
-    if (preprocessor->macro_count >= preprocessor->macro_capacity) {
-        int new_capacity = preprocessor->macro_capacity == 0 ? 8 : preprocessor->macro_capacity * 2;
-        Macro* new_macros = (Macro*)KRT_REALLOC(preprocessor->macros, new_capacity * sizeof(Macro));
-        if (!new_macros) return false;
-        preprocessor->macros = new_macros;
-        preprocessor->macro_capacity = new_capacity;
+    return -1;
+}
+
+static bool grow_macro_index(Preprocessor* preprocessor) {
+    int count = preprocessor->bucket_count ? preprocessor->bucket_count * 2 : 16;
+    int* buckets = (int*)KRT_CALLOC(count, sizeof(int));
+    if (!buckets) {
+        return false;
     }
-    
-    preprocessor->macros[preprocessor->macro_count].name = KRT_STRDUP(name);
-    preprocessor->macros[preprocessor->macro_count].replacement = KRT_STRDUP(replacement);
-    preprocessor->macro_count++;
-    
+    for (int i = 0; i < preprocessor->macro_count; i++) {
+        unsigned bucket = preprocessor->macros[i].hash & (count - 1);
+        while (buckets[bucket]) {
+            bucket = (bucket + 1) & (count - 1);
+        }
+        buckets[bucket] = i + 1;
+    }
+    KRT_FREE(preprocessor->buckets);
+    preprocessor->buckets = buckets;
+    preprocessor->bucket_count = count;
     return true;
 }
 
-static bool IsIdentifierChar(char c) {
-    return isalnum(c) || c == '_';
+bool PreprocessorAddMacro(Preprocessor* preprocessor, const char* name, const char* replacement) {
+    if (!preprocessor || !name || !replacement || !*name || isdigit((unsigned char)*name)) {
+        return false;
+    }
+    size_t length = strlen(name);
+    for (size_t i = 0; i < length; i++) {
+        if (!is_identifier_char((unsigned char)name[i])) {
+            return false;
+        }
+    }
+    unsigned hash = macro_hash(name, length);
+    int existing = find_macro(preprocessor, name, length, hash);
+    char* copy = KRT_STRDUP(replacement);
+    if (!copy) {
+        return false;
+    }
+    if (existing >= 0) {
+        KRT_FREE(preprocessor->macros[existing].replacement);
+        preprocessor->macros[existing].replacement = copy;
+        preprocessor->macros[existing].replacement_length = strlen(replacement);
+        return true;
+    }
+    if ((preprocessor->macro_count + 1) * 4 >= preprocessor->bucket_count * 3 && !grow_macro_index(preprocessor)) {
+        KRT_FREE(copy);
+        return false;
+    }
+    if (preprocessor->macro_count == preprocessor->macro_capacity) {
+        int capacity = preprocessor->macro_capacity ? preprocessor->macro_capacity * 2 : 8;
+        Macro* macros = (Macro*)KRT_REALLOC(preprocessor->macros, capacity * sizeof(Macro));
+        if (!macros) {
+            KRT_FREE(copy);
+            return false;
+        }
+        preprocessor->macros = macros;
+        preprocessor->macro_capacity = capacity;
+    }
+    char* name_copy = KRT_STRDUP(name);
+    if (!name_copy) {
+        KRT_FREE(copy);
+        return false;
+    }
+    int index = preprocessor->macro_count++;
+    preprocessor->macros[index] = (Macro){name_copy, copy, length, strlen(replacement), hash};
+    unsigned bucket = hash & (preprocessor->bucket_count - 1);
+    while (preprocessor->buckets[bucket]) {
+        bucket = (bucket + 1) & (preprocessor->bucket_count - 1);
+    }
+    preprocessor->buckets[bucket] = index + 1;
+    return true;
 }
 
 char* PreprocessorProcess(Preprocessor* preprocessor, const char* source) {
-    if (!preprocessor || !source) return NULL;
-    
-    size_t source_len = strlen(source);
-    size_t capacity = source_len * 2 + 1;
-    char* result = (char*)KRT_MALLOC(capacity);
-    if (!result) return NULL;
-    
-    size_t result_pos = 0;
-    const char* src_ptr = source;
-    
-    while (*src_ptr) {
-        bool replaced = false;
-        
-        for (int i = 0; i < preprocessor->macro_count; i++) {
-            if (!preprocessor->macros[i].name) continue;
-            size_t name_len = strlen(preprocessor->macros[i].name);
-            if (name_len == 0) continue;
-            
-            if (strncmp(src_ptr, preprocessor->macros[i].name, name_len) == 0) {
-                
-                if (!IsIdentifierChar(src_ptr[name_len])) {
-                    
-                    const char* replacement = preprocessor->macros[i].replacement;
-                    if (!replacement) replacement = "";
-                    size_t replacement_len = strlen(replacement);
-                    
-                    if (result_pos + replacement_len >= capacity - 1) {
-                        size_t new_capacity = (result_pos + replacement_len) * 2 + 1;
-                        char* new_result = (char*)KRT_REALLOC(result, new_capacity);
-                        if (!new_result) {
-                            KRT_FREE(result);
-                            return NULL;
-                        }
-                        result = new_result;
-                        capacity = new_capacity;
-                    }
-                    
-                    KRT_STRCPY_S(result + result_pos, capacity - result_pos, replacement);
-                    result_pos += replacement_len;
-                    src_ptr += name_len;
-                    replaced = true;
-                    break;
-                }
-            }
-        }
-        
-        if (!replaced) {
-            
-            if (result_pos + 1 >= capacity - 1) {
-                size_t new_capacity = capacity * 2;
-                char* new_result = (char*)KRT_REALLOC(result, new_capacity);
-                if (!new_result) {
-                    KRT_FREE(result);
-                    return NULL;
-                }
-                result = new_result;
-                capacity = new_capacity;
-            }
-            result[result_pos++] = *src_ptr++;
-        }
+    if (!preprocessor || !source) {
+        return NULL;
     }
-    
-    result[result_pos] = '\0';
+    if (!preprocessor->macro_count) {
+        return KRT_STRDUP(source);
+    }
+    size_t capacity = strlen(source) + 1, used = 0;
+    char* result = (char*)KRT_MALLOC(capacity);
+    if (!result) {
+        return NULL;
+    }
+    const char* cursor = source;
+    while (*cursor) {
+        const char* chunk = cursor;
+        size_t length;
+        if (*cursor == '"' || *cursor == '\'') {
+            char quote = *cursor++;
+            while (*cursor && *cursor != quote) {
+                if (*cursor == '\\' && cursor[1]) {
+                    cursor++;
+                }
+                cursor++;
+            }
+            if (*cursor) {
+                cursor++;
+            }
+        } else if (cursor[0] == '/' && cursor[1] == '/') {
+            while (*cursor && *cursor != '\n') {
+                cursor++;
+            }
+        } else if (cursor[0] == '/' && cursor[1] == '*') {
+            cursor += 2;
+            while (*cursor && !(cursor[0] == '*' && cursor[1] == '/')) {
+                cursor++;
+            }
+            if (*cursor) {
+                cursor += 2;
+            }
+        } else if (is_identifier_char((unsigned char)*cursor)) {
+            unsigned hash = 2166136261u;
+            do {
+                hash = (hash ^ (unsigned char)*cursor++) * 16777619u;
+            } while (is_identifier_char((unsigned char)*cursor));
+            length = cursor - chunk;
+            int index = find_macro(preprocessor, chunk, length, hash);
+            if (index >= 0) {
+                chunk = preprocessor->macros[index].replacement;
+                length = preprocessor->macros[index].replacement_length;
+                goto append;
+            }
+        } else {
+            cursor++;
+        }
+        length = cursor - chunk;
+    append:
+        if (used + length + 1 > capacity) {
+            size_t next = (used + length + 1) * 2;
+            char* resized = (char*)KRT_REALLOC(result, next);
+            if (!resized) {
+                KRT_FREE(result);
+                return NULL;
+            }
+            result = resized;
+            capacity = next;
+        }
+        memcpy(result + used, chunk, length);
+        used += length;
+    }
+    result[used] = '\0';
     return result;
 }

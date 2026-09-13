@@ -12,4 +12,4 @@ int KrtBytecodeGeneratorAddConstant(KrtChunk* chunk, KrtValue value);
 int KrtBytecodeGeneratorAddStringConstant(KrtChunk* chunk, const char* string);
 void KrtBytecodeGeneratorFreeChunk(KrtChunk* chunk);
 bool KrtBytecodeGeneratorSerializeToFile(KrtChunk* chunk, const char* filename);
-#endif 
+#endif

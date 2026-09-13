@@ -26,13 +26,11 @@ typedef struct KROWriter {
     uint32_t rodata_capacity;
 
     uint32_t text_offset;
+    uint32_t text_high_water;
     uint32_t data_offset;
     uint32_t rodata_offset;
 
-    uint8_t text_align;
-    uint8_t data_align;
-    uint8_t rodata_align;
-    uint8_t bss_align;
+    uint32_t bss_align;
 
     uint32_t bss_size;
 
@@ -58,39 +56,57 @@ typedef struct KROWriter {
 static bool allocate_writer_buffers(KROWriter* writer) {
     writer->text_capacity = INITIAL_CAPACITY;
     writer->text = (uint8_t*)malloc(writer->text_capacity);
-    if (!writer->text) return false;
+    if (!writer->text) {
+        return false;
+    }
 
     writer->data_capacity = INITIAL_CAPACITY;
     writer->data = (uint8_t*)malloc(writer->data_capacity);
-    if (!writer->data) return false;
+    if (!writer->data) {
+        return false;
+    }
 
     writer->rodata_capacity = INITIAL_CAPACITY;
     writer->rodata = (uint8_t*)malloc(writer->rodata_capacity);
-    if (!writer->rodata) return false;
+    if (!writer->rodata) {
+        return false;
+    }
 
     writer->sym_capacity = 64;
     writer->symbols = (KROSymbol*)calloc(writer->sym_capacity, sizeof(KROSymbol));
-    if (!writer->symbols) return false;
+    if (!writer->symbols) {
+        return false;
+    }
 
     writer->text_relocs.capacity = 16;
     writer->text_relocs.relocs = (KRORelocation*)calloc(writer->text_relocs.capacity, sizeof(KRORelocation));
-    if (!writer->text_relocs.relocs) return false;
+    if (!writer->text_relocs.relocs) {
+        return false;
+    }
 
     writer->data_relocs.capacity = 16;
     writer->data_relocs.relocs = (KRORelocation*)calloc(writer->data_relocs.capacity, sizeof(KRORelocation));
-    if (!writer->data_relocs.relocs) return false;
+    if (!writer->data_relocs.relocs) {
+        return false;
+    }
 
     writer->rodata_relocs.capacity = 16;
     writer->rodata_relocs.relocs = (KRORelocation*)calloc(writer->rodata_relocs.capacity, sizeof(KRORelocation));
-    if (!writer->rodata_relocs.relocs) return false;
+    if (!writer->rodata_relocs.relocs) {
+        return false;
+    }
 
     writer->bss_relocs.capacity = 16;
     writer->bss_relocs.relocs = (KRORelocation*)calloc(writer->bss_relocs.capacity, sizeof(KRORelocation));
-    if (!writer->bss_relocs.relocs) return false;
+    if (!writer->bss_relocs.relocs) {
+        return false;
+    }
 
     writer->string_capacity = STRING_INITIAL_CAPACITY;
     writer->strings = (char*)malloc(writer->string_capacity);
-    if (!writer->strings) return false;
+    if (!writer->strings) {
+        return false;
+    }
     writer->strings[0] = '\0';
     writer->string_size = 1;
 
@@ -99,23 +115,24 @@ static bool allocate_writer_buffers(KROWriter* writer) {
 
 KROWriter* kro_writer_create(void) {
     KROWriter* writer = (KROWriter*)calloc(1, sizeof(KROWriter));
-    if (!writer) return NULL;
+    if (!writer) {
+        return NULL;
+    }
 
     if (!allocate_writer_buffers(writer)) {
         kro_writer_destroy(writer);
         return NULL;
     }
 
-    writer->text_align = DEFAULT_CODE_ALIGN;
-    writer->data_align = DEFAULT_DATA_ALIGN;
-    writer->rodata_align = DEFAULT_RODATA_ALIGN;
     writer->bss_align = DEFAULT_BSS_ALIGN;
 
     return writer;
 }
 
 void kro_writer_destroy(KROWriter* writer) {
-    if (!writer) return;
+    if (!writer) {
+        return;
+    }
 
     free(writer->text);
     free(writer->data);
@@ -130,15 +147,19 @@ void kro_writer_destroy(KROWriter* writer) {
 }
 
 static bool ensure_capacity(uint8_t** buffer, uint32_t* capacity, uint32_t required) {
-    if (required <= *capacity) return true;
+    if (required <= *capacity) {
+        return true;
+    }
 
-    uint32_t new_capacity = *capacity;
-    while (new_capacity < required) {
-        new_capacity *= 2;
+    uint32_t new_capacity = *capacity <= UINT32_MAX / 2 ? *capacity * 2 : required;
+    if (new_capacity < required) {
+        new_capacity = required;
     }
 
     uint8_t* new_buffer = (uint8_t*)realloc(*buffer, new_capacity);
-    if (!new_buffer) return false;
+    if (!new_buffer) {
+        return false;
+    }
 
     *buffer = new_buffer;
     *capacity = new_capacity;
@@ -146,9 +167,14 @@ static bool ensure_capacity(uint8_t** buffer, uint32_t* capacity, uint32_t requi
 }
 
 uint32_t kro_write_code(KROWriter* writer, const void* data, uint32_t size) {
-    if (!writer || !data || size == 0) return writer ? writer->text_offset : 0;
+    if (!writer || !data || size == 0) {
+        return writer ? writer->text_offset : 0;
+    }
 
     uint32_t offset = writer->text_offset;
+    if (size > UINT32_MAX - offset) {
+        return 0;
+    }
     uint32_t new_size = offset + size;
 
     if (!ensure_capacity(&writer->text, &writer->text_capacity, new_size)) {
@@ -157,13 +183,21 @@ uint32_t kro_write_code(KROWriter* writer, const void* data, uint32_t size) {
 
     memcpy(writer->text + offset, data, size);
     writer->text_offset = new_size;
+    if (new_size > writer->text_high_water) {
+        writer->text_high_water = new_size;
+    }
     return offset;
 }
 
 uint32_t kro_write_data(KROWriter* writer, const void* data, uint32_t size) {
-    if (!writer || !data || size == 0) return writer ? writer->data_offset : 0;
+    if (!writer || !data || size == 0) {
+        return writer ? writer->data_offset : 0;
+    }
 
     uint32_t offset = writer->data_offset;
+    if (size > UINT32_MAX - offset) {
+        return 0;
+    }
     uint32_t new_size = offset + size;
 
     if (!ensure_capacity(&writer->data, &writer->data_capacity, new_size)) {
@@ -176,9 +210,14 @@ uint32_t kro_write_data(KROWriter* writer, const void* data, uint32_t size) {
 }
 
 uint32_t kro_write_rodata(KROWriter* writer, const void* data, uint32_t size) {
-    if (!writer || !data || size == 0) return writer ? writer->rodata_offset : 0;
+    if (!writer || !data || size == 0) {
+        return writer ? writer->rodata_offset : 0;
+    }
 
     uint32_t offset = writer->rodata_offset;
+    if (size > UINT32_MAX - offset) {
+        return 0;
+    }
     uint32_t new_size = offset + size;
 
     if (!ensure_capacity(&writer->rodata, &writer->rodata_capacity, new_size)) {
@@ -190,47 +229,40 @@ uint32_t kro_write_rodata(KROWriter* writer, const void* data, uint32_t size) {
     return offset;
 }
 
-static uint32_t align_up(uint32_t value, uint32_t alignment) {
-    if (alignment == 0) return value;
-    return (value + alignment - 1) & ~(alignment - 1);
+static bool align_offset(uint32_t value, uint32_t alignment, uint32_t* result) {
+    if (!alignment || (alignment & (alignment - 1)) || value > UINT32_MAX - (alignment - 1)) {
+        return false;
+    }
+    *result = (value + alignment - 1) & ~(alignment - 1);
+    return true;
 }
 
 uint32_t kro_write_code_aligned(KROWriter* writer, const void* data, uint32_t size, uint32_t align) {
-    if (!writer || align == 0) return 0;
-
-    uint32_t aligned_offset = align_up(writer->text_offset, align);
-    uint32_t padding = aligned_offset - writer->text_offset;
-
-    if (padding > 0) {
-        static const uint8_t nops[16] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-                                          0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
-        for (uint32_t i = 0; i < padding; i++) {
-            kro_write_code(writer, &nops[i % 16], 1);
-        }
+    uint32_t aligned;
+    if (!writer || !data || !size || !align_offset(writer->text_offset, align, &aligned) ||
+        size > UINT32_MAX - aligned || !ensure_capacity(&writer->text, &writer->text_capacity, aligned + size)) {
+        return 0;
     }
-
+    memset(writer->text + writer->text_offset, 0x90, aligned - writer->text_offset);
+    writer->text_offset = aligned;
     return kro_write_code(writer, data, size);
 }
 
 uint32_t kro_write_data_aligned(KROWriter* writer, const void* data, uint32_t size, uint32_t align) {
-    if (!writer || align == 0) return 0;
-
-    uint32_t aligned_offset = align_up(writer->data_offset, align);
-    uint32_t padding = aligned_offset - writer->data_offset;
-
-    if (padding > 0) {
-        uint8_t zeros[16] = {0};
-        for (uint32_t i = 0; i < padding; i += 16) {
-            uint32_t to_write = (padding - i < 16) ? (padding - i) : 16;
-            kro_write_data(writer, zeros, to_write);
-        }
+    uint32_t aligned;
+    if (!writer || !data || !size || !align_offset(writer->data_offset, align, &aligned) ||
+        size > UINT32_MAX - aligned || !ensure_capacity(&writer->data, &writer->data_capacity, aligned + size)) {
+        return 0;
     }
-
+    memset(writer->data + writer->data_offset, 0, aligned - writer->data_offset);
+    writer->data_offset = aligned;
     return kro_write_data(writer, data, size);
 }
 
 static uint32_t add_string(KROWriter* writer, const char* str) {
-    if (!writer || !str) return 0;
+    if (!writer || !str) {
+        return 0;
+    }
 
     uint32_t len = (uint32_t)strlen(str) + 1;
     uint32_t new_size = writer->string_size + len;
@@ -242,7 +274,9 @@ static uint32_t add_string(KROWriter* writer, const char* str) {
         }
 
         char* new_strings = (char*)realloc(writer->strings, new_capacity);
-        if (!new_strings) return 0;
+        if (!new_strings) {
+            return 0;
+        }
 
         writer->strings = new_strings;
         writer->string_capacity = new_capacity;
@@ -255,15 +289,17 @@ static uint32_t add_string(KROWriter* writer, const char* str) {
     return offset;
 }
 
-int kro_add_symbol(KROWriter* writer, const char* name, uint8_t type, uint8_t bind,
-                  uint32_t sec_idx, uint64_t value) {
-    if (!writer || !name) return -1;
+int kro_add_symbol(KROWriter* writer, const char* name, uint8_t type, uint8_t bind, uint32_t sec_idx, uint64_t value) {
+    if (!writer || !name) {
+        return -1;
+    }
 
     if (writer->sym_count >= writer->sym_capacity) {
         uint32_t new_capacity = writer->sym_capacity * 2;
-        KROSymbol* new_symbols = (KROSymbol*)realloc(writer->symbols,
-                                                    new_capacity * sizeof(KROSymbol));
-        if (!new_symbols) return -1;
+        KROSymbol* new_symbols = (KROSymbol*)realloc(writer->symbols, new_capacity * sizeof(KROSymbol));
+        if (!new_symbols) {
+            return -1;
+        }
 
         writer->symbols = new_symbols;
         writer->sym_capacity = new_capacity;
@@ -289,13 +325,16 @@ int kro_add_undefined_symbol(KROWriter* writer, const char* name) {
 }
 
 int kro_add_import_symbol(KROWriter* writer, const char* name, const char* module) {
-    if (!writer || !name || !module) return -1;
+    if (!writer || !name || !module) {
+        return -1;
+    }
 
     if (writer->sym_count >= writer->sym_capacity) {
         uint32_t new_capacity = writer->sym_capacity * 2;
-        KROSymbol* new_symbols = (KROSymbol*)realloc(writer->symbols,
-                                                    new_capacity * sizeof(KROSymbol));
-        if (!new_symbols) return -1;
+        KROSymbol* new_symbols = (KROSymbol*)realloc(writer->symbols, new_capacity * sizeof(KROSymbol));
+        if (!new_symbols) {
+            return -1;
+        }
 
         writer->symbols = new_symbols;
         writer->sym_capacity = new_capacity;
@@ -316,7 +355,9 @@ int kro_add_import_symbol(KROWriter* writer, const char* name, const char* modul
 }
 
 int kro_find_symbol(KROWriter* writer, const char* name) {
-    if (!writer || !name) return -1;
+    if (!writer || !name) {
+        return -1;
+    }
 
     for (uint32_t i = 0; i < writer->sym_count; i++) {
         if (writer->symbols[i].name_offset < writer->string_size) {
@@ -331,16 +372,19 @@ int kro_find_symbol(KROWriter* writer, const char* name) {
 }
 
 void kro_update_symbol_value(KROWriter* writer, int sym_idx, uint64_t value) {
-    if (!writer || sym_idx < 0 || sym_idx >= (int)writer->sym_count) return;
+    if (!writer || sym_idx < 0 || sym_idx >= (int)writer->sym_count) {
+        return;
+    }
     writer->symbols[sym_idx].value = (uint32_t)value;
 }
 
 static bool add_reloc_to_list(RelocList* list, const KRORelocation* reloc) {
     if (list->count >= list->capacity) {
         uint32_t new_capacity = list->capacity * 2;
-        KRORelocation* new_relocs = (KRORelocation*)realloc(list->relocs,
-                                                            new_capacity * sizeof(KRORelocation));
-        if (!new_relocs) return false;
+        KRORelocation* new_relocs = (KRORelocation*)realloc(list->relocs, new_capacity * sizeof(KRORelocation));
+        if (!new_relocs) {
+            return false;
+        }
 
         list->relocs = new_relocs;
         list->capacity = new_capacity;
@@ -350,42 +394,64 @@ static bool add_reloc_to_list(RelocList* list, const KRORelocation* reloc) {
     return true;
 }
 
-void kro_add_reloc(KROWriter* writer, uint32_t sec_idx, uint64_t offset,
-                   uint32_t sym_idx, uint16_t type, int16_t addend) {
-    if (!writer) return;
-
+void kro_add_reloc(KROWriter* writer, uint32_t sec_idx, uint64_t offset, uint32_t sym_idx, uint16_t type,
+                   int16_t addend) {
+    if (!writer) {
+        return;
+    }
 
     KRORelocation reloc = {
-        .offset    = (uint32_t)offset,
-        .sym_idx   = sym_idx,
-        .type      = type,
-        .addend    = addend,
+        .offset = (uint32_t)offset,
+        .sym_idx = sym_idx,
+        .type = type,
+        .addend = addend,
     };
 
     RelocList* list = NULL;
     switch (sec_idx) {
-        case KRO_SEC_TEXT:   list = &writer->text_relocs; break;
-        case KRO_SEC_DATA:   list = &writer->data_relocs; break;
-        case KRO_SEC_RODATA: list = &writer->rodata_relocs; break;
-        case KRO_SEC_BSS:    list = &writer->bss_relocs; break;
-        default: return;
+    case KRO_SEC_TEXT:
+        list = &writer->text_relocs;
+        break;
+    case KRO_SEC_DATA:
+        list = &writer->data_relocs;
+        break;
+    case KRO_SEC_RODATA:
+        list = &writer->rodata_relocs;
+        break;
+    case KRO_SEC_BSS:
+        list = &writer->bss_relocs;
+        break;
+    default:
+        return;
     }
 
     add_reloc_to_list(list, &reloc);
 }
 
 bool kro_set_entry_point(KROWriter* writer, uint64_t offset) {
-    if (!writer) return false;
+    if (!writer) {
+        return false;
+    }
     writer->entry_point = offset;
     writer->has_entry = true;
     return true;
 }
 
 bool kro_reserve_bss(KROWriter* writer, uint32_t size, uint8_t align_log2) {
-    if (!writer) return false;
-    (void)align_log2;
-
-    writer->bss_size += size;
+    if (!writer) {
+        return false;
+    }
+    if (align_log2 >= 32) {
+        return false;
+    }
+    uint32_t alignment = (uint32_t)1 << align_log2, offset;
+    if (!align_offset(writer->bss_size, alignment, &offset) || size > UINT32_MAX - offset) {
+        return false;
+    }
+    writer->bss_size = offset + size;
+    if (alignment > writer->bss_align) {
+        writer->bss_align = alignment;
+    }
     return true;
 }
 
@@ -402,19 +468,21 @@ uint32_t kro_get_rodata_offset(KROWriter* writer) {
 }
 
 void kro_set_code_offset(KROWriter* writer, uint32_t offset) {
-    if (writer) {
+    if (writer && offset <= writer->text_high_water) {
         writer->text_offset = offset;
     }
 }
 
 bool kro_write_file(KROWriter* writer, const char* filename) {
-    if (!writer || !filename) return false;
+    if (!writer || !filename) {
+        return false;
+    }
 
     FILE* fp = fopen(filename, "wb");
-    if (!fp) return false;
-    uint32_t total_reloc_count = writer->text_relocs.count +
-                                  writer->rodata_relocs.count +
-                                  writer->data_relocs.count;
+    if (!fp) {
+        return false;
+    }
+    uint32_t total_reloc_count = writer->text_relocs.count + writer->rodata_relocs.count + writer->data_relocs.count;
     KROHeader header;
     memset(&header, 0, sizeof(header));
     header.magic = KRO_MAGIC;
@@ -428,7 +496,7 @@ bool kro_write_file(KROWriter* writer, const char* filename) {
     header.text_reloc_count = writer->text_relocs.count;
     header.rodata_reloc_count = writer->rodata_relocs.count;
     header.data_reloc_count = writer->data_relocs.count;
-    header.bss_align = 8;
+    header.bss_align = writer->bss_align;
     header.sym_count = writer->sym_count;
     header.strtab_size = writer->string_size;
     header.total_reloc_count = total_reloc_count;
@@ -467,22 +535,22 @@ bool kro_write_file(KROWriter* writer, const char* filename) {
     }
 
     if (writer->text_relocs.count > 0) {
-        if (fwrite(writer->text_relocs.relocs, sizeof(KRORelocation),
-                   writer->text_relocs.count, fp) != writer->text_relocs.count) {
+        if (fwrite(writer->text_relocs.relocs, sizeof(KRORelocation), writer->text_relocs.count, fp) !=
+            writer->text_relocs.count) {
             fclose(fp);
             return false;
         }
     }
     if (writer->rodata_relocs.count > 0) {
-        if (fwrite(writer->rodata_relocs.relocs, sizeof(KRORelocation),
-                   writer->rodata_relocs.count, fp) != writer->rodata_relocs.count) {
+        if (fwrite(writer->rodata_relocs.relocs, sizeof(KRORelocation), writer->rodata_relocs.count, fp) !=
+            writer->rodata_relocs.count) {
             fclose(fp);
             return false;
         }
     }
     if (writer->data_relocs.count > 0) {
-        if (fwrite(writer->data_relocs.relocs, sizeof(KRORelocation),
-                   writer->data_relocs.count, fp) != writer->data_relocs.count) {
+        if (fwrite(writer->data_relocs.relocs, sizeof(KRORelocation), writer->data_relocs.count, fp) !=
+            writer->data_relocs.count) {
             fclose(fp);
             return false;
         }

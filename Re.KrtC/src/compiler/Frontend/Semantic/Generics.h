@@ -23,7 +23,7 @@ typedef struct GenericType {
 typedef struct GenericRegistry {
     GenericType* types;
     int type_count;
-    pthread_mutex_t mutex;  
+    pthread_mutex_t mutex;
 } GenericRegistry;
 
 typedef struct GenericTypeInfo {
@@ -36,14 +36,13 @@ typedef struct GenericTypeInfo {
 GenericRegistry* generics_create_registry(void);
 void generics_destroy_registry(GenericRegistry* registry);
 
-bool generics_register_type(GenericRegistry* registry, const char* name, 
-                           GenericParameter* params, int param_count, ASTNode* definition);
+bool generics_register_type(GenericRegistry* registry, const char* name, GenericParameter* params, int param_count,
+                            ASTNode* definition);
 
 GenericType* generics_lookup_type(GenericRegistry* registry, const char* name);
 
-bool generics_instantiate_type(GenericRegistry* registry, const char* type_name,
-                              const char** type_args, int arg_count,
-                              SymbolTable* target_table);
+bool generics_instantiate_type(GenericRegistry* registry, const char* type_name, const char** type_args, int arg_count,
+                               SymbolTable* target_table);
 
 GenericParameter* generics_create_parameter(const char* name);
 void generics_add_parameter(GenericParameter** list, const char* name);

@@ -5,7 +5,9 @@
 
 ArkLinkUnit* ark_link_unit_create(const char* path) {
     ArkLinkUnit* unit = (ArkLinkUnit*)calloc(1, sizeof(ArkLinkUnit));
-    if (!unit) return NULL;
+    if (!unit) {
+        return NULL;
+    }
 
     if (path) {
         unit->path = strdup(path);
@@ -19,16 +21,24 @@ ArkLinkUnit* ark_link_unit_create(const char* path) {
 }
 
 void ark_link_unit_destroy(ArkLinkUnit* unit) {
-    if (!unit) return;
+    if (!unit) {
+        return;
+    }
 
-    if (unit->path) free((char*)unit->path);
+    if (unit->path) {
+        free((char*)unit->path);
+    }
 
     if (unit->sections) {
         for (size_t i = 0; i < unit->section_count; i++) {
             ArkLinkSection* sec = &unit->sections[i];
-            if (sec->relocs) free(sec->relocs);
-            
-            if (sec->data) free((void*)sec->data);
+            if (sec->relocs) {
+                free(sec->relocs);
+            }
+
+            if (sec->data) {
+                free((void*)sec->data);
+            }
         }
         free(unit->sections);
     }
@@ -36,8 +46,12 @@ void ark_link_unit_destroy(ArkLinkUnit* unit) {
     if (unit->symbols) {
         for (size_t i = 0; i < unit->symbol_count; i++) {
             ArkSymbolDesc* sym = &unit->symbols[i];
-            if (sym->name) free((char*)sym->name);
-            if (sym->import_module) free((void*)sym->import_module);
+            if (sym->name) {
+                free((char*)sym->name);
+            }
+            if (sym->import_module) {
+                free((void*)sym->import_module);
+            }
         }
         free(unit->symbols);
     }
@@ -54,11 +68,15 @@ void ark_link_unit_destroy(ArkLinkUnit* unit) {
 }
 
 ArkLinkSection* ark_link_unit_add_section(ArkLinkUnit* unit, const ArkSectionDesc* desc) {
-    if (!unit || !desc || !desc->name) return NULL;
+    if (!unit || !desc || !desc->name) {
+        return NULL;
+    }
 
-    ArkLinkSection* new_sections = (ArkLinkSection*)realloc(unit->sections,
-        (unit->section_count + 1) * sizeof(ArkLinkSection));
-    if (!new_sections) return NULL;
+    ArkLinkSection* new_sections =
+        (ArkLinkSection*)realloc(unit->sections, (unit->section_count + 1) * sizeof(ArkLinkSection));
+    if (!new_sections) {
+        return NULL;
+    }
 
     unit->sections = new_sections;
     ArkLinkSection* sec = &unit->sections[unit->section_count];
@@ -75,11 +93,15 @@ ArkLinkSection* ark_link_unit_add_section(ArkLinkUnit* unit, const ArkSectionDes
 }
 
 int ark_link_unit_add_symbol(ArkLinkUnit* unit, const ArkSymbolDesc* desc) {
-    if (!unit || !desc) return 0;
+    if (!unit || !desc) {
+        return 0;
+    }
 
-    ArkSymbolDesc* new_symbols = (ArkSymbolDesc*)realloc(unit->symbols,
-        (unit->symbol_count + 1) * sizeof(ArkSymbolDesc));
-    if (!new_symbols) return 0;
+    ArkSymbolDesc* new_symbols =
+        (ArkSymbolDesc*)realloc(unit->symbols, (unit->symbol_count + 1) * sizeof(ArkSymbolDesc));
+    if (!new_symbols) {
+        return 0;
+    }
 
     unit->symbols = new_symbols;
     unit->symbols[unit->symbol_count] = *desc;
@@ -88,10 +110,14 @@ int ark_link_unit_add_symbol(ArkLinkUnit* unit, const ArkSymbolDesc* desc) {
 }
 
 ArkLinkSection* ark_link_section_create(const char* name, const uint8_t* data, size_t size) {
-    if (!name) return NULL;
+    if (!name) {
+        return NULL;
+    }
 
     ArkLinkSection* sec = (ArkLinkSection*)calloc(1, sizeof(ArkLinkSection));
-    if (!sec) return NULL;
+    if (!sec) {
+        return NULL;
+    }
 
     strncpy(sec->name, name, sizeof(sec->name) - 1);
     sec->data = data;
@@ -101,13 +127,17 @@ ArkLinkSection* ark_link_section_create(const char* name, const uint8_t* data, s
 }
 
 int ark_link_section_add_reloc(ArkLinkSection* section, const ArkRelocationDesc* desc) {
-    if (!section || !desc) return 0;
+    if (!section || !desc) {
+        return 0;
+    }
 
     if (section->reloc_count >= section->reloc_capacity) {
         size_t new_capacity = section->reloc_capacity ? section->reloc_capacity * 2 : 8;
-        ArkRelocationDesc* new_relocs = (ArkRelocationDesc*)realloc(section->relocs,
-            new_capacity * sizeof(ArkRelocationDesc));
-        if (!new_relocs) return 0;
+        ArkRelocationDesc* new_relocs =
+            (ArkRelocationDesc*)realloc(section->relocs, new_capacity * sizeof(ArkRelocationDesc));
+        if (!new_relocs) {
+            return 0;
+        }
 
         section->relocs = new_relocs;
         section->reloc_capacity = new_capacity;
@@ -118,11 +148,15 @@ int ark_link_section_add_reloc(ArkLinkSection* section, const ArkRelocationDesc*
 }
 
 int ark_link_unit_add_reloc(ArkLinkUnit* unit, const ArkRelocationDesc* desc) {
-    if (!unit || !desc) return 0;
+    if (!unit || !desc) {
+        return 0;
+    }
 
-    ArkRelocationDesc* new_relocs = (ArkRelocationDesc*)realloc(unit->relocations.relocs,
-        (unit->relocations.count + 1) * sizeof(ArkRelocationDesc));
-    if (!new_relocs) return 0;
+    ArkRelocationDesc* new_relocs = (ArkRelocationDesc*)realloc(
+        unit->relocations.relocs, (unit->relocations.count + 1) * sizeof(ArkRelocationDesc));
+    if (!new_relocs) {
+        return 0;
+    }
 
     unit->relocations.relocs = new_relocs;
     unit->relocations.relocs[unit->relocations.count++] = *desc;

@@ -2,11 +2,12 @@
 # Re.KrtC 基础语法自动跑批
 # 用法: bash run.sh [用例glob]
 set -u
-ROOT="/home/airs_td/桌面/KairoteLang"
-KRTC="$ROOT/Re.KrtC/build/KrtC"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+KRTC="${KRTC:-$ROOT/Re.KrtC/build/KrtC}"
 DIR="$ROOT/Test/SyntaxAudit/cases"
 OUT="$ROOT/Test/SyntaxAudit/out"
 mkdir -p "$OUT"
+cd "$OUT" || exit 1
 
 PASS=0; FAIL=0; CFAIL=0; RCRASH=0
 RESULT_MD="$ROOT/Test/SyntaxAudit/RESULTS.md"
@@ -97,3 +98,4 @@ done
 echo "" >> "$RESULT_MD"
 echo "**统计**: PASS=$PASS, 输出错误=$FAIL, 编译失败=$CFAIL, 运行崩溃=$RCRASH, 总计=$((PASS+FAIL+CFAIL+RCRASH))" >> "$RESULT_MD"
 echo "===> PASS=$PASS FAIL(output)=$FAIL COMPILE_FAIL=$CFAIL CRASH=$RCRASH"
+(( FAIL + CFAIL + RCRASH == 0 ))

@@ -6,126 +6,137 @@
 #include "IrParamTable.h"
 
 #ifndef KRT_IR_INLINE
-    #ifdef _MSC_VER
-        #define KRT_IR_INLINE __forceinline
-    #else
-        #define KRT_IR_INLINE static inline __attribute__((always_inline))
-    #endif
+#ifdef _MSC_VER
+#define KRT_IR_INLINE __forceinline
+#else
+#define KRT_IR_INLINE static inline __attribute__((always_inline))
+#endif
 #endif
 
 #ifndef KRT_IR_LIKELY
-    #ifdef __GNUC__
-        #define KRT_IR_LIKELY(x) __builtin_expect(!!(x), 1)
-        #define KRT_IR_UNLIKELY(x) __builtin_expect(!!(x), 0)
-    #else
-        #define KRT_IR_LIKELY(x) (x)
-        #define KRT_IR_UNLIKELY(x) (x)
-    #endif
+#ifdef __GNUC__
+#define KRT_IR_LIKELY(x) __builtin_expect(!!(x), 1)
+#define KRT_IR_UNLIKELY(x) __builtin_expect(!!(x), 0)
+#else
+#define KRT_IR_LIKELY(x) (x)
+#define KRT_IR_UNLIKELY(x) (x)
+#endif
 #endif
 
 #ifndef KRT_IR_ASSERT_ENABLED
-    #ifdef DEBUG
-        #define KRT_IR_ASSERT_ENABLED 1
-    #else
-        #define KRT_IR_ASSERT_ENABLED 0
-    #endif
+#ifdef DEBUG
+#define KRT_IR_ASSERT_ENABLED 1
+#else
+#define KRT_IR_ASSERT_ENABLED 0
+#endif
 #endif
 
 #ifndef KRT_IR_BOUNDS_CHECK_ENABLED
-    #ifdef DEBUG
-        #define KRT_IR_BOUNDS_CHECK_ENABLED 1
-    #else
-        #define KRT_IR_BOUNDS_CHECK_ENABLED 0
-    #endif
+#ifdef DEBUG
+#define KRT_IR_BOUNDS_CHECK_ENABLED 1
+#else
+#define KRT_IR_BOUNDS_CHECK_ENABLED 0
+#endif
 #endif
 
 #if KRT_IR_ASSERT_ENABLED
-    #define KRT_IR_ASSERT(cond) do { \
-        if (!(cond)) { \
-            KrtError("IR_ASSERT failed: %s at %s:%d", #cond, __FILE__, __LINE__); \
-            assert(cond); \
-        } \
-    } while(0)
-    
-    #define KRT_IR_ASSERT_MSG(cond, msg) do { \
-        if (!(cond)) { \
-            KrtError("IR_ASSERT failed: %s - %s at %s:%d", #cond, msg, __FILE__, __LINE__); \
-            assert(cond); \
-        } \
-    } while(0)
-    
-    #define KRT_IR_ASSERT_NOT_NULL(ptr) KRT_IR_ASSERT_MSG((ptr) != NULL, #ptr " must not be NULL")
-    
-    #define KRT_IR_ASSERT_VALID_BUILDER(builder) do { \
-        KRT_IR_ASSERT_NOT_NULL(builder); \
-        KRT_IR_ASSERT_NOT_NULL((builder)->arena); \
-        KRT_IR_ASSERT_NOT_NULL((builder)->module); \
-    } while(0)
-    
-    #define KRT_IR_ASSERT_VALID_FUNCTION(func) do { \
-        KRT_IR_ASSERT_NOT_NULL(func); \
-        KRT_IR_ASSERT_NOT_NULL((func)->name); \
-        KRT_IR_ASSERT((func)->param_count >= 0); \
-    } while(0)
-    
-    #define KRT_IR_ASSERT_VALID_BLOCK(block) do { \
-        KRT_IR_ASSERT_NOT_NULL(block); \
-        KRT_IR_ASSERT_NOT_NULL((block)->label); \
-    } while(0)
-    
-    #define KRT_IR_ASSERT_VALID_INST(inst) do { \
-        KRT_IR_ASSERT_NOT_NULL(inst); \
-        KRT_IR_ASSERT((inst)->opcode >= KRT_IR_LOAD && (inst)->opcode <= KRT_IR_NOP); \
-        KRT_IR_ASSERT((inst)->operand_count >= 0); \
-        KRT_IR_ASSERT((inst)->operand_count <= (inst)->operand_capacity); \
-    } while(0)
-    
-    #define KRT_IR_ASSERT_VALID_VALUE(val) do { \
-        KRT_IR_ASSERT((val).type >= KRT_IR_VALUE_VOID && (val).type <= KRT_IR_VALUE_FUNCTION); \
-    } while(0)
-    
-    #define KRT_IR_ASSERT_VALID_ARENA(arena) do { \
-        KRT_IR_ASSERT_NOT_NULL(arena); \
-        KRT_IR_ASSERT_NOT_NULL((arena)->current_pool); \
-        KRT_IR_ASSERT((arena)->pool_size > 0); \
-    } while(0)
+#define KRT_IR_ASSERT(cond)                                                                                            \
+    do {                                                                                                               \
+        if (!(cond)) {                                                                                                 \
+            KrtError("IR_ASSERT failed: %s at %s:%d", #cond, __FILE__, __LINE__);                                      \
+            assert(cond);                                                                                              \
+        }                                                                                                              \
+    } while (0)
+
+#define KRT_IR_ASSERT_MSG(cond, msg)                                                                                   \
+    do {                                                                                                               \
+        if (!(cond)) {                                                                                                 \
+            KrtError("IR_ASSERT failed: %s - %s at %s:%d", #cond, msg, __FILE__, __LINE__);                            \
+            assert(cond);                                                                                              \
+        }                                                                                                              \
+    } while (0)
+
+#define KRT_IR_ASSERT_NOT_NULL(ptr) KRT_IR_ASSERT_MSG((ptr) != NULL, #ptr " must not be NULL")
+
+#define KRT_IR_ASSERT_VALID_BUILDER(builder)                                                                           \
+    do {                                                                                                               \
+        KRT_IR_ASSERT_NOT_NULL(builder);                                                                               \
+        KRT_IR_ASSERT_NOT_NULL((builder)->arena);                                                                      \
+        KRT_IR_ASSERT_NOT_NULL((builder)->module);                                                                     \
+    } while (0)
+
+#define KRT_IR_ASSERT_VALID_FUNCTION(func)                                                                             \
+    do {                                                                                                               \
+        KRT_IR_ASSERT_NOT_NULL(func);                                                                                  \
+        KRT_IR_ASSERT_NOT_NULL((func)->name);                                                                          \
+        KRT_IR_ASSERT((func)->param_count >= 0);                                                                       \
+    } while (0)
+
+#define KRT_IR_ASSERT_VALID_BLOCK(block)                                                                               \
+    do {                                                                                                               \
+        KRT_IR_ASSERT_NOT_NULL(block);                                                                                 \
+        KRT_IR_ASSERT_NOT_NULL((block)->label);                                                                        \
+    } while (0)
+
+#define KRT_IR_ASSERT_VALID_INST(inst)                                                                                 \
+    do {                                                                                                               \
+        KRT_IR_ASSERT_NOT_NULL(inst);                                                                                  \
+        KRT_IR_ASSERT((inst)->opcode >= KRT_IR_LOAD && (inst)->opcode <= KRT_IR_NOP);                                  \
+        KRT_IR_ASSERT((inst)->operand_count >= 0);                                                                     \
+        KRT_IR_ASSERT((inst)->operand_count <= (inst)->operand_capacity);                                              \
+    } while (0)
+
+#define KRT_IR_ASSERT_VALID_VALUE(val)                                                                                 \
+    do {                                                                                                               \
+        KRT_IR_ASSERT((val).type >= KRT_IR_VALUE_VOID && (val).type <= KRT_IR_VALUE_FUNCTION);                         \
+    } while (0)
+
+#define KRT_IR_ASSERT_VALID_ARENA(arena)                                                                               \
+    do {                                                                                                               \
+        KRT_IR_ASSERT_NOT_NULL(arena);                                                                                 \
+        KRT_IR_ASSERT_NOT_NULL((arena)->current_pool);                                                                 \
+        KRT_IR_ASSERT((arena)->pool_size > 0);                                                                         \
+    } while (0)
 #else
-    #define KRT_IR_ASSERT(cond) ((void)0)
-    #define KRT_IR_ASSERT_MSG(cond, msg) ((void)0)
-    #define KRT_IR_ASSERT_NOT_NULL(ptr) ((void)0)
-    #define KRT_IR_ASSERT_VALID_BUILDER(builder) ((void)0)
-    #define KRT_IR_ASSERT_VALID_FUNCTION(func) ((void)0)
-    #define KRT_IR_ASSERT_VALID_BLOCK(block) ((void)0)
-    #define KRT_IR_ASSERT_VALID_INST(inst) ((void)0)
-    #define KRT_IR_ASSERT_VALID_VALUE(val) ((void)0)
-    #define KRT_IR_ASSERT_VALID_ARENA(arena) ((void)0)
+#define KRT_IR_ASSERT(cond) ((void)0)
+#define KRT_IR_ASSERT_MSG(cond, msg) ((void)0)
+#define KRT_IR_ASSERT_NOT_NULL(ptr) ((void)0)
+#define KRT_IR_ASSERT_VALID_BUILDER(builder) ((void)0)
+#define KRT_IR_ASSERT_VALID_FUNCTION(func) ((void)0)
+#define KRT_IR_ASSERT_VALID_BLOCK(block) ((void)0)
+#define KRT_IR_ASSERT_VALID_INST(inst) ((void)0)
+#define KRT_IR_ASSERT_VALID_VALUE(val) ((void)0)
+#define KRT_IR_ASSERT_VALID_ARENA(arena) ((void)0)
 #endif
 
 #if KRT_IR_BOUNDS_CHECK_ENABLED
-    #define KRT_IR_BOUNDS_CHECK(index, count) do { \
-        if ((index) < 0 || (index) >= (count)) { \
-            KrtError("IR_BOUNDS_CHECK failed: index=%d, count=%d at %s:%d", \
-                     (int)(index), (int)(count), __FILE__, __LINE__); \
-            assert((index) >= 0 && (index) < (count)); \
-        } \
-    } while(0)
-    
-    #define KRT_IR_BOUNDS_CHECK_ARRAY(ptr, index, count) do { \
-        KRT_IR_ASSERT_NOT_NULL(ptr); \
-        KRT_IR_BOUNDS_CHECK(index, count); \
-    } while(0)
-    
-    #define KRT_IR_CAPACITY_CHECK(current, capacity) do { \
-        if ((current) >= (capacity)) { \
-            KrtError("IR_CAPACITY_CHECK failed: current=%d, capacity=%d at %s:%d", \
-                     (int)(current), (int)(capacity), __FILE__, __LINE__); \
-            assert((current) < (capacity)); \
-        } \
-    } while(0)
+#define KRT_IR_BOUNDS_CHECK(index, count)                                                                              \
+    do {                                                                                                               \
+        if ((index) < 0 || (index) >= (count)) {                                                                       \
+            KrtError("IR_BOUNDS_CHECK failed: index=%d, count=%d at %s:%d", (int)(index), (int)(count), __FILE__,      \
+                     __LINE__);                                                                                        \
+            assert((index) >= 0 && (index) < (count));                                                                 \
+        }                                                                                                              \
+    } while (0)
+
+#define KRT_IR_BOUNDS_CHECK_ARRAY(ptr, index, count)                                                                   \
+    do {                                                                                                               \
+        KRT_IR_ASSERT_NOT_NULL(ptr);                                                                                   \
+        KRT_IR_BOUNDS_CHECK(index, count);                                                                             \
+    } while (0)
+
+#define KRT_IR_CAPACITY_CHECK(current, capacity)                                                                       \
+    do {                                                                                                               \
+        if ((current) >= (capacity)) {                                                                                 \
+            KrtError("IR_CAPACITY_CHECK failed: current=%d, capacity=%d at %s:%d", (int)(current), (int)(capacity),    \
+                     __FILE__, __LINE__);                                                                              \
+            assert((current) < (capacity));                                                                            \
+        }                                                                                                              \
+    } while (0)
 #else
-    #define KRT_IR_BOUNDS_CHECK(index, count) ((void)0)
-    #define KRT_IR_BOUNDS_CHECK_ARRAY(ptr, index, count) ((void)0)
-    #define KRT_IR_CAPACITY_CHECK(current, capacity) ((void)0)
+#define KRT_IR_BOUNDS_CHECK(index, count) ((void)0)
+#define KRT_IR_BOUNDS_CHECK_ARRAY(ptr, index, count) ((void)0)
+#define KRT_IR_CAPACITY_CHECK(current, capacity) ((void)0)
 #endif
 
 #define KRT_IR_ALLOC_FAIL_ABORT 0
@@ -133,45 +144,51 @@
 #define KRT_IR_ALLOC_FAIL_LOG_AND_RETURN 2
 
 #ifndef KRT_IR_ALLOC_FAIL_POLICY
-    #define KRT_IR_ALLOC_FAIL_POLICY KRT_IR_ALLOC_FAIL_LOG_AND_RETURN
+#define KRT_IR_ALLOC_FAIL_POLICY KRT_IR_ALLOC_FAIL_LOG_AND_RETURN
 #endif
 
 #if KRT_IR_ALLOC_FAIL_POLICY == KRT_IR_ALLOC_FAIL_ABORT
-    #define KRT_IR_HANDLE_ALLOC_FAIL(msg) do { \
-        KrtError("IR_ALLOC_FAIL: %s at %s:%d", msg, __FILE__, __LINE__); \
-        abort(); \
-    } while(0)
+#define KRT_IR_HANDLE_ALLOC_FAIL(msg)                                                                                  \
+    do {                                                                                                               \
+        KrtError("IR_ALLOC_FAIL: %s at %s:%d", msg, __FILE__, __LINE__);                                               \
+        abort();                                                                                                       \
+    } while (0)
 #elif KRT_IR_ALLOC_FAIL_POLICY == KRT_IR_ALLOC_FAIL_RETURN_NULL
-    #define KRT_IR_HANDLE_ALLOC_FAIL(msg) do { \
-        return NULL; \
-    } while(0)
-#else 
-    #define KRT_IR_HANDLE_ALLOC_FAIL(msg) do { \
-        KrtError("IR_ALLOC_FAIL: %s at %s:%d", msg, __FILE__, __LINE__); \
-        return NULL; \
-    } while(0)
+#define KRT_IR_HANDLE_ALLOC_FAIL(msg)                                                                                  \
+    do {                                                                                                               \
+        return NULL;                                                                                                   \
+    } while (0)
+#else
+#define KRT_IR_HANDLE_ALLOC_FAIL(msg)                                                                                  \
+    do {                                                                                                               \
+        KrtError("IR_ALLOC_FAIL: %s at %s:%d", msg, __FILE__, __LINE__);                                               \
+        return NULL;                                                                                                   \
+    } while (0)
 #endif
 
-#define KRT_IR_ALLOC_CHECKED(ptr, type, arena) do { \
-    (ptr) = (type*)KrtIrArenaAlloc((arena), sizeof(type)); \
-    if (KRT_IR_UNLIKELY(!(ptr))) { \
-        KRT_IR_HANDLE_ALLOC_FAIL("Failed to allocate " #type); \
-    } \
-} while(0)
+#define KRT_IR_ALLOC_CHECKED(ptr, type, arena)                                                                         \
+    do {                                                                                                               \
+        (ptr) = (type*)KrtIrArenaAlloc((arena), sizeof(type));                                                         \
+        if (KRT_IR_UNLIKELY(!(ptr))) {                                                                                 \
+            KRT_IR_HANDLE_ALLOC_FAIL("Failed to allocate " #type);                                                     \
+        }                                                                                                              \
+    } while (0)
 
-#define KRT_IR_ALLOC_ARRAY_CHECKED(ptr, type, count, arena) do { \
-    (ptr) = (type*)KrtIrArenaAlloc((arena), sizeof(type) * (count)); \
-    if (KRT_IR_UNLIKELY(!(ptr))) { \
-        KRT_IR_HANDLE_ALLOC_FAIL("Failed to allocate array of " #type); \
-    } \
-} while(0)
+#define KRT_IR_ALLOC_ARRAY_CHECKED(ptr, type, count, arena)                                                            \
+    do {                                                                                                               \
+        (ptr) = (type*)KrtIrArenaAlloc((arena), sizeof(type) * (count));                                               \
+        if (KRT_IR_UNLIKELY(!(ptr))) {                                                                                 \
+            KRT_IR_HANDLE_ALLOC_FAIL("Failed to allocate array of " #type);                                            \
+        }                                                                                                              \
+    } while (0)
 
-#define KRT_IR_STRDUP_CHECKED(ptr, str, arena) do { \
-    (ptr) = KrtIrArenaStrdup((arena), (str)); \
-    if (KRT_IR_UNLIKELY(!(ptr))) { \
-        KRT_IR_HANDLE_ALLOC_FAIL("Failed to duplicate string"); \
-    } \
-} while(0)
+#define KRT_IR_STRDUP_CHECKED(ptr, str, arena)                                                                         \
+    do {                                                                                                               \
+        (ptr) = KrtIrArenaStrdup((arena), (str));                                                                      \
+        if (KRT_IR_UNLIKELY(!(ptr))) {                                                                                 \
+            KRT_IR_HANDLE_ALLOC_FAIL("Failed to duplicate string");                                                    \
+        }                                                                                                              \
+    } while (0)
 typedef struct KrtIRModule KrtIRModule;
 typedef struct KrtIRFunction KrtIRFunction;
 typedef struct KrtIRBasicBlock KrtIRBasicBlock;
@@ -188,13 +205,16 @@ typedef enum {
     KRT_IR_VALUE_FUNCTION,
     /* 双精度立即数: 物化时按 IEEE754 位型装入, 不走整数编码 */
     KRT_IR_VALUE_IMM_F,
+    KRT_IR_VALUE_INTEGER,
 } KrtIRValueType;
 #define KRT_IR_TYPE_I64 KRT_IR_VALUE_IMM
 
 typedef struct {
     KrtIRValueType type;
+    KrtTokenType value_type;
     union {
         double imm;
+        KrtUInt128 integer;
         char* name;
         int index;
         int string_const_id;
@@ -251,6 +271,9 @@ typedef enum {
     KRT_IR_FLE,
     KRT_IR_FGT,
     KRT_IR_FGE,
+    KRT_IR_ADDRESS_OF,
+    KRT_IR_STACKALLOC,
+    KRT_IR_CALL_INDIRECT,
 } KrtIROpcode;
 
 #define KRT_IR_CACHE_LINE_SIZE 64
@@ -292,6 +315,7 @@ typedef struct {
     char* name;
     KrtTokenType type;
     int is_params;
+    bool is_array;
 } KrtIRParam;
 
 typedef struct {
@@ -299,6 +323,8 @@ typedef struct {
     KrtTokenType type;
     int has_initializer;
     double init_number;
+    KrtUInt128 init_integer;
+    bool is_integer_initializer;
 } KrtIRGlobal;
 
 typedef struct KrtIRFunction {
@@ -317,6 +343,7 @@ typedef struct KrtIRFunction {
 } KrtIRFunction;
 
 typedef struct KrtIRModule {
+    int optimization_level;
     KrtIRFunction* functions;
     KrtIRFunction* main_function;
     char** string_constants;
@@ -348,7 +375,12 @@ struct KrtIRBuilder {
     int layout_count;
     int layout_capacity;
     void* semantic_analyzer;
-    struct KrtIrVarType { const char* name; const char* ir_name; int token; int is_array; }* var_types;
+    struct KrtIrVarType {
+        const char* name;
+        const char* ir_name;
+        int token;
+        int is_array;
+    }* var_types;
     int var_type_count;
     int var_type_capacity;
     KrtIRMemoryArena* arena;
@@ -360,7 +392,14 @@ KrtIRBuilder* KrtIrBuilderCreate(void);
 void KrtIrBuilderDestroy(KrtIRBuilder* builder);
 KrtIRModule* KrtIrModuleCreate(void);
 void KrtIrModuleDestroy(KrtIRModule* module);
-KrtIRFunction* KrtIrFunctionCreate(KrtIRBuilder* builder, const char* name, KrtIRParam* params, int param_count, KrtTokenType return_type);
+/**
+ * @brief Create a module-owned function, reusing an unresolved declaration when possible.
+ * @param param_count Parameter count, or -1 for an unresolved declaration.
+ * @return The function, or NULL for invalid arguments or allocation failure.
+ * @note Parameter names are copied; failure leaves existing declarations unchanged.
+ */
+KrtIRFunction* KrtIrFunctionCreate(KrtIRBuilder* builder, const char* name, KrtIRParam* params, int param_count,
+                                   KrtTokenType return_type);
 void KrtIrFunctionSetEntry(KrtIRBuilder* builder, KrtIRFunction* func);
 KrtIRBasicBlock* KrtIrBlockCreate(KrtIRBuilder* builder, const char* label);
 void KrtIrBlockSetCurrent(KrtIRBuilder* builder, KrtIRBasicBlock* block);
@@ -387,8 +426,19 @@ KrtIRValue KrtIrLoadPtrSized(KrtIRBuilder* builder, KrtIRValue base, int offset,
 void KrtIrStorePtr(KrtIRBuilder* builder, KrtIRValue base, int offset, KrtIRValue value);
 void KrtIrStorePtrSized(KrtIRBuilder* builder, KrtIRValue base, int offset, KrtIRValue value, int size);
 void KrtIrArrayStore(KrtIRBuilder* builder, KrtIRValue array, KrtIRValue index, KrtIRValue value);
-void KrtIrArrayStoreSized(KrtIRBuilder* builder, KrtIRValue array, KrtIRValue index, KrtIRValue value, int element_size);
+void KrtIrArrayStoreSized(KrtIRBuilder* builder, KrtIRValue array, KrtIRValue index, KrtIRValue value,
+                          int element_size);
 KrtIRValue KrtIrAdd(KrtIRBuilder* builder, KrtIRValue lhs, KrtIRValue rhs);
+/** @brief Construct an integer constant normalized to the declared width and signedness. */
+KrtIRValue KrtIrInteger(KrtUInt128 integer, KrtTokenType type);
+/**
+ * @brief Fold a supported integer operation without changing runtime trap behavior.
+ * @param result Receives the constant on success; otherwise remains unchanged.
+ * @return Whether the operation was folded.
+ */
+bool KrtIrFoldInteger(KrtIROpcode op, KrtIRValue lhs, KrtIRValue rhs, KrtIRValue* result);
+/** @brief Annotate a value and its matching last instruction with a storage type. */
+KrtIRValue KrtIrTyped(KrtIRBuilder* builder, KrtIRValue value, KrtTokenType type);
 KrtIRValue KrtIrImmF(KrtIRBuilder* builder, double value);
 KrtIRValue KrtIrFloatBinary(KrtIRBuilder* builder, KrtIROpcode op, KrtIRValue lhs, KrtIRValue rhs);
 KrtIRValue KrtIrSub(KrtIRBuilder* builder, KrtIRValue lhs, KrtIRValue rhs);
@@ -420,6 +470,20 @@ KrtIRBasicBlock* KrtIrGetCurrentBreakBlock(KrtIRBuilder* builder);
 KrtIRValue KrtIrImm(KrtIRBuilder* builder, double value);
 KrtIRValue KrtIrVar(KrtIRBuilder* builder, const char* name);
 KrtIRValue KrtIrTemp(KrtIRBuilder* builder);
+/** @brief Emit the address of storage, or return a void value if instruction creation fails. */
+KrtIRValue KrtIrAddressOf(KrtIRBuilder* builder, KrtIRValue storage);
+/**
+ * @brief Emit stack allocation of count elements, retaining wide counts for overflow checks.
+ * @param element_size Element size in bytes.
+ * @return The pointer value, or a void value if instruction creation fails.
+ */
+KrtIRValue KrtIrStackAlloc(KrtIRBuilder* builder, KrtIRValue count, int element_size);
+/**
+ * @brief Emit an indirect call and convert args in place to the signature's ABI types.
+ * @return The call result, or a void value for an invalid call context or allocation failure.
+ */
+KrtIRValue KrtIrCallIndirect(KrtIRBuilder* builder, KrtIRValue callee, KrtIRValue* args, int count,
+                             KrtFunctionType* signature);
 KrtIRValue KrtIrArg(KrtIRBuilder* builder, int index);
 KrtIRValue KrtIrStringConst(KrtIRBuilder* builder, const char* str);
 KrtIRValue KrtIrPhi(KrtIRBuilder* builder, KrtIRValue* values, KrtIRBasicBlock** blocks, int count);
@@ -437,6 +501,7 @@ void KrtIrPrint(KrtIRModule* module, FILE* output);
 typedef struct KrtIRFieldOffset {
     char* name;
     int offset;
+    KrtTokenType type;
 } KrtIRFieldOffset;
 
 typedef struct KrtIRClassLayout {
@@ -444,9 +509,16 @@ typedef struct KrtIRClassLayout {
     KrtIRFieldOffset* fields;
     int field_count;
     int field_capacity;
+    int size;
 } KrtIRClassLayout;
+/**
+ * @brief Register the aligned storage layout for a class, preserving existing registrations.
+ * @note Allocation failure reports a fatal compilation error; no partial layout is registered.
+ */
 void KrtIrRegisterClassLayout(KrtIRBuilder* builder, const char* class_name, ASTNode* class_body);
 int KrtIrLayoutGetOffset(KrtIRBuilder* builder, const char* class_name, const char* field_name);
+/** @brief Look up a field's storage type, returning TOKEN_EOF when unavailable. */
+KrtTokenType KrtIrLayoutGetType(KrtIRBuilder* builder, const char* class_name, const char* field_name);
 int KrtIrLayoutGetSize(KrtIRBuilder* builder, const char* class_name);
 
 KrtIRParamNode* KrtIrFunctionFindParam(KrtIRFunction* func, const char* name);
@@ -509,8 +581,8 @@ KRT_IR_INLINE bool KrtIrBlockIsValid(KrtIRBasicBlock* block) {
 }
 
 KRT_IR_INLINE bool KrtIrInstIsValid(KrtIRInst* inst) {
-    return inst && inst->opcode >= KRT_IR_LOAD && inst->opcode <= KRT_IR_NOP
-        && inst->operand_count >= 0 && inst->operand_count <= inst->operand_capacity;
+    return inst && inst->opcode >= KRT_IR_LOAD && inst->opcode <= KRT_IR_NOP && inst->operand_count >= 0 &&
+           inst->operand_count <= inst->operand_capacity;
 }
 
 KRT_IR_INLINE bool KrtIrValueIsValid(KrtIRValue* value) {

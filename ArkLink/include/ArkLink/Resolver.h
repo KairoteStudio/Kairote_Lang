@@ -77,7 +77,10 @@ typedef struct ArkResolverPlan {
     uint32_t entry_offset;
 } ArkResolverPlan;
 
-ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* units, size_t unit_count, ArkResolverPlan* out_plan);
+/** @brief Resolve units into an owned output plan and return the resolution status. */
+ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* units, size_t unit_count,
+                                   ArkResolverPlan* out_plan);
+/** @brief Release storage owned by a resolver plan. */
 void ark_resolver_plan_destroy(ArkLinkContext* ctx, ArkResolverPlan* plan);
 
 #ifdef __cplusplus

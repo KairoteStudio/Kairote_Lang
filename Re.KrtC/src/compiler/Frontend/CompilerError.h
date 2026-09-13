@@ -3,12 +3,7 @@
 
 #include <stdbool.h>
 
-typedef enum {
-    KRT_ERROR_NOTE,
-    KRT_ERROR_WARNING,
-    KRT_ERROR_ERROR,
-    KRT_ERROR_FATAL
-} KrtErrorSeverity;
+typedef enum { KRT_ERROR_NOTE, KRT_ERROR_WARNING, KRT_ERROR_ERROR, KRT_ERROR_FATAL } KrtErrorSeverity;
 
 typedef enum {
     KRT_ERROR_STAGE_UNKNOWN,
@@ -47,14 +42,10 @@ KrtErrorReport* KrtErrorReportCreate(void);
 void KrtErrorReportDestroy(KrtErrorReport* report);
 void KrtErrorReportSetSourceCode(KrtErrorReport* report, const char* source_code);
 void KrtErrorReportSetFilePath(KrtErrorReport* report, const char* file_path);
-void KrtErrorReportAdd(KrtErrorReport* report, KrtErrorSeverity severity,
-                       KrtErrorStage stage, int line, int column,
+void KrtErrorReportAdd(KrtErrorReport* report, KrtErrorSeverity severity, KrtErrorStage stage, int line, int column,
                        const char* message, const char* hint);
-void KrtErrorReportAddEx(KrtErrorReport* report, KrtErrorSeverity severity,
-                          KrtErrorStage stage, int line, int column,
-                          int end_line, int end_column,
-                          const char* error_code, const char* message, 
-                          const char* hint);
+void KrtErrorReportAddEx(KrtErrorReport* report, KrtErrorSeverity severity, KrtErrorStage stage, int line, int column,
+                         int end_line, int end_column, const char* error_code, const char* message, const char* hint);
 void KrtErrorReportPrint(KrtErrorReport* report);
 const char* KrtErrorStageName(KrtErrorStage stage);
 const char* KrtErrorSeverityName(KrtErrorSeverity severity);

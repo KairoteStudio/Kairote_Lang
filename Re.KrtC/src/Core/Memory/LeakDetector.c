@@ -5,13 +5,12 @@
 #include <string.h>
 #include <time.h>
 
-extern char *strrchr(const char *s, int c);
-extern size_t strlen(const char *s);
-
 MemoryLeakDetector g_memory_leak_detector = {0};
 
 void KrtMemoryLeakDetectorInit(void) {
-    if (!KRT_LEAK_DETECTION_ENABLED) return;
+    if (!KRT_LEAK_DETECTION_ENABLED) {
+        return;
+    }
 
     g_memory_leak_detector.capacity = 1024;
     g_memory_leak_detector.allocations = KRT_MALLOC(sizeof(MemoryAllocationInfo) * g_memory_leak_detector.capacity);
@@ -25,11 +24,12 @@ void KrtMemoryLeakDetectorInit(void) {
         g_memory_leak_detector.enabled = 0;
         return;
     }
-
 }
 
 void KrtMemoryLeakDetectorCleanup(void) {
-    if (!KRT_LEAK_DETECTION_ENABLED || !g_memory_leak_detector.enabled) return;
+    if (!KRT_LEAK_DETECTION_ENABLED || !g_memory_leak_detector.enabled) {
+        return;
+    }
 
     KrtReportMemoryLeaks();
 
@@ -41,13 +41,12 @@ void KrtMemoryLeakDetectorCleanup(void) {
     g_memory_leak_detector.capacity = 0;
     g_memory_leak_detector.count = 0;
     g_memory_leak_detector.enabled = 0;
-
 }
 
 static void expand_allocation_array(void) {
     size_t new_capacity = g_memory_leak_detector.capacity * 2;
-    MemoryAllocationInfo* new_allocations = KRT_REALLOC(g_memory_leak_detector.allocations,
-                                                    sizeof(MemoryAllocationInfo) * new_capacity);
+    MemoryAllocationInfo* new_allocations =
+        KRT_REALLOC(g_memory_leak_detector.allocations, sizeof(MemoryAllocationInfo) * new_capacity);
 
     if (!new_allocations) {
         return;
@@ -55,12 +54,12 @@ static void expand_allocation_array(void) {
 
     g_memory_leak_detector.allocations = new_allocations;
     g_memory_leak_detector.capacity = new_capacity;
-
 }
 
-void KrtRecordAllocation(void* ptr, size_t size, const char* file, int line,
-                         const char* function, const char* type) {
-    if (!KRT_LEAK_DETECTION_ENABLED || !g_memory_leak_detector.enabled || !ptr) return;
+void KrtRecordAllocation(void* ptr, size_t size, const char* file, int line, const char* function, const char* type) {
+    if (!KRT_LEAK_DETECTION_ENABLED || !g_memory_leak_detector.enabled || !ptr) {
+        return;
+    }
 
     if (g_memory_leak_detector.count >= g_memory_leak_detector.capacity) {
         expand_allocation_array();
@@ -77,14 +76,15 @@ void KrtRecordAllocation(void* ptr, size_t size, const char* file, int line,
 
     g_memory_leak_detector.count++;
     g_memory_leak_detector.total_allocated += size;
-
 }
 
 void KrtRecordDeallocation(void* ptr, const char* file, int line, const char* function) {
     (void)file;
     (void)line;
     (void)function;
-    if (!KRT_LEAK_DETECTION_ENABLED || !g_memory_leak_detector.enabled || !ptr) return;
+    if (!KRT_LEAK_DETECTION_ENABLED || !g_memory_leak_detector.enabled || !ptr) {
+        return;
+    }
 
     for (size_t i = 0; i < g_memory_leak_detector.count; i++) {
         if (g_memory_leak_detector.allocations[i].ptr == ptr) {
@@ -101,38 +101,54 @@ void KrtRecordDeallocation(void* ptr, const char* file, int line, const char* fu
             return;
         }
     }
-
 }
 
 void KrtReportMemoryLeaks(void) {
-    if (!KRT_LEAK_DETECTION_ENABLED || !g_memory_leak_detector.enabled) return;
-    if (g_memory_leak_detector.count == 0) return;
+    if (!KRT_LEAK_DETECTION_ENABLED || !g_memory_leak_detector.enabled) {
+        return;
+    }
+    if (g_memory_leak_detector.count == 0) {
+        return;
+    }
 
     size_t total_leaked = 0;
     for (size_t i = 0; i < g_memory_leak_detector.count; i++) {
         total_leaked += g_memory_leak_detector.allocations[i].size;
     }
 
-    KrtError("[LEAK] blk=%zu, bytes=%zu, alloc=%zu, free=%zu\n",
-              g_memory_leak_detector.count, total_leaked,
-              g_memory_leak_detector.total_allocated,
-              g_memory_leak_detector.total_freed);
+    KrtError("[LEAK] blk=%zu, bytes=%zu, alloc=%zu, free=%zu\n", g_memory_leak_detector.count, total_leaked,
+             g_memory_leak_detector.total_allocated, g_memory_leak_detector.total_freed);
 }
 
-void KrtGetMemoryStats(size_t* current_usage, size_t* peak_usage,
-                        size_t* total_allocations, size_t* total_leaks) {
+void KrtGetMemoryStats(size_t* current_usage, size_t* peak_usage, size_t* total_allocations, size_t* total_leaks) {
     if (!KRT_LEAK_DETECTION_ENABLED || !g_memory_leak_detector.enabled) {
-        if (current_usage) *current_usage = 0;
-        if (peak_usage) *peak_usage = 0;
-        if (total_allocations) *total_allocations = 0;
-        if (total_leaks) *total_leaks = 0;
+        if (current_usage) {
+            *current_usage = 0;
+        }
+        if (peak_usage) {
+            *peak_usage = 0;
+        }
+        if (total_allocations) {
+            *total_allocations = 0;
+        }
+        if (total_leaks) {
+            *total_leaks = 0;
+        }
         return;
     }
 
-    if (current_usage) *current_usage = g_memory_leak_detector.total_allocated - g_memory_leak_detector.total_freed;
-    if (peak_usage) *peak_usage = g_memory_leak_detector.total_allocated;
-    if (total_allocations) *total_allocations = g_memory_leak_detector.total_allocated;
-    if (total_leaks) *total_leaks = g_memory_leak_detector.count;
+    if (current_usage) {
+        *current_usage = g_memory_leak_detector.total_allocated - g_memory_leak_detector.total_freed;
+    }
+    if (peak_usage) {
+        *peak_usage = g_memory_leak_detector.total_allocated;
+    }
+    if (total_allocations) {
+        *total_allocations = g_memory_leak_detector.total_allocated;
+    }
+    if (total_leaks) {
+        *total_leaks = g_memory_leak_detector.count;
+    }
 }
 
 void* KrtMallocLeakDetected(size_t size, const char* file, int line) {
@@ -166,7 +182,9 @@ void* KrtReallocLeakDetected(void* ptr, size_t size, const char* file, int line)
 }
 
 char* KrtStrdupLeakDetected(const char* str, const char* file, int line) {
-    if (!str) return NULL;
+    if (!str) {
+        return NULL;
+    }
 
     size_t len = strlen(str);
     char* new_str = KRT_MALLOC(len + 1);

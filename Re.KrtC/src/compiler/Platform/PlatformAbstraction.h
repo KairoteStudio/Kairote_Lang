@@ -7,15 +7,15 @@
 typedef struct KrtPlatform {
     KrtPlatformType type;
     const char* name;
-    
+
     char path_separator;
     int (*is_absolute_path)(const char* path);
     int (*path_exists)(const char* path);
     int (*is_directory)(const char* path);
-    
+
     int (*supports_color)(void);
     void (*set_utf8)(void);
-    
+
     int (*execute_command)(const char* command);
 } KrtPlatform;
 
@@ -35,4 +35,4 @@ int KrtPlatformExecuteCommand(KrtPlatform* platform, const char* command);
 
 KrtPlatform* KrtPlatformGetCurrent(void);
 
-#endif 
+#endif

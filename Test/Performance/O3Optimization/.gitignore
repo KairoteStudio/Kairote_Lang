@@ -1,0 +1,5 @@
+__pycache__/
+Artifacts/*.elf
+Artifacts/*.o
+Artifacts/*.kro
+Probes/

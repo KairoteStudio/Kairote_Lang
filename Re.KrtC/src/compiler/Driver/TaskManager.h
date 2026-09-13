@@ -31,4 +31,4 @@ void KrtBuildSummarySetDuration(double duration);
 void KrtBuildSummarySetFailed(int failed);
 KrtTaskStats* KrtGetGlobalTaskStats(void);
 
-#endif 
+#endif

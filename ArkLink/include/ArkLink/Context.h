@@ -18,11 +18,13 @@ typedef struct ArkSectionBuffer {
 
 typedef struct ArkLinkContext ArkLinkContext;
 
+/** @brief Create an owned link context for target, or return NULL on failure. */
 ArkLinkContext* ark_context_create(ArkLinkTarget target);
+/** @brief Release ctx and its owned data, accepting NULL. */
 void ark_context_destroy(ArkLinkContext* ctx);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif 
+#endif

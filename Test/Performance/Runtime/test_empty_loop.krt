@@ -1,0 +1,26 @@
+public static extern int64 syscall(int64 n, int64 a1, int64 a2, int64 a3, int64 a4, int64 a5, int64 a6);
+
+int64 BenchmarkNow(int64 storage) {
+    if (syscall(228, 1, storage, 0, 0, 0, 0) != 0) { return -1; }
+    int64[] stamp = (int64[])storage;
+    return stamp[0] * 1000000000 + stamp[1];
+}
+
+int32 BenchmarkFinish(int64 started, int64 stopped, int64 result) {
+    if (started < 0 || stopped < started) { return 90; }
+    int64[] report = new int64[2];
+    report[0] = stopped - started;
+    report[1] = result;
+    if (syscall(1, 2, (int64)report, 16, 0, 0, 0) != 16) { return 91; }
+    return 0;
+}
+
+int32 main() {
+    int64[] stamp = new int64[2];
+    int32 i = 0;
+    int64 started = BenchmarkNow((int64)stamp);
+    for (; i < 100000; i++) { }
+    int64 stopped = BenchmarkNow((int64)stamp);
+    if (i != 100000) { return 1; }
+    return BenchmarkFinish(started, stopped, (int64)i);
+}

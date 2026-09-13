@@ -14,7 +14,7 @@ typedef enum {
     KRT_TARGET_IR_TEXT,
     KRT_TARGET_VM_BYTECODE,
     KRT_TARGET_KRO_OBJ,
-    KRT_TARGET_EXE_PLATFORM     
+    KRT_TARGET_EXE_PLATFORM
 } KrtTargetPlatform;
 
 #include "Bytecode.h"
@@ -22,13 +22,15 @@ typedef enum {
 typedef struct {
     FILE* output_file;
     KrtTargetPlatform target;
+    int optimization_level;
     KrtChunk last_chunk;
-    char output_filename[256]; 
+    char output_filename[256];
 } KrtCompiler;
 
 KrtCompiler* KrtCompilerCreate(const char* output_filename, KrtTargetPlatform target);
 void KrtCompilerDestroy(KrtCompiler* compiler);
 
-void KrtCompilerCompile(KrtCompiler* compiler, ASTNode* ast, void* semantic_analyzer);
+/** Compile ast using the borrowed analyzer; return false if generation or output fails. */
+bool KrtCompilerCompile(KrtCompiler* compiler, ASTNode* ast, void* semantic_analyzer);
 
 #endif
