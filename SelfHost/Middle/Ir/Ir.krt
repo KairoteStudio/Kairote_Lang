@@ -187,7 +187,8 @@ bool KrtIrLowerReturnFunction(KrtAstNode unit, KrtIrFunction output) {
         KrtAstNode conditional = unit.left.left;
         int64 condition = 0;
         KrtAstNode selected = null;
-        if (KrtIrTryEvaluateConstant(conditional.left, ref condition)) {
+        if (KrtIrTryEvaluateConstant(conditional.left, ref condition) ||
+            KrtIrTryEvaluateWithLocals(conditional.left, unit, conditional, ref condition)) {
             if (condition != 0) { selected = conditional.right; }
             else { selected = conditional.alternate; }
         }
@@ -195,6 +196,31 @@ bool KrtIrLowerReturnFunction(KrtAstNode unit, KrtIrFunction output) {
             selected.left == null || selected.left.kind != KrtAstKind.Return) { return false; }
         int64 immediate_if = 0;
         if (!KrtIrTryEvaluateConstant(selected.left.left, ref immediate_if)) { return false; }
+        output.instruction_count = 2;
+        output.opcodes = new int32[2]; output.types = new int32[2]; output.results = new int32[2];
+        output.lefts = new int32[2]; output.rights = new int32[2]; output.immediates = new int64[2];
+        output.opcodes[0] = (int32)KrtIrOpcode.Constant; output.opcodes[1] = (int32)KrtIrOpcode.Return;
+        output.types[0] = (int32)KrtIrType.Int32; output.types[1] = (int32)KrtIrType.Int32;
+        output.immediates[0] = immediate_if; output.lefts[1] = 0;
+        return KrtIrValidateFunction(output);
+    }
+    // A constant local may feed the final conditional after its declaration.
+    // Fold that shape to the same single-return IR as a literal condition.
+    KrtAstNode final_conditional = unit.left.left;
+    while (final_conditional.next != null) { final_conditional = final_conditional.next; }
+    if (final_conditional.kind == KrtAstKind.If) {
+        int64 condition = 0;
+        KrtAstNode selected = null;
+        if (KrtIrTryEvaluateConstant(final_conditional.left, ref condition) ||
+            KrtIrTryEvaluateWithLocals(final_conditional.left, unit, final_conditional, ref condition)) {
+            if (condition != 0) { selected = final_conditional.right; }
+            else { selected = final_conditional.alternate; }
+        }
+        if (selected == null || selected.kind != KrtAstKind.Block || selected.child_count != 1 ||
+            selected.left == null || selected.left.kind != KrtAstKind.Return) { return false; }
+        int64 immediate_if = 0;
+        if (!KrtIrTryEvaluateConstant(selected.left.left, ref immediate_if) &&
+            !KrtIrTryEvaluateWithLocals(selected.left.left, unit, final_conditional, ref immediate_if)) { return false; }
         output.instruction_count = 2;
         output.opcodes = new int32[2]; output.types = new int32[2]; output.results = new int32[2];
         output.lefts = new int32[2]; output.rights = new int32[2]; output.immediates = new int64[2];
