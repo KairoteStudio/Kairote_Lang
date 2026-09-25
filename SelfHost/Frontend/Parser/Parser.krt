@@ -166,6 +166,12 @@ KrtAstNode KrtParserParsePrimary(KrtParser parser) {
                 node = access;
                 continue;
             }
+            if (KrtParserTokenText2(parser, 43, 43) || KrtParserTokenText2(parser, 45, 45)) {
+                int32 operation = KrtParserTokenText2(parser, 43, 43) ? 201 : 202;
+                KrtLexerNext(parser.lexer, parser.token);
+                node = KrtAstMakeUnary(operation, node);
+                continue;
+            }
             break;
         }
     }
@@ -253,6 +259,14 @@ KrtAstNode KrtParserParseExpression(KrtParser parser, int32 minimum) {
 bool KrtParserTokenText(KrtParser parser, byte expected) {
     if (parser.token.kind != KrtTokenKind.Punctuation || parser.token.length != 1) { return false; }
     unsafe(using krt.mem;) { return ((byte*)parser.lexer.source)[parser.token.start] == expected; }
+}
+
+bool KrtParserTokenText2(KrtParser parser, byte first, byte second) {
+    if (parser.token.kind != KrtTokenKind.Punctuation || parser.token.length != 2) { return false; }
+    unsafe(using krt.mem;) {
+        byte* source = (byte*)parser.lexer.source;
+        return source[parser.token.start] == first && source[parser.token.start + 1] == second;
+    }
 }
 
 bool KrtParserIsWord(KrtParser parser, string word) {
@@ -465,6 +479,44 @@ KrtAstNode KrtParserParseStatement(KrtParser parser) {
         KrtAstNode body = KrtParserParseBlock(parser);
         KrtAstNode result = KrtAstMake(KrtAstKind.While, start, parser.token.start - start);
         result.left = condition; result.right = body; result.child_count = 2;
+        return result;
+    }
+    if (KrtParserIsWord(parser, "do")) {
+        int64 start = parser.token.start;
+        KrtLexerNext(parser.lexer, parser.token);
+        KrtAstNode body = KrtParserParseBlock(parser);
+        if (!KrtParserIsWord(parser, "while")) { parser.errors = parser.errors + 1; return KrtAstMake(KrtAstKind.Invalid, start, 0); }
+        KrtLexerNext(parser.lexer, parser.token);
+        if (!KrtParserTokenText(parser, 40)) { parser.errors = parser.errors + 1; return KrtAstMake(KrtAstKind.Invalid, start, 0); }
+        KrtLexerNext(parser.lexer, parser.token);
+        KrtAstNode condition = KrtParserParseExpression(parser, 1);
+        if (!KrtParserTokenText(parser, 41)) { parser.errors = parser.errors + 1; }
+        else { KrtLexerNext(parser.lexer, parser.token); }
+        if (!KrtParserTokenText(parser, 59)) { parser.errors = parser.errors + 1; }
+        else { KrtLexerNext(parser.lexer, parser.token); }
+        KrtAstNode result = KrtAstMake(KrtAstKind.DoWhile, start, parser.token.start - start);
+        result.left = body; result.right = condition; result.child_count = 2;
+        return result;
+    }
+    if (KrtParserIsWord(parser, "for")) {
+        int64 start = parser.token.start;
+        KrtLexerNext(parser.lexer, parser.token);
+        if (!KrtParserTokenText(parser, 40)) { parser.errors = parser.errors + 1; return KrtAstMake(KrtAstKind.Invalid, start, 0); }
+        KrtLexerNext(parser.lexer, parser.token);
+        KrtAstNode initializer = null;
+        if (!KrtParserTokenText(parser, 59)) { initializer = KrtParserParseStatement(parser); }
+        else { KrtLexerNext(parser.lexer, parser.token); }
+        KrtAstNode condition = null;
+        if (!KrtParserTokenText(parser, 59)) { condition = KrtParserParseExpression(parser, 1); }
+        if (!KrtParserTokenText(parser, 59)) { parser.errors = parser.errors + 1; }
+        else { KrtLexerNext(parser.lexer, parser.token); }
+        KrtAstNode increment = null;
+        if (!KrtParserTokenText(parser, 41)) { increment = KrtParserParseExpression(parser, 1); }
+        if (!KrtParserTokenText(parser, 41)) { parser.errors = parser.errors + 1; }
+        else { KrtLexerNext(parser.lexer, parser.token); }
+        KrtAstNode body = KrtParserParseBlock(parser);
+        KrtAstNode result = KrtAstMake(KrtAstKind.For, start, parser.token.start - start);
+        result.left = initializer; result.right = condition; result.alternate = increment; result.next = body; result.child_count = 4;
         return result;
     }
     bool looks_like_type = false;
