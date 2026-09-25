@@ -258,6 +258,13 @@ KrtAstNode KrtParserParseUnary(KrtParser parser) {
         KrtAstNode reference = KrtAstMakeUnary(200, KrtParserParseUnary(parser));
         return reference;
     }
+    if (KrtParserIsWord(parser, "await")) {
+        int64 start = parser.token.start;
+        KrtLexerNext(parser.lexer, parser.token);
+        KrtAstNode operand = KrtParserParseUnary(parser);
+        KrtAstNode result = KrtAstMake(KrtAstKind.Await, start, operand.start + operand.length - start);
+        result.left = operand; result.child_count = 1; return result;
+    }
     if (parser.token.kind == KrtTokenKind.Punctuation && parser.token.length == 1) {
         int32 operation = KrtParserOperator(parser);
         if (operation == 33 || operation == 45 || operation == 43 || operation == 126 || operation == 42 || operation == 38) {
@@ -641,6 +648,31 @@ KrtAstNode KrtParserParseStatement(KrtParser parser) {
         KrtAstNode result = KrtAstMake(KrtAstKind.Throw, start, parser.token.start - start);
         result.left = value; result.child_count = 1;
         return result;
+    }
+    if (KrtParserIsWord(parser, "yield")) {
+        int64 start = parser.token.start;
+        KrtLexerNext(parser.lexer, parser.token);
+        bool yielding_value = KrtParserIsWord(parser, "return");
+        if (yielding_value) { KrtLexerNext(parser.lexer, parser.token); }
+        else if (KrtParserIsWord(parser, "break")) { KrtLexerNext(parser.lexer, parser.token); }
+        KrtAstNode value = null;
+        if (yielding_value) { value = KrtParserParseExpression(parser, 1); }
+        if (!KrtParserTokenText(parser, 59)) { parser.errors = parser.errors + 1; }
+        else { KrtLexerNext(parser.lexer, parser.token); }
+        KrtAstNode result = KrtAstMake(yielding_value ? KrtAstKind.YieldReturn : KrtAstKind.YieldBreak, start, parser.token.start - start);
+        result.left = value; result.child_count = value == null ? 0 : 1; return result;
+    }
+    if (KrtParserIsWord(parser, "lock") || KrtParserIsWord(parser, "fixed")) {
+        bool is_fixed = KrtParserIsWord(parser, "fixed"); int64 start = parser.token.start;
+        KrtLexerNext(parser.lexer, parser.token);
+        if (!KrtParserTokenText(parser, 40)) { parser.errors = parser.errors + 1; return KrtAstMake(KrtAstKind.Invalid, start, 0); }
+        KrtLexerNext(parser.lexer, parser.token);
+        KrtAstNode value = KrtParserParseExpression(parser, 1);
+        if (!KrtParserTokenText(parser, 41)) { parser.errors = parser.errors + 1; }
+        else { KrtLexerNext(parser.lexer, parser.token); }
+        KrtAstNode body = KrtParserParseBlock(parser);
+        KrtAstNode result = KrtAstMake(is_fixed ? KrtAstKind.Fixed : KrtAstKind.Lock, start, parser.token.start - start);
+        result.left = value; result.right = body; result.child_count = 2; return result;
     }
     if (KrtParserIsWord(parser, "try")) {
         int64 start = parser.token.start;
