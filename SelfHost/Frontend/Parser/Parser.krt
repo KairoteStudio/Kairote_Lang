@@ -183,6 +183,8 @@ int32 KrtParserOperator(KrtParser parser) {
             if (first == 62 && second == 61) { return 103; }
             if (first == 38 && second == 38) { return 104; }
             if (first == 124 && second == 124) { return 105; }
+            if (first == 60 && second == 60) { return 106; }
+            if (first == 62 && second == 62) { return 107; }
         }
         return (int32)first;
     }
@@ -216,6 +218,11 @@ int32 KrtParserPrecedence(KrtParser parser) {
         if (parser.token.length == 2 && (value == 60 || value == 62) && ((byte*)parser.lexer.source)[parser.token.start + 1] == 61) { return 8; }
         if (parser.token.length == 2 && value == 38 && ((byte*)parser.lexer.source)[parser.token.start + 1] == 38) { return 4; }
         if (parser.token.length == 2 && value == 124 && ((byte*)parser.lexer.source)[parser.token.start + 1] == 124) { return 3; }
+        if (parser.token.length == 2 && (value == 60 || value == 62) &&
+            ((byte*)parser.lexer.source)[parser.token.start + 1] == value) { return 9; }
+        if (parser.token.length == 1 && value == 38) { return 6; }
+        if (parser.token.length == 1 && value == 94) { return 5; }
+        if (parser.token.length == 1 && value == 124) { return 4; }
     }
     return 0;
 }
