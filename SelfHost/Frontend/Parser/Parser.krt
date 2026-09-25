@@ -48,6 +48,7 @@ KrtAstNode KrtParserParsePrimary(KrtParser parser) {
         int64 type_start = parser.token.start;
         int64 type_length = parser.token.length;
         KrtLexerNext(parser.lexer, parser.token);
+        KrtParserSkipGenericArguments(parser);
         KrtAstNode count = null;
         if (KrtParserTokenText(parser, 40)) {
             KrtLexerNext(parser.lexer, parser.token);
@@ -291,6 +292,20 @@ bool KrtParserTokenText2(KrtParser parser, byte first, byte second) {
     }
 }
 
+bool KrtParserSkipGenericArguments(KrtParser parser) {
+    if (!KrtParserTokenText(parser, 60)) { return false; }
+    int32 depth = 0;
+    while (parser.token.kind != KrtTokenKind.Eof) {
+        if (KrtParserTokenText(parser, 60)) { depth = depth + 1; }
+        else if (KrtParserTokenText(parser, 62)) { depth = depth - 1; }
+        else if (KrtParserTokenText2(parser, 62, 62)) { depth = depth - 2; }
+        KrtLexerNext(parser.lexer, parser.token);
+        if (depth <= 0) { return true; }
+    }
+    parser.errors = parser.errors + 1;
+    return false;
+}
+
 bool KrtParserIsWord(KrtParser parser, string word) {
     int64 length = 0;
     unsafe(using krt.mem;) {
@@ -363,6 +378,7 @@ KrtAstNode KrtParserParseFunction(KrtParser parser) {
             if (KrtParserIsWord(parser, "ref")) { by_reference = true; KrtLexerNext(parser.lexer, parser.token); }
             if (unit.parameter_count >= 8 || parser.token.kind != KrtTokenKind.Identifier) { parser.errors = parser.errors + 1; return unit; }
             KrtLexerNext(parser.lexer, parser.token);
+            KrtParserSkipGenericArguments(parser);
             if (KrtParserTokenText(parser, 42)) { KrtLexerNext(parser.lexer, parser.token); }
             if (parser.token.kind != KrtTokenKind.Identifier) { parser.errors = parser.errors + 1; return unit; }
             unit.parameter_starts[unit.parameter_count] = parser.token.start;
@@ -687,6 +703,7 @@ KrtAstNode KrtParserParseStatement(KrtParser parser) {
         KrtParserIsWord(parser, "string") || KrtParserIsWord(parser, "byte") || looks_like_type) {
         int64 start = parser.token.start;
         KrtLexerNext(parser.lexer, parser.token);
+        KrtParserSkipGenericArguments(parser);
         if (KrtParserTokenText(parser, 42)) { KrtLexerNext(parser.lexer, parser.token); }
         if (parser.token.kind != KrtTokenKind.Identifier) {
             parser.errors = parser.errors + 1;
