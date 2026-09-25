@@ -575,10 +575,31 @@ bool KrtParserSkipGlobalConstant(KrtParser parser) {
     return true;
 }
 
+bool KrtParserSkipDelegateOrTemplate(KrtParser parser) {
+    if (!KrtParserIsWord(parser, "delegate") && !KrtParserIsWord(parser, "template")) { return false; }
+    int32 parens = 0; int32 angles = 0; int32 braces = 0;
+    while (parser.token.kind != KrtTokenKind.Eof) {
+        if (KrtParserTokenText(parser, 40)) { parens = parens + 1; }
+        else if (KrtParserTokenText(parser, 41) && parens > 0) { parens = parens - 1; }
+        else if (KrtParserTokenText(parser, 60)) { angles = angles + 1; }
+        else if (KrtParserTokenText(parser, 62) && angles > 0) { angles = angles - 1; }
+        else if (KrtParserTokenText(parser, 123)) { braces = braces + 1; }
+        else if (KrtParserTokenText(parser, 125) && braces > 0) { braces = braces - 1; }
+        KrtLexerNext(parser.lexer, parser.token);
+        if (parens == 0 && angles == 0 && braces == 0 && KrtParserTokenText(parser, 59)) {
+            KrtLexerNext(parser.lexer, parser.token); return true;
+        }
+        if (braces == 0 && parens == 0 && angles == 0 && parser.token.kind == KrtTokenKind.Eof) { return true; }
+    }
+    parser.errors = parser.errors + 1;
+    return true;
+}
+
 KrtAstNode KrtParserParseCompilationUnit(KrtParser parser) {
     KrtAstNode unit = KrtAstMake(KrtAstKind.Program, parser.token.start, 0);
     while (KrtParserSkipSourceDirective(parser)) { }
     while (KrtParserSkipGlobalConstant(parser)) { }
+    while (KrtParserSkipDelegateOrTemplate(parser)) { }
     while (KrtParserSkipTypeDeclaration(parser)) { }
     KrtAstNode first = KrtParserParseFunction(parser);
     if (first.kind != KrtAstKind.Function) { parser.errors = parser.errors + 1; return unit; }
@@ -586,6 +607,7 @@ KrtAstNode KrtParserParseCompilationUnit(KrtParser parser) {
     unit.child_count = 1;
     while (KrtParserSkipSourceDirective(parser)) { }
     while (KrtParserSkipGlobalConstant(parser)) { }
+    while (KrtParserSkipDelegateOrTemplate(parser)) { }
     while (KrtParserSkipTypeDeclaration(parser)) { }
     KrtAstNode tail = first;
     while (parser.token.kind != KrtTokenKind.Eof && unit.child_count < 256) {
@@ -596,6 +618,7 @@ KrtAstNode KrtParserParseCompilationUnit(KrtParser parser) {
         unit.child_count = unit.child_count + 1;
         while (KrtParserSkipSourceDirective(parser)) { }
         while (KrtParserSkipGlobalConstant(parser)) { }
+        while (KrtParserSkipDelegateOrTemplate(parser)) { }
         while (KrtParserSkipTypeDeclaration(parser)) { }
     }
     if (parser.token.kind != KrtTokenKind.Eof) { parser.errors = parser.errors + 1; }
