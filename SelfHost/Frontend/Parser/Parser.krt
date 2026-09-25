@@ -354,13 +354,34 @@ bool KrtParserSkipTypeDeclaration(KrtParser parser) {
     return true;
 }
 
+// Source-level directives do not produce executable AST nodes, but they are
+// part of the language grammar and must be consumed before declarations.
+bool KrtParserSkipSourceDirective(KrtParser parser) {
+    if (!KrtParserIsWord(parser, "using") && !KrtParserIsWord(parser, "namespace")) { return false; }
+    KrtLexerNext(parser.lexer, parser.token);
+    int32 angle_depth = 0;
+    while (parser.token.kind != KrtTokenKind.Eof) {
+        if (KrtParserTokenText(parser, 60)) { angle_depth = angle_depth + 1; }
+        else if (KrtParserTokenText(parser, 62) && angle_depth > 0) { angle_depth = angle_depth - 1; }
+        if (KrtParserTokenText(parser, 59) && angle_depth == 0) {
+            KrtLexerNext(parser.lexer, parser.token);
+            return true;
+        }
+        KrtLexerNext(parser.lexer, parser.token);
+    }
+    parser.errors = parser.errors + 1;
+    return true;
+}
+
 KrtAstNode KrtParserParseCompilationUnit(KrtParser parser) {
     KrtAstNode unit = KrtAstMake(KrtAstKind.Program, parser.token.start, 0);
+    while (KrtParserSkipSourceDirective(parser)) { }
     while (KrtParserSkipTypeDeclaration(parser)) { }
     KrtAstNode first = KrtParserParseFunction(parser);
     if (first.kind != KrtAstKind.Function) { parser.errors = parser.errors + 1; return unit; }
     unit.left = first;
     unit.child_count = 1;
+    while (KrtParserSkipSourceDirective(parser)) { }
     while (KrtParserSkipTypeDeclaration(parser)) { }
     KrtAstNode tail = first;
     while (parser.token.kind != KrtTokenKind.Eof && unit.child_count < 256) {
@@ -369,6 +390,7 @@ KrtAstNode KrtParserParseCompilationUnit(KrtParser parser) {
         tail.next = next;
         tail = next;
         unit.child_count = unit.child_count + 1;
+        while (KrtParserSkipSourceDirective(parser)) { }
         while (KrtParserSkipTypeDeclaration(parser)) { }
     }
     if (parser.token.kind != KrtTokenKind.Eof) { parser.errors = parser.errors + 1; }

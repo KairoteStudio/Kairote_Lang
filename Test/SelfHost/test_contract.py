@@ -211,7 +211,7 @@ int32 main() {{
             'Frontend/Semantic/Semantic.krt',
         ]
         prelude = '\n'.join((ROOT / 'SelfHost' / part).read_text() for part in parts)
-        text = 'int32 main() { return 0; } int32 alpha() { return 1; } int32 beta() { return 2; }'
+        text = 'using System; namespace Demo; int32 main() { return 0; } int32 alpha() { return 1; } int32 beta() { return 2; }'
         with tempfile.TemporaryDirectory(prefix='krt-order-') as directory:
             work = Path(directory)
             source = work / 'Order.krt'
