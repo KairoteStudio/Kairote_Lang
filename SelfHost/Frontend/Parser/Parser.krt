@@ -494,15 +494,28 @@ bool KrtParserSkipSourceDirective(KrtParser parser) {
     return true;
 }
 
+bool KrtParserSkipGlobalConstant(KrtParser parser) {
+    if (!KrtParserIsWord(parser, "const")) { return false; }
+    KrtLexerNext(parser.lexer, parser.token);
+    while (parser.token.kind != KrtTokenKind.Eof && !KrtParserTokenText(parser, 59)) {
+        KrtLexerNext(parser.lexer, parser.token);
+    }
+    if (!KrtParserTokenText(parser, 59)) { parser.errors = parser.errors + 1; return true; }
+    KrtLexerNext(parser.lexer, parser.token);
+    return true;
+}
+
 KrtAstNode KrtParserParseCompilationUnit(KrtParser parser) {
     KrtAstNode unit = KrtAstMake(KrtAstKind.Program, parser.token.start, 0);
     while (KrtParserSkipSourceDirective(parser)) { }
+    while (KrtParserSkipGlobalConstant(parser)) { }
     while (KrtParserSkipTypeDeclaration(parser)) { }
     KrtAstNode first = KrtParserParseFunction(parser);
     if (first.kind != KrtAstKind.Function) { parser.errors = parser.errors + 1; return unit; }
     unit.left = first;
     unit.child_count = 1;
     while (KrtParserSkipSourceDirective(parser)) { }
+    while (KrtParserSkipGlobalConstant(parser)) { }
     while (KrtParserSkipTypeDeclaration(parser)) { }
     KrtAstNode tail = first;
     while (parser.token.kind != KrtTokenKind.Eof && unit.child_count < 256) {
@@ -512,6 +525,7 @@ KrtAstNode KrtParserParseCompilationUnit(KrtParser parser) {
         tail = next;
         unit.child_count = unit.child_count + 1;
         while (KrtParserSkipSourceDirective(parser)) { }
+        while (KrtParserSkipGlobalConstant(parser)) { }
         while (KrtParserSkipTypeDeclaration(parser)) { }
     }
     if (parser.token.kind != KrtTokenKind.Eof) { parser.errors = parser.errors + 1; }
