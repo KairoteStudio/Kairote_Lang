@@ -64,6 +64,23 @@ KrtAstNode KrtParserParsePrimary(KrtParser parser) {
         node.left = count; node.child_count = count == null ? 0 : 1;
         return node;
     }
+    if (KrtParserTokenText(parser, 91)) {
+        int64 start = token.start;
+        KrtLexerNext(parser.lexer, parser.token);
+        KrtAstNode first = null; KrtAstNode tail = null; int32 count = 0;
+        while (!KrtParserTokenText(parser, 93) && parser.token.kind != KrtTokenKind.Eof) {
+            KrtAstNode element = KrtParserParseExpression(parser, 1);
+            if (first == null) { first = element; } else { tail.next = element; }
+            tail = element; count = count + 1;
+            if (!KrtParserTokenText(parser, 44)) { break; }
+            KrtLexerNext(parser.lexer, parser.token);
+        }
+        if (!KrtParserTokenText(parser, 93)) { parser.errors = parser.errors + 1; }
+        else { KrtLexerNext(parser.lexer, parser.token); }
+        KrtAstNode array = KrtAstMake(KrtAstKind.ArrayLiteral, start, parser.token.start - start);
+        array.left = first; array.child_count = count;
+        return array;
+    }
     if (token.kind == KrtTokenKind.Punctuation && token.length == 1) {
         unsafe(using krt.mem;) {
             byte value = ((byte*)parser.lexer.source)[token.start];
@@ -531,7 +548,8 @@ KrtAstNode KrtParserParseStatement(KrtParser parser) {
             looks_like_type = first >= 65 && first <= 90;
         }
     }
-    if (KrtParserIsWord(parser, "int32") || KrtParserIsWord(parser, "int64") || KrtParserIsWord(parser, "bool") ||
+    if (KrtParserIsWord(parser, "var") || KrtParserIsWord(parser, "let") ||
+        KrtParserIsWord(parser, "int32") || KrtParserIsWord(parser, "int64") || KrtParserIsWord(parser, "bool") ||
         KrtParserIsWord(parser, "string") || KrtParserIsWord(parser, "byte") || looks_like_type) {
         int64 start = parser.token.start;
         KrtLexerNext(parser.lexer, parser.token);
@@ -543,12 +561,11 @@ KrtAstNode KrtParserParseStatement(KrtParser parser) {
         int64 name_start = parser.token.start;
         int64 name_length = parser.token.length;
         KrtLexerNext(parser.lexer, parser.token);
-        if (!KrtParserTokenText(parser, 61)) {
-            parser.errors = parser.errors + 1;
-            return KrtAstMake(KrtAstKind.Invalid, start, 0);
+        KrtAstNode initializer = null;
+        if (KrtParserTokenText(parser, 61)) {
+            KrtLexerNext(parser.lexer, parser.token);
+            initializer = KrtParserParseExpression(parser, 1);
         }
-        KrtLexerNext(parser.lexer, parser.token);
-        KrtAstNode initializer = KrtParserParseExpression(parser, 1);
         if (!KrtParserTokenText(parser, 59)) { parser.errors = parser.errors + 1; }
         else { KrtLexerNext(parser.lexer, parser.token); }
         KrtAstNode declaration = KrtAstMake(KrtAstKind.Variable, start, parser.token.start - start);
