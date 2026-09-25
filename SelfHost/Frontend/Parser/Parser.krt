@@ -326,6 +326,15 @@ KrtAstNode KrtParserParseBlock(KrtParser parser) {
 }
 
 KrtAstNode KrtParserParseFunction(KrtParser parser) {
+    bool external = false;
+    while (KrtParserIsWord(parser, "public") || KrtParserIsWord(parser, "private") ||
+           KrtParserIsWord(parser, "protected") || KrtParserIsWord(parser, "static") ||
+           KrtParserIsWord(parser, "virtual") || KrtParserIsWord(parser, "override") ||
+           KrtParserIsWord(parser, "abstract") || KrtParserIsWord(parser, "async") ||
+           KrtParserIsWord(parser, "extern")) {
+        if (KrtParserIsWord(parser, "extern")) { external = true; }
+        KrtLexerNext(parser.lexer, parser.token);
+    }
     KrtToken type_token = parser.token;
     if (parser.token.kind != KrtTokenKind.Identifier) {
         parser.errors = parser.errors + 1; return KrtAstMake(KrtAstKind.Invalid, type_token.start, type_token.length);
@@ -366,7 +375,12 @@ KrtAstNode KrtParserParseFunction(KrtParser parser) {
     }
     if (!KrtParserTokenText(parser, 41)) { parser.errors = parser.errors + 1; return unit; }
     KrtLexerNext(parser.lexer, parser.token);
-    unit.left = KrtParserParseBlock(parser);
+    if (external && KrtParserTokenText(parser, 59)) {
+        KrtLexerNext(parser.lexer, parser.token);
+        unit.left = KrtAstMake(KrtAstKind.Block, parser.token.start, 0);
+    } else {
+        unit.left = KrtParserParseBlock(parser);
+    }
     unit.length = parser.token.start - start;
     return unit;
 }
