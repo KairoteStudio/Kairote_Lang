@@ -131,6 +131,12 @@ bool KrtIrTryEvaluateWithLocals(KrtAstNode node, KrtAstNode unit, KrtAstNode bef
     }
     if (node.kind == KrtAstKind.Integer || node.kind == KrtAstKind.Boolean) { value = node.value; return true; }
     if (node.kind == KrtAstKind.Null) { value = 0; return true; }
+    if (node.kind == KrtAstKind.Ternary) {
+        int64 condition = 0;
+        if (!KrtIrTryEvaluateWithLocals(node.left, unit, before, ref condition)) { return false; }
+        if (condition != 0) { return KrtIrTryEvaluateWithLocals(node.right, unit, before, ref value); }
+        return KrtIrTryEvaluateWithLocals(node.next, unit, before, ref value);
+    }
     if (node.kind == KrtAstKind.Unary) {
         int64 operand = 0;
         if (!KrtIrTryEvaluateWithLocals(node.left, unit, before, ref operand)) { return false; }
