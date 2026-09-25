@@ -437,7 +437,27 @@ KrtAstNode KrtParserParseFunction(KrtParser parser) {
 }
 
 bool KrtParserSkipTypeDeclaration(KrtParser parser) {
-    if (!KrtParserIsWord(parser, "enum") && !KrtParserIsWord(parser, "class")) { return false; }
+    int64 saved_position = parser.lexer.position;
+    int64 saved_line = parser.lexer.line;
+    int64 saved_column = parser.lexer.column;
+    KrtTokenKind saved_kind = parser.token.kind;
+    int64 saved_start = parser.token.start;
+    int64 saved_length = parser.token.length;
+    int64 saved_token_line = parser.token.line;
+    int64 saved_token_column = parser.token.column;
+    int32 saved_error = parser.token.error;
+    while (KrtParserIsWord(parser, "public") || KrtParserIsWord(parser, "private") ||
+           KrtParserIsWord(parser, "protected") || KrtParserIsWord(parser, "static") ||
+           KrtParserIsWord(parser, "abstract") || KrtParserIsWord(parser, "partial")) {
+        KrtLexerNext(parser.lexer, parser.token);
+    }
+    if (!KrtParserIsWord(parser, "enum") && !KrtParserIsWord(parser, "class") &&
+        !KrtParserIsWord(parser, "struct") && !KrtParserIsWord(parser, "interface")) {
+        parser.lexer.position = saved_position; parser.lexer.line = saved_line; parser.lexer.column = saved_column;
+        parser.token.kind = saved_kind; parser.token.start = saved_start; parser.token.length = saved_length;
+        parser.token.line = saved_token_line; parser.token.column = saved_token_column; parser.token.error = saved_error;
+        return false;
+    }
     KrtLexerNext(parser.lexer, parser.token);
     int32 braces = 0;
     while (parser.token.kind != KrtTokenKind.Eof) {
