@@ -191,6 +191,11 @@ int32 KrtParserOperator(KrtParser parser) {
             if (first == 124 && second == 124) { return 105; }
             if (first == 60 && second == 60) { return 106; }
             if (first == 62 && second == 62) { return 107; }
+            if (first == 43 && second == 61) { return 108; }
+            if (first == 45 && second == 61) { return 109; }
+            if (first == 42 && second == 61) { return 110; }
+            if (first == 47 && second == 61) { return 111; }
+            if (first == 37 && second == 61) { return 112; }
         }
         return (int32)first;
     }
@@ -574,6 +579,18 @@ KrtAstNode KrtParserParseStatement(KrtParser parser) {
     if (parser.token.kind == KrtTokenKind.Identifier) {
         int64 start = parser.token.start;
         KrtAstNode expression = KrtParserParseExpression(parser, 1);
+        if (parser.token.kind == KrtTokenKind.Punctuation && parser.token.length == 2) {
+            int32 operation = KrtParserOperator(parser);
+            if (operation >= 108 && operation <= 112) {
+                KrtLexerNext(parser.lexer, parser.token);
+                KrtAstNode value = KrtParserParseExpression(parser, 1);
+                if (!KrtParserTokenText(parser, 59)) { parser.errors = parser.errors + 1; }
+                else { KrtLexerNext(parser.lexer, parser.token); }
+                KrtAstNode compound = KrtAstMake(KrtAstKind.CompoundAssign, start, parser.token.start - start);
+                compound.left = expression; compound.right = value; compound.op = operation; compound.child_count = 2;
+                return compound;
+            }
+        }
         if (KrtParserTokenText(parser, 61)) {
             KrtLexerNext(parser.lexer, parser.token);
             KrtAstNode value = KrtParserParseExpression(parser, 1);
