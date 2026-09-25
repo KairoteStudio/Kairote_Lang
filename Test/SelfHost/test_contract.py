@@ -83,6 +83,14 @@ class ContractTests(unittest.TestCase):
             self.assertEqual(if_link.returncode, 0, if_link.stdout + if_link.stderr)
             if_probe.chmod(0o755)
             self.assertEqual(subprocess.run([str(if_probe)], cwd=work, timeout=10).returncode, 7)
+            (work / "program.krt").write_text("int32 main() { int32 flag = 1; if (flag) { return 7; } else { return 9; } }")
+            self.assertEqual(subprocess.run([str(compiler)], cwd=work, timeout=10).returncode, 0)
+            local_if_probe = work / "local-if-probe"
+            local_if_link = subprocess.run([str(ARKLINK), "stage1-probe.kro", "--target", "elf", "-o", str(local_if_probe)],
+                                           cwd=work, capture_output=True, text=True, timeout=10)
+            self.assertEqual(local_if_link.returncode, 0, local_if_link.stdout + local_if_link.stderr)
+            local_if_probe.chmod(0o755)
+            self.assertEqual(subprocess.run([str(local_if_probe)], cwd=work, timeout=10).returncode, 7)
             (work / "program.krt").write_text("int32 main() { byte* p = stackalloc byte[4]; p[0] = 42; return p[0]; }")
             self.assertEqual(subprocess.run([str(compiler)], cwd=work, timeout=10).returncode, 0)
             memory_probe = work / "memory-probe"
