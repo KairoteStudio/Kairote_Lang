@@ -1,0 +1,503 @@
+enum KrtSemanticError { NoError = 0, DuplicateName = 1, UndefinedName = 2, TypeMismatch = 3, MissingReturn = 4 }
+
+class KrtSymbol {
+    public string name;
+    public KrtIrType type;
+    public bool mutable;
+}
+
+class KrtScope {
+    public KrtScope parent;
+    public int32 count;
+    public KrtSymbol[] symbols;
+}
+
+bool KrtSemanticValidateBlockShape(KrtAstNode block) {
+    if (block == null || block.kind != KrtAstKind.Block) { return false; }
+    KrtAstNode statement = block.left;
+    int32 checked = 0;
+    while (statement != null && checked < block.child_count) {
+        if (statement.kind == KrtAstKind.If) {
+            if (!KrtSemanticValidateIfShape(statement)) { return false; }
+        } else if (statement.kind == KrtAstKind.While) {
+            if (statement.left == null || statement.right == null || !KrtSemanticValidateBlockShape(statement.right)) { return false; }
+        } else if (statement.kind == KrtAstKind.Unsafe) {
+            if (!KrtSemanticValidateBlockShape(statement.left)) { return false; }
+        } else if (statement.kind == KrtAstKind.Delete) {
+            if (statement.left == null) { return false; }
+        } else if (statement.kind == KrtAstKind.Break || statement.kind == KrtAstKind.Continue) {
+        } else if (statement.kind == KrtAstKind.Variable) {
+            if (statement.left == null) { return false; }
+        } else if (statement.kind == KrtAstKind.Return) {
+            // Empty returns are valid in void functions; the function-level type checker
+            // will reject them when a non-void return is required.
+        } else if (statement.kind == KrtAstKind.Assign || statement.kind == KrtAstKind.Expression) {
+            if (statement.left == null || (statement.kind == KrtAstKind.Assign && statement.right == null)) { return false; }
+        } else { return false; }
+        statement = statement.next;
+        checked = checked + 1;
+    }
+    return checked == block.child_count;
+}
+
+bool KrtSemanticValidateIfShape(KrtAstNode conditional) {
+    if (conditional == null || conditional.kind != KrtAstKind.If || conditional.left == null || conditional.right == null ||
+        !KrtSemanticValidateBlockShape(conditional.right)) { return false; }
+    if (conditional.alternate == null) { return true; }
+    if (conditional.alternate.kind == KrtAstKind.If) { return KrtSemanticValidateIfShape(conditional.alternate); }
+    return KrtSemanticValidateBlockShape(conditional.alternate);
+}
+
+bool KrtSemanticValidateLoopControl(KrtAstNode block, bool in_loop) {
+    if (block == null || block.kind != KrtAstKind.Block) { return false; }
+    KrtAstNode statement = block.left;
+    while (statement != null) {
+        if (statement.kind == KrtAstKind.Break || statement.kind == KrtAstKind.Continue) {
+            if (!in_loop) { return false; }
+        } else if (statement.kind == KrtAstKind.While) {
+            if (!KrtSemanticValidateLoopControl(statement.right, true)) { return false; }
+        } else if (statement.kind == KrtAstKind.If) {
+            if (!KrtSemanticValidateLoopControl(statement.right, in_loop)) { return false; }
+            if (statement.alternate != null && statement.alternate.kind == KrtAstKind.Block &&
+                !KrtSemanticValidateLoopControl(statement.alternate, in_loop)) { return false; }
+            if (statement.alternate != null && statement.alternate.kind == KrtAstKind.If) {
+                if (!KrtSemanticValidateLoopControl(statement.alternate.right, in_loop)) { return false; }
+            }
+        } else if (statement.kind == KrtAstKind.Unsafe) {
+            if (!KrtSemanticValidateLoopControl(statement.left, in_loop)) { return false; }
+        }
+        statement = statement.next;
+    }
+    return true;
+}
+
+bool KrtSemanticValidateFunction(KrtAstNode unit) {
+    if (unit.kind != KrtAstKind.Function || unit.left == null || unit.left.kind != KrtAstKind.Block) { return false; }
+    if (unit.parameter_count > 8 || unit.left.child_count == 0 || unit.left.left == null) { return false; }
+    if (!KrtSemanticValidateBlockShape(unit.left)) { return false; }
+    if (!KrtSemanticValidateLoopControl(unit.left, false)) { return false; }
+    KrtAstNode statement = unit.left.left;
+    int32 checked = 0;
+    while (statement != null && checked < unit.left.child_count) {
+        if (statement.kind == KrtAstKind.If || statement.kind == KrtAstKind.While) {
+            checked = checked + 1;
+            statement = statement.next;
+            continue;
+        } else if (statement.kind == KrtAstKind.Unsafe) {
+            checked = checked + 1;
+            statement = statement.next;
+            continue;
+        } else if (statement.kind == KrtAstKind.Assign || statement.kind == KrtAstKind.Expression) {
+            checked = checked + 1;
+            statement = statement.next;
+            continue;
+        } else if (statement.kind == KrtAstKind.Variable) {
+            if (statement.left == null || statement.left.kind != KrtAstKind.Integer &&
+                statement.left.kind != KrtAstKind.Binary && statement.left.kind != KrtAstKind.Unary &&
+                statement.left.kind != KrtAstKind.String && statement.left.kind != KrtAstKind.New &&
+                statement.left.kind != KrtAstKind.Call && statement.left.kind != KrtAstKind.StackAlloc && statement.left.kind != KrtAstKind.Boolean && statement.left.kind != KrtAstKind.Null && statement.left.kind != KrtAstKind.Ternary && statement.left.kind != KrtAstKind.Cast && statement.left.kind != KrtAstKind.Member && statement.left.kind != KrtAstKind.Index) { return false; }
+        } else if (statement.kind == KrtAstKind.Delete || statement.kind == KrtAstKind.Break || statement.kind == KrtAstKind.Continue) {
+            if (statement.left == null) { return false; }
+        } else {
+            if (statement.kind != KrtAstKind.Return) { return false; }
+            if (statement.left == null) { checked = checked + 1; statement = statement.next; continue; }
+            if (statement.left.kind != KrtAstKind.Integer && statement.left.kind != KrtAstKind.Boolean && statement.left.kind != KrtAstKind.Null && statement.left.kind != KrtAstKind.String && statement.left.kind != KrtAstKind.Identifier && statement.left.kind != KrtAstKind.Call &&
+                statement.left.kind != KrtAstKind.Binary && statement.left.kind != KrtAstKind.Unary && statement.left.kind != KrtAstKind.Index && statement.left.kind != KrtAstKind.Ternary && statement.left.kind != KrtAstKind.Cast && statement.left.kind != KrtAstKind.Member && statement.left.kind != KrtAstKind.New && statement.left.kind != KrtAstKind.StackAlloc) { return false; }
+        }
+        checked = checked + 1;
+        statement = statement.next;
+    }
+    return checked == unit.left.child_count;
+}
+
+bool KrtSemanticSameName(int64 source, int64 first, int64 first_length, int64 second, int64 second_length) {
+    if (first_length != second_length) { return false; }
+    int64 index = 0;
+    unsafe(using krt.mem;) {
+        byte* bytes = (byte*)source;
+        while (index < first_length) {
+            if (bytes[first + index] != bytes[second + index]) { return false; }
+            index = index + 1;
+        }
+    }
+    return true;
+}
+
+bool KrtSemanticBindExpression(KrtAstNode expression, KrtAstNode unit, KrtAstNode statement, int64 source) {
+    if (expression == null) { return false; }
+    if (expression.kind == KrtAstKind.Identifier) {
+        int32 parameter = 0;
+        while (parameter < unit.parameter_count) {
+            if (KrtSemanticSameName(source, unit.parameter_starts[parameter], unit.parameter_lengths[parameter],
+                expression.start, expression.length)) { expression.local_slot = -2 - parameter; return true; }
+            parameter = parameter + 1;
+        }
+        KrtAstNode previous = unit.left.left;
+        expression.local_slot = -1;
+        while (previous != statement) {
+            if (previous.kind == KrtAstKind.Variable && KrtSemanticSameName(source,
+                previous.name_start, previous.name_length, expression.start, expression.length)) {
+                expression.local_slot = previous.local_slot;
+            }
+            previous = previous.next;
+        }
+        return expression.local_slot >= 0;
+    }
+    if (expression.kind == KrtAstKind.Member) { return KrtSemanticBindExpression(expression.left, unit, statement, source); }
+    if (expression.kind == KrtAstKind.Index) {
+        return KrtSemanticBindExpression(expression.left, unit, statement, source) &&
+            KrtSemanticBindExpression(expression.right, unit, statement, source);
+    }
+    if (expression.kind == KrtAstKind.Call) {
+        if (expression.left == null || (expression.left.kind != KrtAstKind.Identifier && expression.left.kind != KrtAstKind.Member)) { return false; }
+        if (expression.left.kind == KrtAstKind.Member && !KrtSemanticBindExpression(expression.left.left, unit, statement, source)) { return false; }
+        KrtAstNode argument = expression.right;
+        while (argument != null) {
+            if (!KrtSemanticBindExpression(argument, unit, statement, source)) { return false; }
+            argument = argument.next;
+        }
+        return true;
+    }
+    if (expression.kind == KrtAstKind.Assign) {
+        return KrtSemanticBindExpression(expression.left, unit, statement, source) &&
+            KrtSemanticBindExpression(expression.right, unit, statement, source);
+    }
+    if (expression.kind == KrtAstKind.New) { return expression.left == null || KrtSemanticBindExpression(expression.left, unit, statement, source); }
+    if (expression.kind == KrtAstKind.Cast) { return KrtSemanticBindExpression(expression.left, unit, statement, source); }
+    if (expression.kind == KrtAstKind.String || expression.kind == KrtAstKind.Null) { return true; }
+    if (expression.kind == KrtAstKind.StackAlloc) { return KrtSemanticBindExpression(expression.left, unit, statement, source); }
+    if (expression.kind == KrtAstKind.Unary) { return KrtSemanticBindExpression(expression.left, unit, statement, source); }
+    if (expression.kind == KrtAstKind.Binary) {
+        return KrtSemanticBindExpression(expression.left, unit, statement, source) &&
+            KrtSemanticBindExpression(expression.right, unit, statement, source);
+    }
+    if (expression.kind == KrtAstKind.Ternary) {
+        return KrtSemanticBindExpression(expression.left, unit, statement, source) &&
+            KrtSemanticBindExpression(expression.right, unit, statement, source) &&
+            KrtSemanticBindExpression(expression.next, unit, statement, source);
+    }
+    return expression.kind == KrtAstKind.Integer || expression.kind == KrtAstKind.Boolean || expression.kind == KrtAstKind.Null;
+}
+
+KrtAstNode KrtSemanticFindFunction(KrtAstNode module, KrtAstNode callee, int64 source) {
+    if (module == null || callee == null || callee.kind != KrtAstKind.Identifier) { return null; }
+    KrtAstNode current = module.left;
+    while (current != null) {
+        if (KrtSemanticSameName(source, current.name_start, current.name_length, callee.start, callee.length)) { return current; }
+        current = current.next;
+    }
+    return null;
+}
+
+bool KrtSemanticResolveCallExpression(KrtAstNode expression, KrtAstNode module, KrtAstNode unit, KrtAstNode statement, int64 source) {
+    if (expression == null) { return false; }
+    if (expression.kind == KrtAstKind.Call) {
+        if (expression.left == null || (expression.left.kind != KrtAstKind.Identifier && expression.left.kind != KrtAstKind.Member)) { return false; }
+        KrtAstNode target = null;
+        if (expression.left.kind == KrtAstKind.Identifier) { target = KrtSemanticFindFunction(module, expression.left, source); }
+        else if (!KrtSemanticBindExpression(expression.left.left, unit, statement, source)) { return false; }
+        if (target != null && expression.parameter_count != target.parameter_count) { return false; }
+        KrtAstNode argument = expression.right;
+        int32 count = 0;
+        while (argument != null) {
+            if (!KrtSemanticBindExpression(argument, unit, statement, source)) { return false; }
+            argument = argument.next; count = count + 1;
+        }
+        if (count != expression.parameter_count) { return false; }
+        return true;
+    }
+    if (expression.kind == KrtAstKind.Binary || expression.kind == KrtAstKind.Assign || expression.kind == KrtAstKind.Index) {
+        return KrtSemanticResolveCallExpression(expression.left, module, unit, statement, source) &&
+            KrtSemanticResolveCallExpression(expression.right, module, unit, statement, source);
+    }
+    if (expression.kind == KrtAstKind.Ternary) {
+        return KrtSemanticResolveCallExpression(expression.left, module, unit, statement, source) &&
+            KrtSemanticResolveCallExpression(expression.right, module, unit, statement, source) &&
+            KrtSemanticResolveCallExpression(expression.next, module, unit, statement, source);
+    }
+    if (expression.kind == KrtAstKind.Unary || expression.kind == KrtAstKind.Member) {
+        return KrtSemanticResolveCallExpression(expression.left, module, unit, statement, source);
+    }
+    return true;
+}
+
+bool KrtSemanticBindNestedExpression(KrtAstNode expression, KrtAstNode unit, int64 source) {
+    if (expression == null) { return false; }
+    if (expression.kind == KrtAstKind.Identifier) {
+        int32 parameter = 0;
+        while (parameter < unit.parameter_count) {
+            if (KrtSemanticSameName(source, unit.parameter_starts[parameter], unit.parameter_lengths[parameter], expression.start, expression.length)) {
+                expression.local_slot = -2 - parameter; return true;
+            }
+            parameter = parameter + 1;
+        }
+        KrtAstNode declaration = unit.left.left;
+        while (declaration != null) {
+            if (declaration.kind == KrtAstKind.Variable && KrtSemanticSameName(source, declaration.name_start, declaration.name_length, expression.start, expression.length)) {
+                expression.local_slot = declaration.local_slot; return true;
+            }
+            declaration = declaration.next;
+        }
+        return false;
+    }
+    if (expression.kind == KrtAstKind.Call) {
+        if (expression.left == null || (expression.left.kind != KrtAstKind.Identifier && expression.left.kind != KrtAstKind.Member)) { return false; }
+        if (expression.left.kind == KrtAstKind.Member && !KrtSemanticBindNestedExpression(expression.left.left, unit, source)) { return false; }
+        KrtAstNode argument = expression.right;
+        while (argument != null) {
+            if (!KrtSemanticBindNestedExpression(argument, unit, source)) { return false; }
+            argument = argument.next;
+        }
+        return true;
+    }
+    if (expression.kind == KrtAstKind.Binary || expression.kind == KrtAstKind.Assign || expression.kind == KrtAstKind.Index || expression.kind == KrtAstKind.Ternary) {
+        return KrtSemanticBindNestedExpression(expression.left, unit, source) && KrtSemanticBindNestedExpression(expression.right, unit, source) &&
+            (expression.kind != KrtAstKind.Ternary || KrtSemanticBindNestedExpression(expression.next, unit, source));
+    }
+    if (expression.kind == KrtAstKind.Unary || expression.kind == KrtAstKind.Member) { return KrtSemanticBindNestedExpression(expression.left, unit, source); }
+    if (expression.kind == KrtAstKind.New || expression.kind == KrtAstKind.StackAlloc || expression.kind == KrtAstKind.Cast) { return expression.left == null || KrtSemanticBindNestedExpression(expression.left, unit, source); }
+    return expression.kind == KrtAstKind.Integer || expression.kind == KrtAstKind.Boolean || expression.kind == KrtAstKind.String || expression.kind == KrtAstKind.Null;
+}
+
+bool KrtSemanticBindNestedBlock(KrtAstNode block, KrtAstNode unit, int64 source) {
+    if (block == null || block.kind != KrtAstKind.Block) { return false; }
+    KrtAstNode statement = block.left;
+    while (statement != null) {
+        if (statement.kind == KrtAstKind.If || statement.kind == KrtAstKind.While) {
+            if (!KrtSemanticBindNestedExpression(statement.left, unit, source) || !KrtSemanticBindNestedBlock(statement.right, unit, source)) { return false; }
+            if (statement.alternate != null && statement.alternate.kind == KrtAstKind.Block && !KrtSemanticBindNestedBlock(statement.alternate, unit, source)) { return false; }
+        } else if (statement.kind == KrtAstKind.Assign) {
+            if (!KrtSemanticBindNestedExpression(statement.left, unit, source) || !KrtSemanticBindNestedExpression(statement.right, unit, source)) { return false; }
+        } else if (statement.kind == KrtAstKind.Variable || statement.kind == KrtAstKind.Return || statement.kind == KrtAstKind.Expression || statement.kind == KrtAstKind.Delete) {
+            if (!KrtSemanticBindNestedExpression(statement.left, unit, source)) { return false; }
+        } else if (statement.kind == KrtAstKind.Break || statement.kind == KrtAstKind.Continue) {
+        }
+        statement = statement.next;
+    }
+    return true;
+}
+
+bool KrtSemanticResolveCallsInBlock(KrtAstNode block, KrtAstNode module, KrtAstNode unit, int64 source) {
+    if (block == null || block.kind != KrtAstKind.Block) { return false; }
+    KrtAstNode statement = block.left;
+    while (statement != null) {
+        if (statement.kind == KrtAstKind.Return || statement.kind == KrtAstKind.Expression) {
+            if (statement.left != null && !KrtSemanticResolveCallExpression(statement.left, module, unit, statement, source)) { return false; }
+        } else if (statement.kind == KrtAstKind.Variable) {
+            if (!KrtSemanticResolveCallExpression(statement.left, module, unit, statement, source)) { return false; }
+        } else if (statement.kind == KrtAstKind.Assign) {
+            if (!KrtSemanticResolveCallExpression(statement.right, module, unit, statement, source)) { return false; }
+        } else if (statement.kind == KrtAstKind.Unsafe) {
+            if (!KrtSemanticResolveCallsInBlock(statement.left, module, unit, source)) { return false; }
+        } else if (statement.kind == KrtAstKind.Delete) {
+            if (!KrtSemanticResolveCallExpression(statement.left, module, unit, statement, source)) { return false; }
+        } else if (statement.kind == KrtAstKind.If || statement.kind == KrtAstKind.While) {
+            if (!KrtSemanticResolveCallExpression(statement.left, module, unit, statement, source) ||
+                !KrtSemanticResolveCallsInBlock(statement.right, module, unit, source)) { return false; }
+            if (statement.alternate != null && statement.alternate.kind == KrtAstKind.Block &&
+                !KrtSemanticResolveCallsInBlock(statement.alternate, module, unit, source)) { return false; }
+            if (statement.alternate != null && statement.alternate.kind == KrtAstKind.If) {
+                if (!KrtSemanticResolveCallExpression(statement.alternate.left, module, unit, statement, source) ||
+                    !KrtSemanticResolveCallsInBlock(statement.alternate.right, module, unit, source)) { return false; }
+            }
+        }
+        statement = statement.next;
+    }
+    return true;
+}
+
+bool KrtSemanticResolveModuleCalls(KrtAstNode module, int64 source) {
+    if (!KrtSemanticValidateCompilationUnit(module)) { return false; }
+    KrtAstNode current = module.left;
+    while (current != null) {
+        if (!KrtSemanticBindLocals(current, source)) { return false; }
+        if (!KrtSemanticResolveCallsInBlock(current.left, module, current, source)) { return false; }
+        current = current.next;
+    }
+    return true;
+}
+
+bool KrtSemanticBindLocals(KrtAstNode unit, int64 source) {
+    if (!KrtSemanticValidateFunction(unit)) { return false; }
+    KrtAstNode statement = unit.left.left;
+    int32 slot = 0;
+    bool returned = false;
+    while (statement != null) {
+        if (statement.kind == KrtAstKind.Variable) {
+            KrtAstNode previous = unit.left.left;
+            while (previous != statement) {
+                if (previous.kind == KrtAstKind.Variable && KrtSemanticSameName(source,
+                    previous.name_start, previous.name_length, statement.name_start, statement.name_length)) { return false; }
+                previous = previous.next;
+            }
+            statement.local_slot = slot;
+            slot = slot + 1;
+        } else if (statement.kind == KrtAstKind.Assign) {
+            if (!KrtSemanticBindExpression(statement.left, unit, statement, source) ||
+                !KrtSemanticBindExpression(statement.right, unit, statement, source)) { return false; }
+        } else if (statement.kind == KrtAstKind.Expression) {
+            if (!KrtSemanticBindExpression(statement.left, unit, statement, source)) { return false; }
+        } else if (statement.kind == KrtAstKind.If || statement.kind == KrtAstKind.While) {
+            if (!KrtSemanticBindExpression(statement.left, unit, statement, source) ||
+                !KrtSemanticBindNestedBlock(statement.right, unit, source)) { return false; }
+            if (statement.alternate != null && statement.alternate.kind == KrtAstKind.Block &&
+                !KrtSemanticBindNestedBlock(statement.alternate, unit, source)) { return false; }
+            returned = true;
+        } else if (statement.kind == KrtAstKind.Unsafe) {
+            if (!KrtSemanticBindNestedBlock(statement.left, unit, source)) { return false; }
+            returned = true;
+        } else if (statement.kind == KrtAstKind.Delete) {
+            if (!KrtSemanticBindExpression(statement.left, unit, statement, source)) { return false; }
+        } else if (statement.kind == KrtAstKind.Break || statement.kind == KrtAstKind.Continue) {
+            returned = true;
+        } else {
+            returned = true;
+            if (statement.left != null && !KrtSemanticBindExpression(statement.left, unit, statement, source)) { return false; }
+        }
+        statement = statement.next;
+    }
+    return returned;
+}
+
+bool KrtSemanticValidateCompilationUnit(KrtAstNode unit) {
+    if (unit == null || unit.kind != KrtAstKind.Program || unit.child_count <= 0 || unit.child_count > 256 || unit.left == null) { return false; }
+    KrtAstNode current = unit.left;
+    int32 checked = 0;
+    while (current != null && checked < unit.child_count) {
+        if (!KrtSemanticValidateFunction(current)) { return false; }
+        current = current.next;
+        checked = checked + 1;
+    }
+    if (checked != unit.child_count) { return false; }
+    return current == null;
+}
+
+bool KrtSemanticValidateFunctionNames(KrtAstNode unit, int64 source) {
+    if (unit == null || unit.kind != KrtAstKind.Program) { return false; }
+    KrtAstNode current = unit.left;
+    while (current != null) {
+        KrtAstNode other = current.next;
+        while (other != null) {
+            if (KrtSemanticSameName(source, current.name_start, current.name_length,
+                other.name_start, other.name_length)) { return false; }
+            other = other.next;
+        }
+        current = current.next;
+    }
+    return true;
+}
+
+bool KrtSemanticValidateEntryPoint(KrtAstNode unit, int64 source) {
+    if (unit == null || unit.kind != KrtAstKind.Program) { return false; }
+    KrtAstNode current = unit.left;
+    int32 mains = 0;
+    while (current != null) {
+        if (KrtSemanticIsMain(current, source)) { mains = mains + 1; }
+        current = current.next;
+    }
+    return mains == 1;
+}
+
+bool KrtSemanticIsMain(KrtAstNode candidate, int64 source) {
+    if (candidate == null || candidate.name_length != 4) { return false; }
+    unsafe(using krt.mem;) {
+        byte* bytes = (byte*)source;
+        if (bytes[candidate.name_start] != 109) { return false; }
+        if (bytes[candidate.name_start + 1] != 97) { return false; }
+        if (bytes[candidate.name_start + 2] != 105) { return false; }
+        if (bytes[candidate.name_start + 3] != 110) { return false; }
+        return true;
+    }
+}
+
+void KrtSemanticOrderHelperFirst(KrtAstNode unit, int64 source) {
+    if (unit == null || unit.kind != KrtAstKind.Program || unit.child_count < 2 || unit.left == null) { return; }
+    KrtAstNode previous = null;
+    KrtAstNode current = unit.left;
+    KrtAstNode main_function = null;
+    KrtAstNode main_previous = null;
+    while (current != null) {
+        if (KrtSemanticIsMain(current, source)) { main_function = current; main_previous = previous; break; }
+        previous = current;
+        current = current.next;
+    }
+    if (main_function == null || main_function.next == null) { return; }
+    if (main_previous == null) { unit.left = main_function.next; }
+    else { main_previous.next = main_function.next; }
+    current = unit.left;
+    while (current.next != null) { current = current.next; }
+    current.next = main_function;
+    main_function.next = null;
+}
+
+bool KrtSemanticInlineConstantCall(KrtAstNode unit, int64 source) {
+    if (unit == null || unit.left == null) { return true; }
+    KrtAstNode main_function = unit.left;
+    while (main_function != null && !KrtSemanticIsMain(main_function, source)) { main_function = main_function.next; }
+    if (main_function == null || main_function.left == null || main_function.left.left == null) { return true; }
+    KrtAstNode returned = main_function.left.left;
+    if (returned.kind != KrtAstKind.Return || returned.left == null || returned.left.kind != KrtAstKind.Call ||
+        returned.left.left == null) { return true; }
+    KrtAstNode helper_function = unit.left;
+    while (helper_function != null) {
+        if (helper_function != main_function && helper_function.left != null && helper_function.left.left != null &&
+            helper_function.left.left.kind == KrtAstKind.Return && helper_function.left.left.left != null &&
+            helper_function.left.left.left.kind == KrtAstKind.Integer &&
+            KrtSemanticSameName(source, returned.left.left.start, returned.left.left.length,
+                helper_function.name_start, helper_function.name_length)) {
+            returned.left.kind = KrtAstKind.Integer;
+            returned.left.value = helper_function.left.left.left.value;
+            returned.left.start = helper_function.left.left.left.start;
+            returned.left.length = helper_function.left.left.left.length;
+            returned.left.left = null;
+            break;
+        }
+        helper_function = helper_function.next;
+    }
+    return true;
+}
+
+bool KrtSemanticValidateConstantHelperCall(KrtAstNode unit, int64 source) {
+    if (!KrtSemanticValidateCompilationUnit(unit) || unit.child_count != 2) { return false; }
+    KrtAstNode main_function = unit.left;
+    KrtAstNode helper_function = unit.left.next;
+    if (!KrtSemanticIsMain(main_function, source)) { main_function = helper_function; helper_function = unit.left; }
+    if (main_function.left == null || main_function.left.left == null ||
+        helper_function.left == null || helper_function.left.left == null) { return false; }
+    KrtAstNode main_return = main_function.left.left;
+    KrtAstNode helper_return = helper_function.left.left;
+    if (main_return.kind != KrtAstKind.Return || main_return.left == null || main_return.left.kind != KrtAstKind.Call ||
+        main_return.left.left == null || helper_return.kind != KrtAstKind.Return || helper_return.left == null ||
+        helper_return.left.kind != KrtAstKind.Integer) { return false; }
+    return KrtSemanticSameName(source, main_return.left.left.start, main_return.left.left.length,
+        helper_function.name_start, helper_function.name_length);
+}
+
+bool KrtSemanticValidateConstantArgumentCall(KrtAstNode unit, int64 source) {
+    if (!KrtSemanticValidateCompilationUnit(unit) || unit.child_count != 2) { return false; }
+    KrtAstNode main_function = unit.left;
+    KrtAstNode helper_function = unit.left.next;
+    if (!KrtSemanticIsMain(main_function, source)) { main_function = helper_function; helper_function = unit.left; }
+    if (helper_function.parameter_count != 1 || main_function.left == null || main_function.left.left == null ||
+        helper_function.left == null || helper_function.left.left == null) { return false; }
+    KrtAstNode main_return = main_function.left.left;
+    KrtAstNode helper_return = helper_function.left.left;
+    if (main_return.kind != KrtAstKind.Return || main_return.left == null || main_return.left.kind != KrtAstKind.Call ||
+        main_return.left.child_count != 2 || main_return.left.right == null || main_return.left.right.kind != KrtAstKind.Integer ||
+        helper_return.kind != KrtAstKind.Return || helper_return.left == null || helper_return.left.kind != KrtAstKind.Identifier) { return false; }
+    return KrtSemanticSameName(source, main_return.left.left.start, main_return.left.left.length,
+        helper_function.name_start, helper_function.name_length);
+}
+
+KrtSymbol KrtScopeLookup(KrtScope scope, string name) {
+    KrtScope current = scope;
+    while (current != null) {
+        int32 index = 0;
+        while (index < current.count) {
+            if (current.symbols[index].name == name) { return current.symbols[index]; }
+            index = index + 1;
+        }
+        current = current.parent;
+    }
+    return null;
+}

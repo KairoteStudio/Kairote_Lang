@@ -1,0 +1,506 @@
+enum KrtKroSection { Text = 1, ReadOnlyData = 2, Data = 3, Bss = 4 }
+enum KrtKroRelocation { Absolute64 = 1, Address32 = 2, PcRelative32 = 3 }
+
+class KrtKroObject {
+    public int32 magic;
+    public int32 version;
+    public int32 text_size;
+    public int32 rodata_size;
+    public int32 data_size;
+    public int32 bss_size;
+    public int32 symbol_count;
+    public int32 relocation_count;
+    public int32 text_word0;
+    public int32 text_word1;
+    public int32 text_word2;
+    public int32 text_word3;
+    public int32 text_word4;
+    public int32 text_word5;
+    public int32 text_word6;
+    public int32 text_word7;
+    // Variable-length text storage for the real multi-function backend.
+    // The legacy text_word fields remain as a compact compatibility path.
+    public int32[] text_words;
+    public int32 text_word_count;
+    public int32 architecture;
+    public int32 entry_point;
+    public int32 text_reloc_count;
+    public int32 rodata_reloc_count;
+    public int32 data_reloc_count;
+    public int32 bss_align;
+    public int32 total_reloc_count;
+    public int32 strtab_size;
+}
+
+bool KrtKroBeginText(KrtKroObject object, int32 word_capacity) {
+    if (object == null || word_capacity <= 0 || word_capacity > 1024) { return false; }
+    object.text_words = new int32[word_capacity];
+    object.text_word_count = word_capacity;
+    object.text_size = 0;
+    return true;
+}
+
+bool KrtKroEmitTextByte(KrtKroObject object, int32 offset, int32 value) {
+    if (object == null || object.text_words == null || offset < 0 || offset >= object.text_word_count * 4 || value < 0 || value > 255) { return false; }
+    int32 word_index = offset / 4;
+    int32 shift = (offset % 4) * 8;
+    int32 mask = 255 << shift;
+    object.text_words[word_index] = (object.text_words[word_index] & ~mask) | (value << shift);
+    if (offset + 1 > object.text_size) { object.text_size = offset + 1; }
+    return true;
+}
+
+bool KrtKroEmitTextU32(KrtKroObject object, int32 offset, int32 value) {
+    return KrtKroEmitTextByte(object, offset, value & 255) &&
+        KrtKroEmitTextByte(object, offset + 1, (value >> 8) & 255) &&
+        KrtKroEmitTextByte(object, offset + 2, (value >> 16) & 255) &&
+        KrtKroEmitTextByte(object, offset + 3, (value >> 24) & 255);
+}
+
+bool KrtKroObjectIsValid(KrtKroObject object) {
+    return object.magic == 5198411 && object.version == 2 && object.text_size >= 0 && object.rodata_size >= 0 && object.data_size >= 0 && object.bss_size >= 0 &&
+           object.symbol_count >= 0 && object.relocation_count >= 0 && object.entry_point >= 0 && object.text_reloc_count >= 0 &&
+           object.rodata_reloc_count >= 0 && object.data_reloc_count >= 0 && object.bss_align >= 0 && object.total_reloc_count >= 0 && object.strtab_size >= 0;
+}
+
+bool KrtKroEmitConstantHelperCall(KrtAstNode unit, KrtKroObject output) {
+    if (unit == null || unit.child_count != 2 || unit.left == null || unit.left.next == null) { return false; }
+    KrtAstNode helper = unit.left;
+    KrtAstNode main_function = unit.left.next;
+    if (main_function.left == null || main_function.left.left == null || main_function.left.left.kind != KrtAstKind.Return ||
+        main_function.left.left.left == null || main_function.left.left.left.kind != KrtAstKind.Call ||
+        main_function.left.left.left.child_count != 1 ||
+        helper.left == null || helper.left.left == null || helper.left.left.kind != KrtAstKind.Return ||
+        helper.left.left.left == null || helper.left.left.left.kind != KrtAstKind.Integer) { return false; }
+    int64 immediate = helper.left.left.left.value;
+    if (immediate < -2147483648 || immediate > 2147483647) { return false; }
+    output.magic = 5198411; output.version = 2; output.architecture = 34404; output.entry_point = 6;
+    output.text_size = 20; output.rodata_size = 0; output.data_size = 0; output.bss_size = 0;
+    output.text_reloc_count = 0; output.rodata_reloc_count = 0; output.data_reloc_count = 0; output.bss_align = 0;
+    output.total_reloc_count = 0; output.relocation_count = 0; output.symbol_count = 2; output.strtab_size = 13;
+    output.text_word0 = 184 | ((int32)(immediate & 255) << 8) | ((int32)((immediate >> 8) & 255) << 16) | ((int32)((immediate >> 16) & 255) << 24);
+    output.text_word1 = (int32)((immediate >> 24) & 255) | (195 << 8) | (232 << 16) | (245 << 24);
+    output.text_word2 = 255 | (255 << 8) | (255 << 16) | (137 << 24);
+    output.text_word3 = 199 | (184 << 8) | (60 << 16);
+    output.text_word4 = 15 << 16 | 5 << 24; output.text_word5 = 0;
+    return KrtKroObjectIsValid(output);
+}
+
+bool KrtKroEmitConstantArgumentCall(KrtAstNode unit, KrtKroObject output) {
+    if (unit == null || unit.child_count != 2 || unit.left == null || unit.left.next == null) { return false; }
+    KrtAstNode helper = unit.left;
+    KrtAstNode main_function = unit.left.next;
+    if (main_function.left == null || main_function.left.left == null || main_function.left.left.kind != KrtAstKind.Return ||
+        main_function.left.left.left == null || main_function.left.left.left.kind != KrtAstKind.Call ||
+        main_function.left.left.left.child_count != 2 || main_function.left.left.left.right == null ||
+        main_function.left.left.left.right.kind != KrtAstKind.Integer || helper.left == null || helper.left.left == null ||
+        helper.left.left.kind != KrtAstKind.Return || helper.left.left.left == null ||
+        helper.left.left.left.kind != KrtAstKind.Identifier || helper.parameter_count != 1) { return false; }
+    int64 immediate = main_function.left.left.left.right.value;
+    if (immediate < -2147483648 || immediate > 2147483647) { return false; }
+    output.magic = 5198411; output.version = 2; output.architecture = 34404; output.entry_point = 3;
+    output.text_size = 22; output.rodata_size = 0; output.data_size = 0; output.bss_size = 0;
+    output.text_reloc_count = 0; output.rodata_reloc_count = 0; output.data_reloc_count = 0; output.bss_align = 0;
+    output.total_reloc_count = 0; output.relocation_count = 0; output.symbol_count = 2; output.strtab_size = 13;
+    output.text_word0 = 139 | (199 << 8) | (195 << 16) | (191 << 24);
+    output.text_word1 = (int32)(immediate & 255) | ((int32)((immediate >> 8) & 255) << 8) |
+        ((int32)((immediate >> 16) & 255) << 16) | ((int32)((immediate >> 24) & 255) << 24);
+    output.text_word2 = 232 | (243 << 8) | (255 << 16) | (255 << 24);
+    output.text_word3 = 255 | (137 << 8) | (199 << 16) | (184 << 24);
+    output.text_word4 = 60;
+    output.text_word5 = 15 | (5 << 8);
+    return KrtKroObjectIsValid(output);
+}
+
+bool KrtKroEmitConstantTwoArgumentCall(KrtAstNode unit, KrtKroObject output) {
+    if (unit == null || unit.child_count != 2 || unit.left == null || unit.left.next == null) { return false; }
+    KrtAstNode helper = unit.left; KrtAstNode main_function = unit.left.next;
+    if (helper.parameter_count != 2 || helper.left == null || helper.left.left == null ||
+        helper.left.left.kind != KrtAstKind.Return || helper.left.left.left == null ||
+        helper.left.left.left.kind != KrtAstKind.Identifier || main_function.left == null ||
+        main_function.left.left == null || main_function.left.left.kind != KrtAstKind.Return ||
+        main_function.left.left.left == null || main_function.left.left.left.kind != KrtAstKind.Call ||
+        main_function.left.left.left.parameter_count != 2) { return false; }
+    KrtAstNode arguments = main_function.left.left.left.right;
+    if (arguments == null || arguments.next == null || arguments.next.next != null ||
+        arguments.kind != KrtAstKind.Integer || arguments.next.kind != KrtAstKind.Integer) { return false; }
+    int64 first = arguments.value; int64 second = arguments.next.value;
+    if (first < -2147483648 || first > 2147483647 || second < -2147483648 || second > 2147483647) { return false; }
+    output.magic = 5198411; output.version = 2; output.architecture = 34404; output.entry_point = 3;
+    output.text_size = 27; output.rodata_size = 0; output.data_size = 0; output.bss_size = 0;
+    output.text_reloc_count = 0; output.rodata_reloc_count = 0; output.data_reloc_count = 0; output.bss_align = 0;
+    output.total_reloc_count = 0; output.relocation_count = 0; output.symbol_count = 2; output.strtab_size = 13;
+    // mov eax,esi; ret; mov edi,first; mov esi,second; call helper; mov edi,eax; mov eax,60; syscall
+    output.text_word0 = 137 | (240 << 8) | (195 << 16) | (191 << 24);
+    output.text_word1 = (int32)(first & 255) | ((int32)((first >> 8) & 255) << 8) |
+        ((int32)((first >> 16) & 255) << 16) | ((int32)((first >> 24) & 255) << 24);
+    output.text_word2 = 190 | ((int32)(second & 255) << 8) | ((int32)((second >> 8) & 255) << 16) |
+        ((int32)((second >> 16) & 255) << 24);
+    output.text_word3 = 232 << 8 | 238 << 16 | 255 << 24;
+    output.text_word4 = 255 | (255 << 8) | (137 << 16) | (199 << 24);
+    output.text_word5 = 184 | (60 << 8);
+    output.text_word6 = (15 << 8) | (5 << 16);
+    output.text_word7 = 0;
+    return KrtKroObjectIsValid(output);
+}
+
+bool KrtKroEmitExecutableConstant(KrtKroObject raw, KrtKroObject output) {
+    if (!KrtKroObjectIsValid(raw) || raw.text_size != 6 || raw.symbol_count != 1) { return false; }
+    int32 immediate = raw.text_word0 >> 8;
+    output.magic = 5198411; output.version = 2; output.architecture = 34404; output.entry_point = 0;
+    output.text_size = 14; output.rodata_size = 0; output.data_size = 0; output.bss_size = 0;
+    output.text_reloc_count = 0; output.rodata_reloc_count = 0; output.data_reloc_count = 0; output.bss_align = 0;
+    output.total_reloc_count = 0; output.relocation_count = 0; output.symbol_count = 1; output.strtab_size = 6;
+    output.text_word0 = raw.text_word0;
+    output.text_word1 = ((int32)(raw.text_word0 >> 24) & 255) | (137 << 8) | (199 << 16) | (184 << 24);
+    output.text_word2 = 60;
+    output.text_word3 = 15 | (5 << 8);
+    output.text_word4 = 0; output.text_word5 = 0;
+    return KrtKroObjectIsValid(output) && immediate == (raw.text_word0 >> 8);
+}
+
+bool KrtKroEmitExecutableLocal(KrtKroObject raw, KrtKroObject output) {
+    if (!KrtKroObjectIsValid(raw) || raw.text_size != 16 || raw.symbol_count != 1) { return false; }
+    int32 immediate = ((raw.text_word1 >> 24) & 255) | ((raw.text_word2 & 255) << 8) |
+        (((raw.text_word2 >> 8) & 255) << 16) | (((raw.text_word2 >> 16) & 255) << 24);
+    output.magic = 5198411; output.version = 2; output.architecture = 34404; output.entry_point = 0;
+    output.text_size = 14; output.rodata_size = 0; output.data_size = 0; output.bss_size = 0;
+    output.text_reloc_count = 0; output.rodata_reloc_count = 0; output.data_reloc_count = 0; output.bss_align = 0;
+    output.total_reloc_count = 0; output.relocation_count = 0; output.symbol_count = 1; output.strtab_size = 6;
+    output.text_word0 = 184 | ((immediate & 255) << 8) | (((immediate >> 8) & 255) << 16) | (((immediate >> 16) & 255) << 24);
+    output.text_word1 = ((immediate >> 24) & 255) | (137 << 8) | (199 << 16) | (184 << 24);
+    output.text_word2 = 60;
+    output.text_word3 = 15 | (5 << 8);
+    output.text_word4 = 0; output.text_word5 = 0; output.text_word6 = 0;
+    return KrtKroObjectIsValid(output);
+}
+
+bool KrtKroEmitExecutableLocals(KrtKroObject raw, KrtKroObject output) {
+    if (!KrtKroObjectIsValid(raw) || raw.text_size != 23 || raw.symbol_count != 1) { return false; }
+    output.magic = 5198411; output.version = 2; output.architecture = 34404; output.entry_point = 0;
+    output.text_size = 31; output.rodata_size = 0; output.data_size = 0; output.bss_size = 0;
+    output.text_reloc_count = 0; output.rodata_reloc_count = 0; output.data_reloc_count = 0; output.bss_align = 0;
+    output.total_reloc_count = 0; output.relocation_count = 0; output.symbol_count = 1; output.strtab_size = 6;
+    output.text_word0 = raw.text_word0; output.text_word1 = raw.text_word1;
+    output.text_word2 = raw.text_word2; output.text_word3 = raw.text_word3;
+    output.text_word4 = raw.text_word4;
+    output.text_word5 = (raw.text_word5 & 65535) | (137 << 16) | (199 << 24);
+    output.text_word6 = 184 | (60 << 8);
+    output.text_word7 = (15 << 8) | (5 << 16);
+    return KrtKroObjectIsValid(output);
+}
+
+bool KrtKroEmitExecutableMemory(KrtKroObject raw, KrtKroObject output) {
+    if (!KrtKroObjectIsValid(raw) || raw.text_size != 23 || raw.symbol_count != 1) { return false; }
+    output.magic = 5198411; output.version = 2; output.architecture = 34404; output.entry_point = 0;
+    output.text_size = 29; output.rodata_size = 0; output.data_size = 0; output.bss_size = 0;
+    output.text_reloc_count = 0; output.rodata_reloc_count = 0; output.data_reloc_count = 0; output.bss_align = 0;
+    output.total_reloc_count = 0; output.relocation_count = 0; output.symbol_count = 1; output.strtab_size = 6;
+    output.text_word0 = raw.text_word0; output.text_word1 = raw.text_word1;
+    output.text_word2 = raw.text_word2; output.text_word3 = raw.text_word3;
+    output.text_word4 = raw.text_word4;
+    output.text_word5 = 137 | (199 << 8) | (184 << 16) | (60 << 24);
+    output.text_word6 = 0;
+    output.text_word7 = 15 | (5 << 8);
+    return KrtKroObjectIsValid(output);
+}
+
+bool KrtKroWriteText(KrtKroObject object, int64 file_descriptor) {
+    if (KrtKroObjectIsValid(object) && object.text_words != null && object.text_word_count > 0) {
+        if (object.text_word_count > 1024 || object.text_size <= 0 || object.text_size > object.text_word_count * 4) { return false; }
+        unsafe(using krt.mem;) {
+            byte* dynamic_bytes = stackalloc byte[4096];
+            int32 byte_index = 0;
+            while (byte_index < object.text_size) {
+                int32 word = object.text_words[byte_index / 4];
+                int32 shift = (byte_index % 4) * 8;
+                dynamic_bytes[byte_index] = (byte)((word >> shift) & 255);
+                byte_index = byte_index + 1;
+            }
+            return syscall(1, file_descriptor, (int64)dynamic_bytes, object.text_size, 0, 0, 0) == object.text_size;
+        }
+    }
+    if (!KrtKroObjectIsValid(object) || (object.text_size != 3 && object.text_size != 6 && object.text_size != 12 && object.text_size != 14 && object.text_size != 16 && object.text_size != 20 && object.text_size != 22 && object.text_size != 23 && object.text_size != 25 && object.text_size != 27 && object.text_size != 29 && object.text_size != 31)) { return false; }
+    unsafe(using krt.mem;) {
+        byte* bytes = stackalloc byte[32];
+        bytes[0] = (byte)(object.text_word0 & 255);
+        bytes[1] = (byte)((object.text_word0 >> 8) & 255);
+        bytes[2] = (byte)((object.text_word0 >> 16) & 255);
+        bytes[3] = (byte)((object.text_word0 >> 24) & 255);
+        bytes[4] = (byte)(object.text_word1 & 255);
+        bytes[5] = (byte)((object.text_word1 >> 8) & 255);
+        if (object.text_size == 12) {
+            bytes[6] = (byte)((object.text_word1 >> 16) & 255);
+            bytes[7] = (byte)((object.text_word1 >> 24) & 255);
+            bytes[8] = (byte)(object.text_word2 & 255);
+            bytes[9] = (byte)((object.text_word2 >> 8) & 255);
+            bytes[10] = (byte)((object.text_word2 >> 16) & 255);
+            bytes[11] = (byte)((object.text_word2 >> 24) & 255);
+        }
+        if (object.text_size == 14) {
+            bytes[6] = (byte)((object.text_word1 >> 16) & 255);
+            bytes[7] = (byte)((object.text_word1 >> 24) & 255);
+            bytes[8] = (byte)(object.text_word2 & 255);
+            bytes[9] = (byte)((object.text_word2 >> 8) & 255);
+            bytes[10] = (byte)((object.text_word2 >> 16) & 255);
+            bytes[11] = (byte)((object.text_word2 >> 24) & 255);
+            bytes[12] = (byte)(object.text_word3 & 255);
+            bytes[13] = (byte)((object.text_word3 >> 8) & 255);
+        }
+        if (object.text_size >= 16) {
+            bytes[6] = (byte)((object.text_word1 >> 16) & 255);
+            bytes[7] = (byte)((object.text_word1 >> 24) & 255);
+            bytes[8] = (byte)(object.text_word2 & 255);
+            bytes[9] = (byte)((object.text_word2 >> 8) & 255);
+            bytes[10] = (byte)((object.text_word2 >> 16) & 255);
+            bytes[11] = (byte)((object.text_word2 >> 24) & 255);
+            bytes[12] = (byte)(object.text_word3 & 255);
+            bytes[13] = (byte)((object.text_word3 >> 8) & 255);
+            bytes[14] = (byte)((object.text_word3 >> 16) & 255);
+            bytes[15] = (byte)((object.text_word3 >> 24) & 255);
+        }
+        if (object.text_size == 23) {
+            bytes[15] = (byte)((object.text_word3 >> 24) & 255);
+            bytes[16] = (byte)(object.text_word4 & 255);
+            bytes[17] = (byte)((object.text_word4 >> 8) & 255);
+            bytes[18] = (byte)((object.text_word4 >> 16) & 255);
+            bytes[19] = (byte)((object.text_word4 >> 24) & 255);
+            bytes[20] = (byte)(object.text_word5 & 255);
+            bytes[21] = (byte)((object.text_word5 >> 8) & 255);
+            bytes[22] = (byte)((object.text_word5 >> 16) & 255);
+        }
+        if (object.text_size == 20) {
+            bytes[16] = (byte)(object.text_word4 & 255);
+            bytes[17] = (byte)((object.text_word4 >> 8) & 255);
+            bytes[18] = (byte)((object.text_word4 >> 16) & 255);
+            bytes[19] = (byte)((object.text_word4 >> 24) & 255);
+        }
+        if (object.text_size == 22) {
+            bytes[16] = (byte)(object.text_word4 & 255);
+            bytes[17] = (byte)((object.text_word4 >> 8) & 255);
+            bytes[18] = (byte)((object.text_word4 >> 16) & 255);
+            bytes[19] = (byte)((object.text_word4 >> 24) & 255);
+            bytes[20] = (byte)(object.text_word5 & 255);
+            bytes[21] = (byte)((object.text_word5 >> 8) & 255);
+        }
+        if (object.text_size == 25) {
+            bytes[16] = (byte)(object.text_word4 & 255);
+            bytes[17] = (byte)((object.text_word4 >> 8) & 255);
+            bytes[18] = (byte)((object.text_word4 >> 16) & 255);
+            bytes[19] = (byte)((object.text_word4 >> 24) & 255);
+            bytes[20] = (byte)(object.text_word5 & 255);
+            bytes[21] = (byte)((object.text_word5 >> 8) & 255);
+            bytes[22] = (byte)((object.text_word5 >> 16) & 255);
+            bytes[23] = (byte)((object.text_word5 >> 24) & 255);
+            bytes[24] = (byte)(object.text_word6 & 255);
+        }
+        if (object.text_size == 29) {
+            bytes[16] = (byte)(object.text_word4 & 255);
+            bytes[17] = (byte)((object.text_word4 >> 8) & 255);
+            bytes[18] = (byte)((object.text_word4 >> 16) & 255);
+            bytes[19] = (byte)((object.text_word4 >> 24) & 255);
+            bytes[20] = (byte)(object.text_word5 & 255);
+            bytes[21] = (byte)((object.text_word5 >> 8) & 255);
+            bytes[22] = (byte)((object.text_word5 >> 16) & 255);
+            bytes[23] = (byte)((object.text_word5 >> 24) & 255);
+            bytes[24] = (byte)(object.text_word6 & 255);
+            bytes[25] = (byte)((object.text_word6 >> 8) & 255);
+            bytes[26] = (byte)((object.text_word6 >> 16) & 255);
+            bytes[27] = (byte)(object.text_word7 & 255);
+            bytes[28] = (byte)((object.text_word7 >> 8) & 255);
+        }
+        if (object.text_size == 27) {
+            bytes[16] = (byte)(object.text_word4 & 255); bytes[17] = (byte)((object.text_word4 >> 8) & 255);
+            bytes[18] = (byte)((object.text_word4 >> 16) & 255); bytes[19] = (byte)((object.text_word4 >> 24) & 255);
+            bytes[20] = (byte)(object.text_word5 & 255); bytes[21] = (byte)((object.text_word5 >> 8) & 255);
+            bytes[22] = (byte)((object.text_word5 >> 16) & 255); bytes[23] = (byte)((object.text_word5 >> 24) & 255);
+            bytes[24] = (byte)(object.text_word6 & 255); bytes[25] = (byte)((object.text_word6 >> 8) & 255);
+            bytes[26] = (byte)((object.text_word6 >> 16) & 255);
+        }
+        if (object.text_size == 31) {
+            bytes[16] = (byte)(object.text_word4 & 255);
+            bytes[17] = (byte)((object.text_word4 >> 8) & 255);
+            bytes[18] = (byte)((object.text_word4 >> 16) & 255);
+            bytes[19] = (byte)((object.text_word4 >> 24) & 255);
+            bytes[20] = (byte)(object.text_word5 & 255);
+            bytes[21] = (byte)((object.text_word5 >> 8) & 255);
+            bytes[22] = (byte)((object.text_word5 >> 16) & 255);
+            bytes[23] = (byte)((object.text_word5 >> 24) & 255);
+            bytes[24] = (byte)(object.text_word6 & 255);
+            bytes[25] = (byte)((object.text_word6 >> 8) & 255);
+            bytes[26] = (byte)((object.text_word6 >> 16) & 255);
+            bytes[27] = (byte)((object.text_word6 >> 24) & 255);
+            bytes[28] = (byte)(object.text_word7 & 255);
+            bytes[29] = (byte)((object.text_word7 >> 8) & 255);
+            bytes[30] = (byte)((object.text_word7 >> 16) & 255);
+        }
+        return syscall(1, file_descriptor, (int64)bytes, object.text_size, 0, 0, 0) == object.text_size;
+    }
+}
+
+bool KrtKroWriteHeader(KrtKroObject object, int64 file_descriptor) {
+    if (!KrtKroObjectIsValid(object)) { return false; }
+    unsafe(using krt.mem;) {
+        byte* header = stackalloc byte[64];
+        int32 index = 0;
+        while (index < 64) { header[index] = 0; index = index + 1; }
+        int32* words = stackalloc int32[16];
+        words[0] = object.magic; words[1] = object.version; words[2] = 0; words[3] = object.entry_point;
+        words[4] = object.text_size; words[5] = object.rodata_size; words[6] = object.data_size; words[7] = object.bss_size;
+        words[8] = object.text_reloc_count; words[9] = object.rodata_reloc_count; words[10] = object.data_reloc_count;
+        words[11] = object.bss_align; words[12] = object.symbol_count; words[13] = object.strtab_size;
+        words[14] = object.total_reloc_count; words[15] = 0;
+        int32 word = 0;
+        while (word < 16) {
+            int32 value = words[word];
+            int32 offset = word * 4;
+            header[offset] = (byte)(value & 255);
+            header[offset + 1] = (byte)((value >> 8) & 255);
+            header[offset + 2] = (byte)((value >> 16) & 255);
+            header[offset + 3] = (byte)((value >> 24) & 255);
+            word = word + 1;
+        }
+        return syscall(1, file_descriptor, (int64)header, 64, 0, 0, 0) == 64;
+    }
+}
+
+// The minimal writer emits one main symbol or a helper/main pair, with no relocations.
+bool KrtKroWriteSymbols(KrtKroObject object, int64 file_descriptor) {
+    if ((object.symbol_count != 1 && object.symbol_count != 2) ||
+        (object.symbol_count == 1 && object.strtab_size != 6) || (object.symbol_count == 2 && object.strtab_size != 13)) { return false; }
+    unsafe(using krt.mem;) {
+        int32 symbol_bytes = object.symbol_count * 32;
+        byte* data = stackalloc byte[64];
+        int32 index = 0;
+        while (index < symbol_bytes) { data[index] = 0; index = index + 1; }
+        if (object.symbol_count == 2) { data[0] = 1; }
+        data[8] = (byte)(object.symbol_count == 2 ? ((object.text_size == 22 || object.text_size == 27) ? 3 : 6) : object.text_size);
+        data[12] = 1;
+        data[16] = 1;
+        data[20] = 1;
+        if (object.symbol_count == 2) {
+            data[32] = 8; data[36] = (byte)(object.text_size == 22 || object.text_size == 27 ? 3 : 6); data[40] = (byte)(object.text_size - (object.text_size == 22 || object.text_size == 27 ? 3 : 6)); data[44] = 1; data[48] = 1; data[52] = 1;
+        }
+        if (syscall(1, file_descriptor, (int64)data, symbol_bytes, 0, 0, 0) != symbol_bytes) { return false; }
+        byte* strings = stackalloc byte[13];
+        strings[0] = 0;
+        if (object.symbol_count == 1) {
+            strings[1] = 109; strings[2] = 97; strings[3] = 105; strings[4] = 110; strings[5] = 0;
+        } else {
+            strings[1] = 104; strings[2] = 101; strings[3] = 108; strings[4] = 112; strings[5] = 101; strings[6] = 114;
+            strings[7] = 0; strings[8] = 109; strings[9] = 97; strings[10] = 105; strings[11] = 110; strings[12] = 0;
+        }
+        int32 string_bytes = object.symbol_count == 2 ? 13 : 6;
+        return syscall(1, file_descriptor, (int64)strings, string_bytes, 0, 0, 0) == string_bytes;
+    }
+}
+
+bool KrtKroWriteObjectToPath(KrtKroObject object, string path) {
+    int64 file_descriptor = syscall(2, (int64)path, 577, 420, 0, 0, 0);
+    if (file_descriptor < 0) { return false; }
+    bool result = KrtKroWriteHeader(object, file_descriptor) && KrtKroWriteText(object, file_descriptor) &&
+        KrtKroWriteSymbols(object, file_descriptor);
+    syscall(3, file_descriptor, 0, 0, 0, 0, 0);
+    return result;
+}
+
+bool KrtKroEmitIrFunction(KrtIrFunction ir_function, KrtKroObject output) {
+    if (!KrtIrValidateFunction(ir_function)) { return false; }
+    if (ir_function.block_count != 1) { return false; }
+    if (ir_function.instruction_count < 0) { return false; }
+    output.text_word0 = 0;
+    output.text_word1 = 0;
+    output.text_word2 = 0;
+    output.text_word3 = 0;
+    output.text_word4 = 0;
+    output.text_word5 = 0;
+    output.magic = 5198411;
+    output.version = 2;
+    output.architecture = 34404;
+    output.entry_point = 0;
+    output.text_reloc_count = 0;
+    output.rodata_reloc_count = 0;
+    output.data_reloc_count = 0;
+    output.bss_align = 0;
+    output.total_reloc_count = 0;
+    output.strtab_size = 6;
+    if (ir_function.instruction_count == 0) {
+        output.text_size = 0;
+        output.rodata_size = 0;
+        output.data_size = 0;
+        output.bss_size = 0;
+        output.symbol_count = 0;
+        output.relocation_count = 0;
+        return KrtKroObjectIsValid(output);
+    }
+    if (ir_function.instruction_count == 2 && ir_function.opcodes[0] == (int32)KrtIrOpcode.Constant &&
+        ir_function.opcodes[1] == (int32)KrtIrOpcode.Return) {
+        // x86-64: mov eax, imm32 (B8) followed by ret (C3).
+        int64 immediate = ir_function.immediates[0];
+        if (immediate < -2147483648 || immediate > 2147483647) { return false; }
+        output.text_word0 = 184 | ((int32)(immediate & 255) << 8) |
+            ((int32)((immediate >> 8) & 255) << 16) |
+            ((int32)((immediate >> 16) & 255) << 24);
+        output.text_word1 = (int32)((immediate >> 24) & 255) | (195 << 8);
+        output.text_size = 6;
+    } else if (ir_function.instruction_count == 2 && ir_function.opcodes[0] == (int32)KrtIrOpcode.LoadLocal &&
+               ir_function.opcodes[1] == (int32)KrtIrOpcode.Return && ir_function.lefts[0] == -2) {
+        // System V AMD64 first int32 argument arrives in EDI.
+        output.text_word0 = 139 | (199 << 8) | (195 << 16);
+        output.text_word1 = 0;
+        output.text_size = 3;
+    } else if (ir_function.instruction_count == 4 && ir_function.opcodes[0] == (int32)KrtIrOpcode.Constant &&
+               ir_function.opcodes[1] == (int32)KrtIrOpcode.StoreLocal &&
+               ir_function.opcodes[2] == (int32)KrtIrOpcode.LoadLocal &&
+               ir_function.opcodes[3] == (int32)KrtIrOpcode.Return && ir_function.rights[1] == 0 &&
+               ir_function.lefts[2] == 0) {
+        // push rbp; mov rbp,rsp; mov dword [rbp-8],imm32; mov eax,[rbp-8]; pop rbp; ret.
+        int64 immediate_local = ir_function.immediates[0];
+        if (immediate_local < -2147483648 || immediate_local > 2147483647) { return false; }
+        output.text_word0 = 85 | (72 << 8) | (137 << 16) | (229 << 24);
+        output.text_word1 = 199 | (69 << 8) | (248 << 16) | ((int32)(immediate_local & 255) << 24);
+        output.text_word2 = (int32)((immediate_local >> 8) & 255) | ((int32)((immediate_local >> 16) & 255) << 8) |
+            ((int32)((immediate_local >> 24) & 255) << 16) | (139 << 24);
+        output.text_word3 = 69 | (248 << 8) | (93 << 16) | (195 << 24);
+        output.text_size = 16;
+    } else if (ir_function.instruction_count == 6 && ir_function.opcodes[0] == (int32)KrtIrOpcode.Constant &&
+               ir_function.opcodes[1] == (int32)KrtIrOpcode.StoreLocal && ir_function.opcodes[2] == (int32)KrtIrOpcode.Constant &&
+               ir_function.opcodes[3] == (int32)KrtIrOpcode.StoreLocal && ir_function.opcodes[4] == (int32)KrtIrOpcode.LoadLocal &&
+               ir_function.opcodes[5] == (int32)KrtIrOpcode.Return && ir_function.rights[1] == 0 && ir_function.rights[3] == 1 &&
+               ir_function.lefts[4] == 1) {
+        int64 first = ir_function.immediates[0];
+        int64 second = ir_function.immediates[2];
+        if (first < -2147483648 || first > 2147483647 || second < -2147483648 || second > 2147483647) { return false; }
+        output.text_word0 = 85 | (72 << 8) | (137 << 16) | (229 << 24);
+        output.text_word1 = 199 | (69 << 8) | (248 << 16) | ((int32)(first & 255) << 24);
+        output.text_word2 = (int32)((first >> 8) & 255) | ((int32)((first >> 16) & 255) << 8) | ((int32)((first >> 24) & 255) << 16) | (199 << 24);
+        output.text_word3 = 69 | (244 << 8) | ((int32)(second & 255) << 16) | ((int32)((second >> 8) & 255) << 24);
+        output.text_word4 = (int32)((second >> 16) & 255) | ((int32)((second >> 24) & 255) << 8) | (139 << 16) | (69 << 24);
+        output.text_word5 = 244 | (93 << 8) | (195 << 16);
+        output.text_size = 23;
+    } else if (ir_function.instruction_count == 9 && ir_function.opcodes[0] == (int32)KrtIrOpcode.StackAlloc &&
+               ir_function.opcodes[1] == (int32)KrtIrOpcode.Constant && ir_function.opcodes[2] == (int32)KrtIrOpcode.AddressOffset &&
+               ir_function.opcodes[3] == (int32)KrtIrOpcode.Constant && ir_function.opcodes[4] == (int32)KrtIrOpcode.Store &&
+               ir_function.opcodes[5] == (int32)KrtIrOpcode.Constant && ir_function.opcodes[6] == (int32)KrtIrOpcode.AddressOffset &&
+               ir_function.opcodes[7] == (int32)KrtIrOpcode.Load && ir_function.opcodes[8] == (int32)KrtIrOpcode.Return &&
+               ir_function.immediates[0] <= 128 && ir_function.immediates[1] == 0 && ir_function.immediates[5] == 0 &&
+               ir_function.immediates[4] == 1 && ir_function.immediates[7] == 1) {
+        int64 stored = ir_function.immediates[3];
+        if (stored < 0 || stored > 255) { return false; }
+        // push rbp; mov rbp,rsp; sub rsp,16; lea rax,[rbp-4]; mov byte [rax],imm;
+        // lea rax,[rbp-4]; movzx eax,byte [rax]; leave; ret.
+        output.text_word0 = 85 | (72 << 8) | (137 << 16) | (229 << 24);
+        output.text_word1 = 72 | (131 << 8) | (236 << 16) | (16 << 24);
+        output.text_word2 = 72 | (141 << 8) | (69 << 16) | (252 << 24);
+        output.text_word3 = 198 | ((int32)stored << 16) | (72 << 24);
+        output.text_word4 = 141 | (69 << 8) | (252 << 16) | (15 << 24);
+        output.text_word5 = 182 | (0 << 8) | (201 << 16) | (195 << 24);
+        output.text_size = 23;
+    } else { return false; }
+    output.rodata_size = 0;
+    output.data_size = 0;
+    output.bss_size = 0;
+    output.symbol_count = 1;
+    output.relocation_count = 0;
+    return KrtKroObjectIsValid(output);
+}

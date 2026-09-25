@@ -1314,6 +1314,31 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
         ASTNode* object = expr->data.member_access.object;
         const char* member_name = expr->data.member_access.member_name;
 
+        /* Instance fields must retain their owner for IR address calculation.
+         * Treating parameter.field as a static name silently creates a different
+         * storage location instead of loading/storing through the parameter. */
+        const char* instance_name = object ? object->resolved_type.type_name : NULL;
+        if (object && object->type == AST_IDENTIFIER) {
+            SymbolEntry* variable = symbol_table_lookup(analyzer->symbol_table, object->data.identifier_name);
+            if (variable && variable->type != SYMBOL_CLASS && variable->class_type_name) {
+                instance_name = variable->class_type_name;
+            }
+        }
+        if (instance_name && object && object->type != AST_THIS) {
+            SymbolEntry* owner = semantic_analyzer_lookup_class(analyzer, instance_name);
+            SymbolEntry* field = owner && owner->nested_table
+                                     ? symbol_table_lookup(owner->nested_table, member_name) : NULL;
+            if (field && field->type == SYMBOL_FIELD) {
+                KRT_FREE(expr->data.member_access.resolved_class_name);
+                expr->data.member_access.resolved_class_name = KRT_STRDUP(instance_name);
+                expr->resolved_type = field->source_type;
+                if (!expr->resolved_type.token) {
+                    expr->resolved_type.token = field->value_type;
+                }
+                return true;
+            }
+        }
+
         if (object && (object->type == AST_THIS ||
                        (object->type == AST_IDENTIFIER && strcmp(object->data.identifier_name, "this") == 0))) {
             const char* current_class = semantic_analyzer_get_current_class_context(analyzer);

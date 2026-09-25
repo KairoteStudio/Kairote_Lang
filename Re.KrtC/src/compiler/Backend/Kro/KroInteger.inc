@@ -700,7 +700,47 @@ static void emit_multiply_pair(KROCodegenContext* ctx) {
                20);
 }
 
+/* A shift by a literal count below the operand width needs neither the range
+ * guard nor CL, so the whole dynamic sequence reduces to one immediate form. */
+static bool constant_shift_count(KrtIRInst* inst, int width, int* count) {
+    KrtIRValue* amount = &inst->operands[1];
+    if (amount->type != KRT_IR_VALUE_INTEGER || width <= 0 || width > 64) {
+        return false;
+    }
+    KrtUInt128 value = KrtIntegerNormalize(amount->data.integer, KrtTokenIntegerBits(amount->value_type),
+                                           KrtTokenIsUnsigned(amount->value_type));
+    if (value >= (KrtUInt128)width) {
+        return false;
+    }
+    *count = (int)value;
+    return true;
+}
+
+static bool emit_shift_by_constant(KROCodegenContext* ctx, KrtIRInst* inst) {
+    if (ctx->optimization_level < 3 || (inst->opcode != KRT_IR_LSHIFT && inst->opcode != KRT_IR_RSHIFT) ||
+        inst->operand_count != 2) {
+        return false;
+    }
+    KrtTokenType type = inst->result.value_type;
+    int width = KrtTokenIntegerBits(type);
+    int count;
+    if (KrtTokenIntegerBits(inst->operands[0].value_type) > 64 || !constant_shift_count(inst, width, &count)) {
+        return false;
+    }
+    bool is_unsigned = KrtTokenIsUnsigned(type);
+    emit_load_for_type(ctx, &inst->operands[0], type, KRT_REG_RAX, KRT_REG_RDX);
+    emit_extend_scalar(ctx, width, is_unsigned, KRT_REG_RAX, KRT_REG_RAX);
+    if (count) {
+        emit_shift_imm(ctx, KRT_REG_RAX, inst->opcode == KRT_IR_LSHIFT ? 4 : is_unsigned ? 5 : 7, count);
+    }
+    emit_store_value(ctx, &inst->result);
+    return true;
+}
+
 static void emit_integer_binary(KROCodegenContext* ctx, KrtIRInst* inst) {
+    if (emit_shift_by_constant(ctx, inst)) {
+        return;
+    }
     if (emit_binary32(ctx, inst) || emit_binary64(ctx, inst)) {
         return;
     }

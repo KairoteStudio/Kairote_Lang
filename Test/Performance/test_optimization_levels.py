@@ -159,6 +159,40 @@ int32 main() {
             checks.append(f"if (Plain{i}(7) != {i+7}) {{ return 2; }}")
         self.run_source("\n".join(definitions)+"\nint32 main() {\n"+"\n".join(checks)+"\nreturn 0; }",(0,2,3))
 
+    def test_constant_shift_counts_use_immediate_encoding(self):
+        widths=((8,"int8","uint8"),(16,"int16","uint16"),(32,"int32","uint32"),(64,"int64","uint64"))
+        for bits,signed,unsigned_kind in widths:
+            for kind,unsigned in ((signed,False),(unsigned_kind,True)):
+                definitions,checks=[],[]
+                values=(0,1,-1,3,(1 << (bits-1)),(1 << bits)-1,-(1 << (bits-1)))
+                counts=(0,1,bits//2,bits-1,bits,bits+3,127)
+                for index,value in enumerate(values):
+                    start=wrap(value,bits,unsigned)
+                    for position,count in enumerate(counts):
+                        for name,op in (("Left","<<"),("Right",">>")):
+                            function=f"{name}{index}_{position}"
+                            definitions.append(f"{kind} {function}({kind} n) {{ return n {op} {count}; }}")
+                            if count >= bits:
+                                expected=0 if op == "<<" or unsigned or start >= 0 else -1
+                            elif op == "<<":
+                                expected=wrap(start << count,bits,unsigned)
+                            else:
+                                expected=wrap((start & ((1 << bits)-1)) >> count if unsigned else start >> count,
+                                              bits,unsigned)
+                            checks.append(f"if ({function}(({kind}){start}) != ({kind}){expected}) {{ return 1; }}")
+                with self.subTest(type=kind):
+                    self.run_source("\n".join(definitions)+"\nint32 main() {\n"+"\n".join(checks)+"\nreturn 0; }",
+                                    (0,1,2,3))
+        source="""
+uint32 Mix(uint32 x) { x = x*1664525; return x ^ (x >> 13); }
+int32 main() { return Mix(12345) == 3368840884 ? 0 : 1; }
+"""
+        results=self.run_source(source,(2,3))
+        bodies={level:re.search(r"<_ZN3Mix\w*>:(.*?)\n\n",results[level]["asm"],re.S).group(1) for level in (2,3)}
+        self.assertRegex(bodies[3],r"shr\s+\w+,0xd")
+        self.assertRegex(bodies[2],r"shr\s+\w+,cl")
+        self.assertNotRegex(bodies[3],r"shr\s+\w+,cl")
+
     def test_tail_guards_and_effectful_base_cases(self):
         for kind in ("int2", "int30", "uint32", "int64", "uint64", "int128"):
             for condition in ("n <= 0", "n == 0", "0 >= n", "n < 1", "0 == n", "1 > n"):
