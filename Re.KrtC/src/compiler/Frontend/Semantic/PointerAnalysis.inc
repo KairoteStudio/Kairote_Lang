@@ -275,7 +275,9 @@ bool semantic_analyzer_analyze_expression(SemanticAnalyzer* analyzer, ASTNode* e
     if (!semantic_expression_impl(analyzer, expr)) {
         return false;
     }
-    expr->resolved_type = (KrtSourceType){.token = semantic_analyzer_infer_expression_type(analyzer, expr)};
+    if (expr->type != AST_MEMBER_ACCESS || !expr->resolved_type.token) {
+        expr->resolved_type = (KrtSourceType){.token = semantic_analyzer_infer_expression_type(analyzer, expr)};
+    }
     switch (expr->type) {
     case AST_NEW_EXPRESSION:
         expr->resolved_type = (KrtSourceType){.token = TOKEN_IDENTIFIER, .type_name = expr->data.new_expr.class_name};

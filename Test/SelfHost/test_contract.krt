@@ -1,0 +1,308 @@
+int32 main() {
+    KrtKroObject object = new KrtKroObject();
+    object.magic = 5198411;
+    object.version = 2;
+    object.text_size = 4;
+    if (!KrtKroObjectIsValid(object)) { return 1; }
+    if (!KrtIrIsTerminator((int32)KrtIrOpcode.Return)) { return 2; }
+    if (KrtIrIsTerminator((int32)KrtIrOpcode.Add)) { return 3; }
+    KrtIrFunction direct = new KrtIrFunction();
+    direct.block_count = 1;
+    direct.instruction_count = 2;
+    direct.opcodes = new int32[2];
+    direct.types = new int32[2];
+    direct.lefts = new int32[2];
+    direct.immediates = new int64[2];
+    direct.opcodes[0] = KrtIrOpcode.Constant;
+    direct.opcodes[1] = KrtIrOpcode.Return;
+    if (!KrtIrValidateFunction(direct)) { return 12; }
+    KrtKroObject emitted = new KrtKroObject();
+    if (!KrtKroEmitIrFunction(direct, emitted)) { return 13; }
+    if (emitted.text_size != 6 || emitted.symbol_count != 1 || emitted.architecture != 34404 || emitted.magic != 5198411 || emitted.version != 2) { return 14; }
+    if (emitted.entry_point != 0 || emitted.total_reloc_count != 0 || emitted.strtab_size != 6) { return 29; }
+    if ((emitted.text_word0 & 255) != 184 || ((emitted.text_word1 >> 8) & 255) != 195) { return 28; }
+    string invalid_source = "int32 main() { }";
+    if (KrtCompileSourceToFd(invalid_source, 16, -1)) { return 35; }
+    // Header/text writers are compiled as direct syscall paths; actual file integration is tested by the Stage1 driver.
+    // Three blocks: conditional entry followed by two independent returns.
+    KrtIrFunction cfg = new KrtIrFunction();
+    cfg.block_count = 3; cfg.instruction_count = 6;
+    cfg.block_starts = new int32[3];
+    cfg.block_starts[0] = 0; cfg.block_starts[1] = 2; cfg.block_starts[2] = 4;
+    cfg.opcodes = new int32[6]; cfg.types = new int32[6];
+    cfg.lefts = new int32[6]; cfg.rights = new int32[6]; cfg.immediates = new int64[6];
+    cfg.opcodes[0] = (int32)KrtIrOpcode.Constant; cfg.types[0] = (int32)KrtIrType.Bool;
+    cfg.opcodes[1] = (int32)KrtIrOpcode.Branch; cfg.lefts[1] = 0; cfg.rights[1] = 1; cfg.immediates[1] = 2;
+    cfg.opcodes[2] = (int32)KrtIrOpcode.Constant; cfg.types[2] = (int32)KrtIrType.Int32;
+    cfg.opcodes[3] = (int32)KrtIrOpcode.Return; cfg.types[3] = (int32)KrtIrType.Int32; cfg.lefts[3] = 2;
+    cfg.opcodes[4] = (int32)KrtIrOpcode.Constant; cfg.types[4] = (int32)KrtIrType.Int32;
+    cfg.opcodes[5] = (int32)KrtIrOpcode.Return; cfg.types[5] = (int32)KrtIrType.Int32; cfg.lefts[5] = 4;
+    if (!KrtIrValidateFunction(cfg)) { return 70; }
+    if (KrtKroEmitIrFunction(cfg, emitted)) { return 71; }
+    cfg.rights[1] = 3;
+    if (KrtIrValidateFunction(cfg)) { return 72; }
+    cfg.rights[1] = 1;
+    cfg.block_starts[2] = 4; cfg.types[0] = (int32)KrtIrType.Int32;
+    if (KrtIrValidateFunction(cfg)) { return 74; }
+    cfg.types[0] = (int32)KrtIrType.Bool; cfg.lefts[5] = 5;
+    if (KrtIrValidateFunction(cfg)) { return 75; }
+    delete direct;
+    delete emitted;
+    KrtKroObject compiled = new KrtKroObject();
+    string function_source = "int32 main() { return 0; }";
+    if (!KrtCompileSource(function_source, 26, compiled)) { return 15; }
+    if (compiled.text_size != 6) { return 16; }
+    if (!KrtCompileSourceToPath(function_source, 26, "contract.kro")) { return 36; }
+    string helper_program = "int32 helper() { return 7; } int32 main() { return 0; }";
+    KrtKroObject helper_program_object = new KrtKroObject();
+    if (!KrtCompileSource(helper_program, 55, helper_program_object) || helper_program_object.text_size != 6) { return 40; }
+    delete helper_program_object;
+    string call_program = "int32 helper() { return 7; } int32 main() { return helper(); }";
+    KrtKroObject call_program_object = new KrtKroObject();
+    if (!KrtCompileSource(call_program, 62, call_program_object) || call_program_object.text_size != 20) { return 43; }
+    delete call_program_object;
+    string reversed_call_program = "int32 main() { return helper(); } int32 helper() { return 7; }";
+    KrtKroObject reversed_call_object = new KrtKroObject();
+    if (!KrtCompileSource(reversed_call_program, 62, reversed_call_object) || reversed_call_object.text_size != 20) { return 46; }
+    delete reversed_call_object;
+    string invalid_call_program = "int32 helper() { return 7; } int32 main() { return nope(); }";
+    KrtKroObject invalid_call_object = new KrtKroObject();
+    if (KrtCompileSource(invalid_call_program, 60, invalid_call_object)) { return 44; }
+    delete invalid_call_object;
+    string argument_call_program = "int32 helper(int32 value) { return value; } int32 main() { return helper(7); }";
+    KrtKroObject argument_call_object = new KrtKroObject();
+    if (!KrtCompileSource(argument_call_program, 78, argument_call_object) || argument_call_object.text_size != 22 ||
+        !KrtKroWriteObjectToPath(argument_call_object, "argument-call.kro")) { return 45; }
+    delete argument_call_object;
+    string two_argument_program = "int32 helper(int32 left, int32 right) { return right; } int32 main() { return helper(7, 9); }";
+    KrtKroObject two_argument_object = new KrtKroObject();
+    if (!KrtCompileSource(two_argument_program, 93, two_argument_object) || two_argument_object.text_size != 27 ||
+        !KrtKroWriteObjectToPath(two_argument_object, "two-argument-call.kro")) { return 76; }
+    delete two_argument_object;
+    string reversed_argument_program = "int32 main() { return helper(7); } int32 helper(int32 value) { return value; }";
+    KrtKroObject reversed_argument_object = new KrtKroObject();
+    if (!KrtCompileSource(reversed_argument_program, 78, reversed_argument_object) || reversed_argument_object.text_size != 22) { return 47; }
+    delete reversed_argument_object;
+    KrtLexer real_call_lexer = new KrtLexer();
+    KrtToken real_call_token = new KrtToken();
+    KrtParser real_call_parser = new KrtParser();
+    unsafe(using krt.mem;) { KrtLexerInit(real_call_lexer, (byte*)(int64)call_program, 62); }
+    KrtParserInit(real_call_parser, real_call_lexer, real_call_token);
+    KrtAstNode real_call_unit = KrtParserParseCompilationUnit(real_call_parser);
+    KrtKroObject real_call_object = new KrtKroObject();
+if (!KrtKroEmitConstantHelperCall(real_call_unit, real_call_object) || real_call_object.text_size != 20 ||
+        !KrtKroWriteObjectToPath(real_call_object, "real-call.kro")) { return 47; }
+    delete real_call_object; delete real_call_unit; delete real_call_parser; delete real_call_token; delete real_call_lexer;
+    string unit_source = "int32 helper() { return 7; } int32 main() { return 0; }";
+    KrtLexer unit_lexer = new KrtLexer();
+    KrtToken unit_token = new KrtToken();
+    KrtParser unit_parser = new KrtParser();
+    unsafe(using krt.mem;) { KrtLexerInit(unit_lexer, (byte*)(int64)unit_source, 55); }
+    KrtParserInit(unit_parser, unit_lexer, unit_token);
+    KrtAstNode compilation_unit = KrtParserParseCompilationUnit(unit_parser);
+    if (unit_parser.errors != 0 || compilation_unit.child_count != 2 ||
+        !KrtSemanticValidateCompilationUnit(compilation_unit)) { return 39; }
+    delete compilation_unit;
+    delete unit_parser;
+    delete unit_token;
+    delete unit_lexer;
+    string call_source = "int32 main() { return helper(); }";
+    KrtLexer call_lexer = new KrtLexer();
+    KrtToken call_token = new KrtToken();
+    KrtParser call_parser = new KrtParser();
+    unsafe(using krt.mem;) { KrtLexerInit(call_lexer, (byte*)(int64)call_source, 33); }
+    KrtParserInit(call_parser, call_lexer, call_token);
+    KrtAstNode call_unit = KrtParserParseFunction(call_parser);
+    if (call_parser.errors != 0 || call_unit.left.left.left.kind != KrtAstKind.Call) { return 42; }
+    delete call_unit;
+    delete call_parser;
+    delete call_token;
+    delete call_lexer;
+    delete compiled;
+
+
+    string two_returns = "int32 main() { return 0; return 1; }";
+    KrtKroObject multi = new KrtKroObject();
+    KrtLexer probe_lexer = new KrtLexer();
+    KrtToken probe_token = new KrtToken();
+    KrtParser probe_parser = new KrtParser();
+    unsafe(using krt.mem;) { KrtLexerInit(probe_lexer, (byte*)(int64)two_returns, 36); }
+    KrtParserInit(probe_parser, probe_lexer, probe_token);
+    KrtAstNode probe = KrtParserParseFunction(probe_parser);
+    if (probe.left.child_count != 2) { return 30; }
+    KrtIrFunction multi_ir = new KrtIrFunction();
+    if (KrtIrLowerReturnFunction(probe, multi_ir)) { return 31; }
+    if (KrtCompileSource(two_returns, 36, multi)) { return 17; }
+    delete multi_ir;
+    delete probe;
+    delete probe_parser;
+    delete probe_token;
+    delete probe_lexer;
+    delete multi;
+    string expression_source = "int32 main() { return 2 + 3 * 4; }";
+    KrtLexer expression_lexer = new KrtLexer();
+    KrtToken expression_token = new KrtToken();
+    KrtParser expression_parser = new KrtParser();
+    unsafe(using krt.mem;) { KrtLexerInit(expression_lexer, (byte*)(int64)expression_source, 34); }
+    KrtParserInit(expression_parser, expression_lexer, expression_token);
+    KrtAstNode expression_unit = KrtParserParseFunction(expression_parser);
+    KrtIrFunction expression_ir = new KrtIrFunction();
+    if (!KrtIrLowerReturnFunction(expression_unit, expression_ir)) { return 22; }
+    if (expression_ir.immediates[0] != 14) { return 23; }
+    delete expression_ir;
+    delete expression_unit;
+    delete expression_parser;
+    delete expression_token;
+    delete expression_lexer;
+
+    string variable_source = "int32 main() { int32 x = 2 + 3; return x; }";
+    KrtLexer variable_lexer = new KrtLexer();
+    KrtToken variable_token = new KrtToken();
+    KrtParser variable_parser = new KrtParser();
+    unsafe(using krt.mem;) { KrtLexerInit(variable_lexer, (byte*)(int64)variable_source, 43); }
+    KrtParserInit(variable_parser, variable_lexer, variable_token);
+    KrtAstNode variable_unit = KrtParserParseFunction(variable_parser);
+    KrtIrFunction variable_ir = new KrtIrFunction();
+    if (!KrtSemanticBindLocals(variable_unit, variable_lexer.source) || !KrtIrLowerReturnFunction(variable_unit, variable_ir)) { return 26; }
+    if (variable_ir.instruction_count != 4 || variable_ir.opcodes[1] != 11 || variable_ir.opcodes[2] != 12) { return 27; }
+    KrtKroObject variable_object = new KrtKroObject();
+    if (!KrtCompileSource(variable_source, 43, variable_object)) { return 31; }
+    if (variable_object.text_size != 16 || (variable_object.text_word0 & 255) != 85 ||
+        ((variable_object.text_word3 >> 24) & 255) != 195) { return 32; }
+    if (!KrtCompileSourceToPath(variable_source, 43, "local.kro")) { return 37; }
+    delete variable_object;
+    string local_expression_source = "int32 main() { int32 x = 5; return x + 2; }";
+    KrtKroObject local_expression_object = new KrtKroObject();
+    if (!KrtCompileSource(local_expression_source, 43, local_expression_object) || local_expression_object.text_size != 6) { return 48; }
+    delete local_expression_object;
+    string comparison_source = "int32 main() { return 3 >= 3 && 2 != 4; }";
+    KrtKroObject comparison_object = new KrtKroObject();
+    if (!KrtCompileSource(comparison_source, 41, comparison_object) || comparison_object.text_size != 6) { return 49; }
+    delete comparison_object;
+    string declaration_source = "enum Flag { Off = 0, On = 1 } class Marker { public int32 value; } int32 main() { return 7; }";
+    KrtKroObject declaration_object = new KrtKroObject();
+    if (!KrtCompileSource(declaration_source, 93, declaration_object) || declaration_object.text_size != 6) { return 50; }
+    delete declaration_object;
+    string three_function_source = "int32 first() { return 1; } int32 second() { return 2; } int32 main() { return 3; }";
+    KrtLexer three_lexer = new KrtLexer();
+    KrtToken three_token = new KrtToken();
+    KrtParser three_parser = new KrtParser();
+    unsafe(using krt.mem;) { KrtLexerInit(three_lexer, (byte*)(int64)three_function_source, 83); }
+    KrtParserInit(three_parser, three_lexer, three_token);
+    KrtAstNode three_unit = KrtParserParseCompilationUnit(three_parser);
+    if (three_parser.errors != 0 || three_unit.child_count != 3 || !KrtSemanticValidateCompilationUnit(three_unit) ||
+        !KrtSemanticValidateEntryPoint(three_unit, three_lexer.source)) { return 51; }
+    delete three_unit; delete three_parser; delete three_token; delete three_lexer;
+    string duplicate_function_source = "int32 first() { return 1; } int32 first() { return 2; } int32 main() { return 3; }";
+    KrtLexer duplicate_lexer = new KrtLexer();
+    KrtToken duplicate_token = new KrtToken();
+    KrtParser duplicate_parser = new KrtParser();
+    unsafe(using krt.mem;) { KrtLexerInit(duplicate_lexer, (byte*)(int64)duplicate_function_source, 82); }
+    KrtParserInit(duplicate_parser, duplicate_lexer, duplicate_token);
+    KrtAstNode duplicate_unit = KrtParserParseCompilationUnit(duplicate_parser);
+    if (duplicate_parser.errors != 0 || KrtSemanticValidateFunctionNames(duplicate_unit, duplicate_lexer.source)) { return 52; }
+    delete duplicate_unit; delete duplicate_parser; delete duplicate_token; delete duplicate_lexer;
+    string no_entry_source = "int32 first() { return 1; } int32 second() { return 2; }";
+    KrtKroObject no_entry_object = new KrtKroObject();
+    if (KrtCompileSource(no_entry_source, 56, no_entry_object)) { return 53; }
+    delete no_entry_object;
+    string if_source = "int32 main() { if (1) { return 7; } else { return 9; } }";
+    KrtLexer if_lexer = new KrtLexer();
+    KrtToken if_token = new KrtToken();
+    KrtParser if_parser = new KrtParser();
+    unsafe(using krt.mem;) { KrtLexerInit(if_lexer, (byte*)(int64)if_source, 56); }
+    KrtParserInit(if_parser, if_lexer, if_token);
+    KrtAstNode if_function = KrtParserParseFunction(if_parser);
+    if (if_parser.errors != 0 || !KrtSemanticValidateFunction(if_function) || if_function.left.left.kind != KrtAstKind.If) { return 54; }
+    KrtKroObject if_object = new KrtKroObject();
+    if (!KrtCompileSource(if_source, 56, if_object) || if_object.text_size != 6) { return 55; }
+    delete if_object;
+    string assignment_source = "int32 main() { int32 x = 1; x = 2; return x; }";
+    KrtLexer assignment_lexer = new KrtLexer();
+    KrtToken assignment_token = new KrtToken();
+    KrtParser assignment_parser = new KrtParser();
+    unsafe(using krt.mem;) { KrtLexerInit(assignment_lexer, (byte*)(int64)assignment_source, 46); }
+    KrtParserInit(assignment_parser, assignment_lexer, assignment_token);
+    KrtAstNode assignment_function = KrtParserParseFunction(assignment_parser);
+    if (assignment_parser.errors != 0 || !KrtSemanticValidateFunction(assignment_function) ||
+        assignment_function.left.left.next.kind != KrtAstKind.Assign) { return 56; }
+    KrtKroObject assignment_object = new KrtKroObject();
+    if (!KrtCompileSource(assignment_source, 46, assignment_object) || assignment_object.text_size != 6) { return 57; }
+    delete assignment_object;
+    delete assignment_function; delete assignment_parser; delete assignment_token; delete assignment_lexer;
+    string object_declaration_source = "int32 main() { string source = \"ok\"; KrtKroObject object = new KrtKroObject(); return 0; }";
+    KrtLexer object_lexer = new KrtLexer();
+    KrtToken object_token = new KrtToken();
+    KrtParser object_parser = new KrtParser();
+    unsafe(using krt.mem;) { KrtLexerInit(object_lexer, (byte*)(int64)object_declaration_source, 90); }
+    KrtParserInit(object_parser, object_lexer, object_token);
+    KrtAstNode object_function = KrtParserParseFunction(object_parser);
+    if (object_parser.errors != 0 || !KrtSemanticValidateFunction(object_function) ||
+        object_function.left.left.kind != KrtAstKind.Variable || object_function.left.left.next.left.kind != KrtAstKind.New) { return 58; }
+    delete object_function; delete object_parser; delete object_token; delete object_lexer;
+    string stack_source = "int32 main() { byte* p = stackalloc byte[4]; return 0; }";
+    KrtLexer stack_lexer = new KrtLexer();
+    KrtToken stack_token = new KrtToken();
+    KrtParser stack_parser = new KrtParser();
+    unsafe(using krt.mem;) { KrtLexerInit(stack_lexer, (byte*)(int64)stack_source, 56); }
+    KrtParserInit(stack_parser, stack_lexer, stack_token);
+    KrtAstNode stack_function = KrtParserParseFunction(stack_parser);
+    if (stack_parser.errors != 0 || !KrtSemanticValidateFunction(stack_function) ||
+        stack_function.left.left.left.kind != KrtAstKind.StackAlloc) { return 59; }
+    delete stack_function; delete stack_parser; delete stack_token; delete stack_lexer;
+    delete if_function; delete if_parser; delete if_token; delete if_lexer;
+    string two_variable_source = "int32 main() { int32 x = 5; int32 y = 9; return y; }";
+    KrtKroObject two_variable_object = new KrtKroObject();
+    if (!KrtCompileSource(two_variable_source, 52, two_variable_object)) { return 33; }
+    if (two_variable_object.text_size != 23 || ((two_variable_object.text_word5 >> 8) & 255) != 93 ||
+        ((two_variable_object.text_word5 >> 16) & 255) != 195) { return 34; }
+    if (!KrtCompileSourceToPath(two_variable_source, 52, "locals.kro")) { return 38; }
+    delete two_variable_object;
+    delete variable_ir;
+    delete variable_unit;
+    delete variable_parser;
+    delete variable_token;
+    delete variable_lexer;
+
+    KrtLexer lexer = new KrtLexer();
+    KrtToken token = new KrtToken();
+    KrtParser parser = new KrtParser();
+    string source = "2 + 3 * 4 == 14";
+    unsafe(using krt.mem;) { KrtLexerInit(lexer, (byte*)(int64)source, 15); }
+    KrtParserInit(parser, lexer, token);
+    KrtAstNode node = KrtParserParseExpression(parser, 1);
+    if (node.kind != KrtAstKind.Binary || node.op != 61) { return 4; }
+    if (node.left.kind != KrtAstKind.Binary || node.left.op != 43) { return 5; }
+    if (node.left.right.kind != KrtAstKind.Binary || node.left.right.op != 42) { return 6; }
+    if (parser.token.kind != KrtTokenKind.Eof || parser.errors != 0) { return 7; }
+    delete node;
+
+    string unary_source = "!-7";
+    unsafe(using krt.mem;) { KrtLexerInit(lexer, (byte*)(int64)unary_source, 3); }
+    KrtParserInit(parser, lexer, token);
+    KrtAstNode unary = KrtParserParseExpression(parser, 1);
+    if (unary.kind != KrtAstKind.Unary || unary.op != 33 || unary.left.kind != KrtAstKind.Unary || unary.left.op != 45) { return 8; }
+    delete unary;
+
+    string statement_source = "return 42;";
+    unsafe(using krt.mem;) { KrtLexerInit(lexer, (byte*)(int64)statement_source, 10); }
+    KrtParserInit(parser, lexer, token);
+    KrtAstNode statement = KrtParserParseStatement(parser);
+    if (statement.kind != KrtAstKind.Return || statement.left.kind != KrtAstKind.Integer || parser.errors != 0) { return 9; }
+    delete statement;
+
+    function_source = "int32 main() { return 0; }";
+    unsafe(using krt.mem;) { KrtLexerInit(lexer, (byte*)(int64)function_source, 26); }
+    KrtParserInit(parser, lexer, token);
+    KrtAstNode function_node = KrtParserParseFunction(parser);
+    if (function_node.kind != KrtAstKind.Function || function_node.left.kind != KrtAstKind.Block ||
+        function_node.left.left.kind != KrtAstKind.Return || parser.errors != 0) { return 10; }
+    delete function_node;
+
+
+    delete parser;
+    delete token;
+    delete lexer;
+    delete object;
+    return 0;
+}

@@ -1,0 +1,110 @@
+class KrtLexer {
+    public int64 source;
+    public int64 length;
+    public int64 position;
+    public int64 line;
+    public int64 column;
+    public KrtTokenKind token_kind;
+    public int64 token_start;
+    public int64 token_length;
+
+    public bool Init(byte* input, int64 input_length) {
+        if (input_length < 0) { return false; }
+        unsafe(using krt.mem;) {
+            if (input == null && input_length != 0) { return false; }
+            this.source = (int64)input;
+        }
+        this.length = input_length; this.position = 0; this.line = 1; this.column = 1; return true;
+    }
+
+    public int64 At(int64 offset) {
+        int64 index = this.position + offset;
+        if (index < 0 || index >= this.length) { return -1; }
+        unsafe(using krt.mem;) { return (int64)((byte*)this.source)[index]; }
+    }
+
+    public void Advance() {
+        if (this.position >= this.length) { return; }
+        int64 value = At(0); this.position = this.position + 1;
+        if (value == 10 || value == 13) { this.line = this.line + 1; this.column = 1; }
+        else { this.column = this.column + 1; }
+    }
+
+}
+
+bool KrtLexerInit(KrtLexer lexer, byte* source, int64 length) {
+    if (length < 0) { return false; }
+    unsafe(using krt.mem;) {
+        if (source == null && length != 0) { return false; }
+        lexer.source = (int64)source;
+    }
+    lexer.length = length; lexer.position = 0; lexer.line = 1; lexer.column = 1; return true;
+}
+
+int64 lexer_at(KrtLexer lexer, int64 offset) {
+    int64 index = lexer.position + offset;
+    if (index < 0 || index >= lexer.length) { return -1; }
+    unsafe(using krt.mem;) { return (int64)((byte*)lexer.source)[index]; }
+}
+
+bool lexer_letter(int64 value) { return (value >= 65 && value <= 90) || (value >= 97 && value <= 122) || value == 95; }
+bool lexer_digit(int64 value) { return value >= 48 && value <= 57; }
+
+void lexer_advance(KrtLexer lexer) {
+    if (lexer.position >= lexer.length) { return; }
+    int64 value = lexer_at(lexer, 0);
+    lexer.position = lexer.position + 1;
+    if (value == 10 || value == 13) {
+        lexer.line = lexer.line + 1;
+        lexer.column = 1;
+    } else { lexer.column = lexer.column + 1; }
+}
+
+void lexer_mark(KrtLexer lexer, KrtToken token) {
+    token.Reset(lexer.position, lexer.line, lexer.column);
+}
+
+void lexer_skip(KrtLexer lexer, KrtToken token) {
+    while (true) {
+        int64 value = lexer_at(lexer, 0);
+        if (value == 32 || value == 9 || value == 10 || value == 13) { lexer_advance(lexer); }
+        else if (value == 47 && lexer_at(lexer, 1) == 47) {
+            while (lexer_at(lexer, 0) >= 0 && lexer_at(lexer, 0) != 10 && lexer_at(lexer, 0) != 13) { lexer_advance(lexer); }
+        } else if (value == 47 && lexer_at(lexer, 1) == 42) {
+            lexer_mark(lexer, token); lexer_advance(lexer); lexer_advance(lexer);
+            while (lexer_at(lexer, 0) >= 0 && !(lexer_at(lexer, 0) == 42 && lexer_at(lexer, 1) == 47)) { lexer_advance(lexer); }
+            if (lexer_at(lexer, 0) < 0) { token.SetError(2); token.SetLength(lexer.position - token.start); return; }
+            lexer_advance(lexer); lexer_advance(lexer);
+        } else { return; }
+    }
+}
+
+void KrtLexerNext(KrtLexer lexer, KrtToken token) {
+    lexer_skip(lexer, token);
+    if (token.kind == KrtTokenKind.Invalid) { return; }
+    lexer_mark(lexer, token); int64 first = lexer_at(lexer, 0);
+    if (first < 0) { return; }
+    if (lexer_letter(first)) {
+        token.SetKind(KrtTokenKind.Identifier);
+        while (lexer_letter(lexer_at(lexer, 0)) || lexer_digit(lexer_at(lexer, 0))) { lexer_advance(lexer); }
+    } else if (lexer_digit(first)) {
+        token.SetKind(KrtTokenKind.Integer);
+        while (lexer_digit(lexer_at(lexer, 0))) { lexer_advance(lexer); }
+        if (lexer_letter(lexer_at(lexer, 0))) { token.SetError(5); }
+    } else if (first == 34 || first == 39) {
+        int64 quote = first; token.SetKind(quote == 39 ? KrtTokenKind.Character : KrtTokenKind.String); lexer_advance(lexer);
+        int64 count = 0;
+        while (lexer_at(lexer, 0) >= 0 && lexer_at(lexer, 0) != quote) {
+            if (lexer_at(lexer, 0) == 92) { lexer_advance(lexer); }
+            lexer_advance(lexer); count = count + 1;
+        }
+        if (lexer_at(lexer, 0) < 0) { token.SetError(3); }
+        else { lexer_advance(lexer); if (quote == 39 && count != 1) { token.SetError(6); } }
+    } else {
+        token.SetKind(KrtTokenKind.Punctuation); lexer_advance(lexer);
+        int64 second = lexer_at(lexer, 0);
+        if ((first == 61 || first == 33 || first == 60 || first == 62 || first == 43 || first == 45) && second == 61) { lexer_advance(lexer); }
+        else if ((first == 38 || first == 124 || first == 43 || first == 45 || first == 60 || first == 62) && second == first) { lexer_advance(lexer); }
+    }
+    token.SetLength(lexer.position - token.start);
+}
