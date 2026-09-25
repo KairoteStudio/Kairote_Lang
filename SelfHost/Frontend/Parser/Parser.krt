@@ -555,6 +555,45 @@ KrtAstNode KrtParserParseStatement(KrtParser parser) {
         result.left = initializer; result.right = condition; result.alternate = increment; result.next = body; result.child_count = 4;
         return result;
     }
+    if (KrtParserIsWord(parser, "switch")) {
+        int64 start = parser.token.start;
+        KrtLexerNext(parser.lexer, parser.token);
+        if (!KrtParserTokenText(parser, 40)) { parser.errors = parser.errors + 1; return KrtAstMake(KrtAstKind.Invalid, start, 0); }
+        KrtLexerNext(parser.lexer, parser.token);
+        KrtAstNode value = KrtParserParseExpression(parser, 1);
+        if (!KrtParserTokenText(parser, 41)) { parser.errors = parser.errors + 1; return KrtAstMake(KrtAstKind.Invalid, start, 0); }
+        KrtLexerNext(parser.lexer, parser.token);
+        if (!KrtParserTokenText(parser, 123)) { parser.errors = parser.errors + 1; return KrtAstMake(KrtAstKind.Invalid, start, 0); }
+        KrtLexerNext(parser.lexer, parser.token);
+        KrtAstNode first_case = null; KrtAstNode case_tail = null; int32 case_count = 0;
+        while (!KrtParserTokenText(parser, 125) && parser.token.kind != KrtTokenKind.Eof) {
+            bool is_default = KrtParserIsWord(parser, "default");
+            if (!is_default && !KrtParserIsWord(parser, "case")) { parser.errors = parser.errors + 1; KrtLexerNext(parser.lexer, parser.token); continue; }
+            int64 case_start = parser.token.start;
+            KrtLexerNext(parser.lexer, parser.token);
+            KrtAstNode label = null;
+            if (!is_default) { label = KrtParserParseExpression(parser, 1); }
+            if (!KrtParserTokenText(parser, 58)) { parser.errors = parser.errors + 1; }
+            else { KrtLexerNext(parser.lexer, parser.token); }
+            KrtAstNode body = KrtAstMake(KrtAstKind.Block, case_start, 0);
+            KrtAstNode body_tail = null;
+            while (!KrtParserTokenText(parser, 125) && !KrtParserIsWord(parser, "case") &&
+                   !KrtParserIsWord(parser, "default") && parser.token.kind != KrtTokenKind.Eof) {
+                KrtAstNode statement = KrtParserParseStatement(parser);
+                if (body.left == null) { body.left = statement; } else { body_tail.next = statement; }
+                body_tail = statement; body.child_count = body.child_count + 1;
+            }
+            KrtAstNode clause = KrtAstMake(is_default ? KrtAstKind.Default : KrtAstKind.Case, case_start, parser.token.start - case_start);
+            clause.left = label; clause.right = body; clause.child_count = is_default ? 1 : 2;
+            if (first_case == null) { first_case = clause; } else { case_tail.next = clause; }
+            case_tail = clause; case_count = case_count + 1;
+        }
+        if (!KrtParserTokenText(parser, 125)) { parser.errors = parser.errors + 1; }
+        else { KrtLexerNext(parser.lexer, parser.token); }
+        KrtAstNode result = KrtAstMake(KrtAstKind.Switch, start, parser.token.start - start);
+        result.left = value; result.right = first_case; result.child_count = case_count + 1;
+        return result;
+    }
     bool looks_like_type = false;
     if (parser.token.kind == KrtTokenKind.Identifier && parser.token.length > 0) {
         unsafe(using krt.mem;) {
