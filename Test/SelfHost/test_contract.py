@@ -237,6 +237,36 @@ int32 main() {{
             self.assertEqual(build.returncode, 0, build.stdout + build.stderr)
             self.assertEqual(subprocess.run([str(binary)], timeout=10).returncode, 0)
 
+    def test_bitwise_and_shift_expression_contract(self):
+        parts = [
+            'Frontend/Lexer/Token.krt', 'Frontend/Lexer/Lexer.krt',
+            'Frontend/Parser/Ast.krt', 'Frontend/Parser/Parser.krt',
+        ]
+        prelude = '\n'.join((ROOT / 'SelfHost' / part).read_text() for part in parts)
+        source_text = 'int32 main() { return 1 | 2 ^ 3 & 4 << 1; }'
+        main = f'''
+int32 main() {{
+    string input = {json.dumps(source_text)};
+    KrtLexer lexer = new KrtLexer(); KrtToken token = new KrtToken(); KrtParser parser = new KrtParser();
+    unsafe(using krt.mem;) {{ KrtLexerInit(lexer, (byte*)(int64)input, {len(source_text)}); }}
+    KrtParserInit(parser, lexer, token);
+    KrtAstNode unit = KrtParserParseFunction(parser);
+    if (parser.errors != 0 || unit.left.left.kind != KrtAstKind.Return) {{ return 1; }}
+    KrtAstNode expression = unit.left.left.left;
+    if (expression.kind != KrtAstKind.Binary || expression.op != 124 ||
+        expression.right.kind != KrtAstKind.Binary || expression.right.op != 94 ||
+        expression.right.right.kind != KrtAstKind.Binary || expression.right.right.op != 38 ||
+        expression.right.right.right.kind != KrtAstKind.Binary || expression.right.right.right.op != 106) {{ return 2; }}
+    return 0;
+}}
+'''
+        with tempfile.TemporaryDirectory(prefix='krt-operators-') as directory:
+            work = Path(directory); source = work / 'Operators.krt'; source.write_text(prelude + '\n' + main)
+            binary = work / 'operators'
+            build = subprocess.run([str(KRTC), '-O2', str(source), 'output', str(binary)], cwd=work, capture_output=True, text=True, timeout=60)
+            self.assertEqual(build.returncode, 0, build.stdout + build.stderr)
+            self.assertEqual(subprocess.run([str(binary)], timeout=10).returncode, 0)
+
     def test_multiple_parameter_binding_contract(self):
         parts = [
             'Frontend/Lexer/Token.krt', 'Frontend/Lexer/Lexer.krt',
