@@ -379,6 +379,16 @@ bool KrtParserIsWord(KrtParser parser, string word) {
     return true;
 }
 
+bool KrtParserIsBuiltinType(KrtParser parser) {
+    return KrtParserIsWord(parser, "void") || KrtParserIsWord(parser, "bool") || KrtParserIsWord(parser, "char") ||
+        KrtParserIsWord(parser, "byte") || KrtParserIsWord(parser, "string") || KrtParserIsWord(parser, "int") ||
+        KrtParserIsWord(parser, "long") || KrtParserIsWord(parser, "float") || KrtParserIsWord(parser, "double") ||
+        KrtParserIsWord(parser, "int8") || KrtParserIsWord(parser, "int16") || KrtParserIsWord(parser, "int32") ||
+        KrtParserIsWord(parser, "int64") || KrtParserIsWord(parser, "int128") || KrtParserIsWord(parser, "uint8") ||
+        KrtParserIsWord(parser, "uint16") || KrtParserIsWord(parser, "uint32") || KrtParserIsWord(parser, "uint64") ||
+        KrtParserIsWord(parser, "uint128") || KrtParserIsWord(parser, "float32") || KrtParserIsWord(parser, "float64");
+}
+
 KrtAstNode KrtParserParseBlock(KrtParser parser) {
     int64 start = parser.token.start;
     if (!KrtParserTokenText(parser, 123)) { parser.errors = parser.errors + 1; return KrtAstMake(KrtAstKind.Invalid, start, 0); }
@@ -798,9 +808,9 @@ KrtAstNode KrtParserParseStatement(KrtParser parser) {
             looks_like_type = first >= 65 && first <= 90;
         }
     }
-    if (KrtParserIsWord(parser, "var") || KrtParserIsWord(parser, "let") ||
-        KrtParserIsWord(parser, "int32") || KrtParserIsWord(parser, "int64") || KrtParserIsWord(parser, "bool") ||
-        KrtParserIsWord(parser, "string") || KrtParserIsWord(parser, "byte") || looks_like_type) {
+    bool local_const = KrtParserIsWord(parser, "const");
+    if (local_const) { KrtLexerNext(parser.lexer, parser.token); }
+    if (KrtParserIsWord(parser, "var") || KrtParserIsWord(parser, "let") || KrtParserIsBuiltinType(parser) || looks_like_type || local_const) {
         int64 start = parser.token.start;
         KrtLexerNext(parser.lexer, parser.token);
         KrtParserSkipGenericArguments(parser);
