@@ -335,7 +335,9 @@ KrtAstNode KrtParserParseFunction(KrtParser parser) {
         if (KrtParserIsWord(parser, "extern")) { external = true; }
         KrtLexerNext(parser.lexer, parser.token);
     }
+    bool keyword_function = KrtParserIsWord(parser, "function") || KrtParserIsWord(parser, "func") || KrtParserIsWord(parser, "fn");
     KrtToken type_token = parser.token;
+    if (keyword_function) { KrtLexerNext(parser.lexer, parser.token); }
     if (parser.token.kind != KrtTokenKind.Identifier) {
         parser.errors = parser.errors + 1; return KrtAstMake(KrtAstKind.Invalid, type_token.start, type_token.length);
     }
@@ -349,7 +351,7 @@ KrtAstNode KrtParserParseFunction(KrtParser parser) {
     KrtLexerNext(parser.lexer, parser.token);
     KrtAstNode unit = KrtAstMake(KrtAstKind.Function, start, 0);
     unit.type_start = type_token.start;
-    unit.type_length = type_token.length;
+    unit.type_length = keyword_function ? 4 : type_token.length;
     unit.name_start = name_start;
     unit.name_length = name_length;
     if (!KrtParserTokenText(parser, 41)) {
@@ -407,8 +409,28 @@ bool KrtParserSkipTypeDeclaration(KrtParser parser) {
 // Source-level directives do not produce executable AST nodes, but they are
 // part of the language grammar and must be consumed before declarations.
 bool KrtParserSkipSourceDirective(KrtParser parser) {
-    if (!KrtParserIsWord(parser, "using") && !KrtParserIsWord(parser, "namespace")) { return false; }
+    bool namespace_directive = KrtParserIsWord(parser, "namespace");
+    if (!KrtParserIsWord(parser, "using") && !namespace_directive) { return false; }
     KrtLexerNext(parser.lexer, parser.token);
+    if (namespace_directive) {
+        int32 braces = 0;
+        while (parser.token.kind != KrtTokenKind.Eof) {
+            if (KrtParserTokenText(parser, 123)) { braces = braces + 1; }
+            else if (KrtParserTokenText(parser, 125)) {
+                braces = braces - 1;
+                KrtLexerNext(parser.lexer, parser.token);
+                if (braces == 0) { return true; }
+                continue;
+            }
+            if (braces == 0 && KrtParserTokenText(parser, 59)) {
+                KrtLexerNext(parser.lexer, parser.token);
+                return true;
+            }
+            KrtLexerNext(parser.lexer, parser.token);
+        }
+        parser.errors = parser.errors + 1;
+        return true;
+    }
     int32 angle_depth = 0;
     while (parser.token.kind != KrtTokenKind.Eof) {
         if (KrtParserTokenText(parser, 60)) { angle_depth = angle_depth + 1; }
