@@ -1,4 +1,4 @@
-enum KrtAstKind { Invalid = 0, Program = 1, Function = 2, Block = 3, Return = 4, Integer = 5, Identifier = 6, String = 7, Binary = 8, Unary = 9, Type = 10, Variable = 11, Call = 12, If = 13, While = 14, Member = 15, Assign = 16, Expression = 17, New = 18, StackAlloc = 19, Index = 20, Boolean = 21, Cast = 22, Unsafe = 23, Delete = 24, Ternary = 25, Null = 26, Break = 27, Continue = 28, DoWhile = 29, For = 30, CompoundAssign = 31 }
+enum KrtAstKind { Invalid = 0, Program = 1, Function = 2, Block = 3, Return = 4, Integer = 5, Identifier = 6, String = 7, Binary = 8, Unary = 9, Type = 10, Variable = 11, Call = 12, If = 13, While = 14, Member = 15, Assign = 16, Expression = 17, New = 18, StackAlloc = 19, Index = 20, Boolean = 21, Cast = 22, Unsafe = 23, Delete = 24, Ternary = 25, Null = 26, Break = 27, Continue = 28, DoWhile = 29, For = 30, CompoundAssign = 31, ArrayLiteral = 32 }
 
 // AST nodes own child arrays; token spans continue to borrow source storage.
 class KrtAstNode {
