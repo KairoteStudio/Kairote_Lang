@@ -49,6 +49,7 @@ KrtAstNode KrtParserParsePrimary(KrtParser parser) {
         int64 type_length = parser.token.length;
         KrtLexerNext(parser.lexer, parser.token);
         KrtParserSkipGenericArguments(parser);
+        KrtParserSkipQualifiedType(parser);
         KrtAstNode count = null;
         if (KrtParserTokenText(parser, 40)) {
             KrtLexerNext(parser.lexer, parser.token);
@@ -91,6 +92,9 @@ KrtAstNode KrtParserParsePrimary(KrtParser parser) {
                     int64 cast_type_start = parser.token.start;
                     int64 cast_type_length = parser.token.length;
                     KrtLexerNext(parser.lexer, parser.token);
+                    KrtParserSkipGenericArguments(parser);
+                    KrtParserSkipQualifiedType(parser);
+                    KrtParserSkipArrayTypeSuffix(parser);
                     bool pointer_cast = false;
                     if (KrtParserTokenText(parser, 42)) { pointer_cast = true; KrtLexerNext(parser.lexer, parser.token); }
                     if (KrtParserTokenText(parser, 41)) {
@@ -306,6 +310,27 @@ bool KrtParserSkipGenericArguments(KrtParser parser) {
     return false;
 }
 
+bool KrtParserSkipQualifiedType(KrtParser parser) {
+    while (KrtParserTokenText(parser, 46)) {
+        KrtLexerNext(parser.lexer, parser.token);
+        if (parser.token.kind != KrtTokenKind.Identifier) { parser.errors = parser.errors + 1; return false; }
+        KrtLexerNext(parser.lexer, parser.token);
+        KrtParserSkipGenericArguments(parser);
+    }
+    return true;
+}
+
+bool KrtParserSkipArrayTypeSuffix(KrtParser parser) {
+    bool found = false;
+    while (KrtParserTokenText(parser, 91)) {
+        KrtLexerNext(parser.lexer, parser.token);
+        if (!KrtParserTokenText(parser, 93)) { return false; }
+        KrtLexerNext(parser.lexer, parser.token);
+        found = true;
+    }
+    return found;
+}
+
 bool KrtParserIsWord(KrtParser parser, string word) {
     int64 length = 0;
     unsafe(using krt.mem;) {
@@ -357,6 +382,12 @@ KrtAstNode KrtParserParseFunction(KrtParser parser) {
         parser.errors = parser.errors + 1; return KrtAstMake(KrtAstKind.Invalid, type_token.start, type_token.length);
     }
     KrtLexerNext(parser.lexer, parser.token);
+    if (!keyword_function) {
+        KrtParserSkipGenericArguments(parser);
+        KrtParserSkipQualifiedType(parser);
+        KrtParserSkipArrayTypeSuffix(parser);
+        if (KrtParserTokenText(parser, 42)) { KrtLexerNext(parser.lexer, parser.token); }
+    }
     if (parser.token.kind != KrtTokenKind.Identifier) { parser.errors = parser.errors + 1; return KrtAstMake(KrtAstKind.Invalid, type_token.start, 0); }
     int64 name_start = parser.token.start;
     int64 name_length = parser.token.length;
@@ -379,7 +410,9 @@ KrtAstNode KrtParserParseFunction(KrtParser parser) {
             if (unit.parameter_count >= 8 || parser.token.kind != KrtTokenKind.Identifier) { parser.errors = parser.errors + 1; return unit; }
             KrtLexerNext(parser.lexer, parser.token);
             KrtParserSkipGenericArguments(parser);
+            KrtParserSkipQualifiedType(parser);
             if (KrtParserTokenText(parser, 42)) { KrtLexerNext(parser.lexer, parser.token); }
+            KrtParserSkipArrayTypeSuffix(parser);
             if (parser.token.kind != KrtTokenKind.Identifier) { parser.errors = parser.errors + 1; return unit; }
             unit.parameter_starts[unit.parameter_count] = parser.token.start;
             unit.parameter_lengths[unit.parameter_count] = parser.token.length;
@@ -704,7 +737,9 @@ KrtAstNode KrtParserParseStatement(KrtParser parser) {
         int64 start = parser.token.start;
         KrtLexerNext(parser.lexer, parser.token);
         KrtParserSkipGenericArguments(parser);
+        KrtParserSkipQualifiedType(parser);
         if (KrtParserTokenText(parser, 42)) { KrtLexerNext(parser.lexer, parser.token); }
+        KrtParserSkipArrayTypeSuffix(parser);
         if (parser.token.kind != KrtTokenKind.Identifier) {
             parser.errors = parser.errors + 1;
             return KrtAstMake(KrtAstKind.Invalid, start, 0);
