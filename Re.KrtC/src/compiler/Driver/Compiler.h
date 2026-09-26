@@ -23,6 +23,8 @@ typedef struct {
     FILE* output_file;
     KrtTargetPlatform target;
     int optimization_level;
+    /** True when the compiled IR contains functions or data that must participate in linking. */
+    bool has_object_code;
     KrtChunk last_chunk;
     char output_filename[256];
 } KrtCompiler;

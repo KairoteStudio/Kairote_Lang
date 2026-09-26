@@ -391,6 +391,27 @@ static void semantic_analyzer_add_using_directive(SemanticAnalyzer* analyzer, AS
     if (!analyzer || !using_node) {
         return;
     }
+    for (int i = 0; i < analyzer->using_count; i++) {
+        UsingDirective* existing = analyzer->using_directives[i];
+        if (existing->is_alias != using_node->data.using_directive.is_alias ||
+            existing->path_length != using_node->data.using_directive.path_length) {
+            continue;
+        }
+        const char* alias = using_node->data.using_directive.alias;
+        if ((existing->alias == NULL) != (alias == NULL) || (alias && strcmp(existing->alias, alias) != 0)) {
+            continue;
+        }
+        bool same_path = true;
+        for (int j = 0; j < existing->path_length; j++) {
+            if (strcmp(existing->namespace_path[j], using_node->data.using_directive.namespace_path[j]) != 0) {
+                same_path = false;
+                break;
+            }
+        }
+        if (same_path) {
+            return;
+        }
+    }
     if (analyzer->using_count >= analyzer->using_capacity) {
         if (analyzer->using_capacity > INT_MAX / 2) {
             semantic_analyzer_add_error_at(analyzer, using_node, "Too many using directives");
@@ -560,9 +581,9 @@ static bool semantic_class_has_members(SymbolEntry* cls) {
     return false;
 }
 
-static SymbolEntry* semantic_lookup_method_by_arity(SymbolTable* nested, const char* class_name,
-                                                    const char* method_name, int argc, ASTNode* const* args,
-                                                    const KrtTokenType* inferred_types);
+static SymbolEntry* semantic_lookup_method_by_arity(SemanticAnalyzer* analyzer, SymbolTable* nested,
+                                                    const char* class_name, const char* method_name, int argc,
+                                                    ASTNode* const* args);
 static SymbolEntry* semantic_lookup_method_in_global_class(SemanticAnalyzer* analyzer, const char* class_name,
                                                            const char* method_name, int argc, ASTNode* const* args) {
     if (!analyzer || !analyzer->global_symbol_table || !class_name || !method_name) {
@@ -572,7 +593,7 @@ static SymbolEntry* semantic_lookup_method_in_global_class(SemanticAnalyzer* ana
     if (!gcls || gcls->type != SYMBOL_CLASS || !gcls->nested_table) {
         return NULL;
     }
-    return semantic_lookup_method_by_arity(gcls->nested_table, class_name, method_name, argc, args, NULL);
+    return semantic_lookup_method_by_arity(analyzer, gcls->nested_table, class_name, method_name, argc, args);
 }
 
 static SymbolEntry* semantic_analyzer_lookup_class(SemanticAnalyzer* analyzer, const char* class_name) {
@@ -610,9 +631,38 @@ static SymbolEntry* semantic_analyzer_lookup_class(SemanticAnalyzer* analyzer, c
     return fallback;
 }
 
+static KrtTokenType semantic_array_element_type(SemanticAnalyzer* analyzer, ASTNode* expr) {
+    if (!expr) {
+        return TOKEN_EOF;
+    }
+    if (expr->type == AST_IDENTIFIER) {
+        SymbolEntry* symbol = symbol_table_lookup_scope_chain(analyzer->symbol_table, expr->data.identifier_name);
+        return symbol && symbol->is_array ? symbol->value_type : TOKEN_EOF;
+    }
+    if (expr->type == AST_NEW_ARRAY_EXPRESSION) {
+        return expr->data.new_array_expr.type_token;
+    }
+    if (expr->type == AST_TERNARY_OPERATION) {
+        KrtTokenType left = semantic_array_element_type(analyzer, expr->data.ternary_op.true_value);
+        KrtTokenType right = semantic_array_element_type(analyzer, expr->data.ternary_op.false_value);
+        if (left == right || expr->data.ternary_op.false_value->type == AST_NULL) {
+            return left;
+        }
+        if (expr->data.ternary_op.true_value->type == AST_NULL) {
+            return right;
+        }
+    }
+    return TOKEN_EOF;
+}
+
 static KrtTokenType semantic_analyzer_infer_expression_type(SemanticAnalyzer* analyzer, ASTNode* expr) {
     if (!expr) {
         return TOKEN_INT32;
+    }
+    /* Array overloads are named by their element token, while the ABI passes an address. */
+    KrtTokenType element_type = semantic_array_element_type(analyzer, expr);
+    if (element_type != TOKEN_EOF) {
+        return element_type;
     }
     if (expr->resolved_type.token) {
         return KrtSourceStorage(expr->resolved_type);
@@ -638,6 +688,8 @@ static KrtTokenType semantic_analyzer_infer_expression_type(SemanticAnalyzer* an
         return TOKEN_STRING;
     case AST_BOOLEAN:
         return TOKEN_BOOL;
+    case AST_CHAR_LITERAL:
+        return TOKEN_CHAR;
     case AST_IDENTIFIER: {
         SymbolEntry* sym = symbol_table_lookup_scope_chain(analyzer->symbol_table, expr->data.identifier_name);
         if (sym && sym->value_type != TOKEN_EOF) {
@@ -667,6 +719,23 @@ static KrtTokenType semantic_analyzer_infer_expression_type(SemanticAnalyzer* an
     }
     case AST_UNARY_OPERATION:
         return semantic_analyzer_infer_expression_type(analyzer, expr->data.unary_op.operand);
+    case AST_TERNARY_OPERATION: {
+        KrtTokenType left = semantic_analyzer_infer_expression_type(analyzer, expr->data.ternary_op.true_value);
+        KrtTokenType right = semantic_analyzer_infer_expression_type(analyzer, expr->data.ternary_op.false_value);
+        if (left == right) {
+            return left;
+        }
+        if ((left == TOKEN_STRING && right == TOKEN_NULL) || (right == TOKEN_STRING && left == TOKEN_NULL)) {
+            return TOKEN_STRING;
+        }
+        if (left == TOKEN_FLOAT64 || right == TOKEN_FLOAT64) {
+            return TOKEN_FLOAT64;
+        }
+        if (left == TOKEN_FLOAT32 || right == TOKEN_FLOAT32) {
+            return TOKEN_FLOAT32;
+        }
+        return KrtTokenIntegerCommon(left, right);
+    }
     case AST_BINARY_OPERATION: {
         KrtTokenType left = semantic_analyzer_infer_expression_type(analyzer, expr->data.binary_op.left);
         KrtTokenType right = semantic_analyzer_infer_expression_type(analyzer, expr->data.binary_op.right);
@@ -767,41 +836,143 @@ static SymbolEntry* semantic_lookup_exact_in_class(SymbolTable* nested, const ch
     return symbol_table_lookup_scope_chain(nested, name);
 }
 
-static int semantic_parameter_score(const char* suffix, int argc, ASTNode* const* args,
-                                    const KrtTokenType* inferred_types) {
-    int score = 0;
+typedef struct {
+    int worst_conversion;
+    int conversion_count;
+    uint64_t width_distance;
+} KrtMethodScore;
+
+static bool source_type_equal(KrtSourceType a, KrtSourceType b);
+
+static KrtTokenType semantic_mangled_parameter_type(const char* suffix, int length) {
+    if (length > 1) {
+        int bits = 0;
+        for (int i = 1; i < length - 1; i++) {
+            if (bits > 128) {
+                return TOKEN_EOF;
+            }
+            bits = bits * 10 + suffix[i] - '0';
+        }
+        return KrtTokenIntegerType(bits, suffix[0] == 'u');
+    }
+    switch (*suffix) {
+    case 'c':
+        return TOKEN_INT8;
+    case 's':
+        return TOKEN_INT16;
+    case 'i':
+        return TOKEN_INT32;
+    case 'l':
+        return TOKEN_INT64;
+    case 'C':
+        return TOKEN_UINT8;
+    case 'S':
+        return TOKEN_UINT16;
+    case 'I':
+        return TOKEN_UINT32;
+    case 'L':
+        return TOKEN_UINT64;
+    case 'f':
+        return TOKEN_FLOAT32;
+    case 'd':
+        return TOKEN_FLOAT64;
+    case 'b':
+        return TOKEN_BOOL;
+    case 'r':
+        return TOKEN_STRING;
+    case 'v':
+        return TOKEN_VOID;
+    default:
+        return TOKEN_EOF;
+    }
+}
+
+static bool semantic_parameter_score(SemanticAnalyzer* analyzer, const SymbolEntry* method, const char* suffix,
+                                     int argc, ASTNode* const* args, KrtMethodScore* score) {
+    *score = (KrtMethodScore){0};
+    if (argc == 0) {
+        return !*suffix || strcmp(suffix, "v") == 0;
+    }
     for (int k = 0; k < argc; k++) {
-        if (!*suffix) {
-            return -10000;
+        if (!*suffix || !args || !args[k]) {
+            return false;
         }
-        KrtTokenType type = inferred_types ? inferred_types[k] : TOKEN_INT32;
-        if (args && args[k] && args[k]->type == AST_CHAR_LITERAL) {
-            type = TOKEN_CHAR;
+        KrtTokenType source = semantic_analyzer_infer_expression_type(analyzer, args[k]);
+        KrtFunctionType* signature = method->source_type.function;
+        KrtSourceType parameter =
+            signature && signature->parameter_count == argc ? signature->parameters[k] : (KrtSourceType){0};
+        if (parameter.is_ref) {
+            parameter.is_ref = false;
+            if (!source_type_equal(parameter, args[k]->resolved_type)) {
+                return false;
+            }
+        } else if (args[k]->is_ref_argument) {
+            return false;
         }
-        const char* expected = KrtMangleTypeName(type);
+        const char* expected = KrtMangleTypeName(source);
         int length = 1;
         if ((suffix[0] == 'i' || suffix[0] == 'u') && suffix[1] >= '0' && suffix[1] <= '9') {
             while (suffix[length] >= '0' && suffix[length] <= '9') {
                 length++;
             }
             if (suffix[length] != '_') {
-                return -10000;
+                return false;
             }
             length++;
         }
-        if (strlen(expected) == (size_t)length && strncmp(suffix, expected, length) == 0) {
-            score += 2;
-        } else if (type == TOKEN_STRING || type == TOKEN_TYPE_STRING) {
-            score--;
+        if (strlen(expected) != (size_t)length || strncmp(suffix, expected, length) != 0) {
+            KrtTokenType target = semantic_mangled_parameter_type(suffix, length);
+            bool source_string = source == TOKEN_STRING || source == TOKEN_TYPE_STRING;
+            bool target_string = target == TOKEN_STRING || target == TOKEN_TYPE_STRING;
+            bool null_to_string = source == TOKEN_NULL && target_string;
+            if (source_string != target_string && !null_to_string) {
+                return false;
+            }
+            if (semantic_array_element_type(analyzer, args[k]) != TOKEN_EOF && !KrtSourceIsPointer(parameter)) {
+                /* Changing an array element type would change the callee's indexing stride. */
+                return false;
+            }
+            int source_bits = KrtTokenIntegerBits(source), target_bits = KrtTokenIntegerBits(target);
+            int conversion = null_to_string ? 1 : 3;
+            if (source == TOKEN_CHAR || source == TOKEN_BOOL) {
+                source_bits = source == TOKEN_BOOL ? 1 : 8;
+            }
+            if (source_bits && target_bits) {
+                bool source_unsigned = KrtTokenIsUnsigned(source) || source == TOKEN_CHAR || source == TOKEN_BOOL;
+                bool target_unsigned = KrtTokenIsUnsigned(target);
+                if ((source_unsigned == target_unsigned && target_bits >= source_bits) ||
+                    (source_unsigned && !target_unsigned && target_bits > source_bits)) {
+                    conversion = 1;
+                }
+                score->width_distance += (uint64_t)abs(target_bits - source_bits);
+            } else if (source == TOKEN_FLOAT32 && target == TOKEN_FLOAT64) {
+                conversion = 1;
+            } else if (source_bits && (target == TOKEN_FLOAT32 || target == TOKEN_FLOAT64)) {
+                conversion = 2;
+            }
+            if (conversion > score->worst_conversion) {
+                score->worst_conversion = conversion;
+            }
+            score->conversion_count++;
         }
         suffix += length;
     }
-    return *suffix ? -10000 : score;
+    return !*suffix;
 }
 
-static SymbolEntry* semantic_lookup_method_by_arity(SymbolTable* nested, const char* class_name,
-                                                    const char* method_name, int argc, ASTNode* const* args,
-                                                    const KrtTokenType* inferred_types) {
+static bool semantic_method_score_better(KrtMethodScore score, KrtMethodScore best) {
+    if (score.worst_conversion != best.worst_conversion) {
+        return score.worst_conversion < best.worst_conversion;
+    }
+    if (score.conversion_count != best.conversion_count) {
+        return score.conversion_count < best.conversion_count;
+    }
+    return score.width_distance < best.width_distance;
+}
+
+static SymbolEntry* semantic_lookup_method_by_arity(SemanticAnalyzer* analyzer, SymbolTable* nested,
+                                                    const char* class_name, const char* method_name, int argc,
+                                                    ASTNode* const* args) {
     if (!nested || !class_name || !method_name) {
         return NULL;
     }
@@ -811,7 +982,7 @@ static SymbolEntry* semantic_lookup_method_by_arity(SymbolTable* nested, const c
     size_t plen = strlen(prefix);
 
     SymbolEntry* best = NULL;
-    int best_score = -1;
+    KrtMethodScore best_score = {INT_MAX, INT_MAX, UINT64_MAX};
 
     for (SymbolScope* sc = nested->current_scope; sc; sc = sc->parent) {
         for (SymbolEntry* e = sc->symbols; e; e = e->scope_next) {
@@ -821,8 +992,9 @@ static SymbolEntry* semantic_lookup_method_by_arity(SymbolTable* nested, const c
             if (strncmp(e->name, prefix, plen) != 0) {
                 continue;
             }
-            int score = semantic_parameter_score(e->name + plen, argc, args, inferred_types);
-            if (score > best_score) {
+            KrtMethodScore score;
+            if (semantic_parameter_score(analyzer, e, e->name + plen, argc, args, &score) &&
+                semantic_method_score_better(score, best_score)) {
                 best_score = score;
                 best = e;
             }
@@ -837,8 +1009,9 @@ static SymbolEntry* semantic_lookup_method_by_arity(SymbolTable* nested, const c
                 if (strncmp(e->name, prefix, plen) != 0) {
                     continue;
                 }
-                int score = semantic_parameter_score(e->name + plen, argc, args, inferred_types);
-                if (score > best_score) {
+                KrtMethodScore score;
+                if (semantic_parameter_score(analyzer, e, e->name + plen, argc, args, &score) &&
+                    semantic_method_score_better(score, best_score)) {
                     best_score = score;
                     best = e;
                 }
@@ -945,6 +1118,14 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
         bool cond_ok = semantic_analyzer_analyze_expression(analyzer, expr->data.ternary_op.condition);
         bool true_ok = semantic_analyzer_analyze_expression(analyzer, expr->data.ternary_op.true_value);
         bool false_ok = semantic_analyzer_analyze_expression(analyzer, expr->data.ternary_op.false_value);
+        KrtTokenType left = semantic_array_element_type(analyzer, expr->data.ternary_op.true_value);
+        KrtTokenType right = semantic_array_element_type(analyzer, expr->data.ternary_op.false_value);
+        if (left != right && (left != TOKEN_EOF || right != TOKEN_EOF) &&
+            expr->data.ternary_op.true_value->type != AST_NULL && expr->data.ternary_op.false_value->type != AST_NULL) {
+            semantic_analyzer_add_error_at(analyzer, expr,
+                                           "Conditional array operands must have the same element type");
+            return false;
+        }
         return cond_ok && true_ok && false_ok;
     }
 
@@ -996,8 +1177,8 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
         }
 
         SymbolEntry* constructor =
-            semantic_lookup_method_by_arity(class_symbol->nested_table, class_name, class_name,
-                                            expr->data.new_expr.argument_count, expr->data.new_expr.arguments, NULL);
+            semantic_lookup_method_by_arity(analyzer, class_symbol->nested_table, class_name, class_name,
+                                            expr->data.new_expr.argument_count, expr->data.new_expr.arguments);
         if (constructor && constructor->source_type.function) {
             expr->function_type = constructor->source_type.function;
             for (int i = 0; i < expr->data.new_expr.argument_count; i++) {
@@ -1071,18 +1252,18 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
                 method_symbol = semantic_lookup_exact_in_class(class_symbol->nested_table, mangled_name);
             }
             if (!method_symbol) {
-                method_symbol = semantic_lookup_method_by_arity(class_symbol->nested_table, class_name, method_name,
-                                                                expr->data.static_call.argument_count,
-                                                                expr->data.static_call.arguments, NULL);
+                method_symbol = semantic_lookup_method_by_arity(analyzer, class_symbol->nested_table, class_name,
+                                                                method_name, expr->data.static_call.argument_count,
+                                                                expr->data.static_call.arguments);
             }
         }
 
         if (!method_symbol) {
             method_symbol = symbol_table_lookup_in_namespace(analyzer->symbol_table, class_name, method_name);
             if (!method_symbol) {
-                method_symbol = semantic_lookup_method_by_arity(analyzer->symbol_table, class_name, method_name,
-                                                                expr->data.static_call.argument_count,
-                                                                expr->data.static_call.arguments, NULL);
+                method_symbol = semantic_lookup_method_by_arity(analyzer, analyzer->symbol_table, class_name,
+                                                                method_name, expr->data.static_call.argument_count,
+                                                                expr->data.static_call.arguments);
             }
             if (!method_symbol) {
                 method_symbol = semantic_lookup_method_in_global_class(analyzer, class_name, method_name,
@@ -1132,6 +1313,31 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
 
         ASTNode* object = expr->data.member_access.object;
         const char* member_name = expr->data.member_access.member_name;
+
+        /* Instance fields must retain their owner for IR address calculation.
+         * Treating parameter.field as a static name silently creates a different
+         * storage location instead of loading/storing through the parameter. */
+        const char* instance_name = object ? object->resolved_type.type_name : NULL;
+        if (object && object->type == AST_IDENTIFIER) {
+            SymbolEntry* variable = symbol_table_lookup(analyzer->symbol_table, object->data.identifier_name);
+            if (variable && variable->type != SYMBOL_CLASS && variable->class_type_name) {
+                instance_name = variable->class_type_name;
+            }
+        }
+        if (instance_name && object && object->type != AST_THIS) {
+            SymbolEntry* owner = semantic_analyzer_lookup_class(analyzer, instance_name);
+            SymbolEntry* field = owner && owner->nested_table
+                                     ? symbol_table_lookup(owner->nested_table, member_name) : NULL;
+            if (field && field->type == SYMBOL_FIELD) {
+                KRT_FREE(expr->data.member_access.resolved_class_name);
+                expr->data.member_access.resolved_class_name = KRT_STRDUP(instance_name);
+                expr->resolved_type = field->source_type;
+                if (!expr->resolved_type.token) {
+                    expr->resolved_type.token = field->value_type;
+                }
+                return true;
+            }
+        }
 
         if (object && (object->type == AST_THIS ||
                        (object->type == AST_IDENTIFIER && strcmp(object->data.identifier_name, "this") == 0))) {
@@ -1330,8 +1536,8 @@ bool semantic_analyzer_analyze_function_call(SemanticAnalyzer* analyzer, ASTNode
                         : NULL;
                 if (!method_symbol && owner_class && owner_class->nested_table) {
                     method_symbol = semantic_lookup_method_by_arity(
-                        owner_class->nested_table, current_class, call_expr->data.call.name,
-                        call_expr->data.call.argument_count, call_expr->data.call.arguments, NULL);
+                        analyzer, owner_class->nested_table, current_class, call_expr->data.call.name,
+                        call_expr->data.call.argument_count, call_expr->data.call.arguments);
                 }
                 if (!method_symbol) {
                     KRT_FREE(mangled_name);
@@ -1388,9 +1594,9 @@ bool semantic_analyzer_analyze_function_call(SemanticAnalyzer* analyzer, ASTNode
             SymbolEntry* method_symbol =
                 mangled_name ? semantic_lookup_exact_in_class(cls->nested_table, mangled_name) : NULL;
             if (!method_symbol) {
-                method_symbol = semantic_lookup_method_by_arity(cls->nested_table, inst_class, method_name,
+                method_symbol = semantic_lookup_method_by_arity(analyzer, cls->nested_table, inst_class, method_name,
                                                                 call_expr->data.call.argument_count,
-                                                                call_expr->data.call.arguments, NULL);
+                                                                call_expr->data.call.arguments);
             }
             if (!method_symbol) {
                 method_symbol = semantic_lookup_method_in_global_class(analyzer, inst_class, method_name,
@@ -1452,17 +1658,17 @@ bool semantic_analyzer_analyze_function_call(SemanticAnalyzer* analyzer, ASTNode
             if (mangled_name && class_symbol->nested_table) {
                 method_symbol = semantic_lookup_exact_in_class(class_symbol->nested_table, mangled_name);
                 if (!method_symbol) {
-                    method_symbol = semantic_lookup_method_by_arity(class_symbol->nested_table, class_name, method_name,
-                                                                    call_expr->data.call.argument_count,
-                                                                    call_expr->data.call.arguments, NULL);
+                    method_symbol = semantic_lookup_method_by_arity(analyzer, class_symbol->nested_table, class_name,
+                                                                    method_name, call_expr->data.call.argument_count,
+                                                                    call_expr->data.call.arguments);
                 }
             }
             if (!method_symbol) {
                 SymbolTable* gtable =
                     analyzer->global_symbol_table ? analyzer->global_symbol_table : analyzer->symbol_table;
-                method_symbol = semantic_lookup_method_by_arity(gtable, class_name, method_name,
+                method_symbol = semantic_lookup_method_by_arity(analyzer, gtable, class_name, method_name,
                                                                 call_expr->data.call.argument_count,
-                                                                call_expr->data.call.arguments, NULL);
+                                                                call_expr->data.call.arguments);
             }
             if (!method_symbol) {
                 method_symbol = semantic_lookup_method_in_global_class(analyzer, class_name, method_name,
@@ -2051,10 +2257,12 @@ static bool semantic_analyze_stmt_class_declaration(SemanticAnalyzer* analyzer, 
     SymbolTable* prev_table = analyzer->symbol_table;
     if (!class_sym->nested_table) {
         class_sym->nested_table = symbol_table_create();
-        if (class_sym->nested_table) {
-            class_sym->nested_table->parent_table = prev_table;
-        }
     }
+    if (!class_sym->nested_table) {
+        semantic_analyzer_add_error_at(analyzer, stmt, "Failed to create class scope");
+        return false;
+    }
+    class_sym->nested_table->parent_table = prev_table;
 
     analyzer->symbol_table = class_sym->nested_table;
 
@@ -2937,6 +3145,24 @@ SemanticAnalysisResult* semantic_analyzer_analyze(SemanticAnalyzer* analyzer, AS
             }
         }
 
+        /* Class bodies must see global signatures before their calls are checked. */
+        for (int i = 0; i < ast->data.block.statement_count; i++) {
+            ASTNode* decl = ast->data.block.statements[i];
+            if (decl && (decl->type == AST_FUNCTION_DECLARATION || decl->type == AST_STATIC_FUNCTION_DECLARATION)) {
+                const char* fn = (decl->type == AST_FUNCTION_DECLARATION) ? decl->data.function_decl.name
+                                                                          : decl->data.static_function_decl.name;
+                if (!symbol_table_lookup(analyzer->symbol_table, fn)) {
+                    SymbolEntry* pre = symbol_table_define(analyzer->symbol_table, fn, SYMBOL_FUNCTION, 0, NULL);
+                    if (pre) {
+                        pre->state = SYMBOL_FORWARD_REF;
+                        pre->source_type = KrtSourceTypeClone(
+                            analyzer->type_arena, (KrtSourceType){.token = TOKEN_FN, .function = decl->function_type});
+                        pre->value_type = decl->data.function_decl.return_type;
+                    }
+                }
+            }
+        }
+
         for (int i = 0; i < ast->data.block.statement_count; i++) {
             ASTNode* decl = ast->data.block.statements[i];
             if (decl && (decl->type == AST_CLASS_DECLARATION || decl->type == AST_TEMPLATE_DECLARATION)) {
@@ -2963,23 +3189,6 @@ SemanticAnalysisResult* semantic_analyzer_analyze(SemanticAnalyzer* analyzer, AS
                     "Top-level variable '%s' must be declared 'static' (file-scope variables require 'static')",
                     decl->data.variable_decl.name);
                 result->success = false;
-            }
-        }
-
-        for (int i = 0; i < ast->data.block.statement_count; i++) {
-            ASTNode* decl = ast->data.block.statements[i];
-            if (decl && (decl->type == AST_FUNCTION_DECLARATION || decl->type == AST_STATIC_FUNCTION_DECLARATION)) {
-                const char* fn = (decl->type == AST_FUNCTION_DECLARATION) ? decl->data.function_decl.name
-                                                                          : decl->data.static_function_decl.name;
-                if (!symbol_table_lookup(analyzer->symbol_table, fn)) {
-                    SymbolEntry* pre = symbol_table_define(analyzer->symbol_table, fn, SYMBOL_FUNCTION, 0, NULL);
-                    if (pre) {
-                        pre->state = SYMBOL_FORWARD_REF;
-                        pre->source_type = KrtSourceTypeClone(
-                            analyzer->type_arena, (KrtSourceType){.token = TOKEN_FN, .function = decl->function_type});
-                        pre->value_type = decl->data.function_decl.return_type;
-                    }
-                }
             }
         }
 
@@ -3215,6 +3424,8 @@ static void import_krt_file(SemanticAnalyzer* analyzer, const char* file_path) {
                 continue;
             }
             if (stmt->type == AST_USING_DIRECTIVE) {
+                /* Queue copied dependencies; the outer scan handles transitive imports without recursion. */
+                semantic_analyzer_add_using_directive(analyzer, stmt);
                 continue;
             }
 

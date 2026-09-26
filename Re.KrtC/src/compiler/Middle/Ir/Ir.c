@@ -923,27 +923,7 @@ KrtIRValue KrtIrCall(KrtIRBuilder* builder, const char* func_name, KrtIRValue* a
     while (callee && strcmp(callee->name, func_name) != 0) {
         callee = callee->next;
     }
-    if (!callee && strncmp(func_name, "_ZN", 3) == 0) {
-        const char* end = func_name + 3;
-        while (*end >= '0' && *end <= '9') {
-            char* next = NULL;
-            long length = strtol(end, &next, 10);
-            if (length <= 0 || (size_t)length > strlen(next)) {
-                break;
-            }
-            end = next + length;
-        }
-        if (*end == 'E') {
-            size_t prefix = (size_t)(end - func_name) + 1;
-            for (KrtIRFunction* candidate = builder->module->functions; candidate; candidate = candidate->next) {
-                if (candidate->param_count == arg_count && strncmp(candidate->name, func_name, prefix) == 0) {
-                    callee = candidate;
-                    func_name = candidate->name;
-                    break;
-                }
-            }
-        }
-    }
+    /* Preserve the semantic target even when its definition occurs later in the module. */
     if (callee) {
         for (int i = 0; i < arg_count && i < callee->param_count; i++) {
             if (!callee->params[i].is_array && KrtTokenIntegerBits(callee->params[i].type)) {

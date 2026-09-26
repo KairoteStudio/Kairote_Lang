@@ -1,0 +1,43 @@
+class KrtTestBox {
+    public int64 value;
+    public int64 guard;
+}
+
+class KrtTestHolder {
+    public KrtTestBox box;
+}
+
+void KrtTestSet(KrtTestBox box, int64 value) {
+    box.value = value;
+}
+
+int64 KrtTestRead(KrtTestBox box) {
+    return box.value;
+}
+
+KrtTestBox KrtTestMake(int64 value) {
+    KrtTestBox box = new KrtTestBox();
+    box.value = value;
+    box.guard = 1234;
+    return box;
+}
+
+void KrtTestNested(KrtTestHolder holder, int64 value) {
+    holder.box.value = value;
+}
+
+int32 main() {
+    KrtTestBox first = KrtTestMake(7);
+    KrtTestBox second = KrtTestMake(9);
+    KrtTestSet(first, 42);
+    if (KrtTestRead(first) != 42 || KrtTestRead(second) != 9) { return 1; }
+    if (first.guard != 1234 || second.guard != 1234) { return 2; }
+    KrtTestHolder holder = new KrtTestHolder();
+    holder.box = first;
+    KrtTestNested(holder, 99);
+    if (first.value != 99 || holder.box.guard != 1234 || second.value != 9) { return 3; }
+    delete holder;
+    delete first;
+    delete second;
+    return 0;
+}

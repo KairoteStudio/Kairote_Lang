@@ -241,7 +241,9 @@ bool semantic_analyzer_analyze_expression(SemanticAnalyzer* analyzer, ASTNode* e
             }
             callee = expr->data.call.object->resolved_type;
         }
-        if (callee.function && !callee.pointer_depth) {
+        bool class_method = symbol && symbol->type == SYMBOL_FUNCTION && !expr->data.call.object &&
+                            semantic_analyzer_get_current_class_context(analyzer);
+        if (callee.function && !callee.pointer_depth && !class_method) {
             expr->is_indirect_call = !symbol || symbol->type != SYMBOL_FUNCTION;
             if (expr->is_indirect_call && (!require_memory_permission(analyzer, expr) || callee.nullable)) {
                 return pointer_error(analyzer, expr,
@@ -273,7 +275,9 @@ bool semantic_analyzer_analyze_expression(SemanticAnalyzer* analyzer, ASTNode* e
     if (!semantic_expression_impl(analyzer, expr)) {
         return false;
     }
-    expr->resolved_type = (KrtSourceType){.token = semantic_analyzer_infer_expression_type(analyzer, expr)};
+    if (expr->type != AST_MEMBER_ACCESS || !expr->resolved_type.token) {
+        expr->resolved_type = (KrtSourceType){.token = semantic_analyzer_infer_expression_type(analyzer, expr)};
+    }
     switch (expr->type) {
     case AST_NEW_EXPRESSION:
         expr->resolved_type = (KrtSourceType){.token = TOKEN_IDENTIFIER, .type_name = expr->data.new_expr.class_name};
@@ -322,17 +326,31 @@ bool semantic_analyzer_analyze_expression(SemanticAnalyzer* analyzer, ASTNode* e
         if (!method && key) {
             method = symbol_table_lookup_scope_chain(analyzer->symbol_table, key);
         }
+        if (!method && !key && !expr->data.call.object) {
+            SymbolEntry* function = NULL;
+            for (SymbolTable* table = analyzer->symbol_table; table && !function; table = table->parent_table) {
+                function = symbol_table_lookup_scope_chain(table, expr->data.call.name);
+            }
+            if (!function) {
+                function = symbol_table_lookup_scope_chain(analyzer->global_symbol_table, expr->data.call.name);
+            }
+            if (function && function->type == SYMBOL_FUNCTION) {
+                /* A class body may call a global function after trying its own overloads. */
+                method = function;
+            }
+        }
         if (method && method->source_type.function) {
             KrtFunctionType* fn = method->source_type.function;
-            if (fn->parameter_count == expr->data.call.argument_count) {
-                for (int i = 0; i < fn->parameter_count; i++) {
-                    if (!call_argument_assignable(analyzer, expr->data.call.arguments[i], fn->parameters[i])) {
-                        return false;
-                    }
-                }
-                expr->function_type = fn;
-                expr->resolved_type = fn->result;
+            if (fn->parameter_count != expr->data.call.argument_count) {
+                return pointer_error(analyzer, expr, "Function signature argument count mismatch");
             }
+            for (int i = 0; i < fn->parameter_count; i++) {
+                if (!call_argument_assignable(analyzer, expr->data.call.arguments[i], fn->parameters[i])) {
+                    return false;
+                }
+            }
+            expr->function_type = fn;
+            expr->resolved_type = fn->result;
         }
         break;
     }

@@ -1,0 +1,23 @@
+enum KrtTokenKind { Eof = 0, Identifier = 1, Integer = 2, String = 3, Character = 4, Punctuation = 5, Invalid = 6 }
+
+class KrtToken {
+    public KrtTokenKind kind;
+    public int64 start;
+    public int64 length;
+    public int64 line;
+    public int64 column;
+    public int32 error;
+
+    public void Reset(int64 source_start, int64 source_line, int64 source_column) {
+        start = source_start;
+        length = 0;
+        line = source_line;
+        column = source_column;
+        error = 0;
+        kind = KrtTokenKind.Eof;
+    }
+
+    public void SetKind(KrtTokenKind value) { kind = value; }
+    public void SetError(int32 value) { error = value; kind = KrtTokenKind.Invalid; }
+    public void SetLength(int64 value) { length = value; }
+}

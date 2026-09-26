@@ -1,95 +1,153 @@
-using System;
+using System.Sys;
 
 namespace System;
 
-public static class Console
-{
+public static class Console {
     public const int32 STDOUT = 1;
     public const int32 STDERR = 2;
     public const int32 STDIN = 0;
 
-    private static int32 WriteRaw(int32 fd, int64 data, int32 length)
-    {
-        return (int32)Sys.syscall(1, (int64)fd, data, (int64)length, 0, 0, 0);
+    private static int64 write_raw(int32 descriptor, int64 data, int64 length) {
+        if (length <= 0) {
+            return 0;
+        }
+        int64 written = 0;
+        while (written < length) {
+            int64 count = Sys.Syscall(1, (int64)descriptor, data + written, length - written, 0, 0, 0);
+            if (count == -4) {
+                continue;
+            }
+            if (count <= 0) {
+                return count;
+            }
+            written += count;
+        }
+        return written;
     }
 
-    public static void Write(string value)
-    {
-        if (value == null)
-        {
+    private static void write_number(uint64 magnitude, bool negative) {
+        unsafe(using krt.mem;) {
+            byte* buffer = stackalloc byte[21];
+            int32 position = 21;
+            do {
+                position--;
+                buffer[position] = (byte)(48 + magnitude % 10);
+                magnitude /= 10;
+            } while (magnitude != 0);
+            if (negative) {
+                position--;
+                buffer[position] = (byte)45;
+            }
+            write_raw(STDOUT, (int64)(buffer + position), (int64)(21 - position));
+        }
+    }
+
+    /** Write UTF-8 bytes; null writes nothing. */
+    public static void Write(string value) {
+        if (value != null) {
+            write_raw(STDOUT, Sys.InternalStringPtr(value), Sys.InternalStringLength(value));
+        }
+    }
+
+    /** Write a string followed by a newline. */
+    public static void WriteLine(string value) {
+        Write(value);
+        WriteLine();
+    }
+
+    /** Write one newline byte. */
+    public static void WriteLine() {
+        write_raw(STDOUT, (int64)"\n", 1);
+    }
+
+    /** Write a signed decimal integer without allocating heap storage. */
+    public static void Write(int32 value) {
+        Write((int64)value);
+    }
+
+    /** Write a signed decimal integer, including the minimum int64 value. */
+    public static void Write(int64 value) {
+        uint64 magnitude = (uint64)value;
+        bool negative = value < 0;
+        if (negative) {
+            magnitude = (uint64)0 - magnitude;
+        }
+        write_number(magnitude, negative);
+    }
+
+    /** Write an unsigned decimal integer. */
+    public static void Write(uint32 value) {
+        write_number((uint64)value, false);
+    }
+
+    /** Write an unsigned decimal integer without narrowing to int64. */
+    public static void Write(uint64 value) {
+        write_number(value, false);
+    }
+
+    /** Write an integer followed by a newline. */
+    public static void WriteLine(int32 value) {
+        Write(value);
+        WriteLine();
+    }
+
+    /** Write an integer followed by a newline. */
+    public static void WriteLine(int64 value) {
+        Write(value);
+        WriteLine();
+    }
+
+    /** Write an unsigned integer followed by a newline. */
+    public static void WriteLine(uint32 value) {
+        Write(value);
+        WriteLine();
+    }
+
+    /** Write an unsigned integer followed by a newline. */
+    public static void WriteLine(uint64 value) {
+        Write(value);
+        WriteLine();
+    }
+
+    /** Write the invariant literal True or False. */
+    public static void Write(bool value) {
+        Write(value ? "True" : "False");
+    }
+
+    /** Write a boolean followed by a newline. */
+    public static void WriteLine(bool value) {
+        Write(value);
+        WriteLine();
+    }
+
+    /** Replace each literal {0}; other bytes are emitted unchanged. */
+    public static void WriteFormat(string format, string argument) {
+        if (format == null) {
             return;
         }
-        int64 len = Sys.InternalStringLength(value);
-        int64 ptr = Sys.InternalStringPtr(value);
-        WriteRaw(STDOUT, ptr, (int32)len);
-    }
-
-    public static void WriteLine(string value)
-    {
-        Write(value);
-        WriteLine();
-    }
-
-    public static void WriteLine()
-    {
-        WriteRaw(STDOUT, (int64)"\n", 1);
-    }
-
-    public static void Write(int32 value)
-    {
-        string s = Sys.InternalInt32ToString(value);
-        Write(s);
-    }
-
-    public static void WriteLine(int32 value)
-    {
-        Write(value);
-        WriteLine();
-    }
-
-    public static void Write(bool value)
-    {
-        if (value)
-        {
-            Write("True");
-        }
-        else
-        {
-            Write("False");
-        }
-    }
-
-    public static void WriteLine(bool value)
-    {
-        Write(value);
-        WriteLine();
-    }
-
-    public static void WriteFormat(string format, string arg0)
-    {
-        int32 i = 0;
-        int64 len = Sys.InternalStringLength(format);
-        int64 ptr = Sys.InternalStringPtr(format);
-        char[] arr = (char[])ptr;
-
-        while (i < (int32)len)
-        {
-            if (i + 2 < (int32)len && arr[i] == '{' && arr[i + 1] == '0' && arr[i + 2] == '}')
-            {
-                Write(arg0);
-                i = i + 3;
+        unsafe(using krt.mem;) {
+            int64 length = Sys.InternalStringLength(format);
+            byte* data = (byte*)Sys.InternalStringPtr(format);
+            int64 index = 0;
+            int64 literal_start = 0;
+            while (index < length) {
+                if (length - index >= 3 && data[index] == (byte)123 &&
+                    data[index + 1] == (byte)48 && data[index + 2] == (byte)125) {
+                    write_raw(STDOUT, (int64)(data + literal_start), index - literal_start);
+                    Write(argument);
+                    index += 3;
+                    literal_start = index;
+                } else {
+                    index++;
+                }
             }
-            else
-            {
-                WriteRaw(STDOUT, (int64)(ptr + (int64)i), 1);
-                i = i + 1;
-            }
+            write_raw(STDOUT, (int64)(data + literal_start), length - literal_start);
         }
     }
 
-    public static void WriteLineFormat(string format, string arg0)
-    {
-        WriteFormat(format, arg0);
+    /** Format a string followed by a newline. */
+    public static void WriteLineFormat(string format, string argument) {
+        WriteFormat(format, argument);
         WriteLine();
     }
 }
