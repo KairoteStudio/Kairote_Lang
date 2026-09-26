@@ -22,6 +22,23 @@ bool KrtParserExpect(KrtParser parser, KrtTokenKind kind) {
 KrtAstNode KrtParserParsePrimary(KrtParser parser) {
     KrtToken token = parser.token;
     KrtAstKind kind = KrtAstKind.Invalid;
+    if (KrtParserIsWord(parser, "sizeof") || KrtParserIsWord(parser, "default")) {
+        bool is_sizeof = KrtParserIsWord(parser, "sizeof");
+        int64 start = token.start;
+        KrtLexerNext(parser.lexer, parser.token);
+        if (!KrtParserTokenText(parser, 40)) { parser.errors = parser.errors + 1; return KrtAstMake(KrtAstKind.Invalid, start, 0); }
+        KrtLexerNext(parser.lexer, parser.token);
+        if (parser.token.kind != KrtTokenKind.Identifier) { parser.errors = parser.errors + 1; return KrtAstMake(KrtAstKind.Invalid, start, 0); }
+        int64 type_start = parser.token.start; int64 type_length = parser.token.length;
+        KrtLexerNext(parser.lexer, parser.token);
+        KrtParserSkipGenericArguments(parser); KrtParserSkipQualifiedType(parser);
+        KrtParserSkipArrayTypeSuffix(parser);
+        while (KrtParserTokenText(parser, 42)) { KrtLexerNext(parser.lexer, parser.token); }
+        if (!KrtParserTokenText(parser, 41)) { parser.errors = parser.errors + 1; return KrtAstMake(KrtAstKind.Invalid, start, 0); }
+        KrtLexerNext(parser.lexer, parser.token);
+        KrtAstNode result = KrtAstMake(is_sizeof ? KrtAstKind.Sizeof : KrtAstKind.DefaultValue, start, parser.token.start - start);
+        result.type_start = type_start; result.type_length = type_length; return result;
+    }
     if (KrtParserIsWord(parser, "stackalloc")) {
         int64 start = token.start;
         KrtLexerNext(parser.lexer, parser.token);

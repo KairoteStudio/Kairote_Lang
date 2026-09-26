@@ -68,3 +68,11 @@ int32 main() {{
     if (lambda_node.parameter_refs[0] || !lambda_node.parameter_refs[1]) { return 5; }
     if (lambda_node.left.kind != KrtAstKind.Binary || lambda_node.left.op != 43) { return 6; }
 ''')
+
+    def test_type_meta_expressions(self):
+        self.check_ast('int32 main() { return sizeof(int64) + default(int32); }', '''
+    KrtAstNode expression = unit.left.left.left;
+    if (expression.kind != KrtAstKind.Binary || expression.left.kind != KrtAstKind.Sizeof ||
+        expression.right.kind != KrtAstKind.DefaultValue) { return 2; }
+    if (expression.left.type_length != 5 || expression.right.type_length != 5) { return 3; }
+''')
