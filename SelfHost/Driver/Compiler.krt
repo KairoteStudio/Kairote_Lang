@@ -1,0 +1,112 @@
+// Stage-0 callable compiler entry point. It owns the pipeline but emits no C.
+bool KrtCompileSource(string source, int32 source_length, KrtKroObject output) {
+    KrtLexer lexer = new KrtLexer();
+    KrtToken token = new KrtToken();
+    KrtParser parser = new KrtParser();
+    KrtIrFunction ir_function = new KrtIrFunction();
+    bool ok = false;
+    unsafe(using krt.mem;) {
+        if (!KrtLexerInit(lexer, (byte*)(int64)source, source_length)) { return false; }
+    }
+    KrtParserInit(parser, lexer, token);
+    KrtAstNode compilation_unit = KrtParserParseCompilationUnit(parser);
+    KrtSemanticOrderHelperFirst(compilation_unit, lexer.source);
+    KrtAstNode unit = compilation_unit.left;
+    KrtAstNode main_unit = null;
+    while (unit != null) {
+        if (KrtSemanticIsMain(unit, lexer.source)) { main_unit = unit; break; }
+        unit = unit.next;
+    }
+    unit = main_unit;
+    bool semantic_ok = false;
+    if (parser.errors == 0 && KrtSemanticValidateFunctionNames(compilation_unit, lexer.source) &&
+        KrtSemanticResolveModuleCalls(compilation_unit, lexer.source) &&
+        KrtSemanticValidateEntryPoint(compilation_unit, lexer.source) && compilation_unit.child_count == 2 &&
+        KrtKroEmitConstantTwoArgumentCall(compilation_unit, output)) {
+        ok = true;
+    } else if (parser.errors == 0 && KrtSemanticValidateFunctionNames(compilation_unit, lexer.source) &&
+        KrtSemanticResolveModuleCalls(compilation_unit, lexer.source) &&
+        KrtSemanticValidateEntryPoint(compilation_unit, lexer.source) && compilation_unit.child_count == 2 &&
+        KrtSemanticValidateConstantArgumentCall(compilation_unit, lexer.source) &&
+        KrtKroEmitConstantArgumentCall(compilation_unit, output)) {
+        ok = true;
+    } else if (parser.errors == 0 && KrtSemanticValidateFunctionNames(compilation_unit, lexer.source) &&
+        KrtSemanticValidateEntryPoint(compilation_unit, lexer.source) && compilation_unit.child_count == 2 &&
+        KrtSemanticValidateConstantHelperCall(compilation_unit, lexer.source) &&
+        KrtKroEmitConstantHelperCall(compilation_unit, output)) {
+        ok = true;
+    } else if (compilation_unit.child_count == 1) { semantic_ok = KrtSemanticValidateFunction(unit); }
+    else {
+        // Backend lowering currently emits the entry function. Validate that
+        // function independently so unrelated helper bodies do not prevent
+        // a valid entry-point compilation (helpers are resolved/inlined by
+        // the dedicated call paths above as those lowering capabilities grow).
+        semantic_ok = KrtSemanticInlineConstantCall(compilation_unit, lexer.source) &&
+            unit != null && KrtSemanticValidateFunction(unit);
+    }
+    if (!ok && parser.errors == 0 && KrtSemanticValidateFunctionNames(compilation_unit, lexer.source) &&
+        KrtSemanticValidateEntryPoint(compilation_unit, lexer.source) && semantic_ok && unit != null && KrtSemanticBindLocals(unit, lexer.source) &&
+        KrtIrLowerReturnFunction(unit, ir_function)) {
+        ok = KrtKroEmitIrFunction(ir_function, output);
+    }
+    delete ir_function;
+    delete compilation_unit;
+    delete parser;
+    delete token;
+    delete lexer;
+    return ok;
+}
+
+bool KrtCompileSourceToFd(string source, int32 source_length, int64 file_descriptor) {
+    KrtKroObject object = new KrtKroObject();
+    if (!KrtCompileSource(source, source_length, object)) {
+        delete object;
+        return false;
+    }
+    bool header_ok = KrtKroWriteHeader(object, file_descriptor);
+    bool text_ok = header_ok && KrtKroWriteText(object, file_descriptor);
+    bool symbols_ok = text_ok && KrtKroWriteSymbols(object, file_descriptor);
+    delete object;
+    return header_ok && text_ok && symbols_ok;
+}
+
+bool KrtCompileSourceToPath(string source, int32 source_length, string path) {
+    int64 file_descriptor = syscall(2, (int64)path, 577, 420, 0, 0, 0);
+    if (file_descriptor < 0) { return false; }
+    bool result = KrtCompileSourceToFd(source, source_length, file_descriptor);
+    syscall(3, file_descriptor, 0, 0, 0, 0, 0);
+    return result;
+}
+
+// Stage1 filesystem driver. The fixed buffer keeps this first bootstrap
+// boundary independent of a heap-backed string implementation.
+bool KrtCompilePath(string input_path, string output_path) {
+    int64 input = syscall(2, (int64)input_path, 0, 0, 0, 0, 0);
+    if (input < 0) { return false; }
+    unsafe(using krt.mem;) {
+        byte* buffer = stackalloc byte[262144];
+        int64 length = 0;
+        int64 chunk = 0;
+        int64 remaining = 0;
+        while (length < 262144) {
+            remaining = 262144 - length;
+            chunk = syscall(0, input, (int64)(buffer + length), remaining, 0, 0, 0);
+            if (chunk <= 0) { break; }
+            length = length + chunk;
+            if (chunk < remaining) { break; }
+        }
+        syscall(3, input, 0, 0, 0, 0, 0);
+        if (length <= 0 || length >= 262144) { return false; }
+        KrtKroObject object = new KrtKroObject();
+        bool compiled = KrtCompileSource((string)(int64)buffer, (int32)length, object);
+        KrtKroObject executable = new KrtKroObject();
+        bool executable_constant = compiled && KrtKroEmitExecutableConstant(object, executable);
+        bool executable_local = !executable_constant && compiled && KrtKroEmitExecutableLocal(object, executable);
+        bool executable_locals = !executable_constant && !executable_local && compiled && KrtKroEmitExecutableLocals(object, executable);
+        bool executable_memory = !executable_constant && !executable_local && !executable_locals && compiled && KrtKroEmitExecutableMemory(object, executable);
+        bool written = compiled && (executable_constant || executable_local || executable_locals || executable_memory ? KrtKroWriteObjectToPath(executable, output_path) : KrtKroWriteObjectToPath(object, output_path));
+        delete executable;
+        delete object;
+        return written;
+    }
+}

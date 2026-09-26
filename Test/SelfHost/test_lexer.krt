@@ -1,0 +1,19 @@
+int32 main() {
+    KrtLexer lexer = new KrtLexer();
+    unsafe(using krt.mem;) {
+        byte* source = stackalloc byte[7];
+        source[0] = 102; source[1] = 111; source[2] = 111; source[3] = 32;
+        source[4] = 49; source[5] = 50; source[6] = 51;
+        if (!KrtLexerInit(lexer, source, 7)) { return 1; }
+        KrtToken token = new KrtToken();
+        KrtLexerNext(lexer, token);
+        if (token.kind != KrtTokenKind.Identifier || token.start != 0 || token.length != 3) { return 2; }
+        KrtLexerNext(lexer, token);
+        if (token.kind != KrtTokenKind.Integer || token.start != 4 || token.length != 3) { return 3; }
+        KrtLexerNext(lexer, token);
+        if (token.kind != KrtTokenKind.Eof || token.start != 7 || token.length != 0) { return 4; }
+        delete token;
+    }
+    delete lexer;
+    return 0;
+}

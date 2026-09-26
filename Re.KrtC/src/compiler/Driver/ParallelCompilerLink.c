@@ -28,7 +28,7 @@ int ParallelCompilerLinkResults(ParallelCompiler* compiler, const char* final_ou
     int success_count = 0;
     for (int i = 0; i < compiler->task_count; i++) {
         CompileTask* task = compiler->tasks[i];
-        if (task->result == 0) {
+        if (task->result == 0 && task->has_object_code) {
             const char* file_to_link = task->obj_file ? task->obj_file : task->output_file;
             if (file_to_link) {
                 if (KrtArkLinkAddObjectFile(ark_ctx, file_to_link) == 0) {

@@ -1,9 +1,5 @@
-// Sys.krt - 系统调用和内建函数
-// 纯 .krt 实现, 是整个运行时的基础层
-
-public static class Sys
-{
-    // Linux x86_64 syscall 编号
+/** Linux x86-64 runtime primitives. Strings are zero-terminated byte sequences. */
+public static class Sys {
     public const int64 SYS_read = 0;
     public const int64 SYS_write = 1;
     public const int64 SYS_open = 2;
@@ -13,85 +9,68 @@ public static class Sys
     public const int64 SYS_brk = 12;
     public const int64 SYS_exit = 60;
 
-    // 内建函数: 直接发出 syscall 指令 (编译器内建, 非 extern)
-    public static int64 Syscall(int64 number, int64 arg1, int64 arg2, int64 arg3, int64 arg4, int64 arg5, int64 arg6)
-    {
+    /** Forward six integer arguments to the native syscall instruction. */
+    public static int64 Syscall(int64 number, int64 arg1, int64 arg2, int64 arg3,
+                               int64 arg4, int64 arg5, int64 arg6) {
         return syscall(number, arg1, arg2, arg3, arg4, arg5, arg6);
     }
 
-    public static int64 InternalStringPtr(string s)
-    {
-        return (int64)s;
+    /** Borrow the string's data address; no storage is allocated. */
+    public static int64 InternalStringPtr(string value) {
+        return (int64)value;
     }
 
-    public static int64 InternalStringLength(string s)
-    {
-        if (s == null)
-        {
+    /** Return the byte length without the terminator; null has length zero. */
+    public static int64 InternalStringLength(string value) {
+        if (value == null) {
             return 0;
         }
-
-        char[] chars = (char[])s;
-        int64 length = 0;
-        while (chars[(int32)length] != '\0')
-        {
-            length = length + 1;
+        unsafe(using krt.mem;) {
+            byte* data = (byte*)(int64)value;
+            int64 length = 0;
+            while (data[length] != 0) {
+                length++;
+            }
+            return length;
         }
-        return length;
     }
 
-    public static string InternalInt32ToString(int32 value)
-    {
-        int64 buffer = syscall(SYS_mmap, 0, 12, 3, 0x22, -1, 0);
-        if (buffer < 0)
-        {
+    /** Return an owned allocation base, or null; free with byte length plus one. */
+    public static string InternalInt32ToString(int32 value) {
+        int64 number = (int64)value;
+        bool negative = number < 0;
+        if (negative) {
+            number = -number;
+        }
+        int64 remaining = number;
+        int32 digits = 1;
+        while (remaining >= 10) {
+            digits++;
+            remaining /= 10;
+        }
+        int32 length = digits + (negative ? 1 : 0);
+        int64 buffer = syscall(SYS_mmap, 0, (int64)length + 1, 3, 0x22, -1, 0);
+        if (buffer <= 0) {
             return null;
         }
-
-        // Store number and index in local variables BEFORE the if block
-        // to avoid the compiler bug with type casts after if blocks
-        int64 number = (int64)value;
-        int32 index = 11;
-        char[] chars;
-
-        // Use a scope block to isolate the type cast
-        // This avoids the compiler's variable registration bug
-        {
-            int64 ptr = buffer;
-            chars = (char[])ptr;
+        unsafe(using krt.mem;) {
+            byte* data = (byte*)buffer;
+            data[length] = 0;
+            int32 position = length;
+            do {
+                position--;
+                data[position] = (byte)(48 + number % 10);
+                number /= 10;
+            } while (number != 0);
+            if (negative) {
+                data[0] = (byte)45;
+            }
+            return (string)buffer;
         }
-
-        chars[index] = '\0';
-
-        if (number == 0)
-        {
-            chars[index - 1] = '0';
-            return (string)(buffer + 10);
-        }
-
-        bool negative = number < 0;
-        if (negative) number = 0 - number;
-
-        while (number > 0)
-        {
-            int32 digit = (int32)(number % 10);
-            index = index - 1;
-            chars[index] = (char)(48 + digit);
-            number = number / 10;
-        }
-
-        if (negative)
-        {
-            index = index - 1;
-            chars[index] = '-';
-        }
-
-        return (string)(buffer + (int64)index);
     }
 
-    // 退出进程
-    public static void Exit(int32 code)
-    {
+    /** Terminate the process with the platform's low-byte exit status. */
+    public static void Exit(int32 code) {
         syscall(SYS_exit, (int64)code, 0, 0, 0, 0, 0);
     }
 }

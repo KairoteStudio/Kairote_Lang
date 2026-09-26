@@ -1,0 +1,58 @@
+enum KrtAstKind { Invalid = 0, Program = 1, Function = 2, Block = 3, Return = 4, Integer = 5, Identifier = 6, String = 7, Binary = 8, Unary = 9, Type = 10, Variable = 11, Call = 12, If = 13, While = 14, Member = 15, Assign = 16, Expression = 17, New = 18, StackAlloc = 19, Index = 20, Boolean = 21, Cast = 22, Unsafe = 23, Delete = 24, Ternary = 25, Null = 26, Break = 27, Continue = 28, DoWhile = 29, For = 30, CompoundAssign = 31, ArrayLiteral = 32, Switch = 33, Case = 34, Default = 35, Foreach = 36, Try = 37, Catch = 38, Finally = 39, Throw = 40, Lambda = 41, YieldReturn = 42, YieldBreak = 43, Lock = 44, Await = 45, Fixed = 46 }
+
+// AST nodes own child arrays; token spans continue to borrow source storage.
+class KrtAstNode {
+    public KrtAstKind kind;
+    public int64 start;
+    public int64 length;
+    public int32 child_count;
+    public KrtAstNode left;
+    public KrtAstNode right;
+    public KrtAstNode next;
+    public KrtAstNode alternate;
+    public int32 op;
+    public bool grouped;
+    public int32 parameter_count;
+    public int64[] parameter_starts;
+    public int64[] parameter_lengths;
+    public bool[] parameter_refs;
+    public int64 name_start;
+    public int64 name_length;
+    public int64 type_start;
+    public int64 type_length;
+    public int64 value;
+    public int32 local_slot;
+    public int32 element_width;
+}
+
+KrtAstNode KrtAstMakeBinary(int32 operation, KrtAstNode left, KrtAstNode right) {
+    KrtAstNode node = KrtAstMake(KrtAstKind.Binary, left.start, right.start + right.length - left.start);
+    node.op = operation;
+    node.left = left;
+    node.right = right;
+    node.child_count = 2;
+    return node;
+}
+
+KrtAstNode KrtAstMakeUnary(int32 operation, KrtAstNode operand) {
+    KrtAstNode node = KrtAstMake(KrtAstKind.Unary, operand.start, operand.length);
+    node.op = operation;
+    node.left = operand;
+    node.child_count = 1;
+    return node;
+}
+
+KrtAstNode KrtAstMake(KrtAstKind kind, int64 start, int64 length) {
+    KrtAstNode node = new KrtAstNode();
+    node.kind = kind;
+    node.start = start;
+    node.length = length;
+    node.child_count = 0;
+    node.local_slot = -1;
+    return node;
+}
+
+bool KrtAstIsLeaf(KrtAstNode node) {
+    if (node == null) { return false; }
+    return node.kind == KrtAstKind.Integer || node.kind == KrtAstKind.Boolean || node.kind == KrtAstKind.Identifier || node.kind == KrtAstKind.String;
+}

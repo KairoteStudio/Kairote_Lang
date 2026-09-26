@@ -26,6 +26,7 @@ KrtCompiler* KrtCompilerCreate(const char* output_filename, KrtTargetPlatform ta
 
     compiler->target = target;
     compiler->optimization_level = 2;
+    compiler->has_object_code = false;
     KrtBytecodeGeneratorInitChunk(&compiler->last_chunk);
 
     return compiler;
@@ -143,6 +144,7 @@ bool KrtCompilerCompile(KrtCompiler* compiler, ASTNode* ast, void* semantic_anal
     if (!compiler || !ast) {
         return false;
     }
+    compiler->has_object_code = false;
 
     KrtIRBuilder* ir_builder = KrtIrBuilderCreate();
     if (!ir_builder) {
@@ -197,6 +199,8 @@ bool KrtCompilerCompile(KrtCompiler* compiler, ASTNode* ast, void* semantic_anal
         KrtIrBuilderDestroy(ir_builder);
         return false;
     }
+    compiler->has_object_code = ir_builder->module->functions != NULL || ir_builder->module->global_count > 0 ||
+                                ir_builder->module->string_const_count > 0;
     switch (compiler->target) {
     case KRT_TARGET_IR_TEXT:
         KrtIrPrint(ir_builder->module, compiler->output_file);

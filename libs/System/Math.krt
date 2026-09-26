@@ -1,126 +1,355 @@
 namespace System.Runtime;
 
-// ============================================
-// Math — 数学函数
-// 纯 .krt 实现, 不依赖 C 运行时库
-// ============================================
-
-public static class MathOps
-{
-    // 绝对值 (int32)
-    public static int32 Abs(int32 value)
-    {
-        if (value < 0) return -value;
+// Integer arithmetic wraps at the declared width. Try methods return false and
+// set result to zero for invalid input or an unrepresentable mathematical result.
+public static class MathOps {
+    /** Return the absolute value; the minimum integer retains its wrapped value. */
+    public static int32 Abs(int32 value) {
+        if (value < 0) {
+            return -value;
+        }
         return value;
     }
 
-    // 绝对值 (int64)
-    public static int64 Abs(int64 value)
-    {
-        if (value < 0) return -value;
-        return value;
+    /** Return false and clear result when the absolute value is unrepresentable. */
+    public static bool TryAbs(int32 value, ref int32 result) {
+        result = 0;
+        if (value == (int32)-2147483648) {
+            return false;
+        }
+        result = Abs(value);
+        return true;
     }
 
-    // 最大值 (int32)
-    public static int32 Max(int32 a, int32 b)
-    {
+    /** Return the greater of the two values. */
+    public static int32 Max(int32 a, int32 b) {
         return a > b ? a : b;
     }
 
-    // 最小值 (int32)
-    public static int32 Min(int32 a, int32 b)
-    {
+    /** Return the lesser of the two values. */
+    public static int32 Min(int32 a, int32 b) {
         return a < b ? a : b;
     }
 
-    // 最大值 (int64)
-    public static int64 Max(int64 a, int64 b)
-    {
-        return a > b ? a : b;
+    /** Return -1, 0, or 1 according to the sign of value. */
+    public static int32 Sign(int32 value) {
+        if (value < 0) {
+            return -1;
+        }
+        return value == 0 ? 0 : 1;
     }
 
-    // 最小值 (int64)
-    public static int64 Min(int64 a, int64 b)
-    {
-        return a < b ? a : b;
-    }
-
-    // 限制值在范围内
-    public static int32 Clamp(int32 value, int32 min, int32 max)
-    {
-        if (value < min) return min;
-        if (value > max) return max;
+    /** Clamp to the inclusive interval; minimum must not exceed maximum. */
+    public static int32 Clamp(int32 value, int32 minimum, int32 maximum) {
+        if (value < minimum) {
+            return minimum;
+        }
+        if (value > maximum) {
+            return maximum;
+        }
         return value;
     }
 
-    // 整数幂运算
-    public static int32 Pow(int32 baseVal, int32 exp)
-    {
-        if (exp <= 0) return 1;
+    /** Clamp to the inclusive interval, or return false and clear result for an invalid interval. */
+    public static bool TryClamp(int32 value, int32 minimum, int32 maximum, ref int32 result) {
+        result = 0;
+        if (minimum > maximum) {
+            return false;
+        }
+        result = Clamp(value, minimum, maximum);
+        return true;
+    }
+
+    /** Return the power with wrapping products; nonpositive exponents yield one. */
+    public static int32 Pow(int32 base_value, int32 exponent) {
         int32 result = 1;
-        int32 i = 0;
-        while (i < exp)
-        {
-            result = result * baseVal;
-            i = i + 1;
+        while (exponent > 0) {
+            if (exponent % 2 != 0) {
+                result = result * base_value;
+            }
+            exponent = exponent / 2;
+            if (exponent > 0) {
+                base_value = base_value * base_value;
+            }
         }
         return result;
     }
 
-    // 整数平方根 (牛顿法)
-    public static int32 Sqrt(int32 value)
-    {
-        if (value <= 0) return 0;
-        if (value == 1) return 1;
-
-        int32 x = value;
-        int32 y = (x + 1) / 2;
-
-        while (y < x)
-        {
-            x = y;
-            y = (x + value / x) / 2;
+    /** Reject negative exponents and overflow, clearing result; zero to the zeroth power is one. */
+    public static bool TryPow(int32 base_value, int32 exponent, ref int32 result) {
+        result = 0;
+        if (exponent < 0) {
+            return false;
         }
-
-        return x;
-    }
-
-    // 判断是否为质数
-    public static bool IsPrime(int32 n)
-    {
-        if (n < 2) return false;
-        if (n == 2) return true;
-        if (n % 2 == 0) return false;
-
-        int32 i = 3;
-        int32 limit = Sqrt(n);
-        while (i <= limit)
-        {
-            if (n % i == 0) return false;
-            i = i + 2;
+        int32 accumulator = 1;
+        while (exponent > 0) {
+            if (exponent % 2 != 0) {
+                int64 product = (int64)accumulator * (int64)base_value;
+                if (product < (int64)-2147483648 || product > (int64)2147483647) {
+                    return false;
+                }
+                accumulator = (int32)product;
+            }
+            exponent = exponent / 2;
+            if (exponent > 0) {
+                int64 square = (int64)base_value * (int64)base_value;
+                if (square > (int64)2147483647) {
+                    return false;
+                }
+                base_value = (int32)square;
+            }
         }
-
+        result = accumulator;
         return true;
     }
 
-    // 最大公约数 (欧几里得算法)
-    public static int32 GCD(int32 a, int32 b)
-    {
-        a = Abs(a);
-        b = Abs(b);
-        while (b != 0)
-        {
-            int32 temp = b;
-            b = a % b;
-            a = temp;
+    /** Return the floor square root; negative inputs retain the legacy zero result. */
+    public static int32 Sqrt(int32 value) {
+        if (value <= 0) {
+            return 0;
         }
-        return a;
+        int32 current = value;
+        // ceil(value / 2) avoids the overflow in (value + 1) / 2.
+        int32 next = current / 2 + current % 2;
+        while (next < current) {
+            current = next;
+            next = (current + value / current) / 2;
+        }
+        return current;
     }
 
-    // 最小公倍数
-    public static int32 LCM(int32 a, int32 b)
-    {
-        if (a == 0 || b == 0) return 0;
-        return Abs(a / GCD(a, b) * b);
+    /** Return the floor square root, or return false and clear result for a negative input. */
+    public static bool TrySqrt(int32 value, ref int32 result) {
+        result = 0;
+        if (value < 0) {
+            return false;
+        }
+        result = Sqrt(value);
+        return true;
+    }
+
+    /** Return the GCD magnitude; an unrepresentable positive magnitude wraps to the minimum integer. */
+    public static int32 GCD(int32 a, int32 b) {
+        return (int32)gcd_magnitude(magnitude((int64)a), magnitude((int64)b));
+    }
+
+    /** Return the legacy LCM with fixed-width wrapping; use TryLCM to detect overflow. */
+    public static int32 LCM(int32 a, int32 b) {
+        if (a == 0 || b == 0) {
+            return 0;
+        }
+        uint64 left = magnitude((int64)a);
+        uint64 right = magnitude((int64)b);
+        return Abs((int32)(left / gcd_magnitude(left, right) * right));
+    }
+
+    /** Return the nonnegative LCM, or return false and clear result when it overflows. */
+    public static bool TryLCM(int32 a, int32 b, ref int32 result) {
+        result = 0;
+        if (a == 0 || b == 0) {
+            return true;
+        }
+        uint64 left = magnitude((int64)a);
+        uint64 right = magnitude((int64)b);
+        uint64 reduced = left / gcd_magnitude(left, right);
+        if (reduced > (uint64)2147483647 / right) {
+            return false;
+        }
+        result = (int32)(reduced * right);
+        return true;
+    }
+
+    /** Return the absolute value; the minimum integer retains its wrapped value. */
+    public static int64 Abs(int64 value) {
+        if (value < 0) {
+            return -value;
+        }
+        return value;
+    }
+
+    /** Return false and clear result when the absolute value is unrepresentable. */
+    public static bool TryAbs(int64 value, ref int64 result) {
+        result = 0;
+        if (value == (int64)-9223372036854775808) {
+            return false;
+        }
+        result = Abs(value);
+        return true;
+    }
+
+    /** Return the greater of the two values. */
+    public static int64 Max(int64 a, int64 b) {
+        return a > b ? a : b;
+    }
+
+    /** Return the lesser of the two values. */
+    public static int64 Min(int64 a, int64 b) {
+        return a < b ? a : b;
+    }
+
+    /** Return -1, 0, or 1 according to the sign of value. */
+    public static int32 Sign(int64 value) {
+        if (value < 0) {
+            return -1;
+        }
+        return value == 0 ? 0 : 1;
+    }
+
+    /** Clamp to the inclusive interval; minimum must not exceed maximum. */
+    public static int64 Clamp(int64 value, int64 minimum, int64 maximum) {
+        if (value < minimum) {
+            return minimum;
+        }
+        if (value > maximum) {
+            return maximum;
+        }
+        return value;
+    }
+
+    /** Clamp to the inclusive interval, or return false and clear result for an invalid interval. */
+    public static bool TryClamp(int64 value, int64 minimum, int64 maximum, ref int64 result) {
+        result = 0;
+        if (minimum > maximum) {
+            return false;
+        }
+        result = Clamp(value, minimum, maximum);
+        return true;
+    }
+
+    /** Return the power with wrapping products; nonpositive exponents yield one. */
+    public static int64 Pow(int64 base_value, int32 exponent) {
+        int64 result = 1;
+        while (exponent > 0) {
+            if (exponent % 2 != 0) {
+                result = result * base_value;
+            }
+            exponent = exponent / 2;
+            if (exponent > 0) {
+                base_value = base_value * base_value;
+            }
+        }
+        return result;
+    }
+
+    /** Reject negative exponents and overflow, clearing result; zero to the zeroth power is one. */
+    public static bool TryPow(int64 base_value, int32 exponent, ref int64 result) {
+        result = 0;
+        if (exponent < 0) {
+            return false;
+        }
+        int64 accumulator = 1;
+        while (exponent > 0) {
+            if (exponent % 2 != 0) {
+                int128 product = (int128)accumulator * (int128)base_value;
+                if (product < (int128)-9223372036854775808 || product > (int128)9223372036854775807) {
+                    return false;
+                }
+                accumulator = (int64)product;
+            }
+            exponent = exponent / 2;
+            if (exponent > 0) {
+                int128 square = (int128)base_value * (int128)base_value;
+                if (square > (int128)9223372036854775807) {
+                    return false;
+                }
+                base_value = (int64)square;
+            }
+        }
+        result = accumulator;
+        return true;
+    }
+
+    /** Return the floor square root; negative inputs retain the legacy zero result. */
+    public static int64 Sqrt(int64 value) {
+        if (value <= 0) {
+            return 0;
+        }
+        int64 current = value;
+        // ceil(value / 2) avoids the overflow in (value + 1) / 2.
+        int64 next = current / 2 + current % 2;
+        while (next < current) {
+            current = next;
+            next = (current + value / current) / 2;
+        }
+        return current;
+    }
+
+    /** Return the floor square root, or return false and clear result for a negative input. */
+    public static bool TrySqrt(int64 value, ref int64 result) {
+        result = 0;
+        if (value < 0) {
+            return false;
+        }
+        result = Sqrt(value);
+        return true;
+    }
+
+    /** Return the GCD magnitude; an unrepresentable positive magnitude wraps to the minimum integer. */
+    public static int64 GCD(int64 a, int64 b) {
+        return (int64)gcd_magnitude(magnitude((int64)a), magnitude((int64)b));
+    }
+
+    /** Return the legacy LCM with fixed-width wrapping; use TryLCM to detect overflow. */
+    public static int64 LCM(int64 a, int64 b) {
+        if (a == 0 || b == 0) {
+            return 0;
+        }
+        uint64 left = magnitude((int64)a);
+        uint64 right = magnitude((int64)b);
+        return Abs((int64)(left / gcd_magnitude(left, right) * right));
+    }
+
+    /** Return the nonnegative LCM, or return false and clear result when it overflows. */
+    public static bool TryLCM(int64 a, int64 b, ref int64 result) {
+        result = 0;
+        if (a == 0 || b == 0) {
+            return true;
+        }
+        uint64 left = magnitude((int64)a);
+        uint64 right = magnitude((int64)b);
+        uint64 reduced = left / gcd_magnitude(left, right);
+        if (reduced > (uint64)9223372036854775807 / right) {
+            return false;
+        }
+        result = (int64)(reduced * right);
+        return true;
+    }
+
+    /** Return whether value is prime; values below two are not prime. */
+    public static bool IsPrime(int32 value) {
+        if (value < 2) {
+            return false;
+        }
+        if (value == 2) {
+            return true;
+        }
+        if (value % 2 == 0) {
+            return false;
+        }
+        int32 divisor = 3;
+        int32 limit = Sqrt(value);
+        while (divisor <= limit) {
+            if (value % divisor == 0) {
+                return false;
+            }
+            divisor = divisor + 2;
+        }
+        return true;
+    }
+
+    private static uint64 magnitude(int64 value) {
+        if (value < 0) {
+            return (uint64)0 - (uint64)value;
+        }
+        return (uint64)value;
+    }
+
+    private static uint64 gcd_magnitude(uint64 a, uint64 b) {
+        while (b != 0) {
+            uint64 remainder = a % b;
+            a = b;
+            b = remainder;
+        }
+        return a;
     }
 }

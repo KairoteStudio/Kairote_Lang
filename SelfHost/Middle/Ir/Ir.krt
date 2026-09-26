@@ -1,0 +1,399 @@
+enum KrtIrOpcode { Nop = 0, Constant = 1, Add = 2, Sub = 3, Mul = 4, Div = 5, Compare = 6, Call = 7, Jump = 8, Branch = 9, Return = 10, StoreLocal = 11, LoadLocal = 12, StackAlloc = 13, AddressOffset = 14, Load = 15, Store = 16 }
+enum KrtIrType { Void = 0, Bool = 1, Int32 = 2, Int64 = 3, Pointer = 4 }
+
+class KrtIrFunction {
+    public string name;
+    public int32 block_count;
+    public int32[] block_starts;
+    public int32 instruction_count;
+    public int32[] opcodes;
+    public int32[] types;
+    public int32[] results;
+    public int32[] lefts;
+    public int32[] rights;
+    public int64[] immediates;
+}
+
+bool KrtIrIsTerminator(int32 opcode) {
+    return opcode == (int32)KrtIrOpcode.Jump || opcode == (int32)KrtIrOpcode.Branch || opcode == (int32)KrtIrOpcode.Return;
+}
+
+bool KrtIrValidateFunction(KrtIrFunction ir_function) {
+    if (ir_function == null || ir_function.block_count < 0 || ir_function.block_count > 32) { return false; }
+    if (ir_function.instruction_count < 0 || ir_function.instruction_count > 4096) { return false; }
+    if (ir_function.instruction_count == 0) { return true; }
+    if (ir_function.opcodes == null || ir_function.types == null || ir_function.lefts == null) { return false; }
+    if (ir_function.block_count == 0) { return false; }
+    if (ir_function.block_count > 1 && ir_function.block_starts == null) { return false; }
+    int32 block = 0;
+    int32 end = ir_function.instruction_count;
+    if (ir_function.block_count > 1) {
+        if (ir_function.block_starts[0] != 0) { return false; }
+        int32 block_index = 1;
+        while (block_index < ir_function.block_count) {
+            if (ir_function.block_starts[block_index] <= ir_function.block_starts[block_index - 1] ||
+                ir_function.block_starts[block_index] >= ir_function.instruction_count) { return false; }
+            block_index = block_index + 1;
+        }
+        end = ir_function.block_starts[1];
+        if (end <= 0 || end >= ir_function.instruction_count) { return false; }
+    }
+    int32 index = 0;
+    while (index < ir_function.instruction_count) {
+        int32 opcode = ir_function.opcodes[index];
+        if (opcode < (int32)KrtIrOpcode.Nop || opcode > (int32)KrtIrOpcode.Store) { return false; }
+        if (opcode == (int32)KrtIrOpcode.Return || opcode == (int32)KrtIrOpcode.Jump || opcode == (int32)KrtIrOpcode.Branch) {
+            if (index != end - 1) { return false; }
+        }
+        if (opcode == (int32)KrtIrOpcode.Jump) {
+            if (ir_function.lefts[index] < 0 || ir_function.lefts[index] >= ir_function.block_count) { return false; }
+        }
+        if (opcode == (int32)KrtIrOpcode.Branch) {
+            if (ir_function.rights == null || ir_function.immediates == null) { return false; }
+            if (ir_function.rights[index] < 0 || ir_function.rights[index] >= ir_function.block_count ||
+                ir_function.immediates[index] < 0 || ir_function.immediates[index] >= ir_function.block_count) { return false; }
+        }
+        if (opcode == (int32)KrtIrOpcode.Return || opcode == (int32)KrtIrOpcode.Branch || opcode == (int32)KrtIrOpcode.StoreLocal) {
+            int32 value = ir_function.lefts[index];
+            if (value < 0 || value >= index) { return false; }
+            if (opcode == (int32)KrtIrOpcode.Return && ir_function.types[value] != ir_function.types[index]) { return false; }
+            if (opcode == (int32)KrtIrOpcode.Branch && ir_function.types[value] != (int32)KrtIrType.Bool) { return false; }
+        }
+        index = index + 1;
+        if (index == end) {
+            if (!KrtIrIsTerminator(opcode)) { return false; }
+            block = block + 1;
+            if (block < ir_function.block_count) {
+                end = ir_function.instruction_count;
+                if (block + 1 < ir_function.block_count) { end = ir_function.block_starts[block + 1]; }
+                if (end <= index || end > ir_function.instruction_count) { return false; }
+            }
+        }
+    }
+    return block == ir_function.block_count;
+}
+
+bool KrtIrTryEvaluateConstant(KrtAstNode node, ref int64 value) {
+    if (node == null) { return false; }
+    if (node.kind == KrtAstKind.Integer || node.kind == KrtAstKind.Boolean) { value = node.value; return true; }
+    if (node.kind == KrtAstKind.Null) { value = 0; return true; }
+    if (node.kind == KrtAstKind.Unary) {
+        int64 operand = 0;
+        if (!KrtIrTryEvaluateConstant(node.left, ref operand)) { return false; }
+        if (node.op == 43) { value = operand; return true; }
+        if (node.op == 45) { value = -operand; return true; }
+        if (node.op == 126) { value = ~operand; return true; }
+        if (node.op == 33) { value = operand == 0 ? 1 : 0; return true; }
+        return false;
+    }
+    if (node.kind == KrtAstKind.Ternary) {
+        int64 condition = 0;
+        if (!KrtIrTryEvaluateConstant(node.left, ref condition)) { return false; }
+        if (condition != 0) { return KrtIrTryEvaluateConstant(node.right, ref value); }
+        return KrtIrTryEvaluateConstant(node.next, ref value);
+    }
+    if (node.kind != KrtAstKind.Binary) { return false; }
+    int64 left = 0; int64 right = 0;
+    if (!KrtIrTryEvaluateConstant(node.left, ref left) || !KrtIrTryEvaluateConstant(node.right, ref right)) { return false; }
+    if (node.op == 43) { value = left + right; return true; }
+    if (node.op == 45) { value = left - right; return true; }
+    if (node.op == 42) { value = left * right; return true; }
+    if (node.op == 47) { if (right == 0) { return false; } value = left / right; return true; }
+    if (node.op == 37) { if (right == 0) { return false; } value = left % right; return true; }
+    if (node.op == 61) { value = left == right ? 1 : 0; return true; }
+    if (node.op == 101) { value = left != right ? 1 : 0; return true; }
+    if (node.op == 60) { value = left < right ? 1 : 0; return true; }
+    if (node.op == 62) { value = left > right ? 1 : 0; return true; }
+    if (node.op == 102) { value = left <= right ? 1 : 0; return true; }
+    if (node.op == 103) { value = left >= right ? 1 : 0; return true; }
+    if (node.op == 104) { value = (left != 0 && right != 0) ? 1 : 0; return true; }
+    if (node.op == 105) { value = (left != 0 || right != 0) ? 1 : 0; return true; }
+    return false;
+}
+
+bool KrtIrTryEvaluateWithLocals(KrtAstNode node, KrtAstNode unit, KrtAstNode before, ref int64 value) {
+    if (node == null) { return false; }
+    if (node.kind == KrtAstKind.Identifier) {
+        KrtAstNode statement = unit.left.left;
+        bool found = false;
+        while (statement != before) {
+            if (statement.kind == KrtAstKind.Variable && statement.local_slot == node.local_slot) {
+                if (!KrtIrTryEvaluateConstant(statement.left, ref value)) { return false; }
+                found = true;
+            }
+            if (statement.kind == KrtAstKind.Assign && statement.left != null && statement.left.local_slot == node.local_slot) {
+                if (!KrtIrTryEvaluateWithLocals(statement.right, unit, statement, ref value)) { return false; }
+                found = true;
+            }
+            statement = statement.next;
+        }
+        return found;
+    }
+    if (node.kind == KrtAstKind.Integer || node.kind == KrtAstKind.Boolean) { value = node.value; return true; }
+    if (node.kind == KrtAstKind.Null) { value = 0; return true; }
+    if (node.kind == KrtAstKind.Ternary) {
+        int64 condition = 0;
+        if (!KrtIrTryEvaluateWithLocals(node.left, unit, before, ref condition)) { return false; }
+        if (condition != 0) { return KrtIrTryEvaluateWithLocals(node.right, unit, before, ref value); }
+        return KrtIrTryEvaluateWithLocals(node.next, unit, before, ref value);
+    }
+    if (node.kind == KrtAstKind.Unary) {
+        int64 operand = 0;
+        if (!KrtIrTryEvaluateWithLocals(node.left, unit, before, ref operand)) { return false; }
+        if (node.op == 43) { value = operand; return true; }
+        if (node.op == 45) { value = -operand; return true; }
+        if (node.op == 126) { value = ~operand; return true; }
+        if (node.op == 33) { value = operand == 0 ? 1 : 0; return true; }
+        return false;
+    }
+    if (node.kind != KrtAstKind.Binary) { return false; }
+    int64 left = 0; int64 right = 0;
+    if (!KrtIrTryEvaluateWithLocals(node.left, unit, before, ref left) ||
+        !KrtIrTryEvaluateWithLocals(node.right, unit, before, ref right)) { return false; }
+    if (node.op == 43) { value = left + right; return true; }
+    if (node.op == 45) { value = left - right; return true; }
+    if (node.op == 42) { value = left * right; return true; }
+    if (node.op == 47) { if (right == 0) { return false; } value = left / right; return true; }
+    if (node.op == 37) { if (right == 0) { return false; } value = left % right; return true; }
+    if (node.op == 61) { value = left == right ? 1 : 0; return true; }
+    if (node.op == 101) { value = left != right ? 1 : 0; return true; }
+    if (node.op == 60) { value = left < right ? 1 : 0; return true; }
+    if (node.op == 62) { value = left > right ? 1 : 0; return true; }
+    if (node.op == 102) { value = left <= right ? 1 : 0; return true; }
+    if (node.op == 103) { value = left >= right ? 1 : 0; return true; }
+    if (node.op == 104) { value = (left != 0 && right != 0) ? 1 : 0; return true; }
+    if (node.op == 105) { value = (left != 0 || right != 0) ? 1 : 0; return true; }
+    return false;
+}
+
+bool KrtIrContainsIdentifier(KrtAstNode node) {
+    if (node == null) { return false; }
+    if (node.kind == KrtAstKind.Identifier) { return true; }
+    return KrtIrContainsIdentifier(node.left) || KrtIrContainsIdentifier(node.right);
+}
+
+bool KrtIrHasAssignment(KrtAstNode unit) {
+    if (unit == null || unit.left == null) { return false; }
+    KrtAstNode statement = unit.left.left;
+    while (statement != null) {
+        if (statement.kind == KrtAstKind.Assign) { return true; }
+        statement = statement.next;
+    }
+    return false;
+}
+
+bool KrtIrLowerReturnFunction(KrtAstNode unit, KrtIrFunction output) {
+    if (unit.kind != KrtAstKind.Function || unit.left == null || unit.left.left == null) { return false; }
+    if (unit.left.left.kind == KrtAstKind.Variable && unit.left.left.left != null &&
+        unit.left.left.left.kind == KrtAstKind.StackAlloc) { return KrtIrLowerByteBuffer(unit, output); }
+    output.block_count = 1;
+    int32 statement_count = unit.left.child_count;
+    if (statement_count <= 0) { return false; }
+    if (statement_count == 1 && unit.left.left.kind == KrtAstKind.If) {
+        KrtAstNode conditional = unit.left.left;
+        int64 condition = 0;
+        KrtAstNode selected = null;
+        if (KrtIrTryEvaluateConstant(conditional.left, ref condition) ||
+            KrtIrTryEvaluateWithLocals(conditional.left, unit, conditional, ref condition)) {
+            if (condition != 0) { selected = conditional.right; }
+            else { selected = conditional.alternate; }
+        }
+        if (selected == null || selected.kind != KrtAstKind.Block || selected.child_count != 1 ||
+            selected.left == null || selected.left.kind != KrtAstKind.Return) { return false; }
+        int64 immediate_if = 0;
+        if (!KrtIrTryEvaluateConstant(selected.left.left, ref immediate_if)) { return false; }
+        output.instruction_count = 2;
+        output.opcodes = new int32[2]; output.types = new int32[2]; output.results = new int32[2];
+        output.lefts = new int32[2]; output.rights = new int32[2]; output.immediates = new int64[2];
+        output.opcodes[0] = (int32)KrtIrOpcode.Constant; output.opcodes[1] = (int32)KrtIrOpcode.Return;
+        output.types[0] = (int32)KrtIrType.Int32; output.types[1] = (int32)KrtIrType.Int32;
+        output.immediates[0] = immediate_if; output.lefts[1] = 0;
+        return KrtIrValidateFunction(output);
+    }
+    // A constant local may feed the final conditional after its declaration.
+    // Fold that shape to the same single-return IR as a literal condition.
+    KrtAstNode final_conditional = unit.left.left;
+    while (final_conditional.next != null) { final_conditional = final_conditional.next; }
+    if (final_conditional.kind == KrtAstKind.If) {
+        int64 condition = 0;
+        KrtAstNode selected = null;
+        if (KrtIrTryEvaluateConstant(final_conditional.left, ref condition) ||
+            KrtIrTryEvaluateWithLocals(final_conditional.left, unit, final_conditional, ref condition)) {
+            if (condition != 0) { selected = final_conditional.right; }
+            else { selected = final_conditional.alternate; }
+        }
+        if (selected == null || selected.kind != KrtAstKind.Block || selected.child_count != 1 ||
+            selected.left == null || selected.left.kind != KrtAstKind.Return) { return false; }
+        int64 immediate_if = 0;
+        if (!KrtIrTryEvaluateConstant(selected.left.left, ref immediate_if) &&
+            !KrtIrTryEvaluateWithLocals(selected.left.left, unit, final_conditional, ref immediate_if)) { return false; }
+        output.instruction_count = 2;
+        output.opcodes = new int32[2]; output.types = new int32[2]; output.results = new int32[2];
+        output.lefts = new int32[2]; output.rights = new int32[2]; output.immediates = new int64[2];
+        output.opcodes[0] = (int32)KrtIrOpcode.Constant; output.opcodes[1] = (int32)KrtIrOpcode.Return;
+        output.types[0] = (int32)KrtIrType.Int32; output.types[1] = (int32)KrtIrType.Int32;
+        output.immediates[0] = immediate_if; output.lefts[1] = 0;
+        return KrtIrValidateFunction(output);
+    }
+    KrtAstNode final_statement = unit.left.left;
+    while (final_statement.next != null) { final_statement = final_statement.next; }
+    int64 folded_return = 0;
+    if (final_statement.kind == KrtAstKind.Return && (final_statement.left.kind != KrtAstKind.Identifier || KrtIrHasAssignment(unit)) &&
+        KrtIrContainsIdentifier(final_statement.left) &&
+        KrtIrTryEvaluateWithLocals(final_statement.left, unit, final_statement, ref folded_return)) {
+        output.instruction_count = 2;
+        output.opcodes = new int32[2];
+        output.types = new int32[2];
+        output.results = new int32[2];
+        output.lefts = new int32[2];
+        output.rights = new int32[2];
+        output.immediates = new int64[2];
+        output.opcodes[0] = (int32)KrtIrOpcode.Constant;
+        output.opcodes[1] = (int32)KrtIrOpcode.Return;
+        output.types[0] = (int32)KrtIrType.Int32;
+        output.types[1] = (int32)KrtIrType.Int32;
+        output.immediates[0] = folded_return;
+        output.lefts[1] = 0;
+        return KrtIrValidateFunction(output);
+    }
+    int32 instruction_count = 0;
+    KrtAstNode sizing = unit.left.left;
+    while (sizing != null) {
+        instruction_count = instruction_count + 2;
+        sizing = sizing.next;
+    }
+    output.instruction_count = instruction_count;
+    output.opcodes = new int32[output.instruction_count];
+    output.types = new int32[output.instruction_count];
+    output.results = new int32[output.instruction_count];
+    output.lefts = new int32[output.instruction_count];
+    output.rights = new int32[output.instruction_count];
+    output.immediates = new int64[output.instruction_count];
+    int32 index = 0;
+    KrtAstNode statement = unit.left.left;
+    while (statement != null && index < output.instruction_count) {
+        if (statement.kind == KrtAstKind.Variable) {
+            if (statement.local_slot < 0) { return false; }
+            output.opcodes[index] = (int32)KrtIrOpcode.Constant;
+            output.opcodes[index + 1] = (int32)KrtIrOpcode.StoreLocal;
+            output.types[index] = (int32)KrtIrType.Int32;
+            output.types[index + 1] = (int32)KrtIrType.Int32;
+            int64 immediate = 0;
+            if (!KrtIrTryEvaluateConstant(statement.left, ref immediate)) { return false; }
+            output.immediates[index] = immediate;
+            output.lefts[index + 1] = index;
+            output.rights[index + 1] = statement.local_slot;
+        } else if (statement.kind == KrtAstKind.Return) {
+            if (statement.left.kind == KrtAstKind.Identifier) {
+                if (statement.left.local_slot < 0 && statement.left.local_slot != -2) { return false; }
+                output.lefts[index] = statement.left.local_slot;
+                output.opcodes[index] = (int32)KrtIrOpcode.LoadLocal;
+                output.opcodes[index + 1] = (int32)KrtIrOpcode.Return;
+                output.types[index] = (int32)KrtIrType.Int32;
+                output.types[index + 1] = (int32)KrtIrType.Int32;
+                output.lefts[index + 1] = index;
+            } else {
+                output.opcodes[index] = (int32)KrtIrOpcode.Constant;
+                output.opcodes[index + 1] = (int32)KrtIrOpcode.Return;
+                output.types[index] = (int32)KrtIrType.Int32;
+                output.types[index + 1] = (int32)KrtIrType.Int32;
+                int64 immediate_return = 0;
+                if (!KrtIrTryEvaluateWithLocals(statement.left, unit, statement, ref immediate_return) &&
+                    !KrtIrTryEvaluateConstant(statement.left, ref immediate_return)) { return false; }
+                output.immediates[index] = immediate_return;
+                output.lefts[index + 1] = index;
+            }
+        } else { return false; }
+        index = index + 2;
+        statement = statement.next;
+    }
+    return KrtIrValidateFunction(output);
+}
+
+// Memory IR uses instruction indices as values. Width is explicit in immediates;
+// address offsets are measured in bytes, never inferred by the machine backend.
+int32 KrtIrAppendMemory(KrtIrFunction output, int32 opcode, int32 type, int32 left, int32 right, int64 immediate) {
+    if (output.instruction_count >= 256) { return -1; }
+    int32 index = output.instruction_count;
+    output.opcodes[index] = opcode; output.types[index] = type;
+    output.results[index] = index; output.lefts[index] = left;
+    output.rights[index] = right; output.immediates[index] = immediate;
+    output.instruction_count = index + 1;
+    return index;
+}
+
+int32 KrtIrLowerByteAddress(KrtAstNode node, int32 slot, int32 allocation, KrtIrFunction output) {
+    if (node == null || node.kind != KrtAstKind.Index || node.left == null ||
+        node.left.kind != KrtAstKind.Identifier || node.left.local_slot != slot) { return -1; }
+    int64 offset = 0;
+    if (!KrtIrTryEvaluateConstant(node.right, ref offset)) { return -1; }
+    int32 index = KrtIrAppendMemory(output, (int32)KrtIrOpcode.Constant, (int32)KrtIrType.Int64, -1, -1, offset);
+    if (index < 0) { return -1; }
+    return KrtIrAppendMemory(output, (int32)KrtIrOpcode.AddressOffset, (int32)KrtIrType.Pointer, allocation, index, 0);
+}
+
+bool KrtIrValidateMemory(KrtIrFunction output) {
+    if (output == null || output.block_count != 1 || output.instruction_count <= 0 || output.instruction_count > 256) { return false; }
+    int32 index = 0;
+    while (index < output.instruction_count) {
+        int32 opcode = output.opcodes[index];
+        int32 type = output.types[index];
+        int32 left = output.lefts[index];
+        int32 right = output.rights[index];
+        if (output.results[index] != index) { return false; }
+        if (opcode == (int32)KrtIrOpcode.Constant) {
+            if (type != (int32)KrtIrType.Int32 && type != (int32)KrtIrType.Int64) { return false; }
+        } else if (opcode == (int32)KrtIrOpcode.StackAlloc) {
+            if (type != (int32)KrtIrType.Pointer || output.immediates[index] <= 0) { return false; }
+        } else {
+            if (left < 0 || left >= index) { return false; }
+            if (opcode == (int32)KrtIrOpcode.Return) {
+                if (index != output.instruction_count - 1 || type != output.types[left]) { return false; }
+            } else {
+                if (output.types[left] != (int32)KrtIrType.Pointer) { return false; }
+                if (opcode == (int32)KrtIrOpcode.AddressOffset || opcode == (int32)KrtIrOpcode.Store) {
+                    if (right < 0 || right >= index) { return false; }
+                }
+                if (opcode == (int32)KrtIrOpcode.AddressOffset) {
+                    if (type != (int32)KrtIrType.Pointer || output.types[right] != (int32)KrtIrType.Int64) { return false; }
+                } else if (opcode == (int32)KrtIrOpcode.Load) {
+                    if (type != (int32)KrtIrType.Int32 || output.immediates[index] != 1) { return false; }
+                } else if (opcode == (int32)KrtIrOpcode.Store) {
+                    if (type != (int32)KrtIrType.Void || output.types[right] != (int32)KrtIrType.Int32 || output.immediates[index] != 1) { return false; }
+                } else { return false; }
+            }
+        }
+        index = index + 1;
+    }
+    return output.opcodes[output.instruction_count - 1] == (int32)KrtIrOpcode.Return;
+}
+
+bool KrtIrLowerByteBuffer(KrtAstNode unit, KrtIrFunction output) {
+    KrtAstNode declaration = unit.left.left;
+    KrtAstNode allocation = declaration.left;
+    // Until general type resolution is available, only byte allocations are accepted.
+    if (allocation.element_width != 1 || declaration.local_slot < 0) { return false; }
+    int64 count = 0;
+    if (!KrtIrTryEvaluateConstant(allocation.left, ref count) || count <= 0 || count > 262144) { return false; }
+    output.block_count = 1; output.instruction_count = 0;
+    output.opcodes = new int32[256]; output.types = new int32[256]; output.results = new int32[256];
+    output.lefts = new int32[256]; output.rights = new int32[256]; output.immediates = new int64[256];
+    int32 pointer = KrtIrAppendMemory(output, (int32)KrtIrOpcode.StackAlloc, (int32)KrtIrType.Pointer, -1, -1, count);
+    KrtAstNode statement = declaration.next;
+    while (statement != null) {
+        if (statement.kind == KrtAstKind.Assign) {
+            int32 address = KrtIrLowerByteAddress(statement.left, declaration.local_slot, pointer, output);
+            int64 value = 0;
+            if (address < 0 || !KrtIrTryEvaluateConstant(statement.right, ref value)) { return false; }
+            int32 stored = KrtIrAppendMemory(output, (int32)KrtIrOpcode.Constant, (int32)KrtIrType.Int32, -1, -1, value);
+            if (stored < 0 || KrtIrAppendMemory(output, (int32)KrtIrOpcode.Store, (int32)KrtIrType.Void, address, stored, 1) < 0) { return false; }
+        } else if (statement.kind == KrtAstKind.Return && statement.next == null) {
+            int32 address = KrtIrLowerByteAddress(statement.left, declaration.local_slot, pointer, output);
+            if (address < 0) { return false; }
+            int32 loaded = KrtIrAppendMemory(output, (int32)KrtIrOpcode.Load, (int32)KrtIrType.Int32, address, -1, 1);
+            if (loaded < 0 || KrtIrAppendMemory(output, (int32)KrtIrOpcode.Return, (int32)KrtIrType.Int32, loaded, -1, 0) < 0) { return false; }
+        } else { return false; }
+        statement = statement.next;
+    }
+    return KrtIrValidateMemory(output);
+}

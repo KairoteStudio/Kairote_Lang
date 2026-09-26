@@ -1,0 +1,6 @@
+// Minimal Stage1 executable entry. The full command-line driver will replace
+// this probe once filesystem argument handling is self-hosted.
+int32 main() {
+    if (!KrtCompilePath("program.krt", "stage1-probe.kro")) { return 1; }
+    return 0;
+}
