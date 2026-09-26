@@ -76,3 +76,14 @@ int32 main() {{
         expression.right.kind != KrtAstKind.DefaultValue) { return 2; }
     if (expression.left.type_length != 5 || expression.right.type_length != 5) { return 3; }
 ''')
+        self.check_ast('int32 main() { return default(int32[]); }', '''
+    if (unit.left.left.left.type_length != 7) { return 2; }
+''')
+
+    def test_null_operator_tokens_and_associativity(self):
+        self.check_ast('int32 main() { return a?.field ?? b ?? c; }', '''
+    KrtAstNode expression = unit.left.left.left;
+    if (expression.kind != KrtAstKind.Binary || expression.op != 113) { return 2; }
+    if (expression.left.kind != KrtAstKind.Member || expression.left.op != 114) { return 3; }
+    if (expression.right.kind != KrtAstKind.Binary || expression.right.op != 113) { return 4; }
+''')

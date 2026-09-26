@@ -35,6 +35,7 @@ KrtAstNode KrtParserParsePrimary(KrtParser parser) {
         KrtParserSkipArrayTypeSuffix(parser);
         while (KrtParserTokenText(parser, 42)) { KrtLexerNext(parser.lexer, parser.token); }
         if (!KrtParserTokenText(parser, 41)) { parser.errors = parser.errors + 1; return KrtAstMake(KrtAstKind.Invalid, start, 0); }
+        type_length = parser.token.start - type_start;
         KrtLexerNext(parser.lexer, parser.token);
         KrtAstNode result = KrtAstMake(is_sizeof ? KrtAstKind.Sizeof : KrtAstKind.DefaultValue, start, parser.token.start - start);
         result.type_start = type_start; result.type_length = type_length; return result;
@@ -349,7 +350,7 @@ KrtAstNode KrtParserParseExpression(KrtParser parser, int32 minimum) {
         if (KrtParserIsWord(parser, "is")) { operation = 115; }
         else if (KrtParserIsWord(parser, "as")) { operation = 116; }
         KrtLexerNext(parser.lexer, parser.token);
-        KrtAstNode right = KrtParserParseExpression(parser, precedence + 1);
+        KrtAstNode right = KrtParserParseExpression(parser, operation == 113 ? precedence : precedence + 1);
         left = KrtAstMakeBinary(operation, left, right);
     }
     if (minimum == 1 && KrtParserTokenText(parser, 63)) {
