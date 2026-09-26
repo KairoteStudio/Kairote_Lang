@@ -10,11 +10,15 @@ class KrtAstNode {
     public KrtAstNode right;
     public KrtAstNode next;
     public KrtAstNode alternate;
+    // Loop bodies must not share the sibling-list link.
+    public KrtAstNode body;
     public int32 op;
     public bool grouped;
     public int32 parameter_count;
     public int64[] parameter_starts;
     public int64[] parameter_lengths;
+    public int64[] parameter_type_starts;
+    public int64[] parameter_type_lengths;
     public bool[] parameter_refs;
     public int64 name_start;
     public int64 name_length;

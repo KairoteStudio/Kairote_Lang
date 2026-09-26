@@ -104,6 +104,7 @@ void KrtLexerNext(KrtLexer lexer, KrtToken token) {
         token.SetKind(KrtTokenKind.Punctuation); lexer_advance(lexer);
         int64 second = lexer_at(lexer, 0);
         if ((first == 61 || first == 33 || first == 60 || first == 62 || first == 43 || first == 45) && second == 61) { lexer_advance(lexer); }
+        else if (first == 61 && second == 62) { lexer_advance(lexer); }
         else if ((first == 38 || first == 124 || first == 43 || first == 45 || first == 60 || first == 62) && second == first) { lexer_advance(lexer); }
     }
     token.SetLength(lexer.position - token.start);
