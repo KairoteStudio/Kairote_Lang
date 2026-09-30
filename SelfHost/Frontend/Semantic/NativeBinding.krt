@@ -1,0 +1,730 @@
+// Native binding keeps lexical names separate from AST sibling links.
+class KrtNativeName {
+    public int64 start;
+    public int64 length;
+    public KrtAstNode declaration;
+    public int32 slot;
+    public bool by_ref;
+    public int32 depth;
+    public KrtNativeName next;
+}
+
+class KrtNativeBinding {
+    public KrtAstNode module;
+    public KrtAstNode unit;
+    public KrtAstNode catch_target;
+    public int32 constant_depth;
+    public int32 candidate_error;
+    public int64 source;
+    public KrtNativeName names;
+    public int32 slots;
+    public int32 depth;
+    public int64 error_start;
+}
+
+bool KrtNativeSpanWord(int64 source, int64 start, int64 length, string word) {
+    unsafe(using krt.mem;) {
+        byte* input = (byte*)source;
+        byte* text = (byte*)(int64)word;
+        int64 index = 0;
+        while (index < length && text[index] != 0) {
+            if (input[start + index] != text[index]) { return false; }
+            index = index + 1;
+        }
+        return index == length && text[index] == 0;
+    }
+}
+
+KrtAstNode KrtNativeFindType(KrtAstNode module, int64 source, int64 start, int64 length) {
+    return KrtNativeFindScopedType(module, source, start, length, null);
+}
+
+void KrtNativeCopyType(KrtAstNode target, KrtAstNode original) {
+    target.native_function_pointer = original.native_function_pointer;
+    target.native_bits = original.native_bits; target.native_wide = original.native_wide; target.native_element_boolean = original.native_element_boolean;
+    target.native_float = original.native_float;
+    target.native_type = original.native_type;
+    target.native_width = original.kind == KrtAstKind.Member && original.element_width > 0 ? original.element_width : original.native_width;
+    target.native_stride = KrtNativeSemanticStride(original);
+    target.native_size = original.native_size;
+    target.native_void_pointer = original.native_void_pointer;
+    target.native_unsigned = original.native_unsigned;
+    target.native_element_unsigned = original.native_element_unsigned;
+    target.native_boolean = original.native_boolean;
+    target.native_string = original.native_string; target.native_element_string = original.native_element_string;
+    target.native_array = original.kind == KrtAstKind.Index ? false : original.native_array;
+}
+
+bool KrtNativeAnnotateType(KrtAstNode node, KrtAstNode module, int64 source, int64 start, int64 length) {
+    node.native_function_pointer = null;
+    node.native_bits = 0; node.native_wide = false; node.native_element_boolean = false; node.native_float = 0; node.native_type = null; node.native_width = 8; node.native_stride = 0;
+    node.native_unsigned = false; node.native_element_unsigned = false; node.native_boolean = false;
+    node.native_string = false; node.native_element_string = false; node.native_array = false;
+    if (length <= 0) { return true; }
+    int64 base_length = 0; bool indirect = false;
+    unsafe(using krt.mem;) {
+        byte* input = (byte*)source;
+        while (base_length < length && ((input[start + base_length] >= 65 && input[start + base_length] <= 90) ||
+               (input[start + base_length] >= 97 && input[start + base_length] <= 122) ||
+               (input[start + base_length] >= 48 && input[start + base_length] <= 57) || input[start + base_length] == 95)) {
+            base_length = base_length + 1;
+        }
+        int64 index = base_length;
+        while (index < length) {
+            if (input[start + index] == 42 || input[start + index] == 91) { indirect = true; }
+            if (input[start + index] == 91) { node.native_array = true; }
+            index = index + 1;
+        }
+    }
+    if (KrtNativeSpanWord(source, start, base_length, "fn")) { return KrtNativeAnnotateFunctionType(node, module, source, start, length); }
+    node.native_boolean = KrtNativeSpanWord(source, start, base_length, "bool");
+    node.native_unsigned = node.native_boolean || KrtNativeSpanWord(source, start, base_length, "byte") ||
+        KrtNativeSpanWord(source, start, base_length, "char") || KrtNativeSpanWord(source, start, base_length, "uint8") ||
+        KrtNativeSpanWord(source, start, base_length, "uint16") || KrtNativeSpanWord(source, start, base_length, "uint32") || KrtNativeSpanWord(source, start, base_length, "uint64") || KrtNativeSpanWord(source, start, base_length, "uint128");
+    int32 width = 8; int32 integer_bits = lexer_integer_type_bits(source, start, base_length);
+    if (integer_bits != 0) {
+        node.native_bits = integer_bits; node.native_wide = integer_bits > 64; width = 1;
+        while (width * 8 < integer_bits) { width = width * 2; }
+        unsafe(using krt.mem;) { node.native_unsigned = ((byte*)source)[start] == 117; }
+    }
+    else if (KrtNativeSpanWord(source, start, base_length, "byte") || KrtNativeSpanWord(source, start, base_length, "bool") ||
+        KrtNativeSpanWord(source, start, base_length, "int8") || KrtNativeSpanWord(source, start, base_length, "uint8") || KrtNativeSpanWord(source, start, base_length, "char")) { width = 1; }
+    else if (KrtNativeSpanWord(source, start, base_length, "int16") || KrtNativeSpanWord(source, start, base_length, "uint16")) { width = 2; }
+    else if (KrtNativeSpanWord(source, start, base_length, "int32") || KrtNativeSpanWord(source, start, base_length, "int") || KrtNativeSpanWord(source, start, base_length, "uint32")) { width = 4; }
+    else if (KrtNativeSpanWord(source, start, base_length, "int128") || KrtNativeSpanWord(source, start, base_length, "uint128")) { width = 16; node.native_wide = true; }
+    else if (KrtNativeSpanWord(source, start, base_length, "float32") || KrtNativeSpanWord(source, start, base_length, "float")) { width = 4; node.native_float = 4; }
+    else if (KrtNativeSpanWord(source, start, base_length, "float64") || KrtNativeSpanWord(source, start, base_length, "double")) { width = 8; node.native_float = 8; }
+    else if (KrtNativeSpanWord(source, start, base_length, "string")) { node.native_stride = 1; node.native_string = true; node.native_element_unsigned = true; }
+    else if (!KrtNativeSpanWord(source, start, base_length, "int64") && !KrtNativeSpanWord(source, start, base_length, "long") && !KrtNativeSpanWord(source, start, base_length, "uint64") &&
+             !KrtNativeSpanWord(source, start, base_length, "void") &&
+             !KrtNativeSpanWord(source, start, base_length, "var") && !KrtNativeSpanWord(source, start, base_length, "let")) {
+        return KrtNativeResolveNamedType(node, module, source, start, length);
+    }
+    node.native_width = width;
+    if (node.native_bits == 0 && node.native_float == 0 && !node.native_string && node.native_type == null) { node.native_bits = width * 8; }
+    node.native_void_pointer = indirect && KrtNativeSpanWord(source, start, base_length, "void");
+    if (indirect) { node.native_element_boolean = node.native_boolean; node.native_element_string = node.native_string; node.native_string = false; node.native_stride = width; node.native_width = 8; node.native_element_unsigned = node.native_unsigned; node.native_unsigned = false; node.native_boolean = false; }
+    if (node.native_type != null) { node.native_size = node.native_type.native_size; }
+    return true;
+}
+
+KrtNativeName KrtNativeFindName(KrtNativeBinding binding, int64 start, int64 length) {
+    KrtNativeName name = binding.names;
+    while (name != null) {
+        if (KrtSemanticSameName(binding.source, start, length, name.start, name.length)) { return name; }
+        name = name.next;
+    }
+    return null;
+}
+
+bool KrtNativeAddName(KrtNativeBinding binding, KrtAstNode declaration, int32 slot, bool by_ref) {
+    KrtNativeName previous = binding.names;
+    while (previous != null) {
+        if ((previous.depth == binding.depth || previous.slot < 0) && KrtSemanticSameName(binding.source, declaration.name_start, declaration.name_length, previous.start, previous.length)) {
+            return KrtNativeBindingError(binding, declaration);
+        }
+        previous = previous.next;
+    }
+    KrtNativeName name = new KrtNativeName();
+    name.start = declaration.name_start; name.length = declaration.name_length;
+    name.declaration = declaration; name.slot = slot; name.by_ref = by_ref; name.depth = binding.depth;
+    name.next = binding.names; binding.names = name; return true;
+}
+
+bool KrtNativeBindingError(KrtNativeBinding binding, KrtAstNode node) {
+    if (binding.error_start < 0 && node != null) { binding.error_start = node.start; }
+    return false;
+}
+
+KrtAstNode KrtNativeFindFunctionType(KrtNativeBinding binding, int64 start, int64 length) {
+    KrtAstNode unit = binding.module.left;
+    while (unit != null) {
+        if (KrtSemanticSameName(binding.source, start, length, unit.name_start, unit.name_length)) { return unit; }
+        unit = unit.next;
+    }
+    return null;
+}
+
+bool KrtNativeIsLvalue(KrtAstNode node) {
+    if (node == null || node.native_readonly) { return false; }
+    return node.kind == KrtAstKind.Identifier || node.kind == KrtAstKind.Member || node.kind == KrtAstKind.Index || (node.kind == KrtAstKind.Unary && node.op == 42);
+}
+
+KrtAstNode KrtNativeThis(KrtNativeBinding binding, int64 start) {
+    KrtAstNode receiver = KrtAstMake(KrtAstKind.Identifier, start, 0);
+    receiver.op = 211; receiver.local_slot = -2; receiver.native_type = binding.unit.native_owner;
+    return receiver;
+}
+
+bool KrtNativeBindConstant(KrtAstNode node, KrtAstNode declaration, KrtNativeBinding binding) {
+    if (declaration.left == null || binding.constant_depth >= 64) { return KrtNativeBindingError(binding, node); }
+    binding.constant_depth = binding.constant_depth + 1;
+    bool valid = KrtNativeBindExpression(declaration.left, binding);
+    binding.constant_depth = binding.constant_depth - 1;
+    if (!valid || !KrtNativeAnnotateType(node, binding.module, binding.source, declaration.type_start, declaration.type_length)) { return KrtNativeBindingError(binding, node); }
+    if (declaration.left.kind == KrtAstKind.String && node.native_string) {
+        node.kind = KrtAstKind.String; node.start = declaration.left.start; node.length = declaration.left.length;
+    } else if (KrtNativeFloatKind(node) != 0 || KrtNativeWideKind(node)) {
+        node.kind = KrtAstKind.Cast; node.left = declaration.left; node.type_start = declaration.type_start; node.type_length = declaration.type_length; node.native_readonly = true; return true;
+    } else {
+        int64 value = 0;
+        if (!KrtIrTryEvaluateConstant(declaration.left, ref value)) { return KrtNativeBindingError(binding, node); }
+        node.kind = KrtAstKind.Integer; node.value = value;
+    }
+    node.left = null; node.native_readonly = true; return true;
+}
+
+int32 KrtNativeArgumentScore(KrtAstNode argument, KrtAstNode function_node, int32 index, KrtNativeBinding binding) {
+    bool reference = argument.kind == KrtAstKind.Unary && argument.op == 200;
+    if (function_node.parameter_refs[index] != reference) { binding.candidate_error = 3; return -1; }
+    KrtAstNode expected = KrtAstMake(KrtAstKind.Type, argument.start, argument.length);
+    expected.native_scope = function_node.native_scope; expected.native_context = function_node.native_context;
+    if (!KrtNativeAnnotateType(expected, binding.module, binding.source, function_node.parameter_type_starts[index], function_node.parameter_type_lengths[index])) { return -1; }
+    KrtAstNode actual = argument;
+    if (reference) { actual = argument.left; }
+    if (expected.native_function_pointer != null || actual.native_function_pointer != null) {
+        if (!reference && actual.kind == KrtAstKind.Null && expected.native_function_pointer != null) { return 1; }
+        return KrtNativeFunctionShapesEqual(expected.native_function_pointer, actual.native_function_pointer) ? 40 : -1;
+    }
+    int32 width = actual.kind == KrtAstKind.Member ? actual.element_width : actual.native_width;
+    int32 stride = KrtNativeSemanticStride(actual);
+    if (reference) {
+        if (expected.native_bits != actual.native_bits || expected.native_wide != actual.native_wide || expected.native_float != actual.native_float || expected.native_width != width || expected.native_stride != stride || expected.native_type != actual.native_type || expected.native_unsigned != actual.native_unsigned || expected.native_string != actual.native_string || expected.native_array != actual.native_array) { return -1; }
+        return 20;
+    }
+    if (actual.kind == KrtAstKind.ArrayLiteral && expected.native_array) {
+        KrtAstNode item = KrtNativeArrayElement(expected); KrtAstNode child = actual.left;
+        while (child != null) { if (!KrtNativeCompatibleValue(item, child)) { return -1; } child = child.next; }
+        return expected.native_stride == actual.native_stride && expected.native_float == actual.native_float ? 12 : 2;
+    }
+    if (actual.kind == KrtAstKind.Null && (expected.native_stride > 0 || expected.native_type != null)) {
+        if (expected.native_stride > 0 && !expected.native_array && !expected.native_string && expected.native_type == null) { binding.candidate_error = 5; return -1; }
+        return 1;
+    }
+    if (expected.native_type != null && actual.native_type != null && expected.native_stride == 0 && stride == 0 && KrtNativeDerivesFrom(actual.native_type, expected.native_type)) { return 40 - KrtNativeInheritanceDistance(actual.native_type, expected.native_type); }
+    if (expected.native_void_pointer && stride > 0 && !actual.native_array && !actual.native_string) { return 3; }
+    if (expected.native_string != actual.native_string || expected.native_type != actual.native_type || expected.native_stride != stride || expected.native_array != actual.native_array) { return -1; }
+    if (stride > 0 && (expected.native_bits != actual.native_bits || expected.native_float != actual.native_float || expected.native_wide != actual.native_wide || expected.native_element_unsigned != actual.native_element_unsigned || expected.native_element_boolean != actual.native_element_boolean || expected.native_element_string != actual.native_element_string)) { return -1; }
+    bool same_numeric_domain = (KrtNativeFloatKind(expected) == 0) == (KrtNativeFloatKind(actual) == 0);
+    if (stride == 0 && expected.native_type == null && actual.native_type == null && same_numeric_domain && expected.native_width < width && !KrtNativeLiteralArgument(actual)) { return -1; }
+    int32 score = 4;
+    if (KrtNativeWideKind(expected) == KrtNativeWideKind(actual)) { score = score + 16; }
+    else if (!KrtNativeWideKind(expected) && KrtNativeWideKind(actual) && KrtNativeFloatKind(expected) == 0) { return -1; }
+    if (KrtNativeFloatKind(expected) == KrtNativeFloatKind(actual)) { score = score + 16; }
+    else if (KrtNativeFloatKind(expected) == 0 && KrtNativeFloatKind(actual) != 0) { return -1; }
+    if (expected.native_width == width) { score = score + 4; }
+    if (expected.native_bits == actual.native_bits) { score = score + 2; }
+    if (expected.native_unsigned == actual.native_unsigned) { score = score + 2; }
+    if (expected.native_boolean == actual.native_boolean) { score = score + 2; }
+    return score;
+}
+
+bool KrtNativeBindCall(KrtAstNode node, KrtNativeBinding binding) {
+    KrtNativeNormalizeQualifiedSyscall(node, binding);
+    bool indirect = node.left.kind != KrtAstKind.Identifier && node.left.kind != KrtAstKind.Member;
+    if (node.left.kind == KrtAstKind.Identifier) {
+        indirect = KrtNativeFindName(binding, node.left.start, node.left.length) != null || KrtNativeFindGlobal(binding, node.left.start, node.left.length) != null;
+    }
+    if (indirect) {
+        if (!KrtNativeBindExpression(node.left, binding)) { return false; }
+        return KrtNativeBindIndirectCall(node, binding);
+    }
+    int64 name_start = 0; int64 name_length = 0;
+    KrtAstNode owner = null; bool explicit_member = node.left.kind == KrtAstKind.Member; bool static_receiver = false;
+    if (node.left.kind == KrtAstKind.Identifier) {
+        name_start = node.left.start; name_length = node.left.length;
+        owner = binding.unit.native_owner;
+    } else if (explicit_member) {
+        name_start = node.left.name_start; name_length = node.left.name_length;
+        KrtAstNode receiver = node.left.left;
+        owner = KrtNativeExpressionTypeName(receiver, binding);
+        static_receiver = owner != null;
+        if (!static_receiver && KrtNativeNamespaceCallable(node.left, binding)) { static_receiver = true; node.left.native_static = true; }
+        if (!static_receiver) {
+            if (!KrtNativeBindExpression(receiver, binding)) { return false; }
+            owner = receiver.native_type;
+            if (owner == null) { return KrtNativeBindingError(binding, node); }
+        }
+    } else { return KrtNativeBindingError(binding, node); }
+    KrtAstNode argument = node.right;
+    while (argument != null) {
+        if (!KrtNativeBindExpression(argument, binding)) { return false; }
+        argument = argument.next;
+    }
+    KrtAstNode candidate = binding.module.left; KrtAstNode selected = null;
+    int32 best = -1; bool ambiguous = false; bool found_name = false; bool found_arity = false; int32 failure_kind = 0;
+    while (candidate != null) {
+        if (candidate.native_generic_origin == null && KrtSemanticSameName(binding.source, name_start, name_length, candidate.name_start, candidate.name_length) &&
+            (candidate.native_owner == owner || KrtNativeDerivesFrom(owner, candidate.native_owner) || (!static_receiver && candidate.native_owner == null)) &&
+            !(owner != null && owner.value == 1 && candidate.native_owner != null && candidate.native_owner.value == 3)) {
+            found_name = true;
+            bool instance = candidate.native_owner != null && !candidate.native_static;
+            bool extension = explicit_member && !static_receiver && candidate.native_owner == null;
+            int32 extra = instance || extension ? 1 : 0;
+            bool receiver_valid = !(instance && (static_receiver || (!explicit_member && binding.unit.native_static)));
+            if (receiver_valid && candidate.parameter_count == node.parameter_count + extra) {
+                found_arity = true;
+                binding.candidate_error = 0;
+                KrtAstNode specialized = KrtNativeSpecializeCall(candidate, node, extra, binding);
+                int32 score = KrtNativeFunctionScopeScore(candidate, node.left, binding);
+                if (candidate.native_owner != null && owner != null) { score = score - KrtNativeInheritanceDistance(owner, candidate.native_owner); }
+                if (specialized == null) { score = -1; if (binding.candidate_error != 0) { failure_kind = binding.candidate_error; } }
+                int32 index = extra; argument = node.right;
+                while (argument != null && score >= 0) {
+                    binding.candidate_error = 0;
+                    int32 argument_score = KrtNativeArgumentScore(argument, specialized, index, binding);
+                    if (argument_score < 0) { score = -1; if (binding.candidate_error != 0) { failure_kind = binding.candidate_error; } } else { score = score + argument_score; }
+                    index = index + 1; argument = argument.next;
+                }
+                if (score > best) { selected = specialized; best = score; ambiguous = false; }
+                else if (score >= 0 && score == best) {
+                    bool equivalent = selected != null && selected.native_owner != null && candidate.native_owner != null && selected.native_owner.value == 3 && candidate.native_owner.value == 3 && KrtNativeMethodSignatureEqual(selected, candidate, binding.module, binding.source, true);
+                    if (!equivalent) { ambiguous = true; }
+                }
+            }
+        }
+        candidate = candidate.next;
+    }
+    if (selected == null) {
+        if (!explicit_member && KrtNativeSpanWord(binding.source, name_start, name_length, "syscall") && node.parameter_count >= 1 && node.parameter_count <= 7) { return true; }
+        binding.module.native_error = found_name && !found_arity ? 2 : failure_kind != 0 ? failure_kind : 4;
+        return KrtNativeBindingError(binding, node);
+    }
+    if (ambiguous) { return KrtNativeBindingError(binding, node); }
+    node.native_target = selected;
+    int32 argument_index = selected.parameter_count - node.parameter_count;
+    if (!KrtNativeContextArguments(node.right, selected, argument_index, binding)) { return false; }
+    KrtAstNode result_type = KrtAstMake(KrtAstKind.Type, node.start, node.length);
+    result_type.native_scope = selected.native_scope; result_type.native_context = selected.native_context;
+    if (!KrtNativeAnnotateType(result_type, binding.module, binding.source, selected.type_start, selected.type_length)) { return KrtNativeBindingError(binding, node); }
+    KrtNativeCopyType(node, result_type);
+    if (explicit_member) { node.left.native_static = static_receiver || selected.native_static; }
+    else if (selected.native_owner != null && !selected.native_static) {
+        KrtAstNode callee = KrtAstMake(KrtAstKind.Member, node.left.start, node.left.length);
+        callee.name_start = name_start; callee.name_length = name_length; callee.left = KrtNativeThis(binding, node.start);
+        node.left = callee;
+    }
+    return KrtNativeBindDispatchCall(node, binding);
+}
+
+void KrtNativePromoteNumber(KrtAstNode result, KrtAstNode left, KrtAstNode right, bool shift) {
+    KrtNativeCopyType(result, left);
+    int32 floating = KrtNativeFloatKind(left); int32 other_float = KrtNativeFloatKind(right);
+    if (floating != 0 || other_float != 0) {
+        if (other_float > floating) { floating = other_float; }
+        result.native_bits = 0; result.native_wide = false; result.native_float = floating; result.native_width = floating; result.native_unsigned = false; result.native_boolean = false; return;
+    }
+    if (KrtNativeWideKind(left) || (!shift && KrtNativeWideKind(right))) { result.native_bits = 128; result.native_wide = true; result.native_width = 16; result.native_unsigned = left.native_unsigned || right.native_unsigned; result.native_boolean = false; return; }
+    int32 width = result.native_width; bool unsigned_value = result.native_unsigned;
+    if (width < 4) { width = 4; unsigned_value = false; }
+    if (!shift) {
+        int32 other_width = right.kind == KrtAstKind.Member && right.element_width > 0 ? right.element_width : right.native_width;
+        bool other_unsigned = right.native_unsigned;
+        if (other_width < 4) { other_width = 4; other_unsigned = false; }
+        if (other_width > width) { width = other_width; unsigned_value = other_unsigned; }
+        else if (other_width == width && unsigned_value != other_unsigned) {
+            if (width == 4) { width = 8; unsigned_value = false; }
+            else { unsigned_value = true; }
+        }
+    }
+    result.native_width = width; result.native_unsigned = unsigned_value; result.native_boolean = false;
+    int32 bits = left.native_bits;
+    if (!shift && right.native_bits > bits) { bits = right.native_bits; }
+    if (width > left.native_width && width > right.native_width) { bits = width * 8; }
+    result.native_bits = bits;
+}
+
+bool KrtNativeBindExpression(KrtAstNode node, KrtNativeBinding binding) {
+    if (node == null) { return true; }
+    if (node.native_global > 0) { return true; }
+    if (node.kind == KrtAstKind.Identifier) {
+        if (node.op == 211) { node.native_type = binding.unit.native_owner; node.local_slot = -2; return true; }
+        KrtNativeName name = KrtNativeFindName(binding, node.start, node.length);
+        if (name == null) {
+            if (binding.unit.native_owner != null) {
+                if (KrtNativeSpanWord(binding.source, node.start, node.length, "this") && !binding.unit.native_static) {
+                    node.local_slot = -2; node.native_type = binding.unit.native_owner; return true;
+                }
+                if (KrtNativeSpanWord(binding.source, node.start, node.length, "base") && !binding.unit.native_static && binding.unit.native_owner.native_base != null) {
+                    node.local_slot = -2; node.op = 212; node.native_type = binding.unit.native_owner.native_base; return true;
+                }
+                KrtAstNode field_owner = KrtNativeFieldOwner(binding.unit.native_owner, binding.source, node.start, node.length);
+                KrtAstNode field = null; if (field_owner != null) { field = field_owner.body; }
+                while (field != null) {
+                    if (KrtSemanticSameName(binding.source, node.start, node.length, field.name_start, field.name_length)) {
+                        if (field.native_static) { return KrtNativeBindGlobal(node, field, binding); }
+                        if (binding.unit.native_static) { return KrtNativeBindingError(binding, node); }
+                        node.kind = KrtAstKind.Member; node.name_start = node.start; node.name_length = node.length;
+                        node.left = KrtNativeThis(binding, node.start); return KrtNativeBindExpression(node, binding);
+                    }
+                    field = field.next;
+                }
+            }
+            KrtAstNode global = KrtNativeFindGlobal(binding, node.start, node.length);
+            if (global != null) { return KrtNativeBindGlobal(node, global, binding); }
+            if (node.op == 211) { node.local_slot = -2; node.native_type = binding.unit.native_owner; return true; }
+            return KrtNativeBindingError(binding, node);
+        }
+        node.local_slot = name.slot; node.native_ref = name.by_ref;
+        KrtNativeCopyType(node, name.declaration); return true;
+    }
+    if (node.kind == KrtAstKind.Floating) { if (node.native_float == 0) { node.native_float = 8; } node.native_width = node.native_float; return true; }
+    if (node.kind == KrtAstKind.Boolean) { node.native_bits = 8; node.native_boolean = true; node.native_unsigned = true; node.native_width = 1; return true; }
+    if (node.kind == KrtAstKind.Integer) { if (node.native_wide) { node.native_width = 16; node.native_bits = 128; return true; } if (node.value >= 0 && node.value <= 2147483647) { node.native_width = 4; } node.native_bits = node.native_width * 8; return true; }
+    if (node.kind == KrtAstKind.Null) { return true; }
+    if (node.kind == KrtAstKind.String) { node.native_width = 8; node.native_stride = 1; node.native_string = true; node.native_element_unsigned = true; return true; }
+    if (node.kind == KrtAstKind.Member) {
+        KrtAstNode global = KrtNativeFindGlobalExpression(node, binding);
+        if (global != null) { return KrtNativeBindGlobal(node, global, binding); }
+        KrtAstNode type = null;
+        type = KrtNativeExpressionTypeName(node.left, binding);
+        if (type != null) { node.native_static = true; }
+        if (!node.native_static) {
+            if (!KrtNativeBindExpression(node.left, binding)) { return false; }
+            type = node.left.native_type;
+            if (KrtNativeSpanWord(binding.source, node.name_start, node.name_length, "Length")) {
+                if (node.left.native_array || node.left.native_string) {
+                    node.native_offset = -16; node.native_width = 8; node.element_width = 8;
+                    node.native_readonly = true; return true;
+                }
+            }
+        }
+        if (type == null) { return KrtNativeBindingError(binding, node); }
+        type = KrtNativeFieldOwner(type, binding.source, node.name_start, node.name_length);
+        if (type == null) { return KrtNativeBindingError(binding, node); }
+        KrtAstNode field = type.body;
+        while (field != null) {
+            if (KrtSemanticSameName(binding.source, node.name_start, node.name_length, field.name_start, field.name_length)) {
+                if (type.value == 4) {
+                    node.kind = KrtAstKind.Integer; node.value = field.value; node.left = null; node.native_width = 8; node.native_type = type; return true;
+                }
+                if (field.native_static) { return KrtNativeBindGlobal(node, field, binding); }
+                if (node.native_static) { return KrtNativeBindingError(binding, node); }
+                node.native_scope = type.native_scope; node.native_context = type;
+                if (!KrtNativeAnnotateType(node, binding.module, binding.source, field.type_start, field.type_length)) { return KrtNativeBindingError(binding, node); }
+                node.native_offset = field.native_offset; node.element_width = node.native_width; node.native_width = 8; return true;
+            }
+            field = field.next;
+        }
+        return KrtNativeBindingError(binding, node);
+    }
+    if (node.kind == KrtAstKind.Call) { if (node.op == 222) { return KrtNativeBindBaseConstructor(node, binding); } return KrtNativeBindCall(node, binding); }
+    if (node.kind == KrtAstKind.ArrayLiteral) { return KrtNativeBindArrayLiteral(node, null, binding); }
+    if (node.kind == KrtAstKind.New || node.kind == KrtAstKind.StackAlloc) {
+        if (!KrtNativeAnnotateType(node, binding.module, binding.source, node.type_start, node.type_length)) { return KrtNativeBindingError(binding, node); }
+        if (node.left != null) {
+            node.native_stride = node.native_width; node.native_width = 8;
+            node.native_element_unsigned = node.native_unsigned; node.native_element_boolean = node.native_boolean; node.native_boolean = false; node.native_unsigned = false;
+            node.native_element_string = node.native_string; node.native_string = false;
+            node.native_array = node.kind == KrtAstKind.New;
+            if (!KrtNativeBindExpression(node.left, binding)) { return false; }
+            if (KrtNativeSemanticStride(node.left) > 0 || node.left.native_type != null || KrtNativeFloatKind(node.left) != 0 || KrtNativeWideKind(node.left)) { return KrtNativeBindingError(binding, node.left); }
+        } else {
+            if (node.parameter_count == 0 && KrtNativeConstraintValueType(node) &&
+                !KrtNativeSpanWord(binding.source, node.type_start, node.type_length, "void")) {
+                node.kind = KrtAstKind.DefaultValue; return true;
+            }
+            if (node.native_type == null || node.native_type.value != 1 || node.native_type.native_abstract) { return KrtNativeBindingError(binding, node); }
+            return KrtNativeBindConstructor(node, binding);
+        }
+        return true;
+    }
+    if (node.kind == KrtAstKind.Cast || node.kind == KrtAstKind.Sizeof || node.kind == KrtAstKind.DefaultValue) {
+        if (!KrtNativeAnnotateType(node, binding.module, binding.source, node.type_start, node.type_length)) { return KrtNativeBindingError(binding, node); }
+        if (!KrtNativeBindExpression(node.left, binding)) { return false; }
+        if (node.kind == KrtAstKind.Cast && node.native_type != null && (node.native_type.value == 1 || node.native_type.value == 3) && node.left.native_type != null && !KrtNativeCompatibleValue(node, node.left)) { return KrtNativeBindingError(binding, node); }
+        return true;
+    }
+    if (node.kind == KrtAstKind.Index) {
+        if (!KrtNativeBindExpression(node.left, binding) || !KrtNativeBindExpression(node.right, binding)) { return false; }
+        if (KrtNativeSemanticStride(node.left) <= 0 || KrtNativeFloatKind(node.right) != 0 || KrtNativeWideKind(node.right) || KrtNativeSemanticStride(node.right) > 0 || node.right.native_type != null) { return KrtNativeBindingError(binding, node); }
+        node.native_type = node.left.native_type; node.native_bits = node.left.native_bits; node.native_wide = node.left.native_wide; node.native_boolean = node.left.native_element_boolean; node.native_float = node.left.native_float; node.native_string = node.left.native_element_string;
+        node.native_stride = KrtNativeSemanticStride(node.left); node.native_width = node.native_stride;
+        node.native_unsigned = node.left.native_element_unsigned || node.left.native_string; node.native_element_unsigned = node.native_string; node.native_array = false;
+        return true;
+    }
+    if (node.kind == KrtAstKind.Unary) {
+        if (node.op == 38 && KrtNativeBindFunctionAddress(node, binding)) { return true; }
+        if (!KrtNativeBindExpression(node.left, binding)) { return false; }
+        KrtNativeCopyType(node, node.left);
+        if (node.op == 126 && KrtNativeFloatKind(node.left) != 0) { return KrtNativeBindingError(binding, node); }
+        if ((node.op == 201 || node.op == 202) && !KrtNativeIsLvalue(node.left)) { return KrtNativeBindingError(binding, node); }
+        if (node.op == 200 || node.op == 38) {
+            if (!KrtNativeIsLvalue(node.left)) { return KrtNativeBindingError(binding, node); }
+            node.native_stride = node.left.native_width; node.native_width = 8;
+            node.native_element_unsigned = node.left.native_unsigned; node.native_unsigned = false; node.native_array = false;
+        }
+        else if (node.op == 42) { node.native_width = node.left.native_stride; node.native_stride = 0; node.native_unsigned = node.left.native_element_unsigned; node.native_element_unsigned = node.native_string; node.native_array = false; node.native_string = false; }
+        else if ((node.op == 45 || node.op == 126 || node.op == 43) && node.native_width < 4) { node.native_width = 4; node.native_unsigned = false; }
+        else if (node.op == 33) { node.native_bits = 8; node.native_wide = false; node.native_float = 0; node.native_width = 1; node.native_unsigned = true; node.native_boolean = true; node.native_stride = 0; node.native_string = false; node.native_array = false; }
+        return true;
+    }
+    if (node.kind == KrtAstKind.Binary || node.kind == KrtAstKind.Ternary) {
+        if (!KrtNativeBindExpression(node.left, binding) || !KrtNativeBindExpression(node.right, binding)) { return false; }
+        if (node.kind == KrtAstKind.Ternary) {
+            if (!KrtNativeBindExpression(node.alternate, binding)) { return false; }
+            if ((node.right.native_array || node.alternate.native_array) && node.right.kind != KrtAstKind.Null && node.alternate.kind != KrtAstKind.Null &&
+                (!KrtNativeCompatibleValue(node.right, node.alternate) || !KrtNativeCompatibleValue(node.alternate, node.right))) {
+                binding.module.native_error = 1; return KrtNativeBindingError(binding, node);
+            }
+            if (node.right.kind == KrtAstKind.Null) { KrtNativeCopyType(node, node.alternate); }
+            else { KrtNativeCopyType(node, node.right); }
+            if (node.right.kind != KrtAstKind.Null && node.alternate.kind != KrtAstKind.Null &&
+                KrtNativeSemanticStride(node.right) == 0 && KrtNativeSemanticStride(node.alternate) == 0 &&
+                ((node.right.native_type != null && (node.right.native_type.value == 1 || node.right.native_type.value == 3)) || (node.alternate.native_type != null && (node.alternate.native_type.value == 1 || node.alternate.native_type.value == 3)))) {
+                KrtAstNode common = node.right.native_type;
+                if (KrtNativeDerivesFrom(common, node.alternate.native_type)) { common = node.alternate.native_type; }
+                while (common != null && !KrtNativeDerivesFrom(node.alternate.native_type, common)) { common = common.native_base; }
+                if (common == null) { return KrtNativeBindingError(binding, node); }
+                node.native_type = common; node.native_size = common.native_size;
+            }
+            if (node.native_stride == 0 && node.native_type == null && node.alternate.native_stride == 0 && node.alternate.native_type == null) { KrtNativePromoteNumber(node, node.right, node.alternate, false); }
+        } else {
+            bool special_number = KrtNativeFloatKind(node.left) != 0 || KrtNativeFloatKind(node.right) != 0 || KrtNativeWideKind(node.left) || KrtNativeWideKind(node.right);
+            bool reference_value = (node.left.native_stride > 0 && node.left.kind != KrtAstKind.Index) || (node.right.native_stride > 0 && node.right.kind != KrtAstKind.Index) || node.left.native_type != null || node.right.native_type != null;
+            if (special_number && reference_value) { return KrtNativeBindingError(binding, node); }
+            if ((KrtNativeFloatKind(node.left) != 0 || KrtNativeFloatKind(node.right) != 0) &&
+                (node.op == 38 || node.op == 124 || node.op == 94 || node.op == 106 || node.op == 107)) { return KrtNativeBindingError(binding, node); }
+            bool strings = node.left.native_string || node.right.native_string;
+            if (strings) {
+                bool both = node.left.native_string && node.right.native_string;
+                bool nullable = both || node.left.kind == KrtAstKind.Null || node.right.kind == KrtAstKind.Null;
+                if (node.op == 43 && nullable) {
+                    if (node.left.native_string) { KrtNativeCopyType(node, node.left); }
+                    else { KrtNativeCopyType(node, node.right); }
+                }
+                else if ((node.op == 61 || node.op == 101) && nullable) { node.native_bits = 8; node.native_boolean = true; node.native_unsigned = true; node.native_width = 1; }
+                else { return KrtNativeBindingError(binding, node); }
+            } else if (node.op == 43 || node.op == 45 || node.op == 42 || node.op == 47 || node.op == 37 || node.op == 38 || node.op == 124 || node.op == 94 || node.op == 106 || node.op == 107) {
+                KrtNativeCopyType(node, node.left);
+                if (node.native_stride == 0) { KrtNativePromoteNumber(node, node.left, node.right, node.op == 106 || node.op == 107); }
+            } else { node.native_bits = 8; node.native_boolean = true; node.native_unsigned = true; node.native_width = 1; }
+        }
+        return true;
+    }
+    return KrtNativeBindingError(binding, node);
+}
+
+bool KrtNativeCompatibleValue(KrtAstNode target, KrtAstNode value) {
+    if (value == null) { return true; }
+    if (target.native_function_pointer != null || value.native_function_pointer != null) {
+        if (value.kind == KrtAstKind.Null) { return target.native_function_pointer != null; }
+        return KrtNativeFunctionShapesEqual(target.native_function_pointer, value.native_function_pointer);
+    }
+    if (KrtNativeWideKind(value) && !KrtNativeWideKind(target) && KrtNativeFloatKind(target) == 0 && !target.native_boolean) { return false; }
+    int32 target_stride = KrtNativeSemanticStride(target);
+    int32 value_stride = KrtNativeSemanticStride(value);
+    if (value.kind == KrtAstKind.Null) { return target_stride > 0 || target.native_type != null; }
+    if (target.native_type != null && target.native_type.value != 4) {
+        if (target_stride != value_stride || target.native_array != value.native_array) { return false; }
+        if (target_stride > 0) { return target.native_type == value.native_type; }
+        return KrtNativeDerivesFrom(value.native_type, target.native_type);
+    }
+    if (target.native_void_pointer && value_stride > 0 && !value.native_array && !value.native_string) { return true; }
+    if (target_stride > 0 || value_stride > 0) { return target_stride == value_stride && target.native_wide == value.native_wide && target.native_float == value.native_float && target.native_bits == value.native_bits && target.native_element_boolean == value.native_element_boolean && target.native_element_unsigned == value.native_element_unsigned && target.native_element_string == value.native_element_string && target.native_string == value.native_string && target.native_array == value.native_array; }
+    if (value.native_type != null && value.native_type.value != 4) { return false; }
+    return true;
+}
+
+bool KrtNativeBindStatement(KrtAstNode statement, KrtNativeBinding binding) {
+    if (statement == null) { return true; }
+    if (statement.kind == KrtAstKind.Block) { return KrtNativeBindBlock(statement, binding); }
+    if (statement.kind == KrtAstKind.Try) { return KrtNativeBindTry(statement, binding); }
+    if (statement.kind == KrtAstKind.Throw) { return KrtNativeBindThrow(statement, binding); }
+    if (statement.kind == KrtAstKind.Variable) {
+        if (!KrtNativeAnnotateType(statement, binding.module, binding.source, statement.type_start, statement.type_length)) { return KrtNativeBindingError(binding, statement); }
+        if (statement.left != null && statement.left.kind == KrtAstKind.ArrayLiteral && statement.native_array) {
+            if (!KrtNativeBindArrayLiteral(statement.left, statement, binding)) { return false; }
+        } else if (!KrtNativeBindExpression(statement.left, binding)) { return false; }
+        if (statement.left != null && (KrtNativeSpanWord(binding.source, statement.type_start, 3, "var") || KrtNativeSpanWord(binding.source, statement.type_start, 3, "let"))) { KrtNativeCopyType(statement, statement.left); }
+        if (!KrtNativeCompatibleValue(statement, statement.left)) { return KrtNativeBindingError(binding, statement); }
+        statement.local_slot = binding.slots; binding.slots = binding.slots + 1;
+        return KrtNativeAddName(binding, statement, statement.local_slot, false);
+    }
+    if (statement.kind == KrtAstKind.If || statement.kind == KrtAstKind.While) {
+        return KrtNativeBindExpression(statement.left, binding) && KrtNativeBindBlock(statement.right, binding) && KrtNativeBindStatement(statement.alternate, binding);
+    }
+    if (statement.kind == KrtAstKind.Unsafe) { return KrtNativeBindBlock(statement.left, binding); }
+    if (statement.kind == KrtAstKind.DoWhile) { return KrtNativeBindBlock(statement.left, binding) && KrtNativeBindExpression(statement.right, binding); }
+    if (statement.kind == KrtAstKind.Foreach) { return KrtNativeBindForeach(statement, binding); }
+    if (statement.kind == KrtAstKind.For) {
+        KrtNativeName saved = binding.names;
+        bool valid = KrtNativeBindStatement(statement.left, binding) && KrtNativeBindExpression(statement.right, binding) &&
+                     KrtNativeBindExpression(statement.alternate, binding) && KrtNativeBindBlock(statement.body, binding);
+        binding.names = saved; return valid;
+    }
+    if (statement.kind == KrtAstKind.Delete) {
+        if (!KrtNativeBindExpression(statement.left, binding)) { return false; }
+        KrtAstNode value = statement.left;
+        if (value == null || value.kind == KrtAstKind.Null || value.native_array || (value.native_type != null && value.native_stride == 0 && (value.native_type.value == 1 || value.native_type.value == 3))) { return true; }
+        return KrtNativeBindingError(binding, statement);
+    }
+    if (statement.kind == KrtAstKind.Return) {
+        if (statement.left != null && statement.left.kind == KrtAstKind.ArrayLiteral && binding.unit.native_array) {
+            if (!KrtNativeBindArrayLiteral(statement.left, binding.unit, binding)) { return false; }
+        } else if (!KrtNativeBindExpression(statement.left, binding)) { return false; }
+        if (binding.unit.type_length > 0) {
+            bool is_void = KrtNativeSpanWord(binding.source, binding.unit.type_start, binding.unit.type_length, "void");
+            if (is_void && statement.left != null) { return KrtNativeBindingError(binding, statement); }
+            if (!is_void && (statement.left == null || !KrtNativeCompatibleValue(binding.unit, statement.left))) { return KrtNativeBindingError(binding, statement); }
+        }
+        return true;
+    }
+    if (statement.kind == KrtAstKind.Expression) { return KrtNativeBindExpression(statement.left, binding); }
+    if (statement.kind == KrtAstKind.Assign || statement.kind == KrtAstKind.CompoundAssign) {
+        if (!KrtNativeBindExpression(statement.left, binding)) { return false; }
+        if (statement.right.kind == KrtAstKind.ArrayLiteral && statement.left.native_array) {
+            if (!KrtNativeBindArrayLiteral(statement.right, statement.left, binding)) { return false; }
+        } else if (!KrtNativeBindExpression(statement.right, binding)) { return false; }
+        if (!KrtNativeIsLvalue(statement.left)) { return KrtNativeBindingError(binding, statement); }
+        if (statement.kind == KrtAstKind.CompoundAssign && (statement.left.native_string || statement.right.native_string)) { return KrtNativeBindingError(binding, statement); }
+        if (statement.kind == KrtAstKind.Assign && !KrtNativeCompatibleValue(statement.left, statement.right)) { return KrtNativeBindingError(binding, statement); }
+        return true;
+    }
+    if (statement.kind == KrtAstKind.Break || statement.kind == KrtAstKind.Continue) { return true; }
+    return KrtNativeBindingError(binding, statement);
+}
+
+bool KrtNativeBindBlock(KrtAstNode block, KrtNativeBinding binding) {
+    if (block == null || block.kind != KrtAstKind.Block) { return false; }
+    KrtNativeName saved = binding.names; binding.depth = binding.depth + 1;
+    KrtAstNode statement = block.left;
+    while (statement != null) {
+        if (!KrtNativeBindStatement(statement, binding)) { binding.names = saved; binding.depth = binding.depth - 1; return false; }
+        statement = statement.next;
+    }
+    binding.names = saved; binding.depth = binding.depth - 1; return true;
+}
+
+bool KrtNativeBindFunction(KrtAstNode unit, KrtAstNode module, int64 source) {
+    if (unit == null || unit.left == null) { return false; }
+    if (unit.op == 230) { return unit.native_bound; }
+    if (unit.native_owner == null && (unit.native_abstract || unit.native_virtual || unit.op == 223)) { return false; }
+    KrtNativeBinding binding = new KrtNativeBinding();
+    binding.module = module; binding.unit = unit; binding.source = source; binding.slots = unit.parameter_count; binding.error_start = -1;
+    if (!KrtNativeAnnotateType(unit, module, source, unit.type_start, unit.type_length)) { unit.native_offset = (int32)unit.type_start; return false; }
+    int32 index = 0;
+    while (index < unit.parameter_count) {
+        KrtAstNode parameter = KrtAstMake(KrtAstKind.Variable, unit.parameter_starts[index], unit.parameter_lengths[index]);
+        parameter.native_scope = unit.native_scope; parameter.native_context = unit.native_context;
+        parameter.name_start = unit.parameter_starts[index]; parameter.name_length = unit.parameter_lengths[index];
+        if (!KrtNativeAnnotateType(parameter, module, source, unit.parameter_type_starts[index], unit.parameter_type_lengths[index])) { unit.native_offset = (int32)unit.parameter_type_starts[index]; return false; }
+        if (index == 0 && unit.native_owner != null && !unit.native_static) { index = index + 1; continue; }
+        if (!KrtNativeAddName(binding, parameter, -2 - index, unit.parameter_refs[index])) { unit.native_offset = (int32)binding.error_start; return false; }
+        index = index + 1;
+    }
+    bool valid = unit.native_abstract || KrtNativeBindBlock(unit.left, binding);
+    unit.native_locals = binding.slots; unit.native_bound = valid; unit.native_offset = (int32)binding.error_start;
+    return valid;
+}
+
+KrtAstNode KrtNativeArrayElement(KrtAstNode array) {
+    KrtAstNode element = KrtAstMake(KrtAstKind.Type, array.start, array.length);
+    element.native_type = array.native_type; element.native_width = array.native_stride;
+    element.native_bits = array.native_bits; element.native_wide = array.native_wide; element.native_boolean = array.native_element_boolean; element.native_float = array.native_float; element.native_unsigned = array.native_element_unsigned;
+    element.native_string = array.native_element_string;
+    if (element.native_string) { element.native_stride = 1; element.native_element_unsigned = true; }
+    return element;
+}
+
+bool KrtNativeBindArrayLiteral(KrtAstNode node, KrtAstNode expected, KrtNativeBinding binding) {
+    KrtAstNode element = node.left;
+    while (element != null) {
+        if (!KrtNativeBindExpression(element, binding)) { return false; }
+        element = element.next;
+    }
+    KrtAstNode item_type = null;
+    if (expected != null && expected.native_array) { item_type = KrtNativeArrayElement(expected); }
+    else if (node.left != null) {
+        item_type = KrtAstMake(KrtAstKind.Type, node.start, node.length); KrtNativeCopyType(item_type, node.left);
+        element = node.left.next;
+        while (element != null) {
+            if (item_type.native_stride == 0 && item_type.native_type == null && element.native_stride == 0 && element.native_type == null) {
+                KrtNativePromoteNumber(item_type, item_type, element, false);
+            }
+            element = element.next;
+        }
+    } else { item_type = KrtAstMake(KrtAstKind.Type, node.start, node.length); item_type.native_width = 4; }
+    if (item_type.native_array || (item_type.native_stride > 0 && !item_type.native_string)) { return KrtNativeBindingError(binding, node); }
+    element = node.left;
+    while (element != null) {
+        if (!KrtNativeCompatibleValue(item_type, element)) { return KrtNativeBindingError(binding, element); }
+        element = element.next;
+    }
+    node.native_type = item_type.native_type; node.native_bits = item_type.native_bits; node.native_wide = item_type.native_wide; node.native_element_boolean = item_type.native_boolean; node.native_float = item_type.native_float;
+    node.native_width = 8; node.native_stride = item_type.native_width;
+    node.native_unsigned = false; node.native_element_unsigned = item_type.native_unsigned;
+    node.native_string = false; node.native_element_string = item_type.native_string; node.native_array = true;
+    return true;
+}
+
+bool KrtNativeBindConstructor(KrtAstNode node, KrtNativeBinding binding) {
+    KrtAstNode argument = node.right;
+    while (argument != null) { if (!KrtNativeBindExpression(argument, binding)) { return false; } argument = argument.next; }
+    KrtAstNode candidate = binding.module.left; KrtAstNode selected = null;
+    bool declared = false; bool ambiguous = false; int32 best = -1;
+    while (candidate != null) {
+        if (candidate.native_owner == node.native_type && candidate.op == 220) {
+            declared = true;
+            if (candidate.parameter_count == node.parameter_count + 1) {
+                int32 score = 0; int32 index = 1; argument = node.right;
+                while (argument != null && score >= 0) {
+                    int32 argument_score = KrtNativeArgumentScore(argument, candidate, index, binding);
+                    if (argument_score < 0) { score = -1; } else { score = score + argument_score; }
+                    index = index + 1; argument = argument.next;
+                }
+                if (score > best) { selected = candidate; best = score; ambiguous = false; }
+                else if (score >= 0 && score == best) { ambiguous = true; }
+            }
+        }
+        candidate = candidate.next;
+    }
+    if (ambiguous || (selected == null && (declared || node.parameter_count != 0))) { return KrtNativeBindingError(binding, node); }
+    node.native_target = selected;
+    if (selected != null && !KrtNativeContextArguments(node.right, selected, 1, binding)) { return false; }
+    node.local_slot = binding.slots; binding.slots = binding.slots + 1;
+    return true;
+}
+
+bool KrtNativeBindForeach(KrtAstNode statement, KrtNativeBinding binding) {
+    if (!KrtNativeBindExpression(statement.right, binding)) { return false; }
+    KrtAstNode collection = statement.right; KrtAstNode variable = statement.left;
+    if (!collection.native_array && !collection.native_string) { return KrtNativeBindingError(binding, collection); }
+    KrtAstNode item = KrtNativeArrayElement(collection);
+    if (!KrtNativeAnnotateType(variable, binding.module, binding.source, variable.type_start, variable.type_length)) { return KrtNativeBindingError(binding, variable); }
+    if (KrtNativeSpanWord(binding.source, variable.type_start, variable.type_length, "var") || KrtNativeSpanWord(binding.source, variable.type_start, variable.type_length, "let")) { KrtNativeCopyType(variable, item); }
+    if (!KrtNativeCompatibleValue(variable, item)) { return KrtNativeBindingError(binding, variable); }
+    KrtNativeName saved = binding.names; binding.depth = binding.depth + 1;
+    variable.local_slot = binding.slots; statement.native_offset = binding.slots + 1; statement.native_size = binding.slots + 2;
+    statement.local_slot = binding.slots + 3; binding.slots = binding.slots + 4;
+    bool valid = KrtNativeAddName(binding, variable, variable.local_slot, false) && KrtNativeBindBlock(statement.body, binding);
+    binding.names = saved; binding.depth = binding.depth - 1;
+    return valid;
+}
+
+bool KrtNativeContextArguments(KrtAstNode argument, KrtAstNode selected, int32 index, KrtNativeBinding binding) {
+    while (argument != null) {
+        if (argument.kind == KrtAstKind.ArrayLiteral) {
+            KrtAstNode expected = KrtAstMake(KrtAstKind.Type, argument.start, argument.length);
+            expected.native_scope = selected.native_scope; expected.native_context = selected.native_context;
+            if (!KrtNativeAnnotateType(expected, binding.module, binding.source, selected.parameter_type_starts[index], selected.parameter_type_lengths[index]) ||
+                !KrtNativeBindArrayLiteral(argument, expected, binding)) { return KrtNativeBindingError(binding, argument); }
+        }
+        index = index + 1; argument = argument.next;
+    }
+    return true;
+}
+
+// Index nodes retain their address scale separately from their result type.
+int32 KrtNativeSemanticStride(KrtAstNode node) {
+    if (node.kind == KrtAstKind.Index) { return node.native_string ? 1 : 0; }
+    return node.native_stride;
+}
+
+// Literal casts remain eligible for the numeric coercions used by the standard library.
+bool KrtNativeLiteralArgument(KrtAstNode node) {
+    if (node == null) { return false; }
+    if (node.kind == KrtAstKind.Integer || node.kind == KrtAstKind.Floating || node.kind == KrtAstKind.Boolean) { return true; }
+    if (node.kind == KrtAstKind.Cast || (node.kind == KrtAstKind.Unary && (node.op == 43 || node.op == 45))) { return KrtNativeLiteralArgument(node.left); }
+    return false;
+}

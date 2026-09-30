@@ -1,0 +1,4 @@
+void bump(ref int128 x){x+=5;}
+void pair(ref int128 x, ref int128 y){x=7;y+=1;}
+class Box {public int128 x;}
+int32 main(){int128 a=10;int128 b=a;bump(ref a);if(a!=15 || b!=10){return 1;} int128[] arr=[a,b];bump(ref arr[0]);if(arr[0]!=20 || a!=15){return 2;}pair(ref arr[1],ref arr[1]);if(arr[1]!=8){return 3;}Box box=new Box();bump(ref box.x);if(box.x!=5){return 4;}box.x=a;bump(ref box.x);if(a!=15 || box.x!=20){return 5;}unsafe(using krt.mem;){int128* p=&a;p[0]=37;if(a!=37){return 6;}}return 0;}

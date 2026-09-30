@@ -1,0 +1,210 @@
+// Interfaces use the same object pointer as classes. The concrete class identity
+// in the object header selects an implementation when an interface is called.
+void KrtNativeAddInterface(KrtAstNode type, KrtAstNode interface_type, int32 distance) {
+    KrtAstNode entry = type.native_interfaces;
+    while (entry != null) {
+        if (entry.native_type == interface_type) {
+            if (distance < entry.native_offset) { entry.native_offset = distance; }
+            return;
+        }
+        entry = entry.next;
+    }
+    entry = KrtAstMake(KrtAstKind.Type, interface_type.start, 0);
+    entry.native_type = interface_type; entry.native_offset = distance;
+    entry.next = type.native_interfaces; type.native_interfaces = entry;
+}
+
+bool KrtNativeResolveTypeBases(KrtAstNode type, KrtAstNode module, int64 source) {
+    KrtAstNode reference = type.left; bool saw_interface = false;
+    while (reference != null) {
+        reference.native_scope = type.native_scope; reference.native_context = type;
+        if (!KrtNativeAnnotateType(reference, module, source, reference.type_start, reference.type_length) ||
+            reference.native_type == null || reference.native_stride != 0 || reference.native_array ||
+            (reference.native_type.value != 1 && reference.native_type.value != 3)) { return false; }
+        KrtAstNode parent = reference.native_type;
+        KrtAstNode previous = type.left;
+        while (previous != reference) {
+            if (previous.native_type == parent) { return false; }
+            previous = previous.next;
+        }
+        if (parent.value == 1) {
+            if (type.value != 1 || type.native_base != null || saw_interface) { return false; }
+            type.native_base = parent;
+        } else { saw_interface = true; }
+        if (!KrtNativeResolveInheritance(parent, module, source)) { return false; }
+        if (parent.value == 3) { KrtNativeAddInterface(type, parent, 1); }
+        KrtAstNode inherited = parent.native_interfaces;
+        while (inherited != null) {
+            KrtNativeAddInterface(type, inherited.native_type, inherited.native_offset + 1);
+            inherited = inherited.next;
+        }
+        reference = reference.next;
+    }
+    return true;
+}
+
+bool KrtNativeImplements(KrtAstNode actual, KrtAstNode expected) {
+    if (actual == null || expected == null || expected.value != 3) { return false; }
+    if (actual == expected) { return true; }
+    KrtAstNode entry = actual.native_interfaces;
+    while (entry != null) {
+        if (entry.native_type == expected) { return true; }
+        entry = entry.next;
+    }
+    return false;
+}
+
+int32 KrtNativeInterfaceDistance(KrtAstNode actual, KrtAstNode expected) {
+    if (actual == null || expected == null) { return -1; }
+    if (actual == expected) { return 0; }
+    KrtAstNode entry = actual.native_interfaces;
+    while (entry != null) {
+        if (entry.native_type == expected) { return entry.native_offset; }
+        entry = entry.next;
+    }
+    return -1;
+}
+
+bool KrtNativeInterfaceMethodMatches(KrtAstNode implementation, KrtAstNode requirement, KrtAstNode module, int64 source) {
+    return implementation != null && requirement != null && implementation.op != 220 &&
+        !implementation.native_static && implementation.native_generic_parameters == null &&
+        KrtSemanticSameName(source, implementation.name_start, implementation.name_length, requirement.name_start, requirement.name_length) &&
+        KrtNativeMethodSignatureEqual(implementation, requirement, module, source, true);
+}
+
+KrtAstNode KrtNativeFindMatchingInterfaceMethod(KrtAstNode actual, KrtAstNode requirement, KrtAstNode module, int64 source) {
+    int32 depth = 0;
+    while (actual != null && depth < 1024) {
+        KrtAstNode method = actual.declarations;
+        while (method != null && method.native_owner == actual) {
+            if (KrtNativeInterfaceMethodMatches(method, requirement, module, source)) { return method; }
+            method = method.next;
+        }
+        actual = actual.native_base; depth = depth + 1;
+    }
+    return null;
+}
+
+bool KrtNativeDeclaresInterface(KrtAstNode type, KrtAstNode expected) {
+    KrtAstNode reference = type.left;
+    while (reference != null) {
+        if (reference.native_type != null && reference.native_type.value == 3 &&
+            KrtNativeImplements(reference.native_type, expected)) { return true; }
+        reference = reference.next;
+    }
+    return false;
+}
+
+KrtAstNode KrtNativeFindInterfaceImplementation(KrtAstNode actual, KrtAstNode requirement, KrtAstNode module, int64 source) {
+    // A class that explicitly lists the interface establishes its mapping.
+    // Descendants preserve that mapping, following an override slot when the
+    // selected implementation is virtual. Ordinary hiding only affects an
+    // interface when a descendant explicitly lists that interface again.
+    KrtAstNode owner = actual;
+    while (owner != null && !KrtNativeDeclaresInterface(owner, requirement.native_owner)) { owner = owner.native_base; }
+    if (owner == null) { return null; }
+    KrtAstNode implementation = KrtNativeFindMatchingInterfaceMethod(owner, requirement, module, source);
+    // Abstract classes may defer a contract without declaring an abstract
+    // method; the first concrete descendant must supply the missing member.
+    if (implementation == null) {
+        KrtAstNode descendant = actual;
+        while (descendant != null && descendant != owner) {
+            KrtAstNode method = descendant.declarations;
+            while (method != null && method.native_owner == descendant) {
+                if (KrtNativeInterfaceMethodMatches(method, requirement, module, source)) { implementation = method; break; }
+                method = method.next;
+            }
+            descendant = descendant.native_base;
+        }
+    }
+    if (implementation != null && implementation.native_virtual && implementation.native_dispatch_slot != null) {
+        return KrtNativeFindVirtualImplementation(actual, implementation.native_dispatch_slot);
+    }
+    return implementation;
+}
+
+// The override spelling is also valid for a class method that first satisfies
+// an interface contract, even when no virtual class method exists above it.
+bool KrtNativeMethodImplementsInterface(KrtAstNode method, KrtAstNode module, int64 source) {
+    if (method == null || method.native_owner == null) { return false; }
+    KrtAstNode interface_type = module.declarations;
+    while (interface_type != null) {
+        if (interface_type.value == 3 && interface_type.native_generic_parameters == null &&
+            KrtNativeImplements(method.native_owner, interface_type)) {
+            KrtAstNode requirement = interface_type.declarations;
+            while (requirement != null && requirement.native_owner == interface_type) {
+                if (KrtNativeInterfaceMethodMatches(method, requirement, module, source)) { return true; }
+                requirement = requirement.next;
+            }
+        }
+        interface_type = interface_type.next;
+    }
+    return false;
+}
+
+bool KrtNativeValidateInterfaces(KrtAstNode type, KrtAstNode module, int64 source) {
+    if (type.native_generic_parameters != null) { return true; }
+    if (!KrtNativeCompatibleInterfaceContracts(type, module, source)) { return false; }
+    if (type.value == 3) {
+        if (type.body != null) { return false; }
+        KrtAstNode method = type.declarations;
+        while (method != null && method.native_owner == type) {
+            if (method.op != 223 || method.native_static || !method.native_abstract ||
+                method.native_generic_parameters != null || method.native_base_call != null ||
+                (method.left != null && method.left.left != null)) { return false; }
+            KrtAstNode previous = type.declarations;
+            while (previous != method) {
+                if (KrtSemanticSameName(source, method.name_start, method.name_length, previous.name_start, previous.name_length) &&
+                    KrtNativeMethodSignatureEqual(method, previous, module, source, false)) { return false; }
+                previous = previous.next;
+            }
+            method = method.next;
+        }
+        return true;
+    }
+    if (type.value != 1) { return true; }
+    KrtAstNode interface_type = module.declarations;
+    while (interface_type != null) {
+        if (interface_type.value == 3 && interface_type.native_generic_parameters == null && KrtNativeImplements(type, interface_type)) {
+            KrtAstNode requirement = interface_type.declarations;
+            while (requirement != null && requirement.native_owner == interface_type) {
+                KrtAstNode implementation = KrtNativeFindInterfaceImplementation(type, requirement, module, source);
+                if ((implementation == null || implementation.native_abstract) && !type.native_abstract) { return false; }
+                requirement = requirement.next;
+            }
+        }
+        interface_type = interface_type.next;
+    }
+    return true;
+}
+
+// Inherited declarations with the same arguments form one callable contract.
+// Different return types would require explicit implementation syntax, which is
+// not supported; diagnose them before either overload selection or codegen.
+bool KrtNativeCompatibleInterfaceContracts(KrtAstNode type, KrtAstNode module, int64 source) {
+    KrtAstNode contracts = type.native_interfaces;
+    if (type.value == 3) {
+        KrtAstNode own = KrtAstMake(KrtAstKind.Type, type.start, 0);
+        own.native_type = type; own.next = contracts; contracts = own;
+    }
+    KrtAstNode first = contracts;
+    while (first != null) {
+        KrtAstNode second = first.next;
+        while (second != null) {
+            KrtAstNode a = first.native_type.declarations;
+            while (a != null && a.native_owner == first.native_type) {
+                KrtAstNode b = second.native_type.declarations;
+                while (b != null && b.native_owner == second.native_type) {
+                    if (KrtSemanticSameName(source, a.name_start, a.name_length, b.name_start, b.name_length) &&
+                        KrtNativeMethodSignatureEqual(a, b, module, source, false) &&
+                        !KrtNativeMethodSignatureEqual(a, b, module, source, true)) { return false; }
+                    b = b.next;
+                }
+                a = a.next;
+            }
+            second = second.next;
+        }
+        first = first.next;
+    }
+    return true;
+}

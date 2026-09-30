@@ -1,0 +1,23 @@
+using System.Console;
+
+class Counter {
+    int32 total;
+    public void Add(int32 amount) { total += amount; }
+    public int32 Value() { return total; }
+}
+
+int32 main() {
+    Counter counter = new Counter();
+    int32[] values = new int32[3];
+    values[0] = 10;
+    values[1] = 0x14;
+    values[2] = 12;
+    for (int32 index = 0; index < values.Length; index++) {
+        counter.Add(values[index]);
+    }
+    Console.WriteLine("Hello from SelfHost");
+    Console.WriteLine(counter.Value());
+    delete values;
+    delete counter;
+    return 0;
+}

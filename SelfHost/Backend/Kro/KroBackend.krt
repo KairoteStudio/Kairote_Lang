@@ -30,10 +30,17 @@ class KrtKroObject {
     public int32 bss_align;
     public int32 total_reloc_count;
     public int32 strtab_size;
+    // Offset of the exported entry symbol within .text.  Legacy emitters
+    // leave this at zero; native-module emission fills it for ArkLink.
+    public int32 entry_symbol_value;
+    public byte[] data_bytes;
+    public byte[] symbol_bytes;
+    public byte[] string_bytes;
+    public byte[] text_relocation_bytes;
 }
 
 bool KrtKroBeginText(KrtKroObject object, int32 word_capacity) {
-    if (object == null || word_capacity <= 0 || word_capacity > 1024) { return false; }
+    if (object == null || word_capacity <= 0 || word_capacity > 16777216) { return false; }
     object.text_words = new int32[word_capacity];
     object.text_word_count = word_capacity;
     object.text_size = 0;
@@ -206,18 +213,27 @@ bool KrtKroEmitExecutableMemory(KrtKroObject raw, KrtKroObject output) {
 }
 
 bool KrtKroWriteText(KrtKroObject object, int64 file_descriptor) {
+    if (KrtKroObjectIsValid(object) && object.text_size == 0) { return true; }
     if (KrtKroObjectIsValid(object) && object.text_words != null && object.text_word_count > 0) {
-        if (object.text_word_count > 1024 || object.text_size <= 0 || object.text_size > object.text_word_count * 4) { return false; }
+        if (object.text_word_count > 16777216 || object.text_size <= 0 || object.text_size > object.text_word_count * 4) { return false; }
         unsafe(using krt.mem;) {
             byte* dynamic_bytes = stackalloc byte[4096];
             int32 byte_index = 0;
             while (byte_index < object.text_size) {
-                int32 word = object.text_words[byte_index / 4];
-                int32 shift = (byte_index % 4) * 8;
-                dynamic_bytes[byte_index] = (byte)((word >> shift) & 255);
-                byte_index = byte_index + 1;
+                int32 chunk = object.text_size - byte_index;
+                if (chunk > 4096) { chunk = 4096; }
+                int32 chunk_index = 0;
+                while (chunk_index < chunk) {
+                    int32 source_index = byte_index + chunk_index;
+                    int32 word = object.text_words[source_index / 4];
+                    int32 shift = (source_index % 4) * 8;
+                    dynamic_bytes[chunk_index] = (byte)((word >> shift) & 255);
+                    chunk_index = chunk_index + 1;
+                }
+                if (syscall(1, file_descriptor, (int64)dynamic_bytes, chunk, 0, 0, 0) != chunk) { return false; }
+                byte_index = byte_index + chunk;
             }
-            return syscall(1, file_descriptor, (int64)dynamic_bytes, object.text_size, 0, 0, 0) == object.text_size;
+            return true;
         }
     }
     if (!KrtKroObjectIsValid(object) || (object.text_size != 3 && object.text_size != 6 && object.text_size != 12 && object.text_size != 14 && object.text_size != 16 && object.text_size != 20 && object.text_size != 22 && object.text_size != 23 && object.text_size != 25 && object.text_size != 27 && object.text_size != 29 && object.text_size != 31)) { return false; }
@@ -366,6 +382,14 @@ bool KrtKroWriteHeader(KrtKroObject object, int64 file_descriptor) {
 
 // The minimal writer emits one main symbol or a helper/main pair, with no relocations.
 bool KrtKroWriteSymbols(KrtKroObject object, int64 file_descriptor) {
+    if (object.symbol_bytes != null) {
+        byte[] data = object.data_bytes; byte[] symbols = object.symbol_bytes; byte[] names = object.string_bytes;
+        byte[] relocations = object.text_relocation_bytes;
+        return KrtKroWriteBytes(data, object.data_size, file_descriptor) &&
+            KrtKroWriteBytes(symbols, object.symbol_count * 32, file_descriptor) &&
+            KrtKroWriteBytes(relocations, object.text_reloc_count * 16, file_descriptor) &&
+            KrtKroWriteBytes(names, object.strtab_size, file_descriptor);
+    }
     if ((object.symbol_count != 1 && object.symbol_count != 2) ||
         (object.symbol_count == 1 && object.strtab_size != 6) || (object.symbol_count == 2 && object.strtab_size != 13)) { return false; }
     unsafe(using krt.mem;) {
@@ -375,6 +399,10 @@ bool KrtKroWriteSymbols(KrtKroObject object, int64 file_descriptor) {
         while (index < symbol_bytes) { data[index] = 0; index = index + 1; }
         if (object.symbol_count == 2) { data[0] = 1; }
         data[8] = (byte)(object.symbol_count == 2 ? ((object.text_size == 22 || object.text_size == 27) ? 3 : 6) : object.text_size);
+        data[4] = (byte)(object.entry_symbol_value & 255);
+        data[5] = (byte)((object.entry_symbol_value >> 8) & 255);
+        data[6] = (byte)((object.entry_symbol_value >> 16) & 255);
+        data[7] = (byte)((object.entry_symbol_value >> 24) & 255);
         data[12] = 1;
         data[16] = 1;
         data[20] = 1;
@@ -503,4 +531,588 @@ bool KrtKroEmitIrFunction(KrtIrFunction ir_function, KrtKroObject output) {
     output.symbol_count = 1;
     output.relocation_count = 0;
     return KrtKroObjectIsValid(output);
+}
+
+// ---------------------------------------------------------------------------
+// Native stack-IR backend
+// ---------------------------------------------------------------------------
+// NativeIr deliberately has no register-allocation dependency.  Values are
+// kept on the machine stack between instructions while locals live in fixed
+// rbp-relative slots.  This makes the emitter deterministic and keeps calls,
+// branches and memory operations equally simple.
+
+bool KrtKroNativeByte(KrtKroObject object, ref int32 pc, int32 value) {
+    if (!KrtKroEmitTextByte(object, pc, value & 255)) { return false; }
+    pc = pc + 1;
+    return true;
+}
+
+bool KrtKroNativeU32(KrtKroObject object, ref int32 pc, int32 value) {
+    if (!KrtKroEmitTextU32(object, pc, value)) { return false; }
+    pc = pc + 4;
+    return true;
+}
+
+bool KrtKroNativeU64(KrtKroObject object, ref int32 pc, int64 value) {
+    if (!KrtKroNativeU32(object, ref pc, (int32)(value & 4294967295)) ||
+        !KrtKroNativeU32(object, ref pc, (int32)((value >> 32) & 4294967295))) { return false; }
+    return true;
+}
+
+bool KrtKroNativeFrameLoad(KrtKroObject object, ref int32 pc, int32 slot) {
+    int32 displacement = -8 * (slot + 1);
+    if (displacement >= -128 && displacement <= 127) {
+        return KrtKroNativeByte(object, ref pc, 72) && KrtKroNativeByte(object, ref pc, 139) &&
+            KrtKroNativeByte(object, ref pc, 69) && KrtKroNativeByte(object, ref pc, displacement) &&
+            KrtKroNativeByte(object, ref pc, 80);
+    }
+    return KrtKroNativeByte(object, ref pc, 72) && KrtKroNativeByte(object, ref pc, 139) &&
+        KrtKroNativeByte(object, ref pc, 133) && KrtKroNativeU32(object, ref pc, displacement) &&
+        KrtKroNativeByte(object, ref pc, 80);
+}
+
+bool KrtKroNativeFrameStore(KrtKroObject object, ref int32 pc, int32 slot) {
+    int32 displacement = -8 * (slot + 1);
+    if (displacement >= -128 && displacement <= 127) {
+        return KrtKroNativeByte(object, ref pc, 72) && KrtKroNativeByte(object, ref pc, 137) &&
+            KrtKroNativeByte(object, ref pc, 69) && KrtKroNativeByte(object, ref pc, displacement);
+    }
+    return KrtKroNativeByte(object, ref pc, 72) && KrtKroNativeByte(object, ref pc, 137) &&
+        KrtKroNativeByte(object, ref pc, 133) && KrtKroNativeU32(object, ref pc, displacement);
+}
+
+bool KrtKroNativeMoveArg(KrtKroObject object, ref int32 pc, int32 arg_index) {
+    // System V integer argument registers: rdi, rsi, rdx, rcx, r8, r9.
+    if (arg_index == 0) { return KrtKroNativeByte(object, ref pc, 72) && KrtKroNativeByte(object, ref pc, 137) && KrtKroNativeByte(object, ref pc, 199); }
+    if (arg_index == 1) { return KrtKroNativeByte(object, ref pc, 72) && KrtKroNativeByte(object, ref pc, 137) && KrtKroNativeByte(object, ref pc, 198); }
+    if (arg_index == 2) { return KrtKroNativeByte(object, ref pc, 72) && KrtKroNativeByte(object, ref pc, 137) && KrtKroNativeByte(object, ref pc, 194); }
+    if (arg_index == 3) { return KrtKroNativeByte(object, ref pc, 72) && KrtKroNativeByte(object, ref pc, 137) && KrtKroNativeByte(object, ref pc, 193); }
+    if (arg_index == 4) { return KrtKroNativeByte(object, ref pc, 73) && KrtKroNativeByte(object, ref pc, 137) && KrtKroNativeByte(object, ref pc, 192); }
+    if (arg_index == 5) { return KrtKroNativeByte(object, ref pc, 73) && KrtKroNativeByte(object, ref pc, 137) && KrtKroNativeByte(object, ref pc, 193); }
+    return false;
+}
+
+bool KrtKroNativeMoveSyscallArg(KrtKroObject object, ref int32 pc, int32 arg_index) {
+    if (arg_index == 3) { return KrtKroNativeByte(object, ref pc, 73) && KrtKroNativeByte(object, ref pc, 137) && KrtKroNativeByte(object, ref pc, 194); }
+    return KrtKroNativeMoveArg(object, ref pc, arg_index);
+}
+
+bool KrtKroNativeBinary(KrtKroObject object, ref int32 pc, int32 opcode, bool is_unsigned) {
+    // Stack order is lhs, rhs.  Pop rhs into rbx and lhs into rax.
+    if (!KrtKroNativeByte(object, ref pc, 91) || !KrtKroNativeByte(object, ref pc, 88)) { return false; }
+    if (opcode == 4) { return KrtKroNativeByte(object, ref pc, 72) && KrtKroNativeByte(object, ref pc, 1) && KrtKroNativeByte(object, ref pc, 216) && KrtKroNativeByte(object, ref pc, 80); }
+    if (opcode == 5) { return KrtKroNativeByte(object, ref pc, 72) && KrtKroNativeByte(object, ref pc, 41) && KrtKroNativeByte(object, ref pc, 216) && KrtKroNativeByte(object, ref pc, 80); }
+    if (opcode == 6) { return KrtKroNativeByte(object, ref pc, 72) && KrtKroNativeByte(object, ref pc, 15) && KrtKroNativeByte(object, ref pc, 175) && KrtKroNativeByte(object, ref pc, 195) && KrtKroNativeByte(object, ref pc, 80); }
+    if (opcode == 7 || opcode == 8) {
+        if (is_unsigned) {
+            if (!KrtKroNativeByte(object, ref pc, 49) || !KrtKroNativeByte(object, ref pc, 210)) { return false; }
+        } else if (!KrtKroNativeByte(object, ref pc, 72) || !KrtKroNativeByte(object, ref pc, 153)) { return false; }
+        if (!KrtKroNativeByte(object, ref pc, 72) || !KrtKroNativeByte(object, ref pc, 247) || !KrtKroNativeByte(object, ref pc, is_unsigned ? 243 : 251)) { return false; }
+        if (opcode == 8 && (!KrtKroNativeByte(object, ref pc, 72) || !KrtKroNativeByte(object, ref pc, 137) || !KrtKroNativeByte(object, ref pc, 208))) { return false; }
+        return KrtKroNativeByte(object, ref pc, 80);
+    }
+    if (opcode == 9) { return KrtKroNativeByte(object, ref pc, 72) && KrtKroNativeByte(object, ref pc, 33) && KrtKroNativeByte(object, ref pc, 216) && KrtKroNativeByte(object, ref pc, 80); }
+    if (opcode == 10) { return KrtKroNativeByte(object, ref pc, 72) && KrtKroNativeByte(object, ref pc, 9) && KrtKroNativeByte(object, ref pc, 216) && KrtKroNativeByte(object, ref pc, 80); }
+    if (opcode == 11) { return KrtKroNativeByte(object, ref pc, 72) && KrtKroNativeByte(object, ref pc, 49) && KrtKroNativeByte(object, ref pc, 216) && KrtKroNativeByte(object, ref pc, 80); }
+    if (opcode == 12) { return KrtKroNativeByte(object, ref pc, 72) && KrtKroNativeByte(object, ref pc, 137) && KrtKroNativeByte(object, ref pc, 217) && KrtKroNativeByte(object, ref pc, 72) && KrtKroNativeByte(object, ref pc, 211) && KrtKroNativeByte(object, ref pc, 224) && KrtKroNativeByte(object, ref pc, 80); }
+    if (opcode == 13) { return KrtKroNativeByte(object, ref pc, 72) && KrtKroNativeByte(object, ref pc, 137) && KrtKroNativeByte(object, ref pc, 217) && KrtKroNativeByte(object, ref pc, 72) && KrtKroNativeByte(object, ref pc, 211) && KrtKroNativeByte(object, ref pc, is_unsigned ? 232 : 248) && KrtKroNativeByte(object, ref pc, 80); }
+    return false;
+}
+
+bool KrtKroNativeFlowEdge(int32[] depths, int32[] queue, ref int32 tail, int32 target, int32 first, int32 last, int32 depth) {
+    if (target < first || target >= last || depth < 0) { return false; }
+    if (depths[target] >= 0) { return depths[target] == depth; }
+    depths[target] = depth;
+    queue[tail] = target;
+    tail = tail + 1;
+    return true;
+}
+
+bool KrtKroNativeMemoryLoad(KrtKroObject output, ref int32 pc, int32 width) {
+    if (width > 1000 || width < -1000) { return KrtKroNativeMemoryLoad(output, ref pc, KrtKroNativeIntegerStorage(width)) && KrtKroNativeIntegerNormalize(output, ref pc, width); }
+    if (width == 16 || width == -16) { return KrtKroNativeWideLoad(output, ref pc); }
+    if (width == -1 || width == -2) {
+        return KrtKroNativeByte(output, ref pc, 72) && KrtKroNativeByte(output, ref pc, 15) &&
+            KrtKroNativeByte(output, ref pc, width == -1 ? 190 : 191) && KrtKroNativeByte(output, ref pc, 0);
+    }
+    if (width == -4) { return KrtKroNativeByte(output, ref pc, 139) && KrtKroNativeByte(output, ref pc, 0); }
+    if (width == -8) { width = 8; }
+    if (width == 1) { return KrtKroNativeByte(output, ref pc, 15) && KrtKroNativeByte(output, ref pc, 182) && KrtKroNativeByte(output, ref pc, 0); }
+    if (width == 2) { return KrtKroNativeByte(output, ref pc, 15) && KrtKroNativeByte(output, ref pc, 183) && KrtKroNativeByte(output, ref pc, 0); }
+    if (width == 4) { return KrtKroNativeByte(output, ref pc, 72) && KrtKroNativeByte(output, ref pc, 99) && KrtKroNativeByte(output, ref pc, 0); }
+    if (width == 8) { return KrtKroNativeByte(output, ref pc, 72) && KrtKroNativeByte(output, ref pc, 139) && KrtKroNativeByte(output, ref pc, 0); }
+    return false;
+}
+
+bool KrtKroNativeMemoryStore(KrtKroObject output, ref int32 pc, int32 width) {
+    if (width > 1000 || width < -1000) { return KrtKroNativeIntegerNormalize(output, ref pc, width) && KrtKroNativeMemoryStore(output, ref pc, KrtKroNativeIntegerStorage(width)); }
+    if (width == 16 || width == -16) { return KrtKroNativeWideStore(output, ref pc); }
+    if (width < 0) { width = -width; }
+    if (width == 1) { return KrtKroNativeByte(output, ref pc, 136) && KrtKroNativeByte(output, ref pc, 3); }
+    if (width == 2) { return KrtKroNativeByte(output, ref pc, 102) && KrtKroNativeByte(output, ref pc, 137) && KrtKroNativeByte(output, ref pc, 3); }
+    if (width == 4) { return KrtKroNativeByte(output, ref pc, 137) && KrtKroNativeByte(output, ref pc, 3); }
+    if (width == 8) { return KrtKroNativeByte(output, ref pc, 72) && KrtKroNativeByte(output, ref pc, 137) && KrtKroNativeByte(output, ref pc, 3); }
+    return false;
+}
+
+bool KrtKroNativeAllocate(KrtKroObject output, ref int32 pc, int64 stride) {
+    if (stride < 0 || stride > 2147483647) { return false; }
+    // The payload stays a raw, 16-byte-aligned pointer. The preceding words
+    // retain the mmap length for delete and the element count for Length.
+    // Keep the count separate until multiplication has been checked.
+    if (!KrtKroNativeByte(output, ref pc, 94) ||
+        !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 133) || !KrtKroNativeByte(output, ref pc, 246) ||
+        !KrtKroNativeByte(output, ref pc, 15) || !KrtKroNativeByte(output, ref pc, 136)) { return false; }
+    int32 negative_patch = pc;
+    if (!KrtKroNativeU32(output, ref pc, 0) ||
+        !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 243)) { return false; }
+    int32 multiply_patch = -1;
+    if (stride > 1) {
+        if (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 105) || !KrtKroNativeByte(output, ref pc, 246) ||
+            !KrtKroNativeU32(output, ref pc, (int32)stride) ||
+            !KrtKroNativeByte(output, ref pc, 15) || !KrtKroNativeByte(output, ref pc, 128)) { return false; }
+        multiply_patch = pc;
+        if (!KrtKroNativeU32(output, ref pc, 0)) { return false; }
+    }
+    if (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 131) || !KrtKroNativeByte(output, ref pc, 198) || !KrtKroNativeByte(output, ref pc, 16) ||
+        !KrtKroNativeByte(output, ref pc, 15) || !KrtKroNativeByte(output, ref pc, 128)) { return false; }
+    int32 add_patch = pc;
+    if (!KrtKroNativeU32(output, ref pc, 0) ||
+        !KrtKroNativeByte(output, ref pc, 49) || !KrtKroNativeByte(output, ref pc, 255) ||
+        !KrtKroNativeByte(output, ref pc, 186) || !KrtKroNativeU32(output, ref pc, 3) ||
+        !KrtKroNativeByte(output, ref pc, 65) || !KrtKroNativeByte(output, ref pc, 186) || !KrtKroNativeU32(output, ref pc, 34) ||
+        !KrtKroNativeByte(output, ref pc, 73) || !KrtKroNativeByte(output, ref pc, 184) || !KrtKroNativeU64(output, ref pc, -1) ||
+        !KrtKroNativeByte(output, ref pc, 69) || !KrtKroNativeByte(output, ref pc, 49) || !KrtKroNativeByte(output, ref pc, 201) ||
+        !KrtKroNativeByte(output, ref pc, 184) || !KrtKroNativeU32(output, ref pc, 9) ||
+        !KrtKroNativeByte(output, ref pc, 15) || !KrtKroNativeByte(output, ref pc, 5) ||
+        !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 133) || !KrtKroNativeByte(output, ref pc, 192) ||
+        !KrtKroNativeByte(output, ref pc, 15) || !KrtKroNativeByte(output, ref pc, 136)) { return false; }
+    int32 mmap_patch = pc;
+    if (!KrtKroNativeU32(output, ref pc, 0) ||
+        !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 24) ||
+        !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 112) || !KrtKroNativeByte(output, ref pc, 8) ||
+        !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 131) || !KrtKroNativeByte(output, ref pc, 192) || !KrtKroNativeByte(output, ref pc, 16) ||
+        !KrtKroNativeByte(output, ref pc, 233)) { return false; }
+    int32 success_patch = pc;
+    if (!KrtKroNativeU32(output, ref pc, 0)) { return false; }
+    int32 failure = pc;
+    if (!KrtKroNativeByte(output, ref pc, 49) || !KrtKroNativeByte(output, ref pc, 192)) { return false; }
+    int32 finish = pc;
+    if (!KrtKroNativeByte(output, ref pc, 80) ||
+        !KrtKroEmitTextU32(output, negative_patch, failure - negative_patch - 4) ||
+        !KrtKroEmitTextU32(output, add_patch, failure - add_patch - 4) ||
+        !KrtKroEmitTextU32(output, mmap_patch, failure - mmap_patch - 4) ||
+        !KrtKroEmitTextU32(output, success_patch, finish - success_patch - 4)) { return false; }
+    return multiply_patch < 0 || KrtKroEmitTextU32(output, multiply_patch, failure - multiply_patch - 4);
+}
+
+bool KrtKroNativeFree(KrtKroObject output, ref int32 pc) {
+    // delete null is a no-op. Other operands must be pointers returned by new.
+    if (!KrtKroNativeByte(output, ref pc, 95) ||
+        !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 133) || !KrtKroNativeByte(output, ref pc, 255) ||
+        !KrtKroNativeByte(output, ref pc, 15) || !KrtKroNativeByte(output, ref pc, 132)) { return false; }
+    int32 null_patch = pc;
+    if (!KrtKroNativeU32(output, ref pc, 0) ||
+        !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 131) || !KrtKroNativeByte(output, ref pc, 239) || !KrtKroNativeByte(output, ref pc, 16) ||
+        !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 139) || !KrtKroNativeByte(output, ref pc, 119) || !KrtKroNativeByte(output, ref pc, 8) ||
+        !KrtKroNativeByte(output, ref pc, 184) || !KrtKroNativeU32(output, ref pc, 11) ||
+        !KrtKroNativeByte(output, ref pc, 15) || !KrtKroNativeByte(output, ref pc, 5)) { return false; }
+    return KrtKroEmitTextU32(output, null_patch, pc - null_patch - 4);
+}
+
+bool KrtKroNativeStackDepths(KrtNativeModule module, int32 first, int32 last, int32[] depths, int32[] queue) {
+    int32 init = first;
+    while (init < last) { depths[init] = -1; init = init + 1; }
+    int32 head = 0;
+    int32 tail = 0;
+    if (!KrtKroNativeFlowEdge(depths, queue, ref tail, first, first, last, 0)) { return false; }
+    while (head < tail) {
+        int32 index = queue[head];
+        head = head + 1;
+        int32 op = module.ops[index];
+        int32 arity = (int32)module.extra[index];
+        int32 depth = depths[index];
+        int32 need = 0;
+        int32 delta = 0;
+        if (op == 1 || op == 2 || op == 25 || op == 29 || op == 53 || op == 54 || op == 66 || op == 44 || op == 45) { delta = 1; }
+        else if (op == 3 || op == 27 || op == 34) { need = 1; delta = -1; }
+        else if ((op >= 4 && op <= 13) || op == 16 || op == 35 || op == 36 || op == 39 || op == 40 || op == 61 || op == 62) { need = 2; delta = -1; }
+        else if (op == 14 || op == 15 || op == 22 || op == 24 || op == 28 || op == 30 || op == 31 || op == 33 || op == 37 || op == 38 || op == 41 || op == 42 || op == 43 || op == 60 || op == 63 || op == 67 || op == 68 || op == 69) { need = 1; }
+        else if (op == 18) { need = 1; delta = -1; }
+        else if (op == 46) { if (arity < 0 || arity > 32) { return false; } need = arity + 1; delta = -arity; }
+        else if (op == 19 || op == 26) { if (arity < 0 || arity > 32) { return false; } need = arity; delta = 1 - arity; }
+        else if (op == 20) { if (arity < 0 || arity > 1) { return false; } need = arity; }
+        else if (op == 21) { need = module.args[index] == 0 ? 1 : 2; delta = 1 - need; }
+        else if (op == 23) { need = 2; delta = -2; }
+        else if (op == 32) { need = 1; delta = 1; }
+        else if (op == 52) { need = 2; delta = -2; }
+        else if (op != 0 && op != 17 && op != 50 && op != 51) { return false; }
+        if (depth < need) { return false; }
+        depth = depth + delta;
+        if (op == 20 || op == 52) { }
+        else if (op == 50) {
+            if (!KrtKroNativeFlowEdge(depths, queue, ref tail, (int32)module.args[index], first, last, depth) ||
+                !KrtKroNativeFlowEdge(depths, queue, ref tail, index + 1, first, last, depth)) { return false; }
+        }
+        else if (op == 17 || op == 18) {
+            if (!KrtKroNativeFlowEdge(depths, queue, ref tail, (int32)module.args[index], first, last, depth)) { return false; }
+            if (op == 18 && !KrtKroNativeFlowEdge(depths, queue, ref tail, (int32)module.extra[index], first, last, depth)) { return false; }
+        } else if (!KrtKroNativeFlowEdge(depths, queue, ref tail, index + 1, first, last, depth)) { return false; }
+    }
+    return true;
+}
+
+bool KrtKroEmitNativeModule(KrtNativeModule module, KrtKroObject output) {
+    if (module == null || output == null || module.count <= 0 || module.count > 262144 || module.function_count <= 0 ||
+        module.function_count > 1024 || module.ops == null || module.args == null || module.extra == null ||
+        module.starts == null || module.local_counts == null || module.parameter_counts == null || (!module.library_mode && module.entry < 0) || module.entry >= module.function_count ||
+        module.data_length < 0 || module.data_length > 262144) { return false; }
+    int32 capacity = module.count * 64 + module.function_count * 640 + module.data_length + 4096;
+    int32 estimate_index = 0;
+    while (estimate_index < module.count) {
+        if (module.ops[estimate_index] == 19) { capacity = capacity + (int32)module.extra[estimate_index] * 20 + 64; }
+        if (module.ops[estimate_index] == 24) { capacity = capacity + 128; }
+        if (module.ops[estimate_index] >= 35 && module.ops[estimate_index] <= 54) { capacity = capacity + 512; }
+        if (module.ops[estimate_index] >= 60 && module.ops[estimate_index] <= 69) { capacity = capacity + 1024; }
+        if (module.ops[estimate_index] == 22 && (module.extra[estimate_index] == 16 || module.extra[estimate_index] == -16)) { capacity = capacity + 256; }
+        estimate_index = estimate_index + 1;
+    }
+    if (capacity < 4096) { capacity = 4096; }
+    int32 words = (capacity + 3) / 4;
+    if (words > 16777216) { return false; }
+    if (!KrtKroBeginText(output, words)) { return false; }
+    int32[] op_offsets = new int32[module.count + 1];
+    int32[] function_offsets = new int32[module.function_count];
+    module.function_offsets = function_offsets;
+    int32[] function_sizes = new int32[module.function_count]; module.function_sizes = function_sizes;
+    int32[] stack_depths = new int32[module.count];
+    int32[] flow_queue = new int32[module.count];
+    int32 patch_capacity = module.count * 4 + 64;
+    int32[] patch_offsets = new int32[patch_capacity];
+    int32[] patch_targets = new int32[patch_capacity];
+    int32[] patch_kinds = new int32[patch_capacity];
+    module.external_reloc_offsets = new int32[patch_capacity]; module.external_reloc_targets = new int32[patch_capacity];
+    int32[] external_offsets = module.external_reloc_offsets; int32[] external_targets = module.external_reloc_targets;
+    bool[] external_used = module.external_used;
+    int32 patch_count = 0;
+    int32 pc = 0;
+    // ArkLink enters the text section base for compact objects. Emit the
+    // selected entry function first so that this remains valid even when the
+    // source was normalized helper-first. Function ids and call relocations
+    // still use their original module indices.
+    int32 emit_index = 0;
+    while (emit_index < module.function_count) {
+        int32 function_index = emit_index;
+        if (!module.library_mode && emit_index == 0) { function_index = module.entry; }
+        else if (!module.library_mode && emit_index <= module.entry) { function_index = emit_index - 1; }
+        int32 block_first = module.starts[function_index];
+        int32 block_last = module.count;
+        if (function_index + 1 < module.function_count) { block_last = module.starts[function_index + 1]; }
+        if (block_first < 0 || block_first >= block_last || block_last > module.count) { return false; }
+        if (module.parameter_counts[function_index] < 0 || module.parameter_counts[function_index] > 32 ||
+            module.local_counts[function_index] < module.parameter_counts[function_index]) { return false; }
+        if (!KrtKroNativeStackDepths(module, block_first, block_last, stack_depths, flow_queue)) { return false; }
+        function_offsets[function_index] = pc;
+        if (function_index == module.entry) {
+            if (!KrtKroNativeCode(output, ref pc, 16724293, 3) || !KrtKroNativeGlobalsStart(output, ref pc, module.global_count)) { return false; }
+            if (module.initializer_index >= 0) {
+                if (module.initializer_index >= module.function_count || patch_count >= patch_capacity || !KrtKroNativeByte(output, ref pc, 232)) { return false; }
+                patch_offsets[patch_count] = pc; patch_targets[patch_count] = module.initializer_index; patch_kinds[patch_count] = 2; patch_count = patch_count + 1;
+                if (!KrtKroNativeU32(output, ref pc, 0)) { return false; }
+            }
+        }
+        if (!KrtKroNativeByte(output, ref pc, 85) || !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 229)) { return false; }
+        // Reserve a few scratch slots for marshaling stack arguments to calls.
+        int32 frame = (module.local_counts[function_index] + 32) * 8;
+        if (frame < 0 || frame > 1048576) { return false; }
+        if ((frame & 15) != 0) { frame = frame + 8; }
+        if (frame > 0) {
+            if (frame <= 127) { if (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 131) || !KrtKroNativeByte(output, ref pc, 236) || !KrtKroNativeByte(output, ref pc, frame)) { return false; } }
+            else if (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 129) || !KrtKroNativeByte(output, ref pc, 236) || !KrtKroNativeU32(output, ref pc, frame)) { return false; }
+        }
+        int32 parameter = 0;
+        while (parameter < module.parameter_counts[function_index]) {
+            if (parameter == 0 && (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 248))) { return false; }
+            if (parameter == 1 && (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 240))) { return false; }
+            if (parameter == 2 && (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 208))) { return false; }
+            if (parameter == 3 && (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 200))) { return false; }
+            if (parameter == 4 && (!KrtKroNativeByte(output, ref pc, 76) || !KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 192))) { return false; }
+            if (parameter == 5 && (!KrtKroNativeByte(output, ref pc, 76) || !KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 200))) { return false; }
+            if (parameter >= 6) {
+                int32 incoming = 16 + (parameter - 6) * 8;
+                if (incoming <= 127) {
+                    if (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 139) || !KrtKroNativeByte(output, ref pc, 69) || !KrtKroNativeByte(output, ref pc, incoming)) { return false; }
+                } else if (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 139) || !KrtKroNativeByte(output, ref pc, 133) || !KrtKroNativeU32(output, ref pc, incoming)) { return false; }
+            }
+            if (!KrtKroNativeFrameStore(output, ref pc, parameter)) { return false; }
+            parameter = parameter + 1;
+        }
+        int32 index = block_first;
+        while (index < block_last) {
+            op_offsets[index] = pc;
+            int32 op = module.ops[index];
+            int32 arity = (int32)module.extra[index];
+            if (op == (int32)KrtNativeOp.Nop) { }
+            else if (op == (int32)KrtNativeOp.Const) {
+                if (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 184) || !KrtKroNativeU64(output, ref pc, module.args[index]) || !KrtKroNativeByte(output, ref pc, 80)) { return false; }
+            } else if (op == (int32)KrtNativeOp.LoadLocal) {
+                if (module.args[index] < 0 || module.args[index] >= module.local_counts[function_index]) { return false; }
+                if (!KrtKroNativeFrameLoad(output, ref pc, (int32)module.args[index])) { return false; }
+            } else if (op == (int32)KrtNativeOp.StoreLocal) {
+                if (module.args[index] < 0 || module.args[index] >= module.local_counts[function_index]) { return false; }
+                if (!KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeFrameStore(output, ref pc, (int32)module.args[index])) { return false; }
+            } else if (op >= (int32)KrtNativeOp.Add && op <= (int32)KrtNativeOp.Shr) {
+                if (!KrtKroNativeBinary(output, ref pc, op, arity != 0)) { return false; }
+            } else if (op == (int32)KrtNativeOp.Neg || op == (int32)KrtNativeOp.Not) {
+                if (!KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 247) || !KrtKroNativeByte(output, ref pc, op == (int32)KrtNativeOp.Neg ? 216 : 208) || !KrtKroNativeByte(output, ref pc, 80)) { return false; }
+            } else if (op == (int32)KrtNativeOp.Compare) {
+                int32 cc = 149;
+                if (module.args[index] == 61) { cc = 148; } else if (module.args[index] == 101) { cc = 149; } else if (module.args[index] == 60) { cc = 156; } else if (module.args[index] == 62) { cc = 159; } else if (module.args[index] == 102) { cc = 158; } else if (module.args[index] == 103) { cc = 157; }
+                if (arity != 0) {
+                    if (module.args[index] == 60) { cc = 146; } else if (module.args[index] == 62) { cc = 151; }
+                    else if (module.args[index] == 102) { cc = 150; } else if (module.args[index] == 103) { cc = 147; }
+                }
+                if (!KrtKroNativeByte(output, ref pc, 91) || !KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 57) || !KrtKroNativeByte(output, ref pc, 216) || !KrtKroNativeByte(output, ref pc, 15) || !KrtKroNativeByte(output, ref pc, cc) || !KrtKroNativeByte(output, ref pc, 192) || !KrtKroNativeByte(output, ref pc, 15) || !KrtKroNativeByte(output, ref pc, 182) || !KrtKroNativeByte(output, ref pc, 192) || !KrtKroNativeByte(output, ref pc, 80)) { return false; }
+            } else if (op == (int32)KrtNativeOp.Jump) {
+                if (module.args[index] < block_first || module.args[index] >= block_last) { return false; }
+                if (patch_count >= patch_capacity || !KrtKroNativeByte(output, ref pc, 233)) { return false; }
+                patch_offsets[patch_count] = pc; patch_targets[patch_count] = (int32)module.args[index]; patch_kinds[patch_count] = 1; patch_count = patch_count + 1;
+                if (!KrtKroNativeU32(output, ref pc, 0)) { return false; }
+            } else if (op == (int32)KrtNativeOp.Branch) {
+                if (module.args[index] < block_first || module.args[index] >= block_last || module.extra[index] < block_first || module.extra[index] >= block_last) { return false; }
+                if (patch_count + 1 >= patch_capacity || !KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 133) || !KrtKroNativeByte(output, ref pc, 192) || !KrtKroNativeByte(output, ref pc, 15) || !KrtKroNativeByte(output, ref pc, 133)) { return false; }
+                patch_offsets[patch_count] = pc; patch_targets[patch_count] = (int32)module.args[index]; patch_kinds[patch_count] = 1; patch_count = patch_count + 1;
+                if (!KrtKroNativeU32(output, ref pc, 0) || !KrtKroNativeByte(output, ref pc, 233)) { return false; }
+                patch_offsets[patch_count] = pc; patch_targets[patch_count] = (int32)module.extra[index]; patch_kinds[patch_count] = 1; patch_count = patch_count + 1;
+                if (!KrtKroNativeU32(output, ref pc, 0)) { return false; }
+            } else if (op == 44) {
+                if (!KrtKroNativeGlobalAddress(output, ref pc, (int32)module.args[index], module.global_count)) { return false; }
+            } else if (op == 45) {
+                if (patch_count >= patch_capacity || module.args[index] < -module.external_count || module.args[index] >= module.function_count || !KrtKroNativeCode(output, ref pc, 0x058d48, 3)) { return false; }
+                patch_offsets[patch_count] = pc; patch_targets[patch_count] = (int32)module.args[index]; patch_kinds[patch_count] = 2; patch_count = patch_count + 1;
+                if (!KrtKroNativeU32(output, ref pc, 0) || !KrtKroNativeByte(output, ref pc, 80)) { return false; }
+            } else if (op == 46) {
+                if (!KrtKroNativeIndirectCall(output, ref pc, arity, module.local_counts[function_index])) { return false; }
+            } else if (op == (int32)KrtNativeOp.Call) {
+                if (arity < 0 || arity > 32 || patch_count >= patch_capacity) { return false; }
+                int32 scratch_base = module.local_counts[function_index];
+                int32 argument = arity - 1;
+                while (argument >= 6) {
+                    if (!KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeFrameStore(output, ref pc, scratch_base + argument - 6)) { return false; }
+                    argument = argument - 1;
+                }
+                while (argument >= 0) {
+                    if (!KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeMoveArg(output, ref pc, argument)) { return false; }
+                    argument = argument - 1;
+                }
+                // Save the expression stack, align the call stack, and then
+                // place argument seven nearest to the return address.
+                if (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 224) ||
+                    !KrtKroNativeFrameStore(output, ref pc, scratch_base + 26) ||
+                    !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 131) || !KrtKroNativeByte(output, ref pc, 228) || !KrtKroNativeByte(output, ref pc, 240)) { return false; }
+                int32 stack_arguments = arity > 6 ? arity - 6 : 0;
+                if ((stack_arguments & 1) != 0 && (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 131) || !KrtKroNativeByte(output, ref pc, 236) || !KrtKroNativeByte(output, ref pc, 8))) { return false; }
+                argument = stack_arguments - 1;
+                while (argument >= 0) {
+                    if (!KrtKroNativeFrameLoad(output, ref pc, scratch_base + argument)) { return false; }
+                    argument = argument - 1;
+                }
+                if (!KrtKroNativeByte(output, ref pc, 232)) { return false; }
+                patch_offsets[patch_count] = pc; patch_targets[patch_count] = (int32)module.args[index]; patch_kinds[patch_count] = 2; patch_count = patch_count + 1;
+                if (!KrtKroNativeU32(output, ref pc, 0)) { return false; }
+                // mov rsp,[rbp+disp32] restores parent expression operands and
+                // keeps the return value in rax.
+                if (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 139) || !KrtKroNativeByte(output, ref pc, 165) ||
+                    !KrtKroNativeU32(output, ref pc, -8 * (scratch_base + 27)) || !KrtKroNativeByte(output, ref pc, 80)) { return false; }
+            } else if (op == (int32)KrtNativeOp.Return) {
+                if (arity > 1) { return false; }
+                if (arity == 1 && !KrtKroNativeByte(output, ref pc, 88)) { return false; }
+                if (arity == 0 && (!KrtKroNativeByte(output, ref pc, 49) || !KrtKroNativeByte(output, ref pc, 192))) { return false; }
+                if (function_index == module.entry) {
+                    if (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 199) || !KrtKroNativeByte(output, ref pc, 184) || !KrtKroNativeU32(output, ref pc, 60) || !KrtKroNativeByte(output, ref pc, 15) || !KrtKroNativeByte(output, ref pc, 5)) { return false; }
+                } else if (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 236) || !KrtKroNativeByte(output, ref pc, 93) || !KrtKroNativeByte(output, ref pc, 195)) { return false; }
+            } else if (op == (int32)KrtNativeOp.Address) {
+                if (module.extra[index] > 2147483647 ||
+                    (module.args[index] == 0 && module.extra[index] < -16) ||
+                    (module.args[index] != 0 && module.extra[index] <= 0)) { return false; }
+                if (module.args[index] == 0) {
+                    if (!KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 5) || !KrtKroNativeU32(output, ref pc, (int32)module.extra[index]) || !KrtKroNativeByte(output, ref pc, 80)) { return false; }
+                } else if (!KrtKroNativeByte(output, ref pc, 91) || !KrtKroNativeByte(output, ref pc, 88) ||
+                    !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 105) || !KrtKroNativeByte(output, ref pc, 219) || !KrtKroNativeU32(output, ref pc, (int32)module.extra[index]) ||
+                    !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 1) || !KrtKroNativeByte(output, ref pc, 216) || !KrtKroNativeByte(output, ref pc, 80)) { return false; }
+            } else if (op == (int32)KrtNativeOp.Load) {
+                if (!KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeMemoryLoad(output, ref pc, arity) || !KrtKroNativeByte(output, ref pc, 80)) { return false; }
+            } else if (op == (int32)KrtNativeOp.Store) {
+                if (!KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeByte(output, ref pc, 91) || !KrtKroNativeMemoryStore(output, ref pc, arity)) { return false; }
+            } else if (op == (int32)KrtNativeOp.Allocate) {
+                if (!KrtKroNativeAllocate(output, ref pc, module.args[index])) { return false; }
+            } else if (op == (int32)KrtNativeOp.Free) {
+                if (!KrtKroNativeFree(output, ref pc)) { return false; }
+            } else if (op == 30) {
+                // Shift live expression operands below the allocation so that
+                // an allocation inside a larger expression keeps stack order.
+                int32 live_values = stack_depths[index] - 1;
+                if (live_values < 0) { live_values = 0; }
+                if (!KrtKroNativeByte(output, ref pc, 88) ||
+                    !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 131) || !KrtKroNativeByte(output, ref pc, 192) || !KrtKroNativeByte(output, ref pc, 15) ||
+                    !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 131) || !KrtKroNativeByte(output, ref pc, 224) || !KrtKroNativeByte(output, ref pc, 240) ||
+                    !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 230) ||
+                    !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 41) || !KrtKroNativeByte(output, ref pc, 196) ||
+                    !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 231) ||
+                    !KrtKroNativeByte(output, ref pc, 185) || !KrtKroNativeU32(output, ref pc, live_values) ||
+                    !KrtKroNativeByte(output, ref pc, 252) || !KrtKroNativeByte(output, ref pc, 243) || !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 165) ||
+                    !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 141) || !KrtKroNativeByte(output, ref pc, 132) || !KrtKroNativeByte(output, ref pc, 36) ||
+                    !KrtKroNativeU32(output, ref pc, live_values * 8) || !KrtKroNativeByte(output, ref pc, 80)) { return false; }
+            } else if (op == (int32)KrtNativeOp.Data) {
+                if (module.data_length <= 0 || module.data_storage == null || module.args[index] < 0 || module.args[index] + module.extra[index] > module.data_length || patch_count >= patch_capacity) { return false; }
+                if (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 141) || !KrtKroNativeByte(output, ref pc, 5)) { return false; }
+                patch_offsets[patch_count] = pc; patch_targets[patch_count] = (int32)module.args[index]; patch_kinds[patch_count] = 3; patch_count = patch_count + 1;
+                if (!KrtKroNativeU32(output, ref pc, 0) || !KrtKroNativeByte(output, ref pc, 80)) { return false; }
+            } else if (op == (int32)KrtNativeOp.Syscall) {
+                if (arity < 1 || arity > 7) { return false; }
+                // Source arguments are already on the expression stack:
+                // Linux arguments are popped first, then the syscall number.
+                int32 argument = arity - 2;
+                while (argument >= 0) { if (!KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeMoveSyscallArg(output, ref pc, argument)) { return false; } argument = argument - 1; }
+                if (!KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeByte(output, ref pc, 15) || !KrtKroNativeByte(output, ref pc, 5) || !KrtKroNativeByte(output, ref pc, 80)) { return false; }
+            } else if (op == (int32)KrtNativeOp.Drop) {
+                if (!KrtKroNativeByte(output, ref pc, 88)) { return false; }
+            } else if (op == (int32)KrtNativeOp.Cast) {
+                int32 width = (int32)module.args[index];
+                if (width != 8 && width != -8) {
+                    if (!KrtKroNativeByte(output, ref pc, 88)) { return false; }
+                    if (width > 1000 || width < -1000) {
+                        if (!KrtKroNativeIntegerNormalize(output, ref pc, width)) { return false; }
+                    } else if (width == -1 || width == -2) {
+                        if (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 15) ||
+                            !KrtKroNativeByte(output, ref pc, width == -1 ? 190 : 191) || !KrtKroNativeByte(output, ref pc, 192)) { return false; }
+                    } else if (width == -4) {
+                        if (!KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 192)) { return false; }
+                    } else if (width == 1 || width == 2) {
+                        if (!KrtKroNativeByte(output, ref pc, 15) || !KrtKroNativeByte(output, ref pc, width == 1 ? 182 : 183) || !KrtKroNativeByte(output, ref pc, 192)) { return false; }
+                    } else if (width == 4) {
+                        if (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 99) || !KrtKroNativeByte(output, ref pc, 192)) { return false; }
+                    } else { return false; }
+                    if (!KrtKroNativeByte(output, ref pc, 80)) { return false; }
+                }
+            } else if (op == (int32)KrtNativeOp.Ref) {
+                int32 slot = (int32)module.args[index];
+                if (slot < 0 || slot >= module.local_counts[function_index]) { return false; }
+                if (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 141) || !KrtKroNativeByte(output, ref pc, 133) ||
+                    !KrtKroNativeU32(output, ref pc, -8 * (slot + 1)) || !KrtKroNativeByte(output, ref pc, 80)) { return false; }
+            } else if (op == 31) {
+                if (!KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 133) || !KrtKroNativeByte(output, ref pc, 192) ||
+                    !KrtKroNativeByte(output, ref pc, 15) || !KrtKroNativeByte(output, ref pc, 148) || !KrtKroNativeByte(output, ref pc, 192) ||
+                    !KrtKroNativeByte(output, ref pc, 15) || !KrtKroNativeByte(output, ref pc, 182) || !KrtKroNativeByte(output, ref pc, 192) || !KrtKroNativeByte(output, ref pc, 80)) { return false; }
+            } else if (op == 32) {
+                if (!KrtKroNativeByte(output, ref pc, 255) || !KrtKroNativeByte(output, ref pc, 52) || !KrtKroNativeByte(output, ref pc, 36)) { return false; }
+            } else if (op == 33) {
+                if (!KrtKroNativeByte(output, ref pc, 91) || !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 216) ||
+                    !KrtKroNativeMemoryLoad(output, ref pc, arity) ||
+                    !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 193) ||
+                    !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 5) || !KrtKroNativeU32(output, ref pc, (int32)module.args[index]) ||
+                    !KrtKroNativeMemoryStore(output, ref pc, arity) || !KrtKroNativeByte(output, ref pc, 81)) { return false; }
+            } else if (op == 35) {
+                if (!KrtKroNativeStringEqual(output, ref pc)) { return false; }
+            } else if (op == 36) {
+                if (!KrtKroNativeStringConcat(output, ref pc)) { return false; }
+            } else if (op == 37) {
+                if (!KrtKroNativeStringLength(output, ref pc)) { return false; }
+            } else if (op == 38) {
+                if (!KrtKroNativeFloatConvert(output, ref pc, (int32)module.args[index], arity)) { return false; }
+            } else if (op == 39) {
+                if (!KrtKroNativeFloatBinary(output, ref pc, (int32)module.args[index], arity)) { return false; }
+            } else if (op == 40) {
+                if (!KrtKroNativeFloatCompare(output, ref pc, (int32)module.args[index], arity)) { return false; }
+            } else if (op >= 41 && op <= 43) {
+                if (!KrtKroNativeFloatUnary(output, ref pc, op, arity, (int32)module.args[index])) { return false; }
+            } else if (op == 60) {
+                if (!KrtKroNativeWideConvert(output, ref pc, (int32)module.args[index])) { return false; }
+            } else if (op == 61) {
+                if (!KrtKroNativeWideBinary(output, ref pc, (int32)module.args[index], arity != 0)) { return false; }
+            } else if (op == 62) {
+                if (!KrtKroNativeWideCompare(output, ref pc, (int32)module.args[index], arity != 0)) { return false; }
+            } else if (op == 63) {
+                if (!KrtKroNativeWideUnary(output, ref pc, (int32)module.args[index])) { return false; }
+            } else if (op == 69) {
+                if (!KrtKroNativeWideRef(output, ref pc)) { return false; }
+            } else if (op == 67) {
+                if (!KrtKroNativeWidePost(output, ref pc, (int32)module.args[index], arity != 0)) { return false; }
+            } else if (op == 68) {
+                if (!KrtKroNativeWideFloat(output, ref pc, (int32)module.args[index], arity)) { return false; }
+            } else if (op == 66) {
+                if (!KrtKroNativeCode(output, ref pc, 47176, 2) || !KrtKroNativeU64(output, ref pc, module.args[index]) ||
+                    !KrtKroNativeCode(output, ref pc, 47688, 2) || !KrtKroNativeU64(output, ref pc, module.extra[index]) ||
+                    !KrtKroNativeWideBox(output, ref pc) || !KrtKroNativeByte(output, ref pc, 80)) { return false; }
+            } else if (op == 50) {
+                if (arity < 0 || arity + 6 > module.local_counts[function_index] || patch_count >= patch_capacity ||
+                    module.args[index] < block_first || module.args[index] >= block_last ||
+                    !KrtKroNativeTryEnter(output, ref pc, arity)) { return false; }
+                patch_offsets[patch_count] = pc; patch_targets[patch_count] = (int32)module.args[index]; patch_kinds[patch_count] = 1; patch_count = patch_count + 1;
+                if (!KrtKroNativeU32(output, ref pc, 0) || !KrtKroNativeTryFinish(output, ref pc)) { return false; }
+            } else if (op == 51) {
+                int32 record = (int32)module.args[index];
+                if (record < 0 || record + 6 > module.local_counts[function_index] || !KrtKroNativeTryLeave(output, ref pc, record)) { return false; }
+            } else if (op == 52) {
+                if (!KrtKroNativeThrow(output, ref pc)) { return false; }
+            } else if (op == 53 || op == 54) {
+                int32 record = (int32)module.args[index];
+                if (record < 0 || record + 6 > module.local_counts[function_index] ||
+                    !KrtKroNativeFrameLoad(output, ref pc, record + (op == 53 ? 2 : 1))) { return false; }
+            }
+            else { return false; }
+            index = index + 1;
+        }
+        function_sizes[function_index] = pc - function_offsets[function_index];
+        emit_index = emit_index + 1;
+    }
+    op_offsets[module.count] = pc;
+    int32 data_base = pc;
+    if (module.data_length > 0) {
+        if (module.data_storage == null || pc + module.data_length > capacity) { return false; }
+        int32 data_index = 0; while (data_index < module.data_length) { if (!KrtKroNativeByte(output, ref pc, (int32)module.data_storage[data_index])) { return false; } data_index = data_index + 1; }
+    }
+    int32 patch = 0;
+    while (patch < patch_count) {
+        int32 target = 0;
+        if (patch_kinds[patch] == 1) { if (patch_targets[patch] < 0 || patch_targets[patch] >= module.count) { return false; } target = op_offsets[patch_targets[patch]]; }
+        else if (patch_kinds[patch] == 2) {
+            if (patch_targets[patch] < 0) {
+                int32 external = -patch_targets[patch] - 1;
+                if (external < 0 || external >= module.external_count || module.external_reloc_count >= patch_capacity) { return false; }
+                external_offsets[module.external_reloc_count] = patch_offsets[patch]; external_targets[module.external_reloc_count] = external;
+                external_used[external] = true; module.external_reloc_count = module.external_reloc_count + 1;
+                patch = patch + 1; continue;
+            }
+            if (patch_targets[patch] >= module.function_count) { return false; } target = function_offsets[patch_targets[patch]];
+        }
+        else { target = data_base + patch_targets[patch]; }
+        int32 relative = target - (patch_offsets[patch] + 4);
+        if (!KrtKroEmitTextU32(output, patch_offsets[patch], relative)) { return false; }
+        patch = patch + 1;
+    }
+    output.magic = 5198411; output.version = 2; output.architecture = 34404;
+    output.entry_point = 0; output.entry_symbol_value = 0;
+    output.text_size = pc; output.rodata_size = 0; output.data_size = 0; output.bss_size = 0;
+    output.text_reloc_count = 0; output.rodata_reloc_count = 0; output.data_reloc_count = 0; output.bss_align = 0;
+    output.total_reloc_count = 0; output.relocation_count = 0; output.symbol_count = 1; output.strtab_size = 6;
+    return KrtKroObjectIsValid(output);
+}
+
+bool KrtKroWriteBytes(byte[] bytes, int32 count, int64 descriptor) {
+    if (count < 0 || (count > 0 && bytes == null)) { return false; }
+    unsafe(using krt.mem;) {
+        byte* buffer = stackalloc byte[4096]; int32 position = 0;
+        while (position < count) {
+            int32 chunk = count - position; if (chunk > 4096) { chunk = 4096; }
+            int32 index = 0; while (index < chunk) { buffer[index] = bytes[position + index]; index = index + 1; }
+            int32 written = 0;
+            while (written < chunk) {
+                int64 result = syscall(1, descriptor, (int64)(buffer + written), chunk - written, 0, 0, 0);
+                if (result <= 0) { return false; } written = written + (int32)result;
+            }
+            position = position + chunk;
+        }
+    }
+    return true;
 }

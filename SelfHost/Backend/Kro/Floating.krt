@@ -1,0 +1,116 @@
+// Encode a short instruction sequence from its little-endian bytes.
+bool KrtKroNativeCode(KrtKroObject output, ref int32 pc, int64 bytes, int32 count) {
+    int32 i = 0;
+    while (i < count) {
+        if (!KrtKroNativeByte(output, ref pc, (int32)(bytes & 255))) { return false; }
+        bytes = bytes >> 8; i = i + 1;
+    }
+    return true;
+}
+
+bool KrtKroNativeFloatConvert(KrtKroObject output, ref int32 pc, int32 origin_format, int32 target_format) {
+    if ((origin_format != 0 && origin_format != -8 && origin_format != 4 && origin_format != 8) || (target_format != 0 && target_format != -8 && target_format != 4 && target_format != 8)) { return false; }
+    if (origin_format == target_format) { return true; }
+    if (!(KrtKroNativeCode(output, ref pc, 88, 1))) { return false; }
+    if (origin_format == 4) {
+    if (!(KrtKroNativeCode(output, ref pc, 25350287483866982, 7) &&
+        KrtKroNativeCode(output, ref pc, 192, 1))) { return false; }
+    } else if (origin_format == 8) {
+    if (!(KrtKroNativeCode(output, ref pc, 826480216166, 5))) { return false; }
+    } else if (origin_format == -8) {
+    if (!(KrtKroNativeCode(output, ref pc, 38641337473467720, 7) &&
+        KrtKroNativeCode(output, ref pc, 65813776772924353, 7) &&
+        KrtKroNativeCode(output, ref pc, 11838755007105352, 7) &&
+        KrtKroNativeCode(output, ref pc, 1666586227241664, 7) &&
+        KrtKroNativeCode(output, ref pc, 825339365618, 5))) { return false; }
+    } else {
+    if (!(KrtKroNativeCode(output, ref pc, 825339365618, 5))) { return false; }
+    }
+    if (target_format == 4) {
+    if (!(KrtKroNativeCode(output, ref pc, 35482781053751282, 7) &&
+        KrtKroNativeCode(output, ref pc, 192, 1))) { return false; }
+    } else if (target_format == 8) {
+    if (!(KrtKroNativeCode(output, ref pc, 826748651622, 5))) { return false; }
+    } else if (target_format == -8) {
+    if (!(KrtKroNativeCode(output, ref pc, 47432, 7) &&
+        KrtKroNativeCode(output, ref pc, 30979051065958400, 7) &&
+        KrtKroNativeCode(output, ref pc, 4911248631097033, 7) &&
+        KrtKroNativeCode(output, ref pc, 4302332113981426, 7) &&
+        KrtKroNativeCode(output, ref pc, 18006401536802860, 7) &&
+        KrtKroNativeCode(output, ref pc, 54091639688398315, 7))) { return false; }
+    } else {
+    if (!(KrtKroNativeCode(output, ref pc, 825372920050, 5))) { return false; }
+    }
+    return KrtKroNativeCode(output, ref pc, 80, 1);
+}
+
+bool KrtKroNativeFloatBinary(KrtKroObject output, ref int32 pc, int32 operation, int32 width) {
+    if (width != 4 && width != 8) { return false; }
+    if (operation == 37) {
+        // x87 FPREM computes remainder without overflowing the quotient.
+        if (!KrtKroNativeCode(output, ref pc, width == 4 ? 36 * 65536 + 4 * 256 + 217 : 36 * 65536 + 4 * 256 + 221, 3) ||
+            !KrtKroNativeByte(output, ref pc, width == 4 ? 217 : 221) ||
+            !KrtKroNativeCode(output, ref pc, 8 * 65536 + 36 * 256 + 68, 3)) { return false; }
+    if (!(KrtKroNativeCode(output, ref pc, 1342464520616153, 7) &&
+        KrtKroNativeCode(output, ref pc, 63349, 2))) { return false; }
+        if (!KrtKroNativeByte(output, ref pc, width == 4 ? 217 : 221)) { return false; }
+    if (!(KrtKroNativeCode(output, ref pc, 36953318207530076, 7) &&
+        KrtKroNativeCode(output, ref pc, 2244, 2))) { return false; }
+        return true;
+    }
+    int32 opcode = operation == 43 ? 88 : operation == 45 ? 92 : operation == 42 ? 89 : operation == 47 ? 94 : -1;
+    if (opcode < 0) { return false; }
+    if (!(KrtKroNativeCode(output, ref pc, 54164207446677593, 7) &&
+        KrtKroNativeCode(output, ref pc, 865134921830, 5))) { return false; }
+    if (!KrtKroNativeByte(output, ref pc, width == 4 ? 243 : 242) || !KrtKroNativeByte(output, ref pc, 15) || !KrtKroNativeByte(output, ref pc, opcode) || !KrtKroNativeByte(output, ref pc, 193)) { return false; }
+    if (width == 4) {
+    if (!(KrtKroNativeCode(output, ref pc, 3229486950, 4))) { return false; }
+    } else {
+    if (!(KrtKroNativeCode(output, ref pc, 826748651622, 5))) { return false; }
+    }
+    return KrtKroNativeCode(output, ref pc, 80, 1);
+}
+
+bool KrtKroNativeFloatCompare(KrtKroObject output, ref int32 pc, int32 operation, int32 width) {
+    if (width != 4 && width != 8) { return false; }
+    int32 condition = operation == 61 ? 148 : operation == 101 ? 149 : operation == 60 ? 146 : operation == 102 ? 150 : operation == 62 ? 151 : operation == 103 ? 147 : -1;
+    if (condition < 0) { return false; }
+    if (!(KrtKroNativeCode(output, ref pc, 54164207446677593, 7) &&
+        KrtKroNativeCode(output, ref pc, 865134921830, 5))) { return false; }
+    if (width == 8 && !KrtKroNativeByte(output, ref pc, 102)) { return false; }
+    if (!(KrtKroNativeCode(output, ref pc, 12660239, 3))) { return false; }
+    if (!KrtKroNativeByte(output, ref pc, 15) || !KrtKroNativeByte(output, ref pc, condition) || !KrtKroNativeByte(output, ref pc, 192)) { return false; }
+    if (operation == 101) {
+    if (!(KrtKroNativeCode(output, ref pc, 893500168719, 5))) { return false; }
+    } else {
+    if (!(KrtKroNativeCode(output, ref pc, 893902822159, 5))) { return false; }
+    }
+    return KrtKroNativeCode(output, ref pc, 1354806799, 4);
+}
+
+bool KrtKroNativeFloatUnary(KrtKroObject output, ref int32 pc, int32 operation, int32 width, int32 increment) {
+    if (width != 4 && width != 8) { return false; }
+    if (operation == 43) {
+    if (!(KrtKroNativeCode(output, ref pc, 3632875611, 4))) { return false; }
+        if (!KrtKroNativeMemoryLoad(output, ref pc, width == 4 ? -4 : 8)) { return false; }
+    if (!(KrtKroNativeCode(output, ref pc, 20560, 2))) { return false; }
+        if (!KrtKroNativeCode(output, ref pc, 184 * 256 + 72, 2) || !KrtKroNativeU64(output, ref pc, increment)) { return false; }
+    if (!(KrtKroNativeCode(output, ref pc, 80, 1))) { return false; }
+        if (!KrtKroNativeFloatConvert(output, ref pc, 0, width) || !KrtKroNativeFloatBinary(output, ref pc, 43, width)) { return false; }
+    if (!(KrtKroNativeCode(output, ref pc, 88, 1))) { return false; }
+        return KrtKroNativeMemoryStore(output, ref pc, width);
+    }
+    if (!(KrtKroNativeCode(output, ref pc, 88, 1))) { return false; }
+    if (operation == 41) {
+        if (!KrtKroNativeCode(output, ref pc, 185 * 256 + 72, 2) || !KrtKroNativeU64(output, ref pc, width == 4 ? 2147483648 : -9223372036854775807 - 1)) { return false; }
+    if (!(KrtKroNativeCode(output, ref pc, 13119816, 3))) { return false; }
+    } else if (operation == 42) {
+        if (width == 4) {
+    if (!(KrtKroNativeCode(output, ref pc, 57553, 2))) { return false; }
+        } else {
+    if (!(KrtKroNativeCode(output, ref pc, 14733640, 3))) { return false; }
+        }
+    if (!(KrtKroNativeCode(output, ref pc, 211888180860175, 6))) { return false; }
+    } else { return false; }
+    return KrtKroNativeCode(output, ref pc, 80, 1);
+}

@@ -1,0 +1,20 @@
+namespace System;
+
+// Exception payloads are ordinary owned objects. A catch receives the same object.
+public class Exception {
+    public string Message;
+    public int32 Code;
+
+    public function Exception(string message) {
+        Message = message;
+    }
+
+    public function Exception(string message, int32 code) {
+        Message = message;
+        Code = code;
+    }
+
+    public string ToString() {
+        return Message;
+    }
+}

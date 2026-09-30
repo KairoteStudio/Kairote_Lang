@@ -1,0 +1,24 @@
+namespace Demo.Dispatch;
+
+interface IValue {
+    int32 Read();
+}
+
+interface IMeasurement : IValue {
+    string Label();
+}
+
+abstract class Measurement : IMeasurement {
+    public abstract int32 Read();
+    public virtual string Label() { return "reading"; }
+}
+
+class Reading : Measurement {
+    int32 value;
+
+    public Reading(int32 initial) { value = initial; }
+    public override int32 Read() { return value; }
+    public override string Label() { return base.Label() + " verified"; }
+}
+
+int32 ReadValue<T>(T value) where T : IValue { return value.Read(); }

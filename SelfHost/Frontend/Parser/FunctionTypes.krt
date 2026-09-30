@@ -1,0 +1,65 @@
+// Consume one complete type without consuming a following declaration name.
+bool KrtParserSkipNativeType(KrtParser parser) {
+    if (parser.token.kind != KrtTokenKind.Identifier) { KrtParserRecordError(parser); return false; }
+    if (KrtParserIsWord(parser, "fn")) { return KrtParserParseFunctionType(parser) != null; }
+    KrtLexerNext(parser.lexer, parser.token);
+    KrtParserSkipGenericArguments(parser); KrtParserSkipQualifiedType(parser);
+    while (KrtParserTokenText(parser, 42)) { KrtLexerNext(parser.lexer, parser.token); }
+    KrtParserSkipArrayTypeSuffix(parser);
+    return parser.errors == 0;
+}
+
+KrtAstNode KrtParserParseFunctionType(KrtParser parser) {
+    if (!KrtParserIsWord(parser, "fn")) { KrtParserRecordError(parser); return null; }
+    int64 start = parser.token.start;
+    KrtLexerNext(parser.lexer, parser.token);
+    if (!KrtParserTokenText(parser, 40)) { KrtParserRecordError(parser); return null; }
+    KrtLexerNext(parser.lexer, parser.token);
+    KrtAstNode signature = KrtAstMake(KrtAstKind.Function, start, 0);
+    signature.parameter_type_starts = new int64[32]; signature.parameter_type_lengths = new int64[32];
+    signature.parameter_refs = new bool[32];
+    while (!KrtParserTokenText(parser, 41)) {
+        if (signature.parameter_count >= 32 || parser.errors != 0) { KrtParserRecordError(parser); return null; }
+        int32 index = signature.parameter_count;
+        if (KrtParserIsWord(parser, "ref")) { signature.parameter_refs[index] = true; KrtLexerNext(parser.lexer, parser.token); }
+        int64 type_start = parser.token.start;
+        if (!KrtParserSkipNativeType(parser)) { return null; }
+        signature.parameter_type_starts[index] = type_start;
+        signature.parameter_type_lengths[index] = KrtParserTypeSpanLength(parser, type_start, parser.token.start - type_start);
+        signature.parameter_count = index + 1;
+        if (!KrtParserTokenText(parser, 44)) { break; }
+        KrtLexerNext(parser.lexer, parser.token);
+    }
+    if (!KrtParserTokenText(parser, 41)) { KrtParserRecordError(parser); return null; }
+    KrtLexerNext(parser.lexer, parser.token);
+    if (!KrtParserTokenText(parser, 45)) { KrtParserRecordError(parser); return null; }
+    KrtLexerNext(parser.lexer, parser.token);
+    if (!KrtParserTokenText(parser, 62)) { KrtParserRecordError(parser); return null; }
+    KrtLexerNext(parser.lexer, parser.token);
+    signature.type_start = parser.token.start;
+    if (!KrtParserSkipNativeType(parser)) { return null; }
+    signature.type_length = KrtParserTypeSpanLength(parser, signature.type_start, parser.token.start - signature.type_start);
+    signature.length = parser.token.start - start;
+    return signature;
+}
+
+KrtAstNode KrtParserParseGlobalVariable(KrtParser parser) {
+    if (parser.token.kind != KrtTokenKind.Identifier) { return null; }
+    KrtLexer lexer = new KrtLexer(); KrtToken token = new KrtToken(); KrtParser probe = new KrtParser();
+    unsafe(using krt.mem;) { if (!KrtLexerInit(lexer, (byte*)parser.lexer.source, parser.lexer.length)) { return null; } }
+    lexer.position = parser.token.start; KrtParserInit(probe, lexer, token);
+    if (!KrtParserSkipNativeType(probe) || probe.token.kind != KrtTokenKind.Identifier) { return null; }
+    KrtLexerNext(probe.lexer, probe.token);
+    if (!KrtParserTokenText(probe, 61) && !KrtParserTokenText(probe, 59)) { return null; }
+    int64 start = parser.token.start;
+    if (!KrtParserSkipNativeType(parser)) { return null; }
+    KrtAstNode declaration = KrtAstMake(KrtAstKind.Variable, start, 0);
+    declaration.type_start = start; declaration.type_length = KrtParserTypeSpanLength(parser, start, parser.token.start - start);
+    declaration.name_start = parser.token.start; declaration.name_length = parser.token.length;
+    declaration.native_static = true;
+    KrtLexerNext(parser.lexer, parser.token);
+    if (KrtParserTokenText(parser, 61)) { KrtLexerNext(parser.lexer, parser.token); declaration.left = KrtParserParseExpression(parser, 1); }
+    if (!KrtParserTokenText(parser, 59)) { KrtParserRecordError(parser); return declaration; }
+    KrtLexerNext(parser.lexer, parser.token); declaration.length = parser.token.start - start;
+    return declaration;
+}

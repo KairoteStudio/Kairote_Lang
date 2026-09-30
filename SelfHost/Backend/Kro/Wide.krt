@@ -1,0 +1,268 @@
+// Wide integers use immutable 16-byte boxes in scalar slots and packed array storage.
+bool KrtKroNativeWideBox(KrtKroObject output, ref int32 pc) {
+    if (!(KrtKroNativeCode(output, ref pc, 70503322192, 5))) { return false; }
+    if (!KrtKroNativeAllocate(output, ref pc, 0)) { return false; }
+    if (!(KrtKroNativeCode(output, ref pc, 432418789677913, 7) &&
+        KrtKroNativeCode(output, ref pc, 56445937812343112, 7))) { return false; }
+    return true;
+}
+
+bool KrtKroNativeWideLoad(KrtKroObject output, ref int32 pc) {
+    if (!(KrtKroNativeCode(output, ref pc, 153141493402440, 7))) { return false; }
+    return KrtKroNativeWideBox(output, ref pc);
+}
+
+bool KrtKroNativeWideStore(KrtKroObject output, ref int32 pc) {
+    return KrtKroNativeCode(output, ref pc, 39204227213460808, 7) &&
+        KrtKroNativeCode(output, ref pc, 1384320850413576, 7) &&
+        KrtKroNativeCode(output, ref pc, 3247170600945969, 7) &&
+        KrtKroNativeCode(output, ref pc, 139692360, 4);
+}
+
+bool KrtKroNativeWideConvert(KrtKroObject output, ref int32 pc, int32 mode) {
+    if (!(KrtKroNativeCode(output, ref pc, 88, 1))) { return false; }
+    if (mode == 2) {
+    if (!(KrtKroNativeCode(output, ref pc, 39204201443657032, 7) &&
+        KrtKroNativeCode(output, ref pc, 0, 1))) { return false; }
+    } else {
+        if (mode == 5) {
+    if (!(KrtKroNativeCode(output, ref pc, 39204227213460808, 7) &&
+        KrtKroNativeCode(output, ref pc, 1384287476123728, 7) &&
+        KrtKroNativeCode(output, ref pc, 3526475825, 4))) { return false; }
+        } else if (mode == 0) {
+    if (!(KrtKroNativeCode(output, ref pc, 39240, 2))) { return false; }
+        } else if (mode == 1) {
+    if (!(KrtKroNativeCode(output, ref pc, 53809, 2))) { return false; }
+        } else { return false; }
+        if (!KrtKroNativeWideBox(output, ref pc)) { return false; }
+    }
+    return KrtKroNativeCode(output, ref pc, 80, 1);
+}
+
+bool KrtKroNativeWideOperands(KrtKroObject output, ref int32 pc) {
+    return KrtKroNativeCode(output, ref pc, 2661645009049689, 7) &&
+        KrtKroNativeCode(output, ref pc, 153141493402440, 7) &&
+        KrtKroNativeCode(output, ref pc, 20497309442835691, 7) &&
+        KrtKroNativeCode(output, ref pc, 25204414439803269, 7) &&
+        KrtKroNativeCode(output, ref pc, 13797681382770696, 7) &&
+        KrtKroNativeCode(output, ref pc, 14365129, 3);
+}
+
+bool KrtKroNativeWideBinary(KrtKroObject output, ref int32 pc, int32 operation, bool unsigned_value) {
+    if (!KrtKroNativeWideOperands(output, ref pc)) { return false; }
+    if (operation == 43) {
+    if (!(KrtKroNativeCode(output, ref pc, 239767770366280, 6))) { return false; }
+    }
+    else if (operation == 45) {
+    if (!(KrtKroNativeCode(output, ref pc, 239802130114888, 6))) { return false; }
+    }
+    else if (operation == 42) {
+    if (!(KrtKroNativeCode(output, ref pc, 60991075149449545, 7) &&
+        KrtKroNativeCode(output, ref pc, 59392632353132360, 7) &&
+        KrtKroNativeCode(output, ref pc, 239699052590920, 6))) { return false; }
+    }
+    else if (operation == 38) {
+    if (!(KrtKroNativeCode(output, ref pc, 239836489851208, 6))) { return false; }
+    }
+    else if (operation == 124) {
+    if (!(KrtKroNativeCode(output, ref pc, 239733410629960, 6))) { return false; }
+    }
+    else if (operation == 94) {
+    if (!(KrtKroNativeCode(output, ref pc, 239905209332040, 6))) { return false; }
+    }
+    else if (operation == 106) {
+    if (!(KrtKroNativeCode(output, ref pc, 32441062718955907, 7) &&
+        KrtKroNativeCode(output, ref pc, 59471220916045833, 7) &&
+        KrtKroNativeCode(output, ref pc, 20480093198019552, 7) &&
+        KrtKroNativeCode(output, ref pc, 3224494803, 4))) { return false; }
+    }
+    else if (operation == 107) {
+        if (unsigned_value) {
+    if (!(KrtKroNativeCode(output, ref pc, 32441062718955907, 7) &&
+        KrtKroNativeCode(output, ref pc, 59471281179805705, 7) &&
+        KrtKroNativeCode(output, ref pc, 20495486360808426, 7) &&
+        KrtKroNativeCode(output, ref pc, 3526486227, 4))) { return false; }
+        } else {
+    if (!(KrtKroNativeCode(output, ref pc, 32441062718955907, 7) &&
+        KrtKroNativeCode(output, ref pc, 59471281179805705, 7) &&
+        KrtKroNativeCode(output, ref pc, 20495486360939514, 7) &&
+        KrtKroNativeCode(output, ref pc, 70346217158867, 6))) { return false; }
+        }
+    } else if (operation == 47 || operation == 37) {
+    if (!(KrtKroNativeCode(output, ref pc, 15544645, 3))) { return false; }
+        if (!unsigned_value) {
+    if (!(KrtKroNativeCode(output, ref pc, 53270309617435976, 7) &&
+        KrtKroNativeCode(output, ref pc, 61070483579207683, 7) &&
+        KrtKroNativeCode(output, ref pc, 61633433546425160, 7) &&
+        KrtKroNativeCode(output, ref pc, 36944752378873160, 7) &&
+        KrtKroNativeCode(output, ref pc, 36953322942890741, 7) &&
+        KrtKroNativeCode(output, ref pc, 944746528979, 5))) { return false; }
+        }
+    if (!(KrtKroNativeCode(output, ref pc, 33170106679331145, 7) &&
+        KrtKroNativeCode(output, ref pc, 54097372010465283, 7) &&
+        KrtKroNativeCode(output, ref pc, 19652882459078981, 7) &&
+        KrtKroNativeCode(output, ref pc, 2160057137, 7) &&
+        KrtKroNativeCode(output, ref pc, 20779469612568904, 7) &&
+        KrtKroNativeCode(output, ref pc, 4294502655840977, 7) &&
+        KrtKroNativeCode(output, ref pc, 58909500065301650, 7) &&
+        KrtKroNativeCode(output, ref pc, 20561373784458705, 7) &&
+        KrtKroNativeCode(output, ref pc, 20564655725861689, 7) &&
+        KrtKroNativeCode(output, ref pc, 56903338980198969, 7) &&
+        KrtKroNativeCode(output, ref pc, 501941182077257, 7) &&
+        KrtKroNativeCode(output, ref pc, 3413495807, 4))) { return false; }
+        if (operation == 47) {
+    if (!(KrtKroNativeCode(output, ref pc, 18518564533209420, 7) &&
+        KrtKroNativeCode(output, ref pc, 69603528980743670, 7) &&
+        KrtKroNativeCode(output, ref pc, 69603487616551128, 7) &&
+        KrtKroNativeCode(output, ref pc, 218, 1))) { return false; }
+        } else {
+    if (!(KrtKroNativeCode(output, ref pc, 18536156720302412, 7) &&
+        KrtKroNativeCode(output, ref pc, 69603528980678134, 7) &&
+        KrtKroNativeCode(output, ref pc, 69603487616551128, 7) &&
+        KrtKroNativeCode(output, ref pc, 218, 1))) { return false; }
+        }
+    } else { return false; }
+    return KrtKroNativeWideBox(output, ref pc) && KrtKroNativeCode(output, ref pc, 80, 1);
+}
+
+bool KrtKroNativeWideCompare(KrtKroObject output, ref int32 pc, int32 operation, bool unsigned_value) {
+    if (!KrtKroNativeWideOperands(output, ref pc)) { return false; }
+    if (operation == 61) {
+    if (!(KrtKroNativeCode(output, ref pc, 20506103532499272, 7) &&
+        KrtKroNativeCode(output, ref pc, 827117785097, 5))) { return false; }
+    }
+    else if (operation == 101) {
+    if (!(KrtKroNativeCode(output, ref pc, 20506103532499272, 7) &&
+        KrtKroNativeCode(output, ref pc, 827134562313, 5))) { return false; }
+    }
+    else if (operation == 60) {
+        if (unsigned_value) {
+    if (!(KrtKroNativeCode(output, ref pc, 16123274846681416, 7) &&
+        KrtKroNativeCode(output, ref pc, 4226435733655496, 7) &&
+        KrtKroNativeCode(output, ref pc, 49298, 2))) { return false; }
+        } else {
+    if (!(KrtKroNativeCode(output, ref pc, 16123274846681416, 7) &&
+        KrtKroNativeCode(output, ref pc, 4226435733655496, 7) &&
+        KrtKroNativeCode(output, ref pc, 49308, 2))) { return false; }
+        }
+    }
+    else if (operation == 102) {
+        if (unsigned_value) {
+    if (!(KrtKroNativeCode(output, ref pc, 16123274846681416, 7) &&
+        KrtKroNativeCode(output, ref pc, 4226435733917640, 7) &&
+        KrtKroNativeCode(output, ref pc, 49298, 2))) { return false; }
+        } else {
+    if (!(KrtKroNativeCode(output, ref pc, 16123274846681416, 7) &&
+        KrtKroNativeCode(output, ref pc, 4226435733917640, 7) &&
+        KrtKroNativeCode(output, ref pc, 49308, 2))) { return false; }
+        }
+    }
+    else if (operation == 62) {
+        if (unsigned_value) {
+    if (!(KrtKroNativeCode(output, ref pc, 16123274846681416, 7) &&
+        KrtKroNativeCode(output, ref pc, 4226435733983176, 7) &&
+        KrtKroNativeCode(output, ref pc, 49303, 2))) { return false; }
+        } else {
+    if (!(KrtKroNativeCode(output, ref pc, 16123274846681416, 7) &&
+        KrtKroNativeCode(output, ref pc, 4226435733983176, 7) &&
+        KrtKroNativeCode(output, ref pc, 49311, 2))) { return false; }
+        }
+    }
+    else if (operation == 103) {
+        if (unsigned_value) {
+    if (!(KrtKroNativeCode(output, ref pc, 16123274846681416, 7) &&
+        KrtKroNativeCode(output, ref pc, 4226435733721032, 7) &&
+        KrtKroNativeCode(output, ref pc, 49303, 2))) { return false; }
+        } else {
+    if (!(KrtKroNativeCode(output, ref pc, 16123274846681416, 7) &&
+        KrtKroNativeCode(output, ref pc, 4226435733721032, 7) &&
+        KrtKroNativeCode(output, ref pc, 49311, 2))) { return false; }
+        }
+    }
+    else { return false; }
+    return KrtKroNativeCode(output, ref pc, 1354806799, 4);
+}
+
+bool KrtKroNativeWideUnary(KrtKroObject output, ref int32 pc, int32 operation) {
+    if (!(KrtKroNativeCode(output, ref pc, 20276595373983832, 7) &&
+        KrtKroNativeCode(output, ref pc, 66147217735962763, 7) &&
+        KrtKroNativeCode(output, ref pc, 902777811204, 5))) { return false; }
+    if (operation == 33) {
+        return KrtKroNativeCode(output, ref pc, 4433866803644744, 7) &&
+        KrtKroNativeCode(output, ref pc, 5292214, 3);
+    }
+    if (operation == 45) {
+    if (!(KrtKroNativeCode(output, ref pc, 231461304727368, 7) &&
+        KrtKroNativeCode(output, ref pc, 14350152, 3))) { return false; }
+    } else if (operation == 126) {
+    if (!(KrtKroNativeCode(output, ref pc, 231959520409416, 6))) { return false; }
+    } else { return false; }
+    return KrtKroNativeWideBox(output, ref pc) && KrtKroNativeCode(output, ref pc, 80, 1);
+}
+
+bool KrtKroNativeWidePost(KrtKroObject output, ref int32 pc, int32 increment, bool packed) {
+    if (!(KrtKroNativeCode(output, ref pc, 930016154459, 5))) { return false; }
+    if (packed) { if (!KrtKroNativeWideLoad(output, ref pc)) { return false; } }
+    else { if (!KrtKroNativeMemoryLoad(output, ref pc, 8)) { return false; } }
+    if (!(KrtKroNativeCode(output, ref pc, 20560, 2))) { return false; }
+    if (!KrtKroNativeCode(output, ref pc, 47176, 2) || !KrtKroNativeU64(output, ref pc, increment)) { return false; }
+    if (!(KrtKroNativeCode(output, ref pc, 80, 1))) { return false; }
+    if (!KrtKroNativeWideConvert(output, ref pc, 0) || !KrtKroNativeWideBinary(output, ref pc, 43, false)) { return false; }
+    if (!(KrtKroNativeCode(output, ref pc, 1364941144, 4))) { return false; }
+    return KrtKroNativeMemoryStore(output, ref pc, packed ? 16 : 8);
+}
+
+bool KrtKroNativeWideFloat(KrtKroObject output, ref int32 pc, int32 mode, int32 width) {
+    if (mode == 1 || mode == 2) {
+    if (!(KrtKroNativeCode(output, ref pc, 20276595373983832, 7) &&
+        KrtKroNativeCode(output, ref pc, 66147217735962763, 7) &&
+        KrtKroNativeCode(output, ref pc, 13869042938949892, 7) &&
+        KrtKroNativeCode(output, ref pc, 192, 1))) { return false; }
+        if (mode == 1) {
+    if (!(KrtKroNativeCode(output, ref pc, 51871748006774088, 7) &&
+        KrtKroNativeCode(output, ref pc, 0, 7) &&
+        KrtKroNativeCode(output, ref pc, 59254094010206336, 7) &&
+        KrtKroNativeCode(output, ref pc, 3673638912, 4))) { return false; }
+        }
+    if (!(KrtKroNativeCode(output, ref pc, 1380995137, 4))) { return false; }
+        if (!KrtKroNativeFloatConvert(output, ref pc, -8, 8)) { return false; }
+    if (!(KrtKroNativeCode(output, ref pc, 47176, 7) &&
+        KrtKroNativeCode(output, ref pc, 1346629632, 4))) { return false; }
+        if (!KrtKroNativeFloatBinary(output, ref pc, 42, 8)) { return false; }
+    if (!(KrtKroNativeCode(output, ref pc, 1347508313, 4))) { return false; }
+        if (!KrtKroNativeFloatConvert(output, ref pc, -8, 8) || !KrtKroNativeFloatBinary(output, ref pc, 43, 8)) { return false; }
+    if (!(KrtKroNativeCode(output, ref pc, 88820750506328, 6))) { return false; }
+        return width == 8 || KrtKroNativeFloatConvert(output, ref pc, 8, width);
+    }
+    if (mode != 3 && mode != 4) { return false; }
+    if (width == 4 && !KrtKroNativeFloatConvert(output, ref pc, 4, 8)) { return false; }
+    if (!(KrtKroNativeCode(output, ref pc, 65514717103868248, 7) &&
+        KrtKroNativeCode(output, ref pc, 65796187802388543, 7) &&
+        KrtKroNativeCode(output, ref pc, 34357739828, 7) &&
+        KrtKroNativeCode(output, ref pc, 33776997272381825, 7) &&
+        KrtKroNativeCode(output, ref pc, 2163835206, 7) &&
+        KrtKroNativeCode(output, ref pc, 72057592868257395, 7) &&
+        KrtKroNativeCode(output, ref pc, 9367839337086975, 7) &&
+        KrtKroNativeCode(output, ref pc, 13850448017443024, 7) &&
+        KrtKroNativeCode(output, ref pc, 69535860713423826, 7) &&
+        KrtKroNativeCode(output, ref pc, 65534501673075673, 7) &&
+        KrtKroNativeCode(output, ref pc, 70231532480176107, 7) &&
+        KrtKroNativeCode(output, ref pc, 54787630533538624, 7) &&
+        KrtKroNativeCode(output, ref pc, 38641300733481800, 7) &&
+        KrtKroNativeCode(output, ref pc, 66357940018432194, 7) &&
+        KrtKroNativeCode(output, ref pc, 37521737075667204, 7) &&
+        KrtKroNativeCode(output, ref pc, 20504754900333760, 7) &&
+        KrtKroNativeCode(output, ref pc, 240755599790723, 6))) { return false; }
+    return KrtKroNativeWideBox(output, ref pc) && KrtKroNativeCode(output, ref pc, 80, 1);
+}
+
+bool KrtKroNativeWideRef(KrtKroObject output, ref int32 pc) {
+    if (!(KrtKroNativeCode(output, ref pc, 54189739872045147, 7))) { return false; }
+    if (!KrtKroNativeCode(output, ref pc, 34063, 2)) { return false; }
+    int32 ready_patch = pc;
+    if (!KrtKroNativeU32(output, ref pc, 0)) { return false; }
+    if (!(KrtKroNativeCode(output, ref pc, 3526475825, 4))) { return false; }
+    if (!KrtKroNativeWideBox(output, ref pc)) { return false; }
+    if (!(KrtKroNativeCode(output, ref pc, 231752, 3))) { return false; }
+    return KrtKroEmitTextU32(output, ready_patch, pc - ready_patch - 4) && KrtKroNativeCode(output, ref pc, 80, 1);
+}

@@ -1,0 +1,184 @@
+// Mutable program storage is separate from activation-record local slots.
+class KrtNativeGlobalEntry {
+    public KrtAstNode declaration;
+    public KrtAstNode owner;
+    public KrtNativeGlobalEntry next;
+    public KrtAstNode assignment;
+    public bool bound;
+}
+
+// The program registry stays live while binding discovers concrete generic classes.
+class KrtNativeGlobalState {
+    public KrtNativeModule output;
+    public KrtNativeGlobalEntry first;
+    public KrtAstNode initializer;
+    public bool changed;
+}
+
+bool KrtNativeBindGlobal(KrtAstNode node, KrtAstNode declaration, KrtNativeBinding binding) {
+    if (declaration.native_readonly) {
+        // A constant's type and names belong to its concrete declaring class.
+        KrtAstNode context = KrtAstMake(KrtAstKind.Function, declaration.start, 0);
+        context.native_scope = declaration.native_scope; context.native_owner = declaration.native_context;
+        context.native_context = declaration.native_context; context.native_static = true;
+        KrtNativeBinding constant_binding = new KrtNativeBinding();
+        constant_binding.module = binding.module; constant_binding.unit = context; constant_binding.source = binding.source;
+        constant_binding.slots = binding.slots; constant_binding.constant_depth = binding.constant_depth;
+        constant_binding.error_start = -1;
+        node.native_scope = declaration.native_scope; node.native_context = declaration.native_context;
+        bool valid = KrtNativeBindConstant(node, declaration, constant_binding);
+        binding.slots = constant_binding.slots;
+        if (!valid) { return KrtNativeBindingError(binding, node); }
+        return true;
+    }
+    if (declaration.native_global <= 0 &&
+        !KrtNativeRegisterGlobal(declaration, declaration.native_context, binding.module, binding.source)) {
+        return KrtNativeBindingError(binding, node);
+    }
+    if (declaration.native_global <= 0) { return KrtNativeBindingError(binding, node); }
+    KrtNativeCopyType(node, declaration);
+    node.native_global = declaration.native_global; node.native_readonly = false;
+    node.native_static = true; node.element_width = declaration.native_width;
+    return true;
+}
+
+KrtAstNode KrtNativeFindGlobal(KrtNativeBinding binding, int64 start, int64 length) {
+    KrtAstNode scope = binding.unit.native_scope;
+    while (true) {
+        KrtAstNode declaration = binding.module.body;
+        while (declaration != null) {
+            if (KrtDeclarationMatches(declaration, scope, binding.source, start, length)) { return declaration; }
+            declaration = declaration.next;
+        }
+        if (scope == null) { break; }
+        scope = scope.left;
+    }
+    scope = binding.unit.native_scope;
+    KrtAstNode found = null; KrtAstNode declaration = binding.module.body;
+    while (declaration != null) {
+        if (KrtNativeVisibleQualifiedName(declaration, scope, binding.source, start, length)) { return declaration; }
+        KrtAstNode imported = null; if (scope != null) { imported = scope.body; }
+        while (imported != null) {
+            if (imported.type_length == 0 && KrtDeclarationMatches(declaration, imported, binding.source, start, length)) {
+                if (found != null && found != declaration) { return null; }
+                found = declaration;
+            }
+            imported = imported.next;
+        }
+        declaration = declaration.next;
+    }
+    if (found != null) { return found; }
+    return null;
+}
+
+KrtAstNode KrtNativeFindGlobalExpression(KrtAstNode node, KrtNativeBinding binding) {
+    if (node.kind == KrtAstKind.Identifier) { return KrtNativeFindGlobal(binding, node.start, node.length); }
+    if (node.kind != KrtAstKind.Member) { return null; }
+    KrtAstNode first = node;
+    while (first.kind == KrtAstKind.Member) { first = first.left; }
+    if (first.kind != KrtAstKind.Identifier || KrtNativeFindName(binding, first.start, first.length) != null) { return null; }
+    return KrtNativeFindGlobal(binding, first.start, node.name_start + node.name_length - first.start);
+}
+
+bool KrtNativeRegisterGlobal(KrtAstNode declaration, KrtAstNode owner, KrtAstNode module, int64 source) {
+    KrtNativeGlobalState state = module.native_globals;
+    if (state == null || (owner != null && owner.native_generic_parameters != null)) { return false; }
+    KrtNativeGlobalEntry previous = state.first;
+    while (previous != null) {
+        if (previous.declaration == declaration) { return true; }
+        if (previous.owner == owner && KrtScopeEqual(previous.declaration.native_scope, declaration.native_scope, source) &&
+            KrtSemanticSameName(source, previous.declaration.name_start, previous.declaration.name_length, declaration.name_start, declaration.name_length)) {
+            state.output.error_start = declaration.start; return false;
+        }
+        previous = previous.next;
+    }
+    KrtNativeGlobalEntry entry = new KrtNativeGlobalEntry(); entry.declaration = declaration; entry.owner = owner;
+    if (state.first == null || declaration.start < state.first.declaration.start) { entry.next = state.first; state.first = entry; }
+    else {
+        KrtNativeGlobalEntry position = state.first;
+        while (position.next != null && position.next.declaration.start <= declaration.start) { position = position.next; }
+        entry.next = position.next; position.next = entry;
+    }
+    state.changed = true; declaration.native_context = owner;
+    if (!declaration.native_readonly) {
+        if (!KrtNativeAnnotateType(declaration, module, source, declaration.type_start, declaration.type_length)) {
+            state.output.error_start = declaration.type_start; return false;
+        }
+        declaration.native_global = state.output.global_count + 1;
+        state.output.global_count = state.output.global_count + (KrtNativeWideKind(declaration) ? 2 : 1);
+        if (state.output.global_count > 65536) { state.output.error_start = declaration.start; return false; }
+    }
+    return true;
+}
+
+bool KrtNativeCollectGlobals(KrtAstNode module, int64 source) {
+    KrtAstNode owner = null; KrtAstNode declaration = module.body;
+    while (true) {
+        while (declaration != null) {
+            if ((owner == null || declaration.native_static) &&
+                !KrtNativeRegisterGlobal(declaration, owner, module, source)) { return false; }
+            declaration = declaration.next;
+        }
+        if (owner == null) { owner = module.declarations; } else { owner = owner.next; }
+        while (owner != null && owner.native_generic_parameters != null) { owner = owner.next; }
+        if (owner == null) { break; }
+        declaration = owner.body;
+    }
+    return true;
+}
+
+bool KrtNativePrepareGlobals(KrtAstNode module, int64 source, KrtNativeModule output) {
+    KrtNativeGlobalState state = new KrtNativeGlobalState(); state.output = output; module.native_globals = state;
+    KrtAstNode initializer = KrtAstMake(KrtAstKind.Function, 0, 0);
+    initializer.op = 230; initializer.native_static = true; initializer.native_bound = true;
+    initializer.left = KrtAstMake(KrtAstKind.Block, 0, 0); state.initializer = initializer;
+    return KrtNativeCollectGlobals(module, source);
+}
+
+bool KrtNativeBindGlobalInitializers(KrtAstNode module, int64 source) {
+    if (!KrtNativeCollectGlobals(module, source)) { return false; }
+    KrtNativeGlobalState state = module.native_globals;
+    KrtAstNode initializer = state.initializer; KrtNativeGlobalEntry entry = state.first;
+    while (entry != null) {
+        KrtAstNode declaration = entry.declaration;
+        if (!entry.bound) {
+            entry.bound = true; state.changed = true;
+            if (!declaration.native_readonly && declaration.left != null) {
+                KrtAstNode context = KrtAstMake(KrtAstKind.Function, declaration.start, 0);
+                context.native_scope = declaration.native_scope; context.native_owner = entry.owner;
+                context.native_context = entry.owner; context.native_static = true;
+                KrtNativeBinding binding = new KrtNativeBinding();
+                binding.module = module; binding.unit = context; binding.source = source;
+                binding.slots = initializer.native_locals; binding.error_start = -1;
+                bool valid = false;
+                if (declaration.left.kind == KrtAstKind.ArrayLiteral && declaration.native_array) {
+                    valid = KrtNativeBindArrayLiteral(declaration.left, declaration, binding);
+                } else { valid = KrtNativeBindExpression(declaration.left, binding); }
+                if (!valid || !KrtNativeCompatibleValue(declaration, declaration.left)) {
+                    state.output.error_start = binding.error_start >= 0 ? binding.error_start : declaration.start; return false;
+                }
+                initializer.native_locals = binding.slots;
+                KrtAstNode target = KrtAstMake(KrtAstKind.Identifier, declaration.name_start, declaration.name_length);
+                if (!KrtNativeBindGlobal(target, declaration, binding)) { state.output.error_start = declaration.start; return false; }
+                KrtAstNode assignment = KrtAstMake(KrtAstKind.Assign, declaration.start, declaration.length);
+                assignment.left = target; assignment.right = declaration.left; entry.assignment = assignment;
+            }
+        }
+        entry = entry.next;
+    }
+    return true;
+}
+
+bool KrtNativeFinishGlobals(KrtAstNode module) {
+    KrtNativeGlobalState state = module.native_globals;
+    KrtAstNode last = null; KrtNativeGlobalEntry entry = state.first;
+    while (entry != null) {
+        if (entry.assignment != null) {
+            if (last == null) { state.initializer.left.left = entry.assignment; } else { last.next = entry.assignment; }
+            last = entry.assignment;
+        }
+        entry = entry.next;
+    }
+    if (last != null) { KrtParserAppendDeclaration(module, state.initializer); }
+    return true;
+}

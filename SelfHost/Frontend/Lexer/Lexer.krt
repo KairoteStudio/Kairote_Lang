@@ -41,6 +41,8 @@ bool KrtLexerInit(KrtLexer lexer, byte* source, int64 length) {
     lexer.length = length; lexer.position = 0; lexer.line = 1; lexer.column = 1; return true;
 }
 
+bool Init(KrtLexer lexer, byte* source, int64 length) { return KrtLexerInit(lexer, source, length); }
+
 int64 lexer_at(KrtLexer lexer, int64 offset) {
     int64 index = lexer.position + offset;
     if (index < 0 || index >= lexer.length) { return -1; }
@@ -49,6 +51,13 @@ int64 lexer_at(KrtLexer lexer, int64 offset) {
 
 bool lexer_letter(int64 value) { return (value >= 65 && value <= 90) || (value >= 97 && value <= 122) || value == 95; }
 bool lexer_digit(int64 value) { return value >= 48 && value <= 57; }
+
+int64 lexer_hex_digit(int64 value) {
+    if (value >= 48 && value <= 57) { return value - 48; }
+    if (value >= 65 && value <= 70) { return value - 55; }
+    if (value >= 97 && value <= 102) { return value - 87; }
+    return -1;
+}
 
 void lexer_advance(KrtLexer lexer) {
     if (lexer.position >= lexer.length) { return; }
@@ -59,6 +68,8 @@ void lexer_advance(KrtLexer lexer) {
         lexer.column = 1;
     } else { lexer.column = lexer.column + 1; }
 }
+
+void Advance(KrtLexer lexer) { lexer_advance(lexer); }
 
 void lexer_mark(KrtLexer lexer, KrtToken token) {
     token.Reset(lexer.position, lexer.line, lexer.column);
@@ -80,6 +91,8 @@ void lexer_skip(KrtLexer lexer, KrtToken token) {
 }
 
 void KrtLexerNext(KrtLexer lexer, KrtToken token) {
+    // An invalid token is recoverable; never leave the cursor stuck on it.
+    lexer_mark(lexer, token);
     lexer_skip(lexer, token);
     if (token.kind == KrtTokenKind.Invalid) { return; }
     lexer_mark(lexer, token); int64 first = lexer_at(lexer, 0);
@@ -87,9 +100,30 @@ void KrtLexerNext(KrtLexer lexer, KrtToken token) {
     if (lexer_letter(first)) {
         token.SetKind(KrtTokenKind.Identifier);
         while (lexer_letter(lexer_at(lexer, 0)) || lexer_digit(lexer_at(lexer, 0))) { lexer_advance(lexer); }
-    } else if (lexer_digit(first)) {
+    } else if (lexer_digit(first) || (first == 46 && lexer_digit(lexer_at(lexer, 1)))) {
         token.SetKind(KrtTokenKind.Integer);
-        while (lexer_digit(lexer_at(lexer, 0))) { lexer_advance(lexer); }
+        if (first == 48 && (lexer_at(lexer, 1) == 120 || lexer_at(lexer, 1) == 88)) {
+            lexer_advance(lexer); lexer_advance(lexer);
+            int64 digits_start = lexer.position;
+            while (lexer_hex_digit(lexer_at(lexer, 0)) >= 0) { lexer_advance(lexer); }
+            if (lexer.position == digits_start) { token.SetError(5); }
+        } else {
+            while (lexer_digit(lexer_at(lexer, 0))) { lexer_advance(lexer); }
+            if (lexer_at(lexer, 0) == 46 && (lexer_digit(lexer_at(lexer, 1)) || !lexer_letter(lexer_at(lexer, 1)) || lexer_at(lexer, 1) == 101 || lexer_at(lexer, 1) == 69 || lexer_at(lexer, 1) == 102 || lexer_at(lexer, 1) == 70 || lexer_at(lexer, 1) == 100 || lexer_at(lexer, 1) == 68)) {
+                token.SetKind(KrtTokenKind.Floating); lexer_advance(lexer);
+                while (lexer_digit(lexer_at(lexer, 0))) { lexer_advance(lexer); }
+            }
+            if (lexer_at(lexer, 0) == 101 || lexer_at(lexer, 0) == 69) {
+                token.SetKind(KrtTokenKind.Floating); lexer_advance(lexer);
+                if (lexer_at(lexer, 0) == 43 || lexer_at(lexer, 0) == 45) { lexer_advance(lexer); }
+                if (!lexer_digit(lexer_at(lexer, 0))) { token.SetError(5); }
+                while (lexer_digit(lexer_at(lexer, 0))) { lexer_advance(lexer); }
+            }
+            if (lexer_at(lexer, 0) == 102 || lexer_at(lexer, 0) == 70 || lexer_at(lexer, 0) == 100 || lexer_at(lexer, 0) == 68) {
+                if (token.kind != KrtTokenKind.Invalid) { token.SetKind(KrtTokenKind.Floating); }
+                lexer_advance(lexer);
+            }
+        }
         if (lexer_letter(lexer_at(lexer, 0))) { token.SetError(5); }
     } else if (first == 34 || first == 39) {
         int64 quote = first; token.SetKind(quote == 39 ? KrtTokenKind.Character : KrtTokenKind.String); lexer_advance(lexer);
@@ -103,10 +137,27 @@ void KrtLexerNext(KrtLexer lexer, KrtToken token) {
     } else {
         token.SetKind(KrtTokenKind.Punctuation); lexer_advance(lexer);
         int64 second = lexer_at(lexer, 0);
-        if ((first == 61 || first == 33 || first == 60 || first == 62 || first == 43 || first == 45) && second == 61) { lexer_advance(lexer); }
+        if ((first == 61 || first == 33 || first == 60 || first == 62 || first == 43 || first == 45 ||
+             first == 42 || first == 47 || first == 37 || first == 38 || first == 124 || first == 94) && second == 61) { lexer_advance(lexer); }
         else if (first == 61 && second == 62) { lexer_advance(lexer); }
         else if (first == 63 && (second == 63 || second == 46)) { lexer_advance(lexer); }
         else if ((first == 38 || first == 124 || first == 43 || first == 45 || first == 60 || first == 62) && second == first) { lexer_advance(lexer); }
     }
     token.SetLength(lexer.position - token.start);
+}
+
+// Physical storage rounds to 1/2/4/8 bytes; semantic precision stays distinct.
+int32 lexer_integer_type_bits(int64 source, int64 start, int64 length) {
+    unsafe(using krt.mem;) {
+        byte* bytes = (byte*)source; int64 index = start; int64 end = start + length;
+        if (index < end && bytes[index] == 117) { index = index + 1; }
+        if (index + 3 >= end || bytes[index] != 105 || bytes[index + 1] != 110 || bytes[index + 2] != 116) { return 0; }
+        index = index + 3; int32 bits = 0;
+        while (index < end) {
+            if (bytes[index] < 48 || bytes[index] > 57 || bits > 128) { return 0; }
+            bits = bits * 10 + bytes[index] - 48; index = index + 1;
+        }
+        if (bits >= 2 && bits <= 64 && bits % 2 == 0) { return bits; }
+        return bits == 128 ? 128 : 0;
+    }
 }

@@ -1,4 +1,4 @@
-enum KrtAstKind { Invalid = 0, Program = 1, Function = 2, Block = 3, Return = 4, Integer = 5, Identifier = 6, String = 7, Binary = 8, Unary = 9, Type = 10, Variable = 11, Call = 12, If = 13, While = 14, Member = 15, Assign = 16, Expression = 17, New = 18, StackAlloc = 19, Index = 20, Boolean = 21, Cast = 22, Unsafe = 23, Delete = 24, Ternary = 25, Null = 26, Break = 27, Continue = 28, DoWhile = 29, For = 30, CompoundAssign = 31, ArrayLiteral = 32, Switch = 33, Case = 34, Default = 35, Foreach = 36, Try = 37, Catch = 38, Finally = 39, Throw = 40, Lambda = 41, YieldReturn = 42, YieldBreak = 43, Lock = 44, Await = 45, Fixed = 46, Sizeof = 47, DefaultValue = 48 }
+enum KrtAstKind { Invalid = 0, Program = 1, Function = 2, Block = 3, Return = 4, Integer = 5, Identifier = 6, String = 7, Binary = 8, Unary = 9, Type = 10, Variable = 11, Call = 12, If = 13, While = 14, Member = 15, Assign = 16, Expression = 17, New = 18, StackAlloc = 19, Index = 20, Boolean = 21, Cast = 22, Unsafe = 23, Delete = 24, Ternary = 25, Null = 26, Break = 27, Continue = 28, DoWhile = 29, For = 30, CompoundAssign = 31, ArrayLiteral = 32, Switch = 33, Case = 34, Default = 35, Foreach = 36, Try = 37, Catch = 38, Finally = 39, Throw = 40, Lambda = 41, YieldReturn = 42, YieldBreak = 43, Lock = 44, Await = 45, Fixed = 46, Sizeof = 47, DefaultValue = 48, TypeDeclaration = 49, Floating = 50 }
 
 // AST nodes own child arrays; token spans continue to borrow source storage.
 class KrtAstNode {
@@ -12,6 +12,7 @@ class KrtAstNode {
     public KrtAstNode alternate;
     // Loop bodies must not share the sibling-list link.
     public KrtAstNode body;
+    public KrtAstNode declarations;
     public int32 op;
     public bool grouped;
     public int32 parameter_count;
@@ -27,6 +28,52 @@ class KrtAstNode {
     public int64 value;
     public int32 local_slot;
     public int32 element_width;
+    public KrtAstNode native_type;
+    public int32 native_width;
+    public int32 native_float;
+    public int32 native_error;
+    public int32 native_bits;
+    public bool native_wide;
+    public int64 native_high;
+    public bool native_element_boolean;
+    public int32 native_stride;
+    public int32 native_offset;
+    public int32 native_size;
+    public bool native_ref;
+    public int32 native_locals;
+    public bool native_bound;
+    public bool native_unsigned;
+    public bool native_element_unsigned;
+    public bool native_element_string;
+    public bool native_boolean;
+    public bool native_void_pointer;
+    public bool native_array;
+    public bool native_string;
+    public int32 native_global;
+    public KrtNativeGlobalState native_globals;
+    public KrtAstNode native_function_pointer;
+    public bool native_static;
+    public bool native_readonly;
+    public KrtAstNode native_scope;
+    public KrtAstNode native_context;
+    public KrtAstNode native_generic_parameters;
+    public KrtAstNode native_constraints;
+    public int32 native_constraint_depth;
+    public KrtAstNode native_type_arguments;
+    public KrtAstNode native_generic_origin;
+    public KrtAstNode native_instances;
+    public KrtAstNode native_owner;
+    public KrtAstNode native_target;
+    public KrtAstNode native_external_next;
+    public KrtAstNode native_base;
+    public KrtAstNode native_interfaces;
+    public KrtAstNode native_base_call;
+    public int32 native_inheritance_state;
+    public bool native_virtual;
+    public bool native_override;
+    public bool native_abstract;
+    public KrtAstNode native_dispatch_slot;
+    public int32 native_dispatch_state;
 }
 
 KrtAstNode KrtAstMakeBinary(int32 operation, KrtAstNode left, KrtAstNode right) {
@@ -53,6 +100,7 @@ KrtAstNode KrtAstMake(KrtAstKind kind, int64 start, int64 length) {
     node.length = length;
     node.child_count = 0;
     node.local_slot = -1;
+    node.native_width = 8;
     return node;
 }
 

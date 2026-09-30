@@ -1,0 +1,53 @@
+// A failed receiver/type guard terminates deterministically, like the existing
+// allocation guards. Its operands never read through a null object pointer.
+bool KrtNativeLowerDispatchTrap(KrtNativeModule module) {
+    return KrtNativeEmit(module, (int32)KrtNativeOp.Const, 60, 0) >= 0 &&
+        KrtNativeEmit(module, (int32)KrtNativeOp.Const, 126, 0) >= 0 &&
+        KrtNativeEmit(module, (int32)KrtNativeOp.Syscall, 0, 2) >= 0 &&
+        KrtNativeEmit(module, (int32)KrtNativeOp.Drop, 0, 0) >= 0;
+}
+
+bool KrtNativeLowerDispatch(KrtAstNode expression, KrtAstNode ast, KrtNativeModule module, int64 source) {
+    KrtAstNode selected = expression.native_target;
+    if (!KrtNativeLowerExpression(expression.left.left, ast, module, source) ||
+        KrtNativeEmit(module, (int32)KrtNativeOp.StoreLocal, expression.local_slot, 0) < 0 ||
+        KrtNativeEmit(module, (int32)KrtNativeOp.LoadLocal, expression.local_slot, 0) < 0) { return false; }
+    int32 present = KrtNativeEmit(module, (int32)KrtNativeOp.Branch, -1, -1);
+    if (present < 0 || !KrtNativeLowerDispatchTrap(module)) { return false; }
+    module.extra[present] = present + 1; module.args[present] = module.count;
+    int32 patches = -1; int64 identity = 64; KrtAstNode actual = ast.declarations;
+    while (actual != null) {
+        if (actual.value == 1 && !actual.native_abstract && actual.native_generic_parameters == null && KrtNativeDerivesFrom(actual, selected.native_owner)) {
+            KrtAstNode target = selected.native_owner.value == 3 ? KrtNativeFindInterfaceImplementation(actual, selected, ast, source) :
+                KrtNativeFindVirtualImplementation(actual, selected.native_dispatch_slot);
+            if (target == null || target.native_abstract) { return false; }
+            if (KrtNativeEmit(module, (int32)KrtNativeOp.LoadLocal, expression.local_slot, 0) < 0 ||
+                KrtNativeEmit(module, (int32)KrtNativeOp.Load, 0, 8) < 0 || KrtNativeEmit(module, (int32)KrtNativeOp.Const, identity, 0) < 0 ||
+                KrtNativeEmit(module, (int32)KrtNativeOp.Compare, 61, 0) < 0) { return false; }
+            int32 branch = KrtNativeEmit(module, (int32)KrtNativeOp.Branch, -1, -1);
+            if (branch < 0 || KrtNativeEmit(module, (int32)KrtNativeOp.FunctionAddress, target.value, 0) < 0) { return false; }
+            int32 patch = KrtNativeEmit(module, (int32)KrtNativeOp.Jump, -1, patches);
+            if (patch < 0) { return false; }
+            patches = patch; module.args[branch] = branch + 1; module.extra[branch] = module.count;
+        }
+        actual = actual.next; identity = identity + 1;
+    }
+    if (!KrtNativeLowerDispatchTrap(module) || KrtNativeEmit(module, (int32)KrtNativeOp.Const, 0, 0) < 0) { return false; }
+    while (patches >= 0) {
+        int32 previous = (int32)module.extra[patches]; module.args[patches] = module.count; module.extra[patches] = 0; patches = previous;
+    }
+    if (KrtNativeEmit(module, (int32)KrtNativeOp.LoadLocal, expression.local_slot, 0) < 0) { return false; }
+    KrtAstNode argument = expression.right; int32 index = 1;
+    while (argument != null) {
+        if (!KrtNativeLowerExpression(argument, ast, module, source)) { return false; }
+        if (!selected.parameter_refs[index]) {
+            KrtAstNode expected = KrtAstMake(KrtAstKind.Type, argument.start, 0);
+            expected.native_scope = selected.native_scope; expected.native_context = selected.native_context;
+            if (!KrtNativeAnnotateType(expected, ast, source, selected.parameter_type_starts[index], selected.parameter_type_lengths[index]) ||
+                !KrtNativeConvertValue(module, argument, expected)) { return false; }
+        }
+        argument = argument.next; index = index + 1;
+    }
+    return KrtNativeEmit(module, (int32)KrtNativeOp.IndirectCall, 0, index) >= 0 &&
+        (KrtNativeWideKind(expression) || KrtNativeEmit(module, (int32)KrtNativeOp.Cast, KrtNativeValueWidth(expression), 0) >= 0);
+}

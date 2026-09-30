@@ -4,7 +4,7 @@
 #include <string.h>
 
 static void print_usage(const char* program) {
-    printf("Usage: %s <input.kro> [-o output] [--target pe|elf]\n", program);
+    printf("Usage: %s <input.kro> [more-inputs.kro ...] [-o output] [--target pe|elf]\n", program);
     printf("\nOptions:\n");
     printf("  -o <path>  Specify output path (default: a.out)\n");
     printf("  -t, --target pe|elf  Select output format (default: pe)\n");
@@ -39,7 +39,8 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    const char* input_path = NULL;
+    char** input_paths = argv + 1;
+    int input_count = 0;
     const char* output_path = "a.out";
     ArkLinkTarget target = ARK_LINK_TARGET_PE;
 
@@ -55,11 +56,11 @@ int main(int argc, char** argv) {
             else if (strcmp(target_name, "pe") == 0) target = ARK_LINK_TARGET_PE;
             else { fprintf(stderr, "Unknown target: %s\n", target_name); return 1; }
         } else if (argv[i][0] != '-') {
-            input_path = argv[i];
+            input_paths[input_count++] = argv[i];
         }
     }
 
-    if (!input_path) {
+    if (input_count == 0) {
         fprintf(stderr, "No input file specified\n");
         print_usage(argv[0]);
         return 1;
@@ -87,11 +88,13 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    result = arklink_session_add_input(session, input_path);
-    if (result != ARK_LINK_OK) {
-        fprintf(stderr, "%s\n", arklink_session_get_error(session));
-        arklink_session_destroy(session);
-        return 1;
+    for (int i = 0; i < input_count; ++i) {
+        result = arklink_session_add_input(session, input_paths[i]);
+        if (result != ARK_LINK_OK) {
+            fprintf(stderr, "%s\n", arklink_session_get_error(session));
+            arklink_session_destroy(session);
+            return 1;
+        }
     }
 
     result = arklink_session_link(session);
