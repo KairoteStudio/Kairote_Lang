@@ -160,158 +160,20 @@ zig build -Doptimize=ReleaseSafe
 zig build run --
 ```
 
-### 构建配置
-
-构建配置文件：`Cradle.config.json`
-
-```json
-{
-    "compiler": {
-        "name": "gcc",
-        "flags": ["-Wall", "-Wextra"],
-        "include_paths": ["src"],
-        "library_paths": ["lib"],
-        "libraries": ["m"]
-    },
-    "linker": {
-        "name": "gcc",
-        "flags": []
-    },
-    "output": {
-        "directory": "bin",
-        "executable": "e_sharp"
-    }
-}
-```
-
 ## 开发环境设置
 
 ### 必需工具
 
 1. **编译器**
-   - GCC (推荐 7.0+)
-   - Clang (可选)
+   - Zig 0.17.0+
 
-2. **构建工具**
-   - Python 3.6+
-   - Make (可选)
-
-3. **调试工具**
-   - GDB
-   - Valgrind (内存检查)
-
-### IDE配置
-
-#### Visual Studio Code
-
-推荐扩展：
-- C/C++ Extension Pack
-- Python Extension
-- GitLens
-
-配置文件 `.vscode/settings.json`:
-
-```json
-{
-    "files.associations": {
-        "*.h": "c",
-        "*.c": "c"
-    },
-    "C_Cpp.default.configurationProvider": "ms-vscode.cpptools",
-    "C_Cpp.default.cppStandard": "c11",
-    "C_Cpp.default.intelliSenseMode": "gcc-x64"
-}
-```
-
-#### Vim/Neovim
-
-配置文件 `.vimrc` 或 `init.vim`:
-
-```vim
-" C语言配置
-set cindent
-set cinoptions=:0,g0,(0,Ws
-syntax on
-highlight ExtraWhitespace ctermbg=red guibg=red
-match ExtraWhitespace /\s\+$/
-```
+2. **调试工具**
+   - LLVM/GDB
 
 ## 代码结构
 
-### 目录结构
-
-```
-src/
-├── compiler/               # 编译器核心
-│   ├── driver/            # 驱动程序
-│   ├── frontend/          # 前端（词法、语法、语义分析）
-│   ├── middle/            # 中端（IR生成和优化）
-│   ├── backend/           # 后端（代码生成）
-│   └── pipeline/          # 编译流水线
-├── core/                  # 核心工具
-│   ├── memory/            # 内存管理
-│   ├── platform/          # 平台抽象
-│   └── utils/             # 通用工具
-├── runtime/               # 运行时系统
-└── vm/                    # 虚拟机
-```
-
 ### 命名约定
-
-#### 文件命名
-
-- C源文件：小写字母，下划线分隔（如 `semantic_analyzer.c`）
-- 头文件：小写字母，下划线分隔（如 `semantic_analyzer.h`）
-
-#### 函数命名
-
-- 公共API：模块前缀 + 下划线 + 描述性名称（如 `KrtCompilerCreate`）
-- 内部函数：小写字母，下划线分隔（如 `process_statement`）
-
-#### 变量命名
-
-- 局部变量：小写字母，下划线分隔（如 `current_token`）
-- 全局变量：模块前缀 + 下划线（如 `g_compiler_config`）
-
-#### 类型命名
-
-- 结构体/枚举：大驼峰命名（如 `KrtCompiler`）
-- 类型定义：模块前缀 + 下划线 + 大驼峰（如 `KrtTokenType`）
-
-### 注释规范
-
-#### 文件头注释
-
-```c
-/**
- * @file semantic_analyzer.c
- * @brief 语义分析器实现
- * @author Kairote Lang Team
- * @date 2023-01-01
- */
-```
-
-#### 函数注释
-
-```c
-/**
- * @brief 执行语义分析
- * @param analyzer 语义分析器实例
- * @param node 要分析的AST节点
- * @return 分析结果状态码
- */
-int semantic_analyzer_analyze(SemanticAnalyzer* analyzer, ASTNode* node);
-```
-
-#### 行内注释
-
-```c
-// 检查类型是否匹配
-if (left_type != right_type) {
-    // 报告类型错误
-    report_type_error(left_type, right_type);
-}
-```
+见../../../DevStand.md
 
 ## 编译流程
 
@@ -545,144 +407,11 @@ IROptimizer* ir_optimizer_create(void) {
 }
 ```
 
-## 调试和测试
+## 测试
 
-### 调试技巧
+#### 1. 测试
 
-#### 1. 使用调试信息
-
-编译时添加调试标志：
-
-```bash
-gcc -g -DDEBUG -o e_sharp source_files.c
-```
-
-#### 2. 打印调试信息
-
-使用调试宏：
-
-```c
-#ifdef DEBUG
-    #define DEBUG_PRINT(fmt, ...) fprintf(stderr, "[DEBUG] " fmt "\n", ##__VA_ARGS__)
-#else
-    #define DEBUG_PRINT(fmt, ...)
-#endif
-
-DEBUG_PRINT("Processing token: %s", token_type_to_string(token.type));
-```
-
-#### 3. 使用GDB
-
-```bash
-gdb ./e_sharp
-(gdb) run input.es
-(gdb) bt  # 查看调用栈
-(gdb) p variable  # 打印变量值
-```
-
-### 测试框架
-
-#### 1. 单元测试
-
-测试目录：`tests/unit/`
-
-测试示例：
-
-```c
-// tests/unit/test_tokenizer.c
-#include "src/compiler/frontend/lexer/tokenizer.h"
-#include <assert.h>
-#include <stdio.h>
-
-void test_tokenizer() {
-    Lexer* lexer = lexer_create("var x = 42;");
-    Token token = lexer_next_token(lexer);
-    assert(token.type == TOKEN_VAR);
-    
-    token = lexer_next_token(lexer);
-    assert(token.type == TOKEN_IDENTIFIER);
-    assert(strcmp(token.value, "x") == 0);
-    
-    // 更多测试...
-    
-    lexer_destroy(lexer);
-    printf("Tokenizer tests passed!\n");
-}
-
-int main() {
-    test_tokenizer();
-    return 0;
-}
-```
-
-#### 2. 集成测试
-
-测试目录：`tests/integration/`
-
-测试示例：
-
-```KrtL
-// tests/integration/hello_world.es
-function main() {
-    print("Hello, World!");
-}
-```
-
-测试脚本：
-
-```bash
-#!/bin/bash
-# tests/integration/run_tests.sh
-
-for file in *.es; do
-    echo "Testing $file..."
-    ../e_sharp $file > output.asm
-    if [ $? -eq 0 ]; then
-        echo "✓ $file compiled successfully"
-    else
-        echo "✗ $file failed to compile"
-    fi
-done
-```
-
-#### 3. 性能测试
-
-测试目录：`tests/performance/`
-
-测试示例：
-
-```KrtL
-// tests/performance/fibonacci.es
-function fibonacci(n: int): int {
-    if (n <= 1) {
-        return n;
-    }
-    return fibonacci(n - 1) + fibonacci(n - 2);
-}
-
-function main() {
-    var start = timer_start();
-    var result = fibonacci(30);
-    var elapsed = timer_elapsed();
-    print("Result: " + result);
-    print("Time: " + elapsed + " seconds");
-}
-```
-
-### 内存检查
-
-使用Valgrind检查内存泄漏：
-
-```bash
-valgrind --leak-check=full ./e_sharp input.es
-```
-
-使用AddressSanitizer：
-
-```bash
-gcc -fsanitize=address -g -o e_sharp source_files.c
-./e_sharp input.es
-```
+请根据Test/Readme.md引导进行测试
 
 ## 贡献指南
 
@@ -706,17 +435,17 @@ gcc -fsanitize=address -g -o e_sharp source_files.c
 ```
 
 类型：
-- `feat`: 新功能
-- `fix`: 修复bug
-- `docs`: 文档更新
-- `style`: 代码格式调整
-- `refactor`: 代码重构
-- `test`: 测试相关
-- `chore`: 构建过程或辅助工具的变动
+- `Feat`: 新功能
+- `Fix`: 修复bug
+- `Docs`: 文档更新
+- `Style`: 代码格式调整
+- `Refactor`: 代码重构
+- `Test`: 测试相关
+- `Chore`: 构建过程或辅助工具的变动
 
 示例：
 ```
-feat(lexer): 添加对字符串插值的支持
+Feat(Lexer): 添加对字符串插值的支持
 
 实现了词法分析器对字符串插值语法的支持，允许在字符串中嵌入表达式。
 
@@ -729,7 +458,7 @@ feat(lexer): 添加对字符串插值的支持
 
 1. 创建Pull Request
 2. 至少需要一位维护者审查
-3. 通过所有自动化测试
+3. 通过所有自动化测试(或通过允许的不完全通过测试)
 4. 解决审查意见
 
 ### 发布流程
@@ -750,6 +479,4 @@ feat(lexer): 添加对字符串插值的支持
 - [ ] 性能测试通过
 - [ ] 安全审查完成
 
----
-
-*本开发者指南涵盖了Kairote Lang编译器的架构、开发和贡献流程。更多详细信息请参考API文档和语言规范。*
+--- 
