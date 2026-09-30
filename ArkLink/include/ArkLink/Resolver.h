@@ -16,6 +16,7 @@ typedef struct ArkResolverSymbol {
     ArkSymbolVisibility visibility;
     ArkSectionBuffer* section;
     uint32_t section_index;
+    int defined; /* Section indexes are zero based; zero is a valid definition. */
     uint32_t value;
     uint32_t size;
     int32_t import_id;

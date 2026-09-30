@@ -1,0 +1,57 @@
+bool KrtKroNativeGlobalAddress(KrtKroObject output, ref int32 pc, int32 slot, int32 slots) {
+    if (slot < 0 || slot >= slots) { return false; }
+    // lea rax,[r14 + slot*8]; push rax
+    return KrtKroNativeCode(output, ref pc, 0x868d49, 3) &&
+        KrtKroNativeU32(output, ref pc, slot * 8) && KrtKroNativeByte(output, ref pc, 80);
+}
+
+bool KrtKroNativeGlobalsStart(KrtKroObject output, ref int32 pc, int32 slots) {
+    if (slots <= 0) { return true; }
+    if (slots > 65536) { return false; }
+    // mmap anonymous writable storage; r14 is the process-wide global base.
+    if (!KrtKroNativeCode(output, ref pc, 0xff31, 2) ||
+        !KrtKroNativeByte(output, ref pc, 190) || !KrtKroNativeU32(output, ref pc, slots * 8) ||
+        !KrtKroNativeByte(output, ref pc, 186) || !KrtKroNativeU32(output, ref pc, 3) ||
+        !KrtKroNativeCode(output, ref pc, 0xba41, 2) || !KrtKroNativeU32(output, ref pc, 34) ||
+        !KrtKroNativeCode(output, ref pc, 0xb849, 2) || !KrtKroNativeU64(output, ref pc, -1) ||
+        !KrtKroNativeCode(output, ref pc, 0xc93145, 3) ||
+        !KrtKroNativeByte(output, ref pc, 184) || !KrtKroNativeU32(output, ref pc, 9) ||
+        !KrtKroNativeCode(output, ref pc, 0x050f, 2) ||
+        !KrtKroNativeCode(output, ref pc, 0xc08548, 3) ||
+        !KrtKroNativeCode(output, ref pc, 0x890f, 2)) { return false; }
+    int32 success = pc;
+    if (!KrtKroNativeU32(output, ref pc, 0) ||
+        !KrtKroNativeByte(output, ref pc, 191) || !KrtKroNativeU32(output, ref pc, 127) ||
+        !KrtKroNativeByte(output, ref pc, 184) || !KrtKroNativeU32(output, ref pc, 60) ||
+        !KrtKroNativeCode(output, ref pc, 0x050f, 2) ||
+        !KrtKroEmitTextU32(output, success, pc - success - 4)) { return false; }
+    return KrtKroNativeCode(output, ref pc, 0xc68949, 3);
+}
+
+bool KrtKroNativeIndirectCall(KrtKroObject output, ref int32 pc, int32 arity, int32 scratch) {
+    if (arity < 0 || arity > 32) { return false; }
+    int32 argument = arity - 1;
+    while (argument >= 6) {
+        if (!KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeFrameStore(output, ref pc, scratch + argument - 6)) { return false; }
+        argument = argument - 1;
+    }
+    while (argument >= 0) {
+        if (!KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeMoveArg(output, ref pc, argument)) { return false; }
+        argument = argument - 1;
+    }
+    if (!KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeFrameStore(output, ref pc, scratch + 27) ||
+        !KrtKroNativeCode(output, ref pc, 0xe08948, 3) || !KrtKroNativeFrameStore(output, ref pc, scratch + 26) ||
+        !KrtKroNativeCode(output, ref pc, 0xf0e48348, 4)) { return false; }
+    int32 stacked = arity > 6 ? arity - 6 : 0;
+    if ((stacked & 1) != 0 && !KrtKroNativeCode(output, ref pc, 0x08ec8348, 4)) { return false; }
+    argument = stacked - 1;
+    while (argument >= 0) {
+        if (!KrtKroNativeFrameLoad(output, ref pc, scratch + argument)) { return false; }
+        argument = argument - 1;
+    }
+    // Load the saved pointer without changing the already aligned argument stack.
+    if (!KrtKroNativeCode(output, ref pc, 0x858b48, 3) || !KrtKroNativeU32(output, ref pc, -8 * (scratch + 28)) ||
+        !KrtKroNativeCode(output, ref pc, 0xd0ff, 2) ||
+        !KrtKroNativeCode(output, ref pc, 0xa58b48, 3) || !KrtKroNativeU32(output, ref pc, -8 * (scratch + 27))) { return false; }
+    return KrtKroNativeByte(output, ref pc, 80);
+}

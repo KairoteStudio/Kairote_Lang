@@ -1,0 +1,100 @@
+// Dispatch slots are declarations, not names: ordinary hiding starts a distinct
+// method and cannot silently replace a virtual slot inherited from a base.
+bool KrtNativeMethodSignatureEqual(KrtAstNode first, KrtAstNode second, KrtAstNode module, int64 source, bool include_return) {
+    if (first.parameter_count != second.parameter_count || first.native_static != second.native_static ||
+        !KrtSemanticSameName(source, first.name_start, first.name_length, second.name_start, second.name_length)) { return false; }
+    int32 index = first.native_static ? 0 : 1;
+    while (index < first.parameter_count) {
+        if (first.parameter_refs[index] != second.parameter_refs[index]) { return false; }
+        KrtAstNode a = KrtAstMake(KrtAstKind.Type, first.start, 0); a.native_scope = first.native_scope; a.native_context = first.native_context;
+        KrtAstNode b = KrtAstMake(KrtAstKind.Type, second.start, 0); b.native_scope = second.native_scope; b.native_context = second.native_context;
+        if (!KrtNativeAnnotateType(a, module, source, first.parameter_type_starts[index], first.parameter_type_lengths[index]) ||
+            !KrtNativeAnnotateType(b, module, source, second.parameter_type_starts[index], second.parameter_type_lengths[index]) || !KrtNativeExactFunctionValue(a, b)) { return false; }
+        index = index + 1;
+    }
+    if (!include_return) { return true; }
+    bool first_void = first.type_length == 0 || KrtNativeSpanWord(source, first.type_start, first.type_length, "void");
+    bool second_void = second.type_length == 0 || KrtNativeSpanWord(source, second.type_start, second.type_length, "void");
+    if (first_void || second_void) { return first_void && second_void; }
+    KrtAstNode a = KrtAstMake(KrtAstKind.Type, first.start, 0); a.native_scope = first.native_scope; a.native_context = first.native_context;
+    KrtAstNode b = KrtAstMake(KrtAstKind.Type, second.start, 0); b.native_scope = second.native_scope; b.native_context = second.native_context;
+    return KrtNativeAnnotateType(a, module, source, first.type_start, first.type_length) &&
+        KrtNativeAnnotateType(b, module, source, second.type_start, second.type_length) && KrtNativeExactFunctionValue(a, b);
+}
+
+KrtAstNode KrtNativeFindVirtualImplementation(KrtAstNode actual, KrtAstNode slot) {
+    while (actual != null) {
+        KrtAstNode method = actual.declarations;
+        while (method != null && method.native_owner == actual) {
+            if (method.native_dispatch_slot == slot) { return method; }
+            method = method.next;
+        }
+        actual = actual.native_base;
+    }
+    return null;
+}
+
+bool KrtNativePrepareDispatch(KrtAstNode type, KrtAstNode module, int64 source) {
+    if (type.native_dispatch_state == 2) { return true; }
+    if (type.native_dispatch_state == 1 || type.native_dispatch_state == 3) { return false; }
+    if (type.native_generic_parameters != null || type.value == 4) { return true; }
+    type.native_dispatch_state = 1;
+    if (type.native_base != null && !KrtNativePrepareDispatch(type.native_base, module, source)) { type.native_dispatch_state = 3; return false; }
+    KrtAstNode method = type.declarations;
+    while (method != null && method.native_owner == type) {
+        if ((method.op == 223 && !method.native_abstract) || (method.native_abstract && !type.native_abstract) ||
+            (method.native_virtual && (method.native_static || method.op == 220 || method.op == 221 || method.native_generic_parameters != null))) { type.native_dispatch_state = 3; return false; }
+        if (method.native_virtual) {
+            KrtAstNode previous = type.declarations;
+            while (previous != method) {
+                if (KrtNativeMethodSignatureEqual(method, previous, module, source, false)) { type.native_dispatch_state = 3; return false; }
+                previous = previous.next;
+            }
+            method.native_dispatch_slot = method;
+        }
+        if (method.native_override) {
+            KrtAstNode base_type = type.native_base; KrtAstNode overridden = null;
+            while (base_type != null && overridden == null) {
+                KrtAstNode candidate = base_type.declarations;
+                while (candidate != null && candidate.native_owner == base_type) {
+                    if (KrtNativeMethodSignatureEqual(method, candidate, module, source, false)) { overridden = candidate; break; }
+                    candidate = candidate.next;
+                }
+                base_type = base_type.native_base;
+            }
+            if (overridden == null) {
+                if (!KrtNativeMethodImplementsInterface(method, module, source)) { type.native_dispatch_state = 3; return false; }
+            } else {
+                if (!overridden.native_virtual || !KrtNativeMethodSignatureEqual(method, overridden, module, source, true)) { type.native_dispatch_state = 3; return false; }
+                method.native_dispatch_slot = overridden.native_dispatch_slot;
+            }
+        }
+        method = method.next;
+    }
+    if (!type.native_abstract) {
+        KrtAstNode base_type = type;
+        while (base_type != null) {
+            method = base_type.declarations;
+            while (method != null && method.native_owner == base_type) {
+                if (method.native_abstract) {
+                    KrtAstNode implementation = KrtNativeFindVirtualImplementation(type, method.native_dispatch_slot);
+                    if (implementation == null || implementation.native_abstract) { type.native_dispatch_state = 3; return false; }
+                }
+                method = method.next;
+            }
+            base_type = base_type.native_base;
+        }
+    }
+    type.native_dispatch_state = 2;
+    return KrtNativeValidateInterfaces(type, module, source);
+}
+
+bool KrtNativeBindDispatchCall(KrtAstNode node, KrtNativeBinding binding) {
+    KrtAstNode method = node.native_target;
+    if (method == null || !method.native_virtual) { return true; }
+    KrtAstNode receiver = node.left.left;
+    bool base_call = receiver.kind == KrtAstKind.Identifier && receiver.op == 212;
+    if (base_call) { return !method.native_abstract || KrtNativeBindingError(binding, node); }
+    node.native_virtual = true; node.local_slot = binding.slots; binding.slots = binding.slots + 1;
+    return true;
+}

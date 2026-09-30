@@ -1,0 +1,38 @@
+bool KrtNativeConvertWide(KrtNativeModule module, KrtAstNode original, KrtAstNode target) {
+    bool source_wide = KrtNativeWideKind(original); bool target_wide = KrtNativeWideKind(target);
+    if (source_wide && target.native_boolean) { return KrtNativeEmit(module, (int32)KrtNativeOp.WideUnary, 33, 0) >= 0 && KrtNativeEmit(module, (int32)KrtNativeOp.BoolNot, 0, 0) >= 0; }
+    if (source_wide && target_wide) { return KrtNativeEmit(module, (int32)KrtNativeOp.WideConvert, 5, 0) >= 0; }
+    if (source_wide && KrtNativeFloatKind(target) != 0) { return KrtNativeEmit(module, (int32)KrtNativeOp.WideFloat, original.native_unsigned ? 2 : 1, KrtNativeFloatKind(target)) >= 0; }
+    if (target_wide && KrtNativeFloatKind(original) != 0) { return KrtNativeEmit(module, (int32)KrtNativeOp.WideFloat, target.native_unsigned ? 4 : 3, KrtNativeFloatKind(original)) >= 0; }
+    if (source_wide) {
+        return KrtNativeEmit(module, (int32)KrtNativeOp.WideConvert, 2, 0) >= 0 && KrtNativeEmit(module, (int32)KrtNativeOp.Cast, KrtNativeValueWidth(target), 0) >= 0;
+    }
+    return KrtNativeEmit(module, (int32)KrtNativeOp.WideConvert, original != null && original.native_unsigned ? 1 : 0, 0) >= 0;
+}
+
+bool KrtNativeLowerWideBinary(KrtAstNode expression, KrtAstNode module_ast, KrtNativeModule module, int64 source) {
+    if ((expression.op == 106 || expression.op == 107) && !KrtNativeWideKind(expression.left)) {
+        return KrtNativeLowerExpression(expression.left, module_ast, module, source) &&
+            KrtNativeLowerExpression(expression.right, module_ast, module, source) && KrtNativeEmit(module, (int32)KrtNativeOp.WideConvert, 2, 0) >= 0 &&
+            KrtNativeEmit(module, expression.op == 106 ? (int32)KrtNativeOp.Shl : (int32)KrtNativeOp.Shr, 0, expression.native_unsigned ? 1 : 0) >= 0 &&
+            KrtNativeEmit(module, (int32)KrtNativeOp.Cast, KrtNativeWidth(expression), 0) >= 0;
+    }
+    KrtAstNode target = KrtAstMake(KrtAstKind.Type, expression.start, 0); target.native_wide = true; target.native_width = 16;
+    target.native_unsigned = expression.left.native_unsigned || expression.right.native_unsigned;
+    if (!KrtNativeLowerExpression(expression.left, module_ast, module, source) || !KrtNativeConvertValue(module, expression.left, target) ||
+        !KrtNativeLowerExpression(expression.right, module_ast, module, source) || !KrtNativeConvertValue(module, expression.right, target)) { return false; }
+    bool compare = expression.op == 61 || expression.op == 101 || expression.op == 60 || expression.op == 62 || expression.op == 102 || expression.op == 103;
+    return KrtNativeEmit(module, compare ? (int32)KrtNativeOp.WideCompare : (int32)KrtNativeOp.WideBinary, expression.op, target.native_unsigned ? 1 : 0) >= 0;
+}
+
+bool KrtNativeLowerWideCompound(KrtAstNode statement, KrtAstNode module_ast, KrtNativeModule module, int64 source) {
+    int32 operation = statement.op == 108 ? 43 : statement.op == 109 ? 45 : statement.op == 110 ? 42 : statement.op == 111 ? 47 : statement.op == 112 ? 37 : -1;
+    if (operation < 0) { return false; }
+    KrtAstNode target = KrtAstMake(KrtAstKind.Type, statement.start, 0); target.native_wide = true; target.native_width = 16;
+    target.native_unsigned = statement.left.native_unsigned || statement.right.native_unsigned;
+    return KrtNativeLowerLValue(statement.left, module_ast, module, source) && KrtNativeEmit(module, (int32)KrtNativeOp.Dup, 0, 0) >= 0 &&
+        KrtNativeEmit(module, (int32)KrtNativeOp.Load, 0, KrtNativeValueWidth(statement.left)) >= 0 && KrtNativeConvertValue(module, statement.left, target) &&
+        KrtNativeLowerExpression(statement.right, module_ast, module, source) && KrtNativeConvertValue(module, statement.right, target) &&
+        KrtNativeEmit(module, (int32)KrtNativeOp.WideBinary, operation, target.native_unsigned ? 1 : 0) >= 0 &&
+        KrtNativeConvertValue(module, target, statement.left) && KrtNativeEmit(module, (int32)KrtNativeOp.Store, 0, KrtNativeWidth(statement.left)) >= 0;
+}

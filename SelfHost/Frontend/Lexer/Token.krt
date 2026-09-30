@@ -1,4 +1,4 @@
-enum KrtTokenKind { Eof = 0, Identifier = 1, Integer = 2, String = 3, Character = 4, Punctuation = 5, Invalid = 6 }
+enum KrtTokenKind { Eof = 0, Identifier = 1, Integer = 2, String = 3, Character = 4, Punctuation = 5, Invalid = 6, Floating = 7 }
 
 class KrtToken {
     public KrtTokenKind kind;
@@ -21,3 +21,13 @@ class KrtToken {
     public void SetError(int32 value) { error = value; kind = KrtTokenKind.Invalid; }
     public void SetLength(int64 value) { length = value; }
 }
+
+// The source language permits instance methods, while the bootstrap AST keeps
+// type bodies opaque.  These receiver-first forms preserve the same ABI for
+// the self-hosted lowering pass and are selected for member calls by name.
+void Reset(KrtToken token, int64 source_start, int64 source_line, int64 source_column) {
+    token.start = source_start; token.length = 0; token.line = source_line; token.column = source_column; token.error = 0; token.kind = KrtTokenKind.Eof;
+}
+void SetKind(KrtToken token, KrtTokenKind value) { token.kind = value; }
+void SetError(KrtToken token, int32 value) { token.error = value; token.kind = KrtTokenKind.Invalid; }
+void SetLength(KrtToken token, int64 value) { token.length = value; }

@@ -1,0 +1,25 @@
+// Exception records occupy six frame slots. r15 links active records across calls.
+// Layout at the lowest address: previous, saved rsp, saved rbp, value, type, handler.
+bool KrtKroNativeTryEnter(KrtKroObject output, ref int32 pc, int32 slot) {
+    return KrtKroNativeCode(output, ref pc, 9276744, 3) && KrtKroNativeU32(output, ref pc, -8 * (slot + 6)) &&
+        KrtKroNativeCode(output, ref pc, 2359042063829324, 7) &&
+        KrtKroNativeCode(output, ref pc, 1562715536066888, 7);
+}
+
+bool KrtKroNativeTryFinish(KrtKroObject output, ref int32 pc) {
+    return KrtKroNativeCode(output, ref pc, 58416267480107336, 7);
+}
+
+bool KrtKroNativeTryLeave(KrtKroObject output, ref int32 pc, int32 slot) {
+    return KrtKroNativeCode(output, ref pc, 12421964, 3) && KrtKroNativeU32(output, ref pc, -8 * (slot + 6));
+}
+
+bool KrtKroNativeThrow(KrtKroObject output, ref int32 pc) {
+    return KrtKroNativeCode(output, ref pc, 3507440034076762, 7) &&
+        KrtKroNativeCode(output, ref pc, 19913255090666680, 7) &&
+        KrtKroNativeCode(output, ref pc, 38642357884682240, 7) &&
+        KrtKroNativeCode(output, ref pc, 20583233637390407, 7) &&
+        KrtKroNativeCode(output, ref pc, 2365647737614219, 7) &&
+        KrtKroNativeCode(output, ref pc, 17886087037291337, 7) &&
+        KrtKroNativeCode(output, ref pc, 57599, 2);
+}

@@ -1,0 +1,13 @@
+void f(ref int128 v) {v=v+5;}
+int32 main(){
+ int128 x=(int128)1<<100; int128 y=x++; if(y+1!=x){return 1;} x--;if(x!=y){return 2;}
+ int128[] a=[x,-x]; int128 before=a[1]++; if(a[1]!=before+1){return 3;}
+ float64 d=x; if(d!=1267650600228229401496703205376.0){return 4;}
+ float32 s=(int128)-1;if(s!=-1.0){return 5;}
+ int128 big=(int128)1267650600228229401496703205376.0;if(big!=x){return 6;}
+ int128 small=(int128)-5.5; if(small!=-5){return 7;}
+ uint128 large=(uint128)170141183460469231731687303715884105728.0;if(large!=((uint128)1<<127)){return 8;}
+ f(ref x);if(x-y!=5){return 9;}
+ int128 total=0;foreach(int128 n in a){total+=n;}if(total!=1){return 10;}
+ return 0;
+}

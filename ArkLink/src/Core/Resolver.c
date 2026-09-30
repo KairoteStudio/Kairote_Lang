@@ -38,10 +38,19 @@ static int symbol_table_add(SymbolTable* table, const ArkResolverSymbol* sym) {
     for (size_t i = 0; i < table->symbol_count; i++) {
         if (strcmp(table->symbols[i].name, sym->name) == 0) {
 
-            if (table->symbols[i].section_index == 0 && sym->section_index > 0) {
+            if (!table->symbols[i].defined && sym->defined) {
 
                 table->symbols[i] = *sym;
-            } else if (table->symbols[i].section_index > 0 && sym->section_index > 0) {
+            } else if (table->symbols[i].defined && sym->defined) {
+
+                /* Native ABI definitions are strong: silently selecting one
+                 * makes independently compiled calls depend on link order.
+                 * Keep the legacy Re standard-library duplicate policy below. */
+                if (strncmp(sym->name, "_KRT1$", 6) == 0 &&
+                    table->symbols[i].binding == ARK_BIND_GLOBAL &&
+                    sym->binding == ARK_BIND_GLOBAL) {
+                    return 0;
+                }
 
                 /* 重复的全局定义,保留先到者并继续
                  * 原先在此返回 0 使整个链接失败, 导致任何 using 导入标准库的程序都无法生成可执行文件。
@@ -231,9 +240,10 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
             sym.name = sym_desc->name;
             sym.binding = sym_desc->binding;
             sym.visibility = sym_desc->visibility;
+            sym.defined = sym_desc->section_index > 0;
 
             if (sym_desc->section_index > 0 && sym_desc->binding != ARK_BIND_GLOBAL && sym.name &&
-                find_symbol(&sym_table, sym.name) && find_symbol(&sym_table, sym.name)->section_index > 0) {
+                find_symbol(&sym_table, sym.name) && find_symbol(&sym_table, sym.name)->defined) {
                 char renamed[512];
                 snprintf(renamed, sizeof(renamed), "%s@u%zu", sym.name, i);
                 if (rename_table_add(&renames, i, sym.name, renamed)) {
@@ -253,6 +263,7 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
                         ArkLinkSection* sec = &unit->sections[s];
                         if (sec->kind == ARK_SECTION_CODE) {
                             sym.section_index = unit_sec_start[i] + s;
+                            sym.defined = 1;
                             break;
                         }
                     }
@@ -375,7 +386,7 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
         }
     }
 
-    if (entry_sym) {
+    if (entry_sym && entry_sym->defined) {
 
         out_plan->backend_input->entry_section = entry_sym->section_index;
 
@@ -385,7 +396,7 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
 
     for (size_t i = 0; i < sym_table.symbol_count; i++) {
         ArkResolverSymbol* sym = &sym_table.symbols[i];
-        if (sym->section_index < total_sections) {
+        if (sym->defined && sym->section_index < total_sections) {
             sym->section = &out_plan->backend_input->sections[sym->section_index];
         }
     }
@@ -423,6 +434,20 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
                     if (global_sym) {
                         reloc.symbol = global_sym;
                     }
+                }
+
+                if (!reloc.symbol || (!reloc.symbol->defined &&
+                    (!reloc.symbol->import_module || !reloc.symbol->import_module[0]))) {
+                    fprintf(stderr, "Undefined symbol: %s\n", reloc.symbol && reloc.symbol->name ? reloc.symbol->name : "<invalid symbol index>");
+                    for (size_t m = 0; m < unit_count; m++) free(section_map[m]);
+                    free(section_map);
+                    free(unit_sec_start);
+                    free(unit_sym_start);
+                    rename_table_free(&renames);
+                    out_plan->symbols = sym_table.symbols;
+                    out_plan->relocs = reloc_table.relocs;
+                    ark_resolver_plan_destroy(ctx, out_plan);
+                    return ARK_LINK_ERR_UNRESOLVED_SYMBOL;
                 }
 
                 if (!reloc_table_add(&reloc_table, &reloc)) {

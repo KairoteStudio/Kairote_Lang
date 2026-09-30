@@ -1,0 +1,200 @@
+// Namespace scopes retain source spans and imports; no source text is rewritten.
+void KrtParserMarkScope(KrtAstNode node, KrtAstNode scope) {
+    if (node == null) { return; }
+    node.native_scope = scope;
+    KrtParserMarkScope(node.native_base_call, scope);
+    KrtParserMarkScope(node.left, scope); KrtParserMarkScope(node.right, scope);
+    KrtParserMarkScope(node.alternate, scope); KrtParserMarkScope(node.body, scope);
+    KrtParserMarkScope(node.declarations, scope); KrtParserMarkScope(node.next, scope);
+}
+
+KrtAstNode KrtParserNamePath(KrtParser parser) {
+    if (parser.token.kind != KrtTokenKind.Identifier) { KrtParserRecordError(parser); return null; }
+    int64 start = parser.token.start; int64 end = start + parser.token.length;
+    KrtLexerNext(parser.lexer, parser.token);
+    while (KrtParserTokenText(parser, 46)) {
+        KrtLexerNext(parser.lexer, parser.token);
+        if (KrtParserTokenText(parser, 42)) { KrtLexerNext(parser.lexer, parser.token); break; }
+        if (parser.token.kind != KrtTokenKind.Identifier) { KrtParserRecordError(parser); return null; }
+        end = parser.token.start + parser.token.length; KrtLexerNext(parser.lexer, parser.token);
+    }
+    KrtAstNode name = KrtAstMake(KrtAstKind.Type, start, end - start);
+    name.name_start = start; name.name_length = end - start; return name;
+}
+
+void KrtParserAppendDeclaration(KrtAstNode unit, KrtAstNode declaration) {
+    if (declaration == null) { return; }
+    if (declaration.kind == KrtAstKind.TypeDeclaration) {
+        if (unit.declarations == null) { unit.declarations = declaration; }
+        else { KrtAstNode tail = unit.declarations; while (tail.next != null) { tail = tail.next; } tail.next = declaration; }
+    } else if (declaration.kind == KrtAstKind.Function) {
+        if (unit.left == null) { unit.left = declaration; }
+        else { KrtAstNode tail = unit.left; while (tail.next != null) { tail = tail.next; } tail.next = declaration; }
+        unit.child_count = unit.child_count + 1;
+    } else {
+        if (unit.body == null) { unit.body = declaration; }
+        else { KrtAstNode tail = unit.body; while (tail.next != null) { tail = tail.next; } tail.next = declaration; }
+    }
+}
+
+bool KrtParserParseDeclarations(KrtParser parser, KrtAstNode unit, bool nested) {
+    while (parser.token.kind != KrtTokenKind.Eof && parser.errors == 0 && unit.child_count < 1024) {
+        if (KrtParserTokenText(parser, 125)) {
+            if (!nested) { KrtParserRecordError(parser); return false; }
+            KrtLexerNext(parser.lexer, parser.token); return true;
+        }
+        if (KrtParserIsWord(parser, "namespace")) {
+            KrtLexerNext(parser.lexer, parser.token);
+            if (KrtParserTokenText(parser, 59)) {
+                // The source loader emits this boundary before each file.
+                parser.native_scope = KrtAstMake(KrtAstKind.Program, 0, 0);
+                KrtLexerNext(parser.lexer, parser.token); continue;
+            }
+            KrtAstNode path = KrtParserNamePath(parser);
+            if (path == null) { return false; }
+            KrtAstNode previous = parser.native_scope;
+            path.left = previous; path.body = previous.body; parser.native_scope = path;
+            if (KrtParserTokenText(parser, 123)) {
+                KrtLexerNext(parser.lexer, parser.token);
+                if (!KrtParserParseDeclarations(parser, unit, true)) { return false; }
+                parser.native_scope = previous;
+            } else if (KrtParserTokenText(parser, 59)) { KrtLexerNext(parser.lexer, parser.token); }
+            else { KrtParserRecordError(parser); return false; }
+            continue;
+        }
+        if (KrtParserIsWord(parser, "using")) {
+            KrtLexerNext(parser.lexer, parser.token);
+            KrtAstNode imported = KrtParserNamePath(parser);
+            if (imported == null) { return false; }
+            if (KrtParserTokenText(parser, 61)) {
+                KrtLexerNext(parser.lexer, parser.token); KrtAstNode target = KrtParserNamePath(parser);
+                if (target == null) { return false; }
+                target.type_start = imported.name_start; target.type_length = imported.name_length; imported = target;
+            }
+            if (!KrtParserTokenText(parser, 59)) { KrtParserRecordError(parser); return false; }
+            imported.next = parser.native_scope.body; parser.native_scope.body = imported;
+            KrtLexerNext(parser.lexer, parser.token); continue;
+        }
+        KrtAstNode declaration = null;
+        if (KrtParserIsWord(parser, "const")) { declaration = KrtParserParseGlobalConstant(parser); }
+        else {
+            if (KrtParserSkipDelegateOrTemplate(parser)) { KrtParserRecordError(parser); return false; }
+            declaration = KrtParserParseTypeDeclaration(parser);
+            if (declaration == null && KrtParserIsWord(parser, "const")) { declaration = KrtParserParseGlobalConstant(parser); }
+            if (declaration == null) { declaration = KrtParserParseGlobalVariable(parser); }
+            if (declaration == null) { declaration = KrtParserParseFunction(parser); }
+        }
+        if (declaration == null || declaration.kind == KrtAstKind.Invalid) { KrtParserRecordError(parser); return false; }
+        KrtParserMarkScope(declaration, parser.native_scope);
+        KrtParserAppendDeclaration(unit, declaration);
+    }
+    if (nested) { KrtParserRecordError(parser); return false; }
+    return parser.errors == 0;
+}
+
+bool KrtNameSpace(byte value) { return value == 32 || value == 9 || value == 10 || value == 13; }
+int64 KrtNameLength(int64 source, int64 start, int64 length) {
+    int64 count = 0;
+    unsafe(using krt.mem;) { byte* text = (byte*)source; int64 i = 0;
+        while (i < length) { if (!KrtNameSpace(text[start + i])) { count = count + 1; } i = i + 1; }
+    }
+    return count;
+}
+int64 KrtNameAt(int64 source, int64 start, int64 length, int64 index) {
+    unsafe(using krt.mem;) { byte* text = (byte*)source; int64 i = 0;
+        while (i < length) { if (!KrtNameSpace(text[start + i])) { if (index == 0) { return text[start + i]; } index = index - 1; } i = i + 1; }
+    }
+    return -1;
+}
+int64 KrtScopeLength(KrtAstNode scope, int64 source) {
+    if (scope == null || scope.name_length == 0) { return 0; }
+    int64 length = KrtScopeLength(scope.left, source);
+    if (length > 0) { length = length + 1; }
+    return length + KrtNameLength(source, scope.name_start, scope.name_length);
+}
+int64 KrtScopeAt(KrtAstNode scope, int64 source, int64 index) {
+    if (scope == null) { return -1; }
+    int64 prefix = KrtScopeLength(scope.left, source);
+    if (index < prefix) { return KrtScopeAt(scope.left, source, index); }
+    if (prefix > 0) { if (index == prefix) { return 46; } prefix = prefix + 1; }
+    return KrtNameAt(source, scope.name_start, scope.name_length, index - prefix);
+}
+bool KrtScopeEqual(KrtAstNode left, KrtAstNode right, int64 source) {
+    if (left == right) { return true; }
+    int64 length = KrtScopeLength(left, source);
+    if (length != KrtScopeLength(right, source)) { return false; }
+    int64 i = 0; while (i < length) { if (KrtScopeAt(left, source, i) != KrtScopeAt(right, source, i)) { return false; } i = i + 1; }
+    return true;
+}
+int64 KrtDeclarationLength(KrtAstNode declaration, int64 source) {
+    int64 prefix = KrtScopeLength(declaration.native_scope, source);
+    return prefix + (prefix > 0 ? 1 : 0) + KrtNameLength(source, declaration.name_start, declaration.name_length);
+}
+int64 KrtDeclarationAt(KrtAstNode declaration, int64 source, int64 index) {
+    int64 prefix = KrtScopeLength(declaration.native_scope, source);
+    if (index < prefix) { return KrtScopeAt(declaration.native_scope, source, index); }
+    if (prefix > 0) { if (index == prefix) { return 46; } prefix = prefix + 1; }
+    return KrtNameAt(source, declaration.name_start, declaration.name_length, index - prefix);
+}
+bool KrtDeclarationMatches(KrtAstNode declaration, KrtAstNode prefix, int64 source, int64 start, int64 length) {
+    int64 prefix_length = KrtScopeLength(prefix, source); int64 suffix = KrtNameLength(source, start, length);
+    int64 total = prefix_length + (prefix_length > 0 ? 1 : 0) + suffix;
+    if (total != KrtDeclarationLength(declaration, source)) { return false; }
+    int64 i = 0;
+    while (i < total) {
+        int64 value = 0;
+        if (i < prefix_length) { value = KrtScopeAt(prefix, source, i); }
+        else if (prefix_length > 0 && i == prefix_length) { value = 46; }
+        else { value = KrtNameAt(source, start, length, i - prefix_length - (prefix_length > 0 ? 1 : 0)); }
+        if (value != KrtDeclarationAt(declaration, source, i)) { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+KrtAstNode KrtParserTypeParameters(KrtParser parser) {
+    if (!KrtParserTokenText(parser, 60)) { return null; }
+    KrtLexerNext(parser.lexer, parser.token);
+    KrtAstNode first = null; KrtAstNode tail = null;
+    while (parser.token.kind == KrtTokenKind.Identifier) {
+        KrtAstNode previous = first;
+        while (previous != null) {
+            if (KrtParserSameSourceName(parser, parser.token.start, parser.token.length, previous.name_start, previous.name_length)) { KrtParserRecordError(parser); return first; }
+            previous = previous.next;
+        }
+        KrtAstNode parameter = KrtAstMake(KrtAstKind.Type, parser.token.start, parser.token.length);
+        parameter.name_start = parser.token.start; parameter.name_length = parser.token.length;
+        if (first == null) { first = parameter; } else { tail.next = parameter; } tail = parameter;
+        KrtLexerNext(parser.lexer, parser.token);
+        if (!KrtParserTokenText(parser, 44)) { break; }
+        KrtLexerNext(parser.lexer, parser.token);
+    }
+    if (!KrtParserTokenText(parser, 62) || first == null) { KrtParserRecordError(parser); return first; }
+    KrtLexerNext(parser.lexer, parser.token); return first;
+}
+
+bool KrtParserGenericCallAhead(KrtParser parser) {
+    if (!KrtParserTokenText(parser, 60)) { return false; }
+    unsafe(using krt.mem;) {
+        byte* text = (byte*)parser.lexer.source; int64 i = parser.token.start; int32 depth = 0;
+        while (i < parser.lexer.length) {
+            byte value = text[i];
+            if (value == 60) { depth = depth + 1; }
+            else if (value == 62) {
+                depth = depth - 1;
+                if (depth == 0) {
+                    i = i + 1; while (i < parser.lexer.length && KrtNameSpace(text[i])) { i = i + 1; }
+                    return i < parser.lexer.length && (text[i] == 40 || text[i] == 46);
+                }
+            } else if (!lexer_letter(value) && !lexer_digit(value) && !KrtNameSpace(value) && value != 44 && value != 46 && value != 91 && value != 93 && value != 42) { return false; }
+            i = i + 1;
+        }
+    }
+    return false;
+}
+
+KrtAstNode KrtParserCallTypeArguments(KrtParser parser) {
+    int64 start = parser.token.start; KrtParserSkipGenericArguments(parser);
+    KrtAstNode arguments = KrtAstMake(KrtAstKind.Type, start, parser.token.start - start);
+    arguments.type_start = start; arguments.type_length = parser.token.start - start; return arguments;
+}

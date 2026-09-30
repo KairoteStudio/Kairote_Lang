@@ -1,0 +1,81 @@
+// Reference classes share one pointer and a base-prefix layout. Offset zero is
+// the runtime class identity; allocation metadata at -16/-8 remains untouched.
+bool KrtNativeDerivesFrom(KrtAstNode actual_class, KrtAstNode expected_class) {
+    if (actual_class == null || expected_class == null) { return false; }
+    if (expected_class.value == 3) { return KrtNativeImplements(actual_class, expected_class); }
+    int32 depth = 0;
+    while (actual_class != null && depth < 1024) {
+        if (actual_class == expected_class) { return true; }
+        actual_class = actual_class.native_base; depth = depth + 1;
+    }
+    return false;
+}
+
+int32 KrtNativeInheritanceDistance(KrtAstNode actual_class, KrtAstNode expected_class) {
+    if (expected_class != null && expected_class.value == 3 && KrtNativeImplements(actual_class, expected_class)) { return KrtNativeInterfaceDistance(actual_class, expected_class); }
+    int32 distance = 0;
+    while (actual_class != null && distance < 1024) {
+        if (actual_class == expected_class) { return distance; }
+        actual_class = actual_class.native_base; distance = distance + 1;
+    }
+    return -1;
+}
+
+KrtAstNode KrtNativeFieldOwner(KrtAstNode type, int64 source, int64 start, int64 length) {
+    while (type != null) {
+        KrtAstNode field = type.body;
+        while (field != null) {
+            if (KrtSemanticSameName(source, start, length, field.name_start, field.name_length)) { return type; }
+            field = field.next;
+        }
+        type = type.native_base;
+    }
+    return null;
+}
+
+bool KrtNativeResolveInheritance(KrtAstNode type, KrtAstNode module, int64 source) {
+    if (type == null || type.native_inheritance_state == 1 || type.native_inheritance_state == 3) { return false; }
+    if (type.native_inheritance_state == 2) { return true; }
+    if (type.value == 4) { return type.left == null; }
+    if (type.value != 1 && type.value != 3) { return false; }
+    if (type.native_generic_parameters != null) { return true; }
+    type.native_inheritance_state = 1;
+    int32 size = 8;
+    if (!KrtNativeResolveTypeBases(type, module, source)) { type.native_inheritance_state = 3; return false; }
+    if (type.native_base != null) { size = type.native_base.native_size; }
+    KrtAstNode field = type.body;
+    while (field != null) {
+        if (!field.native_static) { field.native_offset = size; size = size + 8; }
+        field = field.next;
+    }
+    type.native_size = size;
+    KrtAstNode method = type.declarations;
+    while (method != null && method.native_owner == type) {
+        if ((method.native_base_call != null && (method.op != 220 || type.native_base == null))) { type.native_inheritance_state = 3; return false; }
+        if (method.op == 220 && type.native_base != null) {
+            KrtAstNode call = method.native_base_call;
+            if (call == null) { call = KrtAstMake(KrtAstKind.Call, method.start, 0); call.op = 222; method.native_base_call = call; }
+            call.native_scope = method.native_scope; call.native_context = method.native_context;
+            KrtAstNode statement = KrtAstMake(KrtAstKind.Expression, call.start, call.length); statement.left = call;
+            statement.next = method.left.left; method.left.left = statement; method.left.child_count = method.left.child_count + 1;
+        }
+        method = method.next;
+    }
+    type.native_inheritance_state = 2; return true;
+}
+
+bool KrtNativePrepareInheritance(KrtAstNode module, int64 source, KrtNativeModule output) {
+    KrtAstNode type = module.declarations;
+    while (type != null) {
+        if (!KrtNativeResolveInheritance(type, module, source)) { output.error_start = type.start; return false; }
+        type = type.next;
+    }
+    return true;
+}
+
+bool KrtNativeBindBaseConstructor(KrtAstNode call, KrtNativeBinding binding) {
+    if (binding.unit.op != 220 || binding.unit.native_owner == null || binding.unit.native_owner.native_base == null) { return KrtNativeBindingError(binding, call); }
+    call.native_type = binding.unit.native_owner.native_base;
+    if (!KrtNativeBindConstructor(call, binding)) { return false; }
+    return true;
+}

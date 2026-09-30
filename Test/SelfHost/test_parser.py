@@ -5,14 +5,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from Test.SelfHost.test_contract import ROOT, KRTC
+from Test.SelfHost.test_contract import ROOT, KRTC, compiler_prelude
 
 
 class ParserTests(unittest.TestCase):
     def check_ast(self, source_text, assertions):
         parts = ('Frontend/Lexer/Token.krt', 'Frontend/Lexer/Lexer.krt',
-                 'Frontend/Parser/Ast.krt', 'Frontend/Parser/Parser.krt')
-        prelude = '\n'.join((ROOT / 'SelfHost' / p).read_text() for p in parts)
+                 'Frontend/Parser/Ast.krt', 'Frontend/Parser/Parser.krt', 'Frontend/Parser/Names.krt')
+        prelude = compiler_prelude(parts)
         program = f'''
 int32 main() {{
     string input = {json.dumps(source_text)};

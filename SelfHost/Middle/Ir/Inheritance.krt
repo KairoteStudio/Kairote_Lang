@@ -1,0 +1,49 @@
+bool KrtNativeLowerBaseConstructor(KrtAstNode expression, KrtAstNode module_ast, KrtNativeModule module, int64 source) {
+    KrtAstNode target = expression.native_target;
+    if (target == null) { return KrtNativeEmit(module, (int32)KrtNativeOp.Const, 0, 0) >= 0; }
+    if (KrtNativeEmit(module, (int32)KrtNativeOp.LoadLocal, 0, 0) < 0) { return false; }
+    KrtAstNode argument = expression.right; int32 index = 1;
+    while (argument != null) {
+        KrtAstNode expected = KrtAstMake(KrtAstKind.Type, argument.start, argument.length);
+        expected.native_scope = target.native_scope; expected.native_context = target.native_context;
+        if (!KrtNativeAnnotateType(expected, module_ast, source, target.parameter_type_starts[index], target.parameter_type_lengths[index]) ||
+            !KrtNativeLowerExpression(argument, module_ast, module, source)) { return false; }
+        if (!target.parameter_refs[index] && !KrtNativeConvertValue(module, argument, expected)) { return false; }
+        argument = argument.next; index = index + 1;
+    }
+    return KrtNativeEmit(module, (int32)KrtNativeOp.Call, target.value, index) >= 0;
+}
+
+// Emit a typed catch predicate. Class catches accept every known descendant,
+// while scalar exceptions keep exact type identity.
+bool KrtNativeLowerCatchMatch(KrtAstNode expected, int32 record_slot, KrtAstNode module_ast, KrtNativeModule module) {
+    if (module.library_mode && expected.native_type != null) { return false; }
+    if (expected.native_type == null) {
+        int64 identity = KrtNativeExceptionType(expected, module_ast);
+        return identity >= 0 && KrtNativeEmit(module, (int32)KrtNativeOp.CatchType, record_slot, 0) >= 0 &&
+            KrtNativeEmit(module, (int32)KrtNativeOp.Const, identity, 0) >= 0 && KrtNativeEmit(module, (int32)KrtNativeOp.Compare, 61, 0) >= 0;
+    }
+    if (KrtNativeEmit(module, (int32)KrtNativeOp.Const, 0, 0) < 0) { return false; }
+    KrtAstNode type = module_ast.declarations; int64 identity = 64;
+    while (type != null) {
+        if (KrtNativeDerivesFrom(type, expected.native_type)) {
+            if (KrtNativeEmit(module, (int32)KrtNativeOp.CatchType, record_slot, 0) < 0 ||
+                KrtNativeEmit(module, (int32)KrtNativeOp.Const, identity, 0) < 0 ||
+                KrtNativeEmit(module, (int32)KrtNativeOp.Compare, 61, 0) < 0 || KrtNativeEmit(module, (int32)KrtNativeOp.Or, 0, 0) < 0) { return false; }
+        }
+        type = type.next; identity = identity + 1;
+    }
+    return true;
+}
+
+bool KrtNativeLowerClassThrow(KrtAstNode value, KrtAstNode module_ast, KrtNativeModule module, int64 source) {
+    if (!KrtNativeLowerExpression(value, module_ast, module, source) || KrtNativeEmit(module, (int32)KrtNativeOp.Dup, 0, 0) < 0) { return false; }
+    int32 present = KrtNativeEmit(module, (int32)KrtNativeOp.Branch, -1, -1);
+    if (present < 0 || KrtNativeEmit(module, (int32)KrtNativeOp.Dup, 0, 0) < 0 || KrtNativeEmit(module, (int32)KrtNativeOp.Load, 0, 8) < 0) { return false; }
+    int32 merge_jump = KrtNativeEmit(module, (int32)KrtNativeOp.Jump, -1, 0);
+    module.args[present] = present + 1; module.extra[present] = module.count;
+    // A null reference has no class identity, and cannot match a typed catch.
+    if (merge_jump < 0 || KrtNativeEmit(module, (int32)KrtNativeOp.Const, 0, 0) < 0) { return false; }
+    module.args[merge_jump] = module.count;
+    return KrtNativeEmit(module, (int32)KrtNativeOp.Throw, 0, 0) >= 0;
+}

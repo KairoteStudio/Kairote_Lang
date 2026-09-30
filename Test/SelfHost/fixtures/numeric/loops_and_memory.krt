@@ -1,0 +1,1 @@
+int32 main() { float32[] a=new float32[2]; a[0]=2.5; a[1]=-3.25; float64 n=-0.0; if(n) {return 1;} while(a[0]>0) {a[0]-=0.5;} if(a[0]!=0.0 || a[1]!=-3.25) {return 2;} unsafe(using krt.mem;) {float64* p=stackalloc float64[2]; p[0]=2.25; p[1]=-1.5; if(*p+p[1]!=0.75) {return 3;}} delete a; return 0;}

@@ -174,7 +174,7 @@ bool KrtSemanticBindExpression(KrtAstNode expression, KrtAstNode unit, KrtAstNod
     if (expression.kind == KrtAstKind.Ternary) {
         return KrtSemanticBindExpression(expression.left, unit, statement, source) &&
             KrtSemanticBindExpression(expression.right, unit, statement, source) &&
-            KrtSemanticBindExpression(expression.next, unit, statement, source);
+            KrtSemanticBindExpression(expression.alternate, unit, statement, source);
     }
     return expression.kind == KrtAstKind.Integer || expression.kind == KrtAstKind.Boolean || expression.kind == KrtAstKind.Null;
 }
@@ -213,7 +213,7 @@ bool KrtSemanticResolveCallExpression(KrtAstNode expression, KrtAstNode module, 
     if (expression.kind == KrtAstKind.Ternary) {
         return KrtSemanticResolveCallExpression(expression.left, module, unit, statement, source) &&
             KrtSemanticResolveCallExpression(expression.right, module, unit, statement, source) &&
-            KrtSemanticResolveCallExpression(expression.next, module, unit, statement, source);
+            KrtSemanticResolveCallExpression(expression.alternate, module, unit, statement, source);
     }
     if (expression.kind == KrtAstKind.Unary || expression.kind == KrtAstKind.Member) {
         return KrtSemanticResolveCallExpression(expression.left, module, unit, statement, source);
@@ -252,7 +252,7 @@ bool KrtSemanticBindNestedExpression(KrtAstNode expression, KrtAstNode unit, int
     }
     if (expression.kind == KrtAstKind.Binary || expression.kind == KrtAstKind.Assign || expression.kind == KrtAstKind.Index || expression.kind == KrtAstKind.Ternary) {
         return KrtSemanticBindNestedExpression(expression.left, unit, source) && KrtSemanticBindNestedExpression(expression.right, unit, source) &&
-            (expression.kind != KrtAstKind.Ternary || KrtSemanticBindNestedExpression(expression.next, unit, source));
+            (expression.kind != KrtAstKind.Ternary || KrtSemanticBindNestedExpression(expression.alternate, unit, source));
     }
     if (expression.kind == KrtAstKind.Unary || expression.kind == KrtAstKind.Member) { return KrtSemanticBindNestedExpression(expression.left, unit, source); }
     if (expression.kind == KrtAstKind.New || expression.kind == KrtAstKind.StackAlloc || expression.kind == KrtAstKind.Cast) { return expression.left == null || KrtSemanticBindNestedExpression(expression.left, unit, source); }
@@ -269,7 +269,7 @@ bool KrtSemanticBindNestedBlock(KrtAstNode block, KrtAstNode unit, int64 source)
         } else if (statement.kind == KrtAstKind.Assign) {
             if (!KrtSemanticBindNestedExpression(statement.left, unit, source) || !KrtSemanticBindNestedExpression(statement.right, unit, source)) { return false; }
         } else if (statement.kind == KrtAstKind.Variable || statement.kind == KrtAstKind.Return || statement.kind == KrtAstKind.Expression || statement.kind == KrtAstKind.Delete) {
-            if (!KrtSemanticBindNestedExpression(statement.left, unit, source)) { return false; }
+            if (statement.left != null && !KrtSemanticBindNestedExpression(statement.left, unit, source)) { return false; }
         } else if (statement.kind == KrtAstKind.Break || statement.kind == KrtAstKind.Continue) {
         }
         statement = statement.next;
@@ -374,12 +374,30 @@ bool KrtSemanticValidateCompilationUnit(KrtAstNode unit) {
 
 bool KrtSemanticValidateFunctionNames(KrtAstNode unit, int64 source) {
     if (unit == null || unit.kind != KrtAstKind.Program) { return false; }
+    KrtAstNode declaration = unit.declarations;
+    while (declaration != null) {
+        KrtAstNode other_type = declaration.next;
+        while (other_type != null) {
+            if (declaration.native_generic_origin == null && other_type.native_generic_origin == null && KrtScopeEqual(declaration.native_scope, other_type.native_scope, source) &&
+                KrtSemanticSameName(source, declaration.name_start, declaration.name_length, other_type.name_start, other_type.name_length)) { return false; }
+            other_type = other_type.next;
+        }
+        declaration = declaration.next;
+    }
     KrtAstNode current = unit.left;
     while (current != null) {
         KrtAstNode other = current.next;
         while (other != null) {
-            if (KrtSemanticSameName(source, current.name_start, current.name_length,
-                other.name_start, other.name_length)) { return false; }
+            if (current.native_owner == other.native_owner && KrtScopeEqual(current.native_scope, other.native_scope, source) && current.parameter_count == other.parameter_count &&
+                KrtSemanticSameName(source, current.name_start, current.name_length, other.name_start, other.name_length)) {
+                bool same = true; int32 index = 0;
+                while (index < current.parameter_count) {
+                    if (current.parameter_refs[index] != other.parameter_refs[index] || !KrtSemanticSameName(source,
+                        current.parameter_type_starts[index], current.parameter_type_lengths[index], other.parameter_type_starts[index], other.parameter_type_lengths[index])) { same = false; }
+                    index = index + 1;
+                }
+                if (same) { return false; }
+            }
             other = other.next;
         }
         current = current.next;
@@ -399,7 +417,7 @@ bool KrtSemanticValidateEntryPoint(KrtAstNode unit, int64 source) {
 }
 
 bool KrtSemanticIsMain(KrtAstNode candidate, int64 source) {
-    if (candidate == null || candidate.name_length != 4) { return false; }
+    if (candidate == null || candidate.native_owner != null || candidate.name_length != 4) { return false; }
     unsafe(using krt.mem;) {
         byte* bytes = (byte*)source;
         if (bytes[candidate.name_start] != 109) { return false; }

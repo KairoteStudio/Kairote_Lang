@@ -1,0 +1,137 @@
+KrtAstNode KrtNativeFindScopedType(KrtAstNode module, int64 source, int64 start, int64 length, KrtAstNode scope) {
+    KrtAstNode context = scope;
+    while (true) {
+        KrtAstNode declaration = module.declarations;
+        while (declaration != null) {
+            if (declaration.native_generic_origin == null && KrtDeclarationMatches(declaration, context, source, start, length)) { return declaration; }
+            declaration = declaration.next;
+        }
+        if (context == null) { break; }
+        context = context.left;
+    }
+    // In Kairote, using loads a source module, whose public declarations can
+    // have a namespace different from the module's directory name.
+    KrtAstNode imported = null; if (scope != null) { imported = scope.body; }
+    while (imported != null) {
+        if (imported.type_length > 0 && KrtSemanticSameName(source, start, length, imported.type_start, imported.type_length)) {
+            return KrtNativeFindScopedType(module, source, imported.name_start, imported.name_length, null);
+        }
+        imported = imported.next;
+    }
+    if (scope != null && scope.body != null) {
+        KrtAstNode qualified = module.declarations;
+        while (qualified != null) {
+            if (qualified.native_generic_origin == null && KrtNativeVisibleQualifiedName(qualified, scope, source, start, length)) { return qualified; }
+            qualified = qualified.next;
+        }
+        KrtAstNode explicit_match = null; KrtAstNode candidate = module.declarations;
+        while (candidate != null) {
+            imported = scope.body;
+            while (imported != null) {
+                if (candidate.native_generic_origin == null && imported.type_length == 0 && KrtDeclarationMatches(candidate, imported, source, start, length)) {
+                    if (explicit_match != null && explicit_match != candidate) { return null; }
+                    explicit_match = candidate;
+                }
+                imported = imported.next;
+            }
+            candidate = candidate.next;
+        }
+        if (explicit_match != null) { return explicit_match; }
+        KrtAstNode found = null; KrtAstNode declaration = module.declarations;
+        while (declaration != null) {
+            if (declaration.native_generic_origin == null && KrtSemanticSameName(source, start, length, declaration.name_start, declaration.name_length)) {
+                if (found != null) { return null; } found = declaration;
+            }
+            declaration = declaration.next;
+        }
+        return found;
+    }
+    return null;
+}
+KrtAstNode KrtNativeExpressionTypeName(KrtAstNode node, KrtNativeBinding binding) {
+    if (node == null) { return null; }
+    if (node.native_type_arguments != null) {
+        KrtAstNode first = node;
+        while (first.kind == KrtAstKind.Member) { first = first.left; }
+        if (first.kind != KrtAstKind.Identifier || KrtNativeFindName(binding, first.start, first.length) != null) { return null; }
+        KrtAstNode descriptor = KrtAstMake(KrtAstKind.Type, first.start, 0);
+        descriptor.native_scope = binding.unit.native_scope; descriptor.native_context = binding.unit.native_context;
+        int64 type_length = node.native_type_arguments.type_start + node.native_type_arguments.type_length - first.start;
+        if (!KrtNativeAnnotateType(descriptor, binding.module, binding.source, first.start, type_length)) { return null; }
+        return descriptor.native_type;
+    }
+    if (node.kind == KrtAstKind.Identifier) {
+        if (KrtNativeFindName(binding, node.start, node.length) != null) { return null; }
+        return KrtNativeFindScopedType(binding.module, binding.source, node.start, node.length, binding.unit.native_scope);
+    }
+    if (node.kind != KrtAstKind.Member) { return null; }
+    KrtAstNode first = node;
+    while (first.kind == KrtAstKind.Member) { first = first.left; }
+    if (first.kind != KrtAstKind.Identifier || KrtNativeFindName(binding, first.start, first.length) != null) { return null; }
+    return KrtNativeFindScopedType(binding.module, binding.source, first.start, node.name_start + node.name_length - first.start, binding.unit.native_scope);
+}
+
+bool KrtNativeVisibleQualifiedName(KrtAstNode declaration, KrtAstNode scope, int64 source, int64 start, int64 length) {
+    KrtAstNode context = scope;
+    while (context != null) {
+        if (KrtDeclarationMatches(declaration, context, source, start, length)) { return true; }
+        context = context.left;
+    }
+    if (KrtDeclarationMatches(declaration, null, source, start, length)) { return true; }
+    if (scope == null) { return false; }
+    int64 first_length = 0;
+    unsafe(using krt.mem;) { byte* text = (byte*)source;
+        while (first_length < length && (lexer_letter(text[start + first_length]) || lexer_digit(text[start + first_length]))) { first_length = first_length + 1; }
+    }
+    KrtAstNode imported = scope.body;
+    while (imported != null) {
+        if (imported.type_length > 0 && KrtSemanticSameName(source, start, first_length, imported.type_start, imported.type_length)) {
+            int64 suffix = first_length;
+            unsafe(using krt.mem;) { byte* text = (byte*)source;
+                while (suffix < length && KrtNameSpace(text[start + suffix])) { suffix = suffix + 1; }
+                if (suffix >= length || text[start + suffix] != 46) { imported = imported.next; continue; }
+                suffix = suffix + 1;
+            }
+            if (KrtDeclarationMatches(declaration, imported, source, start + suffix, length - suffix)) { return true; }
+        }
+        imported = imported.next;
+    }
+    return false;
+}
+
+bool KrtNativeNamespaceCallable(KrtAstNode callee, KrtNativeBinding binding) {
+    if (callee.kind != KrtAstKind.Member) { return false; }
+    KrtAstNode first = callee;
+    while (first.kind == KrtAstKind.Member) { first = first.left; }
+    if (first.kind != KrtAstKind.Identifier || KrtNativeFindName(binding, first.start, first.length) != null) { return false; }
+    int64 length = callee.name_start + callee.name_length - first.start;
+    KrtAstNode function_node = binding.module.left;
+    while (function_node != null) {
+        if (function_node.native_owner == null && KrtNativeVisibleQualifiedName(function_node, binding.unit.native_scope, binding.source, first.start, length)) { return true; }
+        function_node = function_node.next;
+    }
+    return false;
+}
+
+int32 KrtNativeFunctionScopeScore(KrtAstNode function_node, KrtAstNode callee, KrtNativeBinding binding) {
+    if (function_node.native_owner != null) { return 1000; }
+    if (callee.kind == KrtAstKind.Member && callee.native_static) {
+        KrtAstNode first = callee; while (first.kind == KrtAstKind.Member) { first = first.left; }
+        return KrtNativeVisibleQualifiedName(function_node, binding.unit.native_scope, binding.source, first.start, callee.name_start + callee.name_length - first.start) ? 200 : -1;
+    }
+    KrtAstNode scope = binding.unit.native_scope; int32 priority = 200;
+    while (scope != null) {
+        if (KrtScopeEqual(function_node.native_scope, scope, binding.source)) { return priority; }
+        scope = scope.left; priority = priority - 1;
+    }
+    if (KrtScopeLength(function_node.native_scope, binding.source) == 0) { return 100; }
+    if (binding.unit.native_scope != null && binding.unit.native_scope.body != null) {
+        KrtAstNode imported = binding.unit.native_scope.body;
+        while (imported != null) {
+            if (imported.type_length == 0 && KrtDeclarationMatches(function_node, imported, binding.source, callee.start, callee.length)) { return 50; }
+            imported = imported.next;
+        }
+        return 0;
+    }
+    return -1;
+}

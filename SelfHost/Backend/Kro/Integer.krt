@@ -1,0 +1,15 @@
+// Nonstandard even integer widths use rounded byte storage plus exact normalization.
+bool KrtKroNativeIntegerNormalize(KrtKroObject output, ref int32 pc, int32 code) {
+    int32 bits = (code < 0 ? -code : code) - 1000;
+    if (bits < 2 || bits > 64 || bits % 2 != 0) { return false; }
+    if (bits == 64) { return true; }
+    return KrtKroNativeCode(output, ref pc, 14729544, 3) && KrtKroNativeByte(output, ref pc, 64 - bits) &&
+        KrtKroNativeByte(output, ref pc, 72) && KrtKroNativeByte(output, ref pc, 193) &&
+        KrtKroNativeByte(output, ref pc, code < 0 ? 232 : 248) && KrtKroNativeByte(output, ref pc, 64 - bits);
+}
+
+int32 KrtKroNativeIntegerStorage(int32 code) {
+    int32 bits = (code < 0 ? -code : code) - 1000; int32 bytes = 1;
+    while (bytes * 8 < bits && bytes < 8) { bytes = bytes * 2; }
+    return bytes;
+}

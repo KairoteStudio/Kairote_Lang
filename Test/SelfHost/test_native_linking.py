@@ -1,0 +1,206 @@
+"""Native KRO exports, undefined symbols and relocations across separate builds."""
+import json
+import os
+from pathlib import Path
+import struct
+import subprocess
+import sys
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[2]
+COMPILER = Path(os.environ.get('SELFHOST_COMPILER', ROOT / 'build/selfhost/stage2/program')).resolve()
+LINKER = ROOT / 'build/ArkLink/ArkLink'
+if not LINKER.is_file():
+    LINKER = ROOT / 'ArkLink/build/ArkLink'
+
+
+def read_object(path):
+    data = path.read_bytes()
+    header = struct.unpack_from('<16I', data)
+    start = 64 + sum(header[4:7])
+    strings = data[start + header[12] * 32 + header[14] * 16:]
+    symbols = []
+    for index in range(header[12]):
+        symbol = struct.unpack_from('<8I', data, start + index * 32)
+        name = strings[symbol[0]:].split(b'\0', 1)[0].decode()
+        symbols.append((name, symbol))
+    relocations = [struct.unpack_from('<IIIi', data, start + header[12] * 32 + index * 16)
+                   for index in range(header[8])]
+    return header, symbols, relocations
+
+
+@unittest.skipUnless(COMPILER.is_file() and LINKER.is_file(), 'build a native compiler and ArkLink')
+class NativeLinkingTests(unittest.TestCase):
+    def setUp(self):
+        work = tempfile.TemporaryDirectory(prefix='krt native linking ')
+        self.addCleanup(work.cleanup)
+        self.work = Path(work.name)
+
+    def invoke(self, *args):
+        return subprocess.run([sys.executable, str(ROOT / 'SelfHost/compile.py'), *map(str, args),
+                               '--compiler', str(COMPILER), '--linker', str(LINKER)],
+                              cwd=self.work, capture_output=True, text=True, timeout=60)
+
+    def ok(self, result):
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def object(self, name, source):
+        path = self.work / (name + '.krt')
+        path.write_text(source)
+        target = path.with_suffix('.kro')
+        self.ok(self.invoke(path, '-c', '-o', target))
+        return target
+
+    def execute(self, objects, expected=42):
+        target = self.work / 'program'
+        self.ok(self.invoke(*objects, '-o', target))
+        result = subprocess.run([str(target)], capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+        return target
+
+    def test_separate_function_has_real_undefined_symbol_and_pc32_relocation(self):
+        library = self.object('math', 'int32 add(int32 a,int32 b){return a+b;}')
+        caller = self.object('main', 'extern int32 add(int32 x,int32 y); int32 main(){return add(19,23);}')
+        header, symbols, relocations = read_object(caller)
+        external = [(index, name) for index, (name, item) in enumerate(symbols) if item[3] == 0]
+        self.assertEqual(external, [(1, '_KRT1$add$i32;i32;$i32')])
+        self.assertEqual(len(relocations), 1)
+        offset, symbol, kind, addend = relocations[0]
+        self.assertLessEqual(offset + 4, header[4])
+        self.assertEqual((symbol, kind, addend), (external[0][0], 3, 0))
+        self.assertIn(external[0][1], [name for name, item in read_object(library)[1] if item[3] == 1])
+        self.execute([caller, library])
+        self.execute([library, caller])
+
+    def test_namespace_overloads_are_stable_across_separate_libraries(self):
+        first = self.object('first', 'namespace A; int32 choose(int32 x){return x+1;}')
+        second = self.object('second', 'namespace A { int64 choose(int64 x){return x+2;} } namespace B { int32 choose(int32 x){return x+3;} }')
+        caller = self.object('main', '''namespace A { extern int32 choose(int32 a); extern int64 choose(int64 b); }
+            namespace B { extern int32 choose(int32 c); }
+            int32 main(){if(A.choose(9)!=10 || A.choose((int64)18)!=20 || B.choose(9)!=12){return 1;} return 42;}''')
+        self.execute([caller, first, second])
+
+    def test_float_wide_ref_and_stack_arguments_share_native_abi(self):
+        library = self.object('abi', '''float64 scale(float64 a,float32 b){return a*b;}
+            uint128 wide(uint128 a,uint128 b){return a+b;}
+            void bump(ref int64 value){value=value+5;}
+            int64 total(int64 a,int64 b,int64 c,int64 d,int64 e,int64 f,int64 g,int64 h){return a+b+c+d+e+f+g+h;}''')
+        caller = self.object('main', '''extern double scale(double x,float y);
+            extern uint128 wide(uint128 x,uint128 y); extern void bump(ref long x);
+            extern long total(long a,long b,long c,long d,long e,long f,long g,long h);
+            int32 main(){int64 n=37;bump(ref n);if(n!=42 || scale(1.5,(float32)2.0)!=3.0){return 1;}
+            uint128 n128=(uint128)18446744073709551623;
+            if(wide(n128,(uint128)19)!=(uint128)18446744073709551642){return 2;}
+            if(total(1,2,3,4,5,6,7,14)!=42){return 3;}return 42;}''')
+        self.execute([caller, library])
+
+    def test_external_function_address_and_callback_relocations(self):
+        library = self.object('callback', '''int64 twice(int64 x){return x*2;}
+            int64 apply(fn(int64)->int64 callback,int64 x){return callback(x);}''')
+        caller = self.object('main', '''extern int64 twice(int64 x);
+            extern int64 apply(fn(int64)->int64 callback,int64 x);
+            int32 main(){fn(int64)->int64 f=&twice;if(f(21)!=42 || apply(f,21)!=42){return 1;}return 42;}''')
+        self.assertEqual(len(read_object(caller)[2]), 2)
+        self.execute([caller, library])
+
+    def test_library_can_call_another_library_and_ignore_unused_prototypes(self):
+        first = self.object('first', 'extern int32 absent(int32 x); extern int32 base(int32 x); int32 answer(){return base(40)+1;}')
+        second = self.object('second', 'int32 base(int32 x){return x+1;}')
+        caller = self.object('main', 'extern int32 answer(); int32 main(){return answer();}')
+        self.assertFalse(any('absent' in name for name, _ in read_object(first)[1]))
+        self.execute([caller, first, second])
+
+    def test_matching_prototypes_merge_with_definition_and_conflicts_fail(self):
+        caller = self.object('main', '''extern long value(int x); extern int64 value(int32 other);
+            int64 value(int32 x){return x+2;} int32 main(){return (int32)value(40);}''')
+        self.assertEqual(read_object(caller)[0][8], 0)
+        self.execute([caller])
+        source = self.work / 'bad.krt'
+        source.write_text('extern int32 same(int32 x); int64 same(int32 x){return x;} int32 main(){return 0;}')
+        result = self.invoke(source, '-c', '-o', self.work / 'bad.kro')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('E_LINKAGE', result.stderr)
+
+    def test_static_class_methods_use_owner_identity(self):
+        library = self.object('api', '''namespace Demo; class First{public static int32 value(int32 x){return x+1;}}
+            class Second{public static int32 value(int32 x){return x+2;}}''')
+        caller = self.object('main', '''namespace Demo { class First{public static extern int32 value(int32 x);}
+            class Second{public static extern int32 value(int32 x);} }
+            int32 main(){return Demo.First.value(19)+Demo.Second.value(20);}''')
+        self.execute([caller, library])
+
+    def test_unresolved_and_wrong_signature_fail_without_replacing_output(self):
+        library = self.object('library', 'int64 answer(int64 x){return x;}')
+        caller = self.object('main', 'extern int32 answer(int32 x); int32 main(){return answer(42);}')
+        output = self.work / 'program'; output.write_bytes(b'previous output')
+        result = self.invoke(caller, library, '-o', output)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('E_LINK', result.stderr)
+        self.assertEqual(output.read_bytes(), b'previous output')
+
+    def test_class_containing_external_signatures_are_rejected(self):
+        source = self.work / 'bad.krt'
+        for declaration in ['extern Box consume(Box x);', 'extern void consume(fn(Box)->int32 callback);']:
+            with self.subTest(declaration=declaration):
+                source.write_text('class Box{public int32 n;}' + declaration + 'int32 main(){return 0;}')
+                result = self.invoke(source, '-c', '-o', self.work / 'bad.kro')
+                self.assertNotEqual(result.returncode, 0)
+
+    def test_primitive_exceptions_unwind_across_objects_and_run_finally(self):
+        library = self.object('throwing', '''void fail(){throw "cross object";}
+            void fail_number(){try{throw 35;}finally{}}
+            void nested(){try{fail();}catch(string e){throw 35;}}''')
+        caller = self.object('main', '''extern void fail(); extern void fail_number(); extern void nested();
+            int32 main(){int32 n=0;try{fail();}catch(string text){if(text!="cross object"){return 1;}n=1;}finally{n+=2;}
+            try{fail_number();}catch(int32 x){n+=x;}finally{n+=4;}
+            if(n!=42){return 2;}try{nested();}catch(int32 x){if(x!=35){return 3;}}return 42;}''')
+        self.execute([caller, library])
+
+    def test_bool_array_and_void_callback_signatures(self):
+        library = self.object('arrays', '''bool first(bool[] values){return values[0];}
+            void fill(float64[] values){values[1]=2.5;}
+            void run(fn(ref int32)->void callback,ref int32 value){callback(ref value);}''')
+        caller = self.object('main', '''extern bool first(bool[] values); extern void fill(double[] values);
+            extern void run(fn(ref int32)->void callback,ref int32 value);
+            void inc(ref int32 x){x+=2;}
+            int32 main(){bool[] flags=[true,false];float64[] values=[1.0,0.0];fill(values);
+            if(!first(flags) || values[1]!=2.5){return 1;}int32 n=40;run(&inc,ref n);return n;}''')
+        self.execute([caller, library])
+
+    def test_library_named_exception_identity_is_explicitly_rejected(self):
+        path = self.work / 'bad.krt'
+        for source in [
+            'class Failure{} void fail(){throw new Failure();}',
+            'class Failure{} void check(fn()->void callback){try{callback();}catch(Failure e){}}',
+        ]:
+            with self.subTest(source=source):
+                path.write_text(source)
+                result = self.invoke(path, '-c', '-o', self.work / 'bad.kro')
+                self.assertNotEqual(result.returncode, 0)
+
+    def test_generic_owner_specializations_remain_local_symbols(self):
+        library = self.object('generic', '''class Box<T>{public static int32 value(){return 21;}}
+            int32 answer(){return Box<int32>.value()+Box<string>.value();}''')
+        symbols = read_object(library)[1]
+        generic_methods = [(name, symbol) for name, symbol in symbols if '.value$' in name]
+        self.assertEqual(len(generic_methods), 2)
+        self.assertEqual(len({name for name, _ in generic_methods}), 2)
+        self.assertTrue(all(symbol[4] == 0 for _, symbol in generic_methods))
+        caller = self.object('main', 'extern int32 answer(); int32 main(){return answer();}')
+        self.execute([caller, library])
+
+    def test_project_uses_native_library_object_and_rebuilds_on_library_change(self):
+        library = self.object('library', 'int32 answer(){return 42;}')
+        (self.work / 'main.krt').write_text('extern int32 answer(); int32 main(){return answer();}')
+        config = self.work / 'project.json'
+        config.write_text(json.dumps({'sources': ['main.krt'], 'libraries': ['library.kro'], 'output': 'bin/demo'}))
+        self.ok(self.invoke('build', config))
+        self.assertEqual(subprocess.run([str(self.work / 'bin/demo')], timeout=10).returncode, 42)
+        self.object('library', 'int32 answer(){return 17;}')
+        result = self.invoke('build', config); self.ok(result); self.assertIn('built:', result.stdout)
+        self.assertEqual(subprocess.run([str(self.work / 'bin/demo')], timeout=10).returncode, 17)
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -240,19 +240,15 @@ public static class MathOps {
         int64 accumulator = 1;
         while (exponent > 0) {
             if (exponent % 2 != 0) {
-                int128 product = (int128)accumulator * (int128)base_value;
-                if (product < (int128)-9223372036854775808 || product > (int128)9223372036854775807) {
+                if (!multiply_checked(accumulator, base_value, ref accumulator)) {
                     return false;
                 }
-                accumulator = (int64)product;
             }
             exponent = exponent / 2;
             if (exponent > 0) {
-                int128 square = (int128)base_value * (int128)base_value;
-                if (square > (int128)9223372036854775807) {
+                if (!multiply_checked(base_value, base_value, ref base_value)) {
                     return false;
                 }
-                base_value = (int64)square;
             }
         }
         result = accumulator;
@@ -334,6 +330,30 @@ public static class MathOps {
             }
             divisor = divisor + 2;
         }
+        return true;
+    }
+
+    // Check division bounds before multiplying; this works on native targets
+    // with 64-bit arithmetic and never evaluates INT64_MIN / -1.
+    private static bool multiply_checked(int64 left, int64 right, ref int64 result) {
+        result = 0;
+        if (left == 0 || right == 0) {
+            return true;
+        }
+        if (left > 0) {
+            if (right > 0) {
+                if (left > (int64)9223372036854775807 / right) { return false; }
+            } else {
+                if (right < (int64)-9223372036854775808 / left) { return false; }
+            }
+        } else {
+            if (right > 0) {
+                if (left < (int64)-9223372036854775808 / right) { return false; }
+            } else {
+                if (left < (int64)9223372036854775807 / right) { return false; }
+            }
+        }
+        result = left * right;
         return true;
     }
 

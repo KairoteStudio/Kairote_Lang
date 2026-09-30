@@ -1,0 +1,61 @@
+bool KrtNativeConstraintValueType(KrtAstNode type) {
+    if (type.native_array || type.native_string || type.native_stride > 0 || type.native_function_pointer != null) { return false; }
+    return type.native_type == null || type.native_type.value == 4;
+}
+
+bool KrtNativeConstraintDefaultConstructor(KrtAstNode type, KrtAstNode module) {
+    if (KrtNativeConstraintValueType(type)) { return true; }
+    if (type.native_type == null || type.native_array || type.native_string || type.native_stride > 0 ||
+        type.native_type.value != 1 || type.native_type.native_abstract) { return false; }
+    KrtAstNode method = module.left;
+    bool declared = false;
+    while (method != null) {
+        if (method.native_owner == type.native_type && method.op == 220) {
+            declared = true;
+            if (method.parameter_count == 1) { return true; }
+        }
+        method = method.next;
+    }
+    return !declared;
+}
+
+bool KrtNativeCheckConstraints(KrtAstNode declaration, KrtAstNode arguments, KrtAstNode module, int64 source) {
+    if (declaration.native_constraints == null) { return true; }
+    if (module.native_constraint_depth >= 64) { return false; }
+    module.native_constraint_depth = module.native_constraint_depth + 1;
+    bool valid = KrtNativeEvaluateConstraints(declaration, arguments, module, source);
+    module.native_constraint_depth = module.native_constraint_depth - 1;
+    return valid;
+}
+
+bool KrtNativeEvaluateConstraints(KrtAstNode declaration, KrtAstNode arguments, KrtAstNode module, int64 source) {
+    KrtAstNode context = KrtAstMake(KrtAstKind.Type, declaration.start, 0);
+    context.native_generic_origin = declaration; context.native_type_arguments = arguments;
+    context.native_context = declaration.native_context;
+    KrtAstNode constraint = declaration.native_constraints;
+    while (constraint != null) {
+        KrtAstNode argument = KrtNativeTypeParameter(context, source, constraint.name_start, constraint.name_length);
+        if (argument == null || KrtNativeSpanWord(source, argument.type_start, argument.type_length, "void")) { return false; }
+        bool valid = false;
+        if (constraint.op == 1) {
+            valid = argument.native_array || argument.native_string ||
+                (argument.native_type != null && (argument.native_type.value == 1 || argument.native_type.value == 3) && argument.native_stride == 0);
+        } else if (constraint.op == 2) { valid = KrtNativeConstraintValueType(argument); }
+        else if (constraint.op == 3) { valid = KrtNativeConstraintDefaultConstructor(argument, module); }
+        else if (constraint.op == 4) {
+            valid = KrtNativeConstraintValueType(argument) ||
+                (argument.native_stride > 0 && !argument.native_array && !argument.native_string);
+        } else {
+            KrtAstNode expected = KrtAstMake(KrtAstKind.Type, constraint.start, constraint.length);
+            expected.native_scope = declaration.native_scope; expected.native_context = context;
+            if (!KrtNativeAnnotateType(expected, module, source, constraint.type_start, constraint.type_length)) { return false; }
+            if (expected.native_type != null && argument.native_type != null && !expected.native_array && !argument.native_array &&
+                expected.native_stride == 0 && argument.native_stride == 0) {
+                valid = KrtNativeDerivesFrom(argument.native_type, expected.native_type);
+            } else { valid = KrtNativeTypeEqual(expected, argument); }
+        }
+        if (!valid) { return false; }
+        constraint = constraint.next;
+    }
+    return true;
+}

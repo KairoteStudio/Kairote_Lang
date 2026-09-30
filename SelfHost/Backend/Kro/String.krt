@@ -1,0 +1,54 @@
+// Null-terminated UTF-8 strings retain their raw byte-pointer representation.
+// Length counts bytes. Null compares equal only to null, while concatenation
+// and Length treat null as empty. Concatenation creates a zero-terminated heap
+// allocation using the same checked allocator as new.
+
+bool KrtKroNativeStringCode(KrtKroObject output, ref int32 pc, int64 bytes, int32 count) {
+    while (count > 0) {
+        if (!KrtKroNativeByte(output, ref pc, (int32)(bytes & 255))) { return false; }
+        bytes = bytes >> 8;
+        count = count - 1;
+    }
+    return true;
+}
+
+bool KrtKroNativeStringEqual(KrtKroObject output, ref int32 pc) {
+    // Pop rhs into rdx and lhs into rcx; compare bytes until mismatch or NUL.
+    return KrtKroNativeStringCode(output, ref pc, 8009741305928026, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 37515471843067208, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 626728239789266, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 20275495862277237, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 67250267196277247, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 66234580457226680, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 1354772739, 4);
+}
+
+bool KrtKroNativeStringLength(KrtKroObject output, ref int32 pc) {
+    // Pop address into rax; count bytes in rcx until NUL, or zero for null.
+    return KrtKroNativeStringCode(output, ref pc, 32862775982764376, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 1534918370557963, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 90116664196936, 6);
+}
+
+bool KrtKroNativeStringConcat(KrtKroObject output, ref int32 pc) {
+    // Count into r8/r9, then save both inputs and counts on the operand stack.
+    // The allocator consumes len(lhs)+len(rhs)+1 and returns payload or null.
+    if (!(KrtKroNativeStringCode(output, ref pc, 37516162200066394, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 347996538303689, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 66358822201291776, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 59256292768826868, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 11254966127732, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 68939112761591156, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 21481439191192145, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 36953245801562249, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 5243328, 3))) { return false; }
+    if (!KrtKroNativeAllocate(output, ref pc, 0)) { return false; }
+    // Restore inputs and counts; copy each span with rep movsb, append NUL,
+    // and leave the new pointer. On allocation failure leave null untouched.
+    return KrtKroNativeStringCode(output, ref pc, 25150608027238744, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 20354268586345800, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 38646521759582089, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 60386590114184385, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 2188736603982156, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 5265408, 3);
+}

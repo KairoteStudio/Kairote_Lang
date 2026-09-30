@@ -1,0 +1,90 @@
+// Handler contexts are compile-time state. Native TryEnter records unwind state.
+class KrtNativeExceptionFrame {
+    public KrtNativeExceptionFrame previous;
+    public KrtAstNode finally_body;
+    public int32 record_slot;
+    public int32 loop_depth;
+    public bool active_handler;
+}
+
+bool KrtNativeLowerSavedThrow(KrtNativeModule module, int32 record_slot) {
+    return KrtNativeEmit(module, (int32)KrtNativeOp.CatchValue, record_slot, 0) >= 0 &&
+        KrtNativeEmit(module, (int32)KrtNativeOp.CatchType, record_slot, 0) >= 0 &&
+        KrtNativeEmit(module, (int32)KrtNativeOp.Throw, 0, 0) >= 0;
+}
+
+bool KrtNativeLowerThrow(KrtAstNode statement, KrtAstNode module_ast, KrtNativeModule module, int64 source) {
+    if (statement.left == null) {
+        if (statement.native_target == null) { return false; }
+        return KrtNativeLowerSavedThrow(module, statement.native_target.local_slot);
+    }
+    // Named type identities belong to one compilation unit, so they cannot
+    // participate in typed exception dispatch across independently linked KROs.
+    if (module.library_mode && statement.left.native_type != null) { return false; }
+    if (statement.left.native_type != null && (statement.left.native_type.value == 1 || statement.left.native_type.value == 3)) { return KrtNativeLowerClassThrow(statement.left, module_ast, module, source); }
+    int64 type = KrtNativeExceptionType(statement.left, module_ast);
+    return type >= 0 && KrtNativeLowerExpression(statement.left, module_ast, module, source) &&
+        KrtNativeEmit(module, (int32)KrtNativeOp.Const, type, 0) >= 0 &&
+        KrtNativeEmit(module, (int32)KrtNativeOp.Throw, 0, 0) >= 0;
+}
+
+bool KrtNativeLowerCleanup(KrtAstNode module_ast, KrtAstNode unit, KrtNativeModule module, int64 source, int32[] breaks, int32[] continues, ref int32 depth, bool returning) {
+    KrtNativeExceptionFrame saved = module.exception_frame; KrtNativeExceptionFrame frame = saved;
+    while (frame != null && (returning || frame.loop_depth >= depth)) {
+        module.exception_frame = frame.previous;
+        if (frame.active_handler && KrtNativeEmit(module, (int32)KrtNativeOp.TryLeave, frame.record_slot, 0) < 0) { return false; }
+        if (frame.finally_body != null && !KrtNativeLowerBlock(frame.finally_body, module_ast, unit, module, source, breaks, continues, ref depth)) { return false; }
+        frame = frame.previous;
+    }
+    module.exception_frame = saved; return true;
+}
+
+bool KrtNativeLowerTry(KrtAstNode statement, KrtAstNode module_ast, KrtAstNode unit, KrtNativeModule module, int64 source, int32[] breaks, int32[] continues, ref int32 depth) {
+    KrtNativeExceptionFrame outer = module.exception_frame;
+    KrtNativeExceptionFrame frame = new KrtNativeExceptionFrame();
+    frame.previous = outer; frame.finally_body = statement.alternate; frame.record_slot = statement.local_slot;
+    frame.loop_depth = depth; frame.active_handler = true;
+    int32 enter = KrtNativeEmit(module, (int32)KrtNativeOp.TryEnter, -1, statement.local_slot);
+    if (enter < 0) { return false; }
+    module.exception_frame = frame;
+    if (!KrtNativeLowerBlock(statement.left, module_ast, unit, module, source, breaks, continues, ref depth)) { return false; }
+    module.exception_frame = outer;
+    if (KrtNativeEmit(module, (int32)KrtNativeOp.TryLeave, statement.local_slot, 0) < 0) { return false; }
+    if (statement.alternate != null && !KrtNativeLowerBlock(statement.alternate, module_ast, unit, module, source, breaks, continues, ref depth)) { return false; }
+    int32 exits = KrtNativeEmit(module, (int32)KrtNativeOp.Jump, -1, -1);
+    if (exits < 0) { return false; }
+    module.args[enter] = module.count;
+    KrtAstNode clause = statement.right;
+    while (clause != null) {
+        int32 catch_branch = -1;
+        if (clause.left != null) {
+            if (!KrtNativeLowerCatchMatch(clause.left, statement.local_slot, module_ast, module)) { return false; }
+            catch_branch = KrtNativeEmit(module, (int32)KrtNativeOp.Branch, -1, -1);
+            if (catch_branch < 0) { return false; }
+            module.args[catch_branch] = catch_branch + 1;
+            if (clause.left.name_length > 0 && (KrtNativeEmit(module, (int32)KrtNativeOp.CatchValue, statement.local_slot, 0) < 0 ||
+                KrtNativeEmit(module, (int32)KrtNativeOp.StoreLocal, clause.left.local_slot, 0) < 0)) { return false; }
+        }
+        int32 catch_enter = -1;
+        if (statement.alternate != null) { catch_enter = KrtNativeEmit(module, (int32)KrtNativeOp.TryEnter, -1, statement.native_size); if (catch_enter < 0) { return false; } }
+        frame.record_slot = statement.native_size; frame.active_handler = catch_enter >= 0; module.exception_frame = frame;
+        if (!KrtNativeLowerBlock(clause.right, module_ast, unit, module, source, breaks, continues, ref depth)) { return false; }
+        module.exception_frame = outer;
+        if (catch_enter >= 0 && KrtNativeEmit(module, (int32)KrtNativeOp.TryLeave, statement.native_size, 0) < 0) { return false; }
+        if (statement.alternate != null && !KrtNativeLowerBlock(statement.alternate, module_ast, unit, module, source, breaks, continues, ref depth)) { return false; }
+        int32 jump = KrtNativeEmit(module, (int32)KrtNativeOp.Jump, -1, exits);
+        if (jump < 0) { return false; } exits = jump;
+        if (catch_enter >= 0) {
+            module.args[catch_enter] = module.count;
+            if (!KrtNativeLowerBlock(statement.alternate, module_ast, unit, module, source, breaks, continues, ref depth) ||
+                !KrtNativeLowerSavedThrow(module, statement.native_size)) { return false; }
+        }
+        if (catch_branch >= 0) { module.extra[catch_branch] = module.count; }
+        clause = clause.next;
+    }
+    // An unmatched exception still runs finally, then keeps its original type.
+    if (statement.alternate != null && !KrtNativeLowerBlock(statement.alternate, module_ast, unit, module, source, breaks, continues, ref depth)) { return false; }
+    if (!KrtNativeLowerSavedThrow(module, statement.local_slot)) { return false; }
+    module.exception_frame = outer;
+    return KrtNativePatchLoop(module, exits, module.count);
+}

@@ -1,53 +1,112 @@
 # SelfHost 编译器
 
-这里存放真正自举编译器的 Kairote 实现，不生成 C 源码。当前已完成 M0，以及 M1/M2 的可执行最小切片：
+Kairote 编写的 Linux x86-64 编译器直接生成 KRO，再由 ArkLink 链接。完整 `SelfHost/**/*.krt` 源码参与自编译：Stage 0 生成 Stage 1，随后生成 Stage 2、Stage 3 和用于固定点检查的 Stage 4。验证要求 Stage 2、3、4 的 KRO 逐字节相同，并在生成的编译器上执行程序、比较输出和错误诊断。
 
-- `Frontend/Lexer/` 定义借用源缓冲区的 Token、位置和错误码，并实现注释、标识符、整数、字符串和标点扫描。
-- `Frontend/Parser/` 定义只消费 Token 的 Parser 接口。
-- Parser 已能跳过顶层 `enum`/`class` 声明并解析最多 256 个函数节点；类成员语义和多函数后端链接仍待实现。
-- Parser/Semantic 已能构建并验证嵌套 `if/else` block；IR 已支持编译期常量条件的单返回分支折叠，动态条件的控制流 IR 和机器码分支仍待实现。
-- Parser/Semantic 也能保留 `while` 和 `else if` 的嵌套结构；循环降低与动态分支发射仍待实现。
-- Parser/Semantic 已能表示对象字段访问、赋值语句和表达式语句；字段布局、存储 IR 与对应机器码仍待实现。
-- Parser/Semantic 已能识别通用类型局部声明和 `new Type()` 初始化；类型检查、对象布局和分配运行时仍待实现。
-- Parser/Semantic 也能表示 `new Type[count]` 数组构造及其长度表达式；数组布局和运行时分配仍待实现。
-- Parser 可承载最多 8 个 `int32` 参数和逗号分隔的调用实参；Semantic 会逐项绑定并检查参数数量，后端当前仍只实现单参数 ABI。模块解析会先为所有函数建立局部/参数绑定，再解析跨函数调用。
-- Parser 可识别 `ref` 参数修饰符和 `ref value` 实参节点；引用别名/写回语义及其 ABI 仍待实现。
-- 函数参数类型现在接受任意标识符类型及可选指针修饰，覆盖 `KrtAstNode` 等自定义类型；完整类型检查仍待实现。
-- 函数返回类型同样接受任意标识符类型，覆盖 AST/符号对象返回；返回 ABI 和类型一致性检查仍待实现。
-- Parser/Semantic 已能表示 `byte*` 声明和 `stackalloc Type[count]`；指针类型检查、生命周期和栈分配 IR 仍待实现。
-- Parser/Semantic 已能表示下标访问（`p[i]`）以及一元解引用/取址节点；地址计算、边界/别名分析和存储 IR 仍待实现。
-- Parser/Semantic 已能表示 `(Type)value` 与 `(Type*)value` 转换节点；转换的类型检查和机器码语义仍待实现。
-- Parser/Semantic 已能保留 `void` 函数中的空 `return;`；非 void 返回路径和完整返回类型检查仍待实现。
-- Parser/Semantic 已能表示和递归检查 `unsafe(using krt.mem;) { ... }` 块；安全边界和后端内存模型仍待实现。
-- Parser/Semantic 已能保留 `delete value;` 生命周期语句；析构语义、所有权检查和后端释放路径仍待实现。
-- Parser/Semantic 已能表示循环中的 `break;` 与 `continue;`；循环 CFG 降低和跳转机器码仍待实现。
-- 已有契约覆盖 `void` + `unsafe` + `while(true)` + `break` + 空 `return` 的组合路径。
-- Semantic 会递归验证 `break/continue` 只能出现在循环上下文中，非法控制转移不会进入 IR。
-- Parser/Semantic/IR 已识别 `true`、`false` 布尔字面量并参与常量求值，避免循环和条件中的布尔名称被误报为未定义变量。
-- Parser/Semantic/IR 已识别 `null` 字面量并按零值参与常量比较；指针类型检查和非整数空值表示仍待实现。
-- Parser/Semantic/IR 已支持三元表达式 `condition ? when_true : when_false` 的 AST、绑定和常量求值；一般非恒定选择仍待降低。
-- IR 现在提供受验证的 `StackAlloc`、`AddressOffset`、`Load`、`Store` 指令，并能降低常量下标的 `byte` 缓冲区读写；Kro 后端已能发射固定缓冲区读写切片并由 ArkLink 实际执行。
-- 对局部整型常量赋值，IR 会追踪最新赋值并可折叠最终返回；对象字段写入和动态赋值仍未发射。
-- `Frontend/Parser/Ast.krt` 定义带源码跨度的 AST 节点和叶节点验证。
-- `Frontend/Semantic/` 按源码名称及声明顺序绑定函数体局部变量，分配独立槽位，拒绝重复声明、未声明引用和缺失返回。
-- Semantic 会对整个函数链执行名称唯一性检查，重复函数名在进入后端前被拒绝。
-- Semantic 会对任意长度函数链执行确定性排序，将 `main` 移到链尾；多函数后端/重定位仍在实现中。
-- Semantic 会在模块级解析调用目标，检查被调用函数存在且实参与形参数量一致；未解析调用不会进入 IR。
-- 成员调用（例如 `token.SetError(...)`）会保留接收者绑定并进入后续阶段；类方法分派和 ABI 仍待实现，裸函数调用继续执行严格符号检查。
-- Semantic 会递归绑定 `if/while` 嵌套块中的参数、局部变量和赋值目标；控制流本身仍需降低到多块 IR。
-- 函数表达式检查已覆盖转换、成员访问和下标初始化节点，避免已解析的合法 AST 在白名单阶段被误拒。
-- Semantic 要求函数链中恰好存在一个 `main` 入口；缺失入口的模块不会进入后端。
-- 多函数单元在语义阶段规范化为 helper-first，因此源文件中的 `main`/helper 声明顺序不影响调用发射。
-- `Middle/Ir/` 使用扁平指令表和显式基本块起点；验证器支持最多 32 块，检查块尾终结、跳转目标、返回/条件类型及部分值引用。单块内 `return` 后的指令被拒绝；完整 SSA 支配关系验证仍待实现。整数一元/二元常量表达式会在降低阶段求值。
-- IR 会对已绑定的局部整数字面量执行确定性的常量传播，例如 `x + 2`；常量求值覆盖算术、比较和短路逻辑的值语义，无法证明为常量的表达式仍保留局部加载路径。
-- `Backend/Kro/` 生成真实 x86-64 指令和完整的最小 Kro 文件（头、文本、符号表、字符串表），并支持通过 ArkLink ELF 链接执行；当前同时覆盖常量返回（文件驱动入口会补进程退出序列）、单/双局部槽位、无参 helper→main，以及单/双整数参数 helper→main 调用切片。
-- `Driver/` 串起 Lexer → Parser → Semantic → IR → Kro，并提供源码到文件的编译入口。
-- Driver 会在任意长度函数链中显式查找唯一 `main`，不再假设入口位于链首；多函数后端发射仍待实现。
+这说明已实现的编译器能够完整自举。与 Re.KrtC 的语言、优化和独立链接能力是否一致，需要分别验收，不能由自举成功推导。
 
-这些模块目前由 Stage 0 的 `KrtC` 编译进行接口验证；它们还不是完整编译器，也没有宣称已经完成自举。当前 Driver 支持无参数函数、单个 `int32` 参数、`int32` 局部声明（常量初始化）、常量表达式返回、直接局部变量返回，以及无参/单整数参数 helper 调用的直接机器码验证。IR 的 StoreLocal 使用 `lefts` 保存值指令索引、`rights` 保存槽位，LoadLocal 使用 `lefts` 保存槽位；一般调用、控制流和完整 ABI 仍在实现中。
+## 运行自举
 
-`Main.krt` 是可重复的 Stage1 探针：Stage 0 编译全部 `SelfHost/*.krt` 后，Stage1 会直接写出一个 Kro 调用对象；`Test/SelfHost/test_contract.py` 再用 `ArkLink --target elf` 链接并实际运行它。这个探针验证了 Stage0 → Kairote 编译器 → Kro → ArkLink → ELF 的链路，但不等同于完整的 Stage1→Stage2 自编译。
+在仓库根目录执行：
 
-文件驱动入口使用 256 KiB 分块读取上限；超过上限会明确失败，不会静默截断源文件。
+```sh
+cmake -S . -B build
+cmake --build build --target KrtC ArkLink -j4
+python3 Test/SelfHost/bootstrap.py
+```
 
-仍需实现完整作用域和类型检查、一般表达式、控制流降低、多参数/多函数调用、重定位写出，以及 Stage1 → Stage2 → Stage3 自编译验证。现有常量求值也尚未完整覆盖运算符及整数边界；多块 IR 可进行结构验证，但当前机器码后端明确拒绝它。后续实现必须保持 Frontend → Semantic → IR → Kro 的依赖方向，并直接输出 Kro 对象。
+脚本优先使用上述构建产物，也支持 `KRTC`、`ARKLINK` 环境变量。只有生成 Stage 1 时调用 C 编写的 Stage 0；后续编译运行生成的 Kairote 编译器，链接运行 ArkLink。后续子进程使用空 PATH，没有中间 C 文件或 Stage 0 回退。
+
+`build/selfhost/report.json` 保存命令、源码与工具哈希、各代 KRO 哈希、程序运行及诊断结果；`Compiler.krt` 是该次验证使用的源码快照。各代编译器位于 `stage2/program`、`stage3/program`、`stage4-check/program`。只有全部检查通过，报告才标记 `complete: true`。判断报告是否仍适用，还需核对源码快照与当前 `SelfHost/**/*.krt`。`--probes-only` 用于开发检查，不会标记完整自举完成。
+
+## 日常编译
+
+完成自举后，默认使用 Stage 2：
+
+```sh
+./SelfHost/krtc program.krt -o program
+./program
+./SelfHost/krtc helper.krt main.krt -o combined
+./SelfHost/krtc program.krt -c -o program.kro
+./SelfHost/krtc --check program.krt
+./SelfHost/krtc -I libs Test/SelfHost/examples/daily.krt -o build/daily
+```
+
+也可以使用 `python3 SelfHost/compile.py`。省略 `-o` 时，在当前目录生成首个输入的文件名主干；`-c` 默认增加 `.kro` 后缀。兼容 `output 路径`，支持带空格的路径。
+
+`-I` 添加模块搜索目录，默认包含仓库 `libs`。加载器支持文件级 `using System.Console;`、`using System;`、`using System.*;`、using 别名和 `import "helper.krt";`。依赖按确定顺序加载，同一文件只加载一次；循环依赖共享声明，缺失依赖会报错。每个文件的 namespace 和 using 作用域单独保存。
+
+Python 驱动负责依赖加载、源码位置映射、临时文件、工程缓存和链接；词法、语法、绑定、IR 与机器码生成均由 Kairote 编译器完成。错误会映射回原文件的 UTF-8 行列。编译或链接失败不会覆盖已有输出。多个源码先编译为一个模块，也可传入已有 `.kro` 参与链接。对象输出、跨模块符号和链接目标的支持范围见 [工程构建](../Docs/SelfHost/Projects.md)；不能将内部调用约定等同于完整外部 ABI。
+
+`--compiler` 或 `SELFHOST_COMPILER` 可选择其他原生编译器。原生可执行文件本身使用固定文件协议：读取当前目录的 `program.krt`，成功后写出 `stage1-probe.kro`。当前支持 `-O0`；`-O1`、`-O2`、`-O3` 明确报错。
+
+## 工程与标准库
+
+```sh
+./SelfHost/krtc new console /tmp/kairote-example
+./SelfHost/krtc build /tmp/kairote-example
+./SelfHost/krtc check /tmp/kairote-example
+./SelfHost/krtc clean /tmp/kairote-example
+```
+
+仓库中也提供了组合使用新语言能力的 [LanguageDemo 工程](../Test/SelfHost/examples/language-project/project.krt)：
+
+```sh
+./SelfHost/krtc build Test/SelfHost/examples/language-project
+./Test/SelfHost/examples/language-project/bin/release/LanguageDemo
+```
+
+[DispatchDemo 工程](../Test/SelfHost/examples/dispatch-project/project.krt) 演示抽象基类、虚方法、接口继承、接口泛型约束、接口数组及接口异常捕获：
+
+```sh
+./SelfHost/krtc build Test/SelfHost/examples/dispatch-project
+./Test/SelfHost/examples/dispatch-project/bin/release/DispatchDemo
+```
+
+工程驱动接受 `project.krt` 的 `Configure(Project p)` 配置和 `project.json`，提供源码通配符、模块搜索路径、源码库、输出路径、配置变量及缓存。缓存包含源码、依赖、工具与配置的哈希。具体配置、增量构建和 clean 行为见 [工程构建](../Docs/SelfHost/Projects.md)。
+
+标准库从仓库 `libs` 加载，经过同一原生编译路径；没有在 Python 中替代 Console、Math、Memory、Array、String、Convert 或 StringBuilder 的实现。`System.Exception` 提供普通对象形式的异常载荷，包含 Message、Code 和 ToString。完整库契约的覆盖情况以运行结果为准：
+
+```sh
+python3 Test/SelfHost/run_standard_library.py --compiler build/selfhost/stage2/program
+```
+
+该命令使用原有 `Test/StandardLibrary` 契约测试，保存编译器与库源码哈希、每项结果及日志。成功加载某个模块不等于其全部契约已经通过。
+
+## 已有原生执行路径
+
+| 范围 | 实现 |
+| --- | --- |
+| 对象与调用 | 类字段、静态/实例方法、隐式 this、重载、构造函数、字段初始化、默认初始化、递归及 ref 写回；单类继承、限定/泛型基类、基类构造链、base 成员访问及向上转换；virtual/override/abstract、接口实现及接口继承。 |
+| 集合与循环 | 类型化数组、`[...]` 和初始化表达式中的 `{...}`、类型推断、空数组、数组返回值、对象/字符串元素；foreach 遍历数组或字符串，集合只求值一次，支持嵌套、break 和 continue。 |
+| 名称与泛型 | 文件级、块级、嵌套 namespace，限定类型/函数名称、using 和别名；泛型类、函数、方法，显式类型参数和已有推断规则，嵌套实例、泛型构造函数、ref、数组和静态调用。泛型通过生成具体实例执行；支持 where 约束与每个具体类型独立的静态字段。 |
+| 数值 | 2–64 偶数位宽有符号与无符号整数（含 int30 等），以及 int128/uint128；float32/float64 字面量、算术、比较和转换，含数组、字段、参数及返回值。 |
+| 异常 | throw、类型捕获、多个 catch、catch-all、rethrow、finally；支持跨函数展开以及 return、break、continue 时执行 finally。类异常按对象实际类型匹配本类和基类，即使通过基类变量抛出或重抛也保留派生类型；标量异常按类型精确匹配。 |
+| 程序状态与回调 | 可变全局量、类静态字段及按声明顺序执行的初始化；`fn(...) -> ...` 函数指针、自由函数/静态方法取址、带 ref 的间接调用。 |
+| 字符串与内存 | 内容相等比较、双字符串拼接、只读 Length、对象/数组分配、栈分配、类型化指针步长、动态系统调用，以及实际释放对象和数组的 delete。 |
+
+字符串 Length 和 foreach 按 UTF-8 字节处理，不按 Unicode 字符处理。字符串与空指针比较安全；拼接将空指针当空串，空字符串引用的长度为 0。数组 Length 只读。堆分配检查负数、大小溢出和系统调用失败，失败返回空指针；`delete null` 安全，不能用 delete 释放字符串或栈地址。
+
+泛型约束使用 `where T : class`、`struct`、`unmanaged`、`new()`、基类/接口名或另一个类型参数；可以组合约束，并用于类、函数和方法。实例化前验证实际类型，失败报告 `E_GENERIC_CONSTRAINT`。`struct` 约束目前面向已实现的标量与枚举值类型，不表示结构体布局已经完成。`new T()` 支持无参类构造及标量零值；接口和抽象类不满足 `new()`。
+
+虚方法和接口调用根据对象实际类型选择实现；接收者只求值一次，`base.Method()` 直接调用基类实现。非虚方法隐藏仍按静态接收者类型选择。接口支持多个父接口、泛型接口、继承的实现、重载和 ref 参数；签名必须匹配，缺失实现及冲突契约会报错。继承的接口映射随虚方法 override 更新，普通同名方法隐藏不替换它；派生类重新声明实现该接口时建立新映射。接口引用保持原对象指针，可用于数组、delete、throw 和 catch。虚方法或接口调用的空接收者以状态 126 退出。
+
+派发代码枚举当前模块内的具体类，暂不使用可跨模块扩展的虚表；泛型类中的普通虚方法可实例化，但方法自身的泛型参数、接口默认方法和显式接口实现尚未支持。
+
+泛型静态字段按具体类型分别分配存储，启动时按源码顺序初始化一次；继承访问共享所属基类具体实例的静态字段。未使用的模板不分配存储，初始化顺序不依赖运行时首次访问。
+
+原生 IR 显式表示调用、控制流、内存与异常处理。后端验证跳转目标、操作数栈高度及局部槽位，非法 IR 不会被静默修正。
+
+## 验证与限制
+
+```sh
+python3 -m unittest discover -s Test/SelfHost
+SELFHOST_COMPILER="$PWD/build/selfhost/stage2/program" python3 -m unittest \
+  Test.SelfHost.test_native_collections Test.SelfHost.test_native_generics \
+  Test.SelfHost.test_native_exceptions Test.SelfHost.test_inheritance Test.SelfHost.test_namespaces
+```
+
+专项测试覆盖构造与初始化顺序、集合求值顺序、循环作用域、泛型实例隔离、类型/引用不匹配、跨调用异常展开、finally 的多种出口，以及实际机器码运行。具体测试数量、源码版本和通过情况应读取相应报告，不使用文档中的固定数量代替验收。语法边界见 [SyntaxParity.md](../Docs/SelfHost/SyntaxParity.md)，实际对照结果见 [日常使用对比](../Docs/SelfHost/DailyUseComparison.md)。
+
+仍未完成的能力包括结构体值语义、闭包/捕获 lambda、完整迭代器协议、全部类型推断和访问控制规则、通用外部 ABI，以及优化流水线。原生 extern 函数可以通过 KRO 未定义符号和重定位链接；具体支持的参数类型及库边界见工程文档。当前未捕获异常以状态 70 退出。单继承保持基类字段前缀和对象身份；多个类基类和未经检查的类/接口向下转换会拒绝。锯齿数组、字符串 `+=`、数组边界检查和 GC 尚未实现。
+
+所有输入源码及导入合计上限为 1 MiB；参数最多 32 个（实例接收者计入），具体函数最多 1024 个，泛型实例存在固定容量限制。原生 IR 仍为栈式，没有完整 SSA 优化架构。堆对象分别使用匿名映射，小对象开销较高；拼接字符串和 128 位运算的内部盒装分配会保留内存，长时间运行需考虑这一限制。旧紧凑对象 API 仍用于既有二进制契约测试。

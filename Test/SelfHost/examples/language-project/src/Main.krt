@@ -1,0 +1,39 @@
+import "Box.krt";
+using Demo.Models;
+using System.Console;
+using System.Exception;
+
+class EmptyInput:Exception {
+    public EmptyInput():base("empty input", 1) {}
+}
+
+float64 Average(float64[] values) {
+    if (values.Length == 0) { throw new EmptyInput(); }
+    float64 total = 0.0;
+    foreach (float64 value in values) { total += value; }
+    return total / (float64)values.Length;
+}
+
+int32 main() {
+    float64[] values = [1.5, 2.5, 3.5];
+    Box<float64> result = new Box<float64>(Average(values));
+    if (result.Get() != 2.5 || Box<float64>.Count != 1) { return 1; }
+    Console.WriteLine("average verified");
+    delete result;
+    delete values;
+
+    float64[] empty = [];
+    bool caught = false;
+    bool cleaned = false;
+    try {
+        Average(empty);
+    } catch (Exception error) {
+        Console.WriteLine(error.Message);
+        caught = error.Code == 1;
+        delete error;
+    } finally {
+        delete empty;
+        cleaned = true;
+    }
+    return caught && cleaned ? 0 : 2;
+}

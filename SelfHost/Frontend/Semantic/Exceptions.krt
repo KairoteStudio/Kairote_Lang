@@ -1,0 +1,61 @@
+// Scalar exceptions use exact type identities; class throws read the object's
+// runtime identity so a base-typed variable retains its actual exception type.
+int64 KrtNativeExceptionType(KrtAstNode type, KrtAstNode module) {
+    if (type == null || type.native_array || (type.native_stride > 0 && !type.native_string)) { return -1; }
+    if (type.native_type != null) {
+        KrtAstNode declaration = module.declarations; int64 identity = 64;
+        while (declaration != null) {
+            if (declaration == type.native_type) { return identity; }
+            identity = identity + 1; declaration = declaration.next;
+        }
+        return -1;
+    }
+    if (type.native_wide) { return type.native_unsigned ? 57 : 56; }
+    if (type.native_string) { return 48; }
+    if (type.native_boolean) { return 49; }
+    if (type.native_float != 0) { return 32 + type.native_float; }
+    // Storage slots and rounded byte widths do not identify integer types.
+    // Keep the established scalar ABI, and put custom precision above the
+    // module-local class identity range.
+    int32 bits = type.native_bits;
+    if (bits == 8 || bits == 16 || bits == 32 || bits == 64) { return bits / 8 + (type.native_unsigned ? 16 : 0); }
+    if (bits > 0) { return (int64)4294967296 + bits * 2 + (type.native_unsigned ? 1 : 0); }
+    return type.native_width + (type.native_unsigned ? 16 : 0);
+}
+
+bool KrtNativeBindThrow(KrtAstNode statement, KrtNativeBinding binding) {
+    if (statement.left == null) {
+        if (binding.catch_target == null) { return KrtNativeBindingError(binding, statement); }
+        statement.native_target = binding.catch_target; return true;
+    }
+    if (!KrtNativeBindExpression(statement.left, binding)) { return false; }
+    if (statement.left.kind == KrtAstKind.Null || KrtNativeExceptionType(statement.left, binding.module) < 0) { return KrtNativeBindingError(binding, statement); }
+    return true;
+}
+
+bool KrtNativeBindTry(KrtAstNode statement, KrtNativeBinding binding) {
+    statement.local_slot = binding.slots; statement.native_size = binding.slots + 6; binding.slots = binding.slots + 12;
+    if (!KrtNativeBindBlock(statement.left, binding)) { return false; }
+    KrtAstNode clause = statement.right; bool catch_all = false;
+    KrtAstNode saved_catch = binding.catch_target;
+    while (clause != null) {
+        if (catch_all) { return KrtNativeBindingError(binding, clause); }
+        if (clause.left == null) { catch_all = true; }
+        KrtNativeName saved = binding.names; binding.depth = binding.depth + 1; binding.catch_target = statement;
+        if (clause.left != null) {
+            KrtAstNode variable = clause.left;
+            if (!KrtNativeAnnotateType(variable, binding.module, binding.source, variable.type_start, variable.type_length) ||
+                KrtNativeExceptionType(variable, binding.module) < 0) { return KrtNativeBindingError(binding, variable); }
+            if (variable.name_length > 0) {
+                variable.local_slot = binding.slots; binding.slots = binding.slots + 1;
+                if (!KrtNativeAddName(binding, variable, variable.local_slot, false)) { return false; }
+            }
+        }
+        bool valid = KrtNativeBindBlock(clause.right, binding);
+        binding.names = saved; binding.depth = binding.depth - 1; binding.catch_target = saved_catch;
+        if (!valid) { return false; }
+        clause = clause.next;
+    }
+    if (statement.alternate != null && !KrtNativeBindBlock(statement.alternate, binding)) { return false; }
+    return true;
+}

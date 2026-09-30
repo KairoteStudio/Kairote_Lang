@@ -1,0 +1,17 @@
+int32 pick(ref int30 value, int64 n) { value=123; return 1; }
+int32 pick(ref int32 value, int32 n) { value=456; return 2; }
+void increment(ref int30 value) {value++;}
+int32 main() {
+ int30 a=-7; int32 n=4;
+ if(pick(ref a,n)!=1 || a!=123) {return 1;}
+ int30 maximum=536870911; maximum++; if(maximum!=-536870912) {return 2;}
+ maximum-=1; if(maximum!=536870911) {return 3;}
+ uint30 unsigned_max=1073741823; unsigned_max++; if(unsigned_max!=0) {return 4;}
+ int6 small=31; small++; if(small!=-32) {return 5;}
+ int14 medium=8191; medium+=1; if(medium!=-8192) {return 6;}
+ int30[] values=new int30[2]; values[0]=536870911; increment(ref values[0]);
+ if(values[0]!=-536870912 || values[1]!=0) {return 7;}
+ uint62 wide=4611686018427387903; wide++; if(wide!=0) {return 8;}
+ int62 signedwide=2305843009213693951; signedwide++; if(signedwide!=-2305843009213693952) {return 9;}
+ return 0;
+}
