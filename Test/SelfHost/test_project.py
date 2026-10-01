@@ -10,8 +10,8 @@ import tempfile
 import unittest
 from unittest import mock
 
-from SelfHost import compile as driver
-from SelfHost import project
+from SelfHost import Compile as driver
+from SelfHost import Project as project
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPILER = Path(os.environ.get('SELFHOST_COMPILER', ROOT / 'build/selfhost/stage2/program')).resolve()
@@ -132,7 +132,7 @@ class ProjectIntegrationTests(unittest.TestCase):
         self.output = self.work / 'bin/demo'
 
     def command(self, action, *arguments, compiler=COMPILER, linker=LINKER):
-        return subprocess.run([sys.executable, str(ROOT / 'SelfHost/compile.py'), action,
+        return subprocess.run([sys.executable, str(ROOT / 'SelfHost/Compile.py'), action,
                                str(self.path), '--compiler', str(compiler), '--linker', str(linker),
                                *map(str, arguments)], cwd=self.work, capture_output=True, text=True, timeout=60)
 
@@ -289,17 +289,17 @@ class ProjectIntegrationTests(unittest.TestCase):
 
     def test_new_project_build_and_default_discovery(self):
         destination = self.work / 'My First App'
-        result = subprocess.run([sys.executable, str(ROOT / 'SelfHost/compile.py'), 'new', 'console', str(destination)],
+        result = subprocess.run([sys.executable, str(ROOT / 'SelfHost/Compile.py'), 'new', 'console', str(destination)],
                                 capture_output=True, text=True, timeout=10)
         self.ok(result, 'created:')
-        result = subprocess.run([sys.executable, str(ROOT / 'SelfHost/compile.py'), 'build', '--compiler', str(COMPILER),
+        result = subprocess.run([sys.executable, str(ROOT / 'SelfHost/Compile.py'), 'build', '--compiler', str(COMPILER),
                                  '--linker', str(LINKER)], cwd=destination, capture_output=True, text=True, timeout=60)
         self.ok(result, 'built:')
         output = destination / 'bin/release/My First App'
         executed = subprocess.run([str(output)], capture_output=True, text=True, timeout=10)
         self.assertEqual(executed.returncode, 0)
         self.assertEqual(executed.stdout, 'Hello, Kairote!\n')
-        result = subprocess.run([sys.executable, str(ROOT / 'SelfHost/compile.py'), 'new', 'console', str(destination)],
+        result = subprocess.run([sys.executable, str(ROOT / 'SelfHost/Compile.py'), 'new', 'console', str(destination)],
                                 capture_output=True, text=True, timeout=10)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('not empty', result.stderr)

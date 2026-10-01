@@ -12,10 +12,14 @@ static struct {
 } g_smart_ptr_stats = {0};
 
 SmartPtr* KrtMakeShared(const char* type_name, size_t size) {
-    if (size == 0) return NULL;
+    if (size == 0) {
+        return NULL;
+    }
 
     SharedControlBlock* control = KRT_MALLOC(sizeof(SharedControlBlock));
-    if (!control) return NULL;
+    if (!control) {
+        return NULL;
+    }
 
     void* data = KRT_MALLOC(size);
     if (!data) {
@@ -48,7 +52,9 @@ SmartPtr* KrtMakeShared(const char* type_name, size_t size) {
 }
 
 SmartPtr* KrtMakeSharedArray(const char* type_name, size_t count, size_t element_size) {
-    if (count == 0 || element_size == 0) return NULL;
+    if (count == 0 || element_size == 0) {
+        return NULL;
+    }
 
     SmartPtr* ptr = KrtMakeShared(type_name, count * element_size);
     if (ptr && ptr->control) {
@@ -58,10 +64,14 @@ SmartPtr* KrtMakeSharedArray(const char* type_name, size_t count, size_t element
 }
 
 SmartPtr* KrtMakeUnique(const char* type_name, size_t size) {
-    if (size == 0) return NULL;
+    if (size == 0) {
+        return NULL;
+    }
 
     void* data = KRT_MALLOC(size);
-    if (!data) return NULL;
+    if (!data) {
+        return NULL;
+    }
 
     SmartPtr* ptr = KRT_MALLOC(sizeof(SmartPtr));
     if (!ptr) {
@@ -81,18 +91,24 @@ SmartPtr* KrtMakeUnique(const char* type_name, size_t size) {
 }
 
 SmartPtr* KrtMakeUniqueArray(const char* type_name, size_t count, size_t element_size) {
-    if (count == 0 || element_size == 0) return NULL;
+    if (count == 0 || element_size == 0) {
+        return NULL;
+    }
     return KrtMakeUnique(type_name, count * element_size);
 }
 
 void KrtSharedAcquire(SmartPtr* ptr) {
-    if (!ptr || ptr->type != PTR_SHARED || !ptr->control) return;
+    if (!ptr || ptr->type != PTR_SHARED || !ptr->control) {
+        return;
+    }
 
     atomic_fetch_add(&ptr->control->ref_count, 1);
 }
 
 void KrtSharedRelease(SmartPtr* ptr) {
-    if (!ptr || ptr->type != PTR_SHARED || !ptr->control) return;
+    if (!ptr || ptr->type != PTR_SHARED || !ptr->control) {
+        return;
+    }
 
     int old_count = atomic_fetch_sub(&ptr->control->ref_count, 1);
 
@@ -119,12 +135,16 @@ void KrtSharedRelease(SmartPtr* ptr) {
 }
 
 int KrtSharedCount(const SmartPtr* ptr) {
-    if (!ptr || ptr->type != PTR_SHARED || !ptr->control) return 0;
+    if (!ptr || ptr->type != PTR_SHARED || !ptr->control) {
+        return 0;
+    }
     return atomic_load(&ptr->control->ref_count);
 }
 
 void* KrtPtrGet(const SmartPtr* ptr) {
-    if (!ptr || !KrtPtrIsValid(ptr)) return NULL;
+    if (!ptr || !KrtPtrIsValid(ptr)) {
+        return NULL;
+    }
     return ptr->ptr;
 }
 
@@ -135,8 +155,8 @@ void* KrtPtrGetChecked(const SmartPtr* ptr, const char* file, int line) {
     }
 
     if (!KrtPtrIsValid(ptr)) {
-        KrtError("%s:%d: Invalid smart pointer (type: %d, name: %s)\n",
-                file, line, ptr->type, ptr->type_name ? ptr->type_name : "unknown");
+        KrtError("%s:%d: Invalid smart pointer (type: %d, name: %s)\n", file, line, ptr->type,
+                 ptr->type_name ? ptr->type_name : "unknown");
         return NULL;
     }
 
@@ -144,22 +164,22 @@ void* KrtPtrGetChecked(const SmartPtr* ptr, const char* file, int line) {
 }
 
 bool KrtPtrIsValid(const SmartPtr* ptr) {
-    if (!ptr) return false;
+    if (!ptr) {
+        return false;
+    }
 
     switch (ptr->type) {
-        case PTR_SHARED:
-            return ptr->control && ptr->control->data &&
-                   atomic_load(&ptr->control->ref_count) > 0;
+    case PTR_SHARED:
+        return ptr->control && ptr->control->data && atomic_load(&ptr->control->ref_count) > 0;
 
-        case PTR_UNIQUE:
-            return ptr->ptr != NULL;
+    case PTR_UNIQUE:
+        return ptr->ptr != NULL;
 
-        case PTR_WEAK:
-            return ptr->control &&
-                   atomic_load(&ptr->control->ref_count) > 0;
+    case PTR_WEAK:
+        return ptr->control && atomic_load(&ptr->control->ref_count) > 0;
 
-        default:
-            return false;
+    default:
+        return false;
     }
 }
 
@@ -167,46 +187,51 @@ bool KrtPtrIsNull(const SmartPtr* ptr) {
     return !ptr || !KrtPtrIsValid(ptr) || ptr->ptr == NULL;
 }
 
-static void KrtPtrCleanupInternal(SmartPtr* ptr) {
-    if (!ptr) return;
+static void ptr_cleanup_internal(SmartPtr* ptr) {
+    if (!ptr) {
+        return;
+    }
 
     switch (ptr->type) {
-        case PTR_SHARED:
-            KrtSharedRelease(ptr);
-            break;
+    case PTR_SHARED:
+        KrtSharedRelease(ptr);
+        break;
 
-        case PTR_UNIQUE:
-            if (ptr->ptr) {
-                KRT_FREE(ptr->ptr);
-                atomic_fetch_sub(&g_smart_ptr_stats.total_unique, 1);
-                atomic_fetch_add(&g_smart_ptr_stats.total_deallocations, 1);
+    case PTR_UNIQUE:
+        if (ptr->ptr) {
+            KRT_FREE(ptr->ptr);
+            atomic_fetch_sub(&g_smart_ptr_stats.total_unique, 1);
+            atomic_fetch_add(&g_smart_ptr_stats.total_deallocations, 1);
+        }
+        break;
+
+    case PTR_WEAK:
+        if (ptr->control) {
+            atomic_fetch_sub(&ptr->control->weak_count, 1);
+
+            if (atomic_load(&ptr->control->weak_count) == 0 && atomic_load(&ptr->control->ref_count) == 0) {
+                KRT_FREE(ptr->control);
             }
-            break;
-
-        case PTR_WEAK:
-            if (ptr->control) {
-                atomic_fetch_sub(&ptr->control->weak_count, 1);
-
-                if (atomic_load(&ptr->control->weak_count) == 0 &&
-                    atomic_load(&ptr->control->ref_count) == 0) {
-                    KRT_FREE(ptr->control);
-                }
-            }
-            atomic_fetch_sub(&g_smart_ptr_stats.total_weak, 1);
-            break;
+        }
+        atomic_fetch_sub(&g_smart_ptr_stats.total_weak, 1);
+        break;
     }
 }
 
 void KrtPtrDestroy(SmartPtr* ptr) {
-    if (!ptr) return;
-    KrtPtrCleanupInternal(ptr);
+    if (!ptr) {
+        return;
+    }
+    ptr_cleanup_internal(ptr);
     KRT_FREE(ptr);
 }
 
 void KrtPtrReset(SmartPtr* ptr, void* new_ptr, size_t size __attribute__((unused))) {
-    if (!ptr) return;
+    if (!ptr) {
+        return;
+    }
 
-    KrtPtrCleanupInternal(ptr);
+    ptr_cleanup_internal(ptr);
 
     ptr->ptr = new_ptr;
     ptr->control = NULL;
@@ -220,7 +245,9 @@ SmartPtr* KrtMakeWeak(const SmartPtr* shared_ptr) {
     }
 
     SmartPtr* weak = KRT_MALLOC(sizeof(SmartPtr));
-    if (!weak) return NULL;
+    if (!weak) {
+        return NULL;
+    }
 
     weak->ptr = NULL;
     weak->control = shared_ptr->control;
@@ -240,8 +267,7 @@ SmartPtr* KrtWeakLock(const SmartPtr* weak_ptr) {
 
     int current_count = atomic_load(&weak_ptr->control->ref_count);
     while (current_count > 0) {
-        if (atomic_compare_exchange_weak(&weak_ptr->control->ref_count,
-                                        &current_count, current_count + 1)) {
+        if (atomic_compare_exchange_weak(&weak_ptr->control->ref_count, &current_count, current_count + 1)) {
 
             SmartPtr* shared = KRT_MALLOC(sizeof(SmartPtr));
             if (!shared) {
@@ -277,8 +303,7 @@ void KrtPtrDumpStats(void) {
     printf("Active Weak Pointers: %zu\n", g_smart_ptr_stats.total_weak);
     printf("Total Allocations: %zu\n", g_smart_ptr_stats.total_allocations);
     printf("Total Deallocations: %zu\n", g_smart_ptr_stats.total_deallocations);
-    printf("Potential Leaks: %zu\n",
-           g_smart_ptr_stats.total_allocations - g_smart_ptr_stats.total_deallocations);
+    printf("Potential Leaks: %zu\n", g_smart_ptr_stats.total_allocations - g_smart_ptr_stats.total_deallocations);
     printf("================================\n");
 }
 

@@ -98,7 +98,7 @@ def main():
             replacements = {}
             for relative in ("Driver/Preprocessor.c", "Frontend/Semantic/SymbolTable.c",
                              "Driver/ParallelCompiler.c"):
-                source = "Re.KrtC/src/compiler/" + relative
+                source = "Re.KrtC/src/Compiler/" + relative
                 saved = directory / Path(relative).name
                 saved.write_text(run(["git", "show", args.baseline_ref + ":" + source], cwd=ROOT))
                 replacements[relative] = saved

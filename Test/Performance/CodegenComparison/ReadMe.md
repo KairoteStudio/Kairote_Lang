@@ -56,7 +56,7 @@ Krt 与 GCC 双递归版的耗时比为 2.01 / 1.95；与 GCC 普通优化版为
 
 GCC 双递归版先比较参数，叶子直接返回，无局部栈帧。fib40 的双递归调用树共有 **331,160,281** 次函数进入，其中 **165,580,141** 次是叶子，因此这一差异会重复上亿次。当前 Krt 的参数和表达式临时值已放在 RBX/R12/R13；问题在于每次调用的保存/恢复、清零和取值成本。
 
-代码来源：[KroCodegen.c](../../../Re.KrtC/src/compiler/Backend/Kro/KroCodegen.c) 的 `emit_function_prologue`、`emit_function_epilogue`、`KroGenerateFunction`；[KroRegisterPacking.inc](../../../Re.KrtC/src/compiler/Backend/Kro/KroRegisterPacking.inc) 的 `plan_function_storage`。存储规划为一些最终未产生访存的值预留槽位，形成较大的栈帧。当前调用点的栈对齐符合 16 字节要求。
+代码来源：[KroCodegen.c](../../../Re.KrtC/src/Compiler/Backend/Kro/KroCodegen.c) 的 `emit_function_prologue`、`emit_function_epilogue`、`KroGenerateFunction`；[KroRegisterPacking.inc](../../../Re.KrtC/src/Compiler/Backend/Kro/KroRegisterPacking.inc) 的 `plan_function_storage`。存储规划为一些最终未产生访存的值预留槽位，形成较大的栈帧。当前调用点的栈对齐符合 16 字节要求。
 
 ### 2. `int32` 被反复扩展成 64 位并通过临时寄存器中转
 
@@ -75,7 +75,7 @@ mov    rdi, r12
 
 GCC 对应的参数计算只需 `lea edi,[rdi-1]`。Krt 的第二条扩展重复了第一条；常量 1 的扩展也可避免；后续算术和结果保存再次做扩展。一次非叶子局部路径中，Krt 有 **16 次** `movsxd`，GCC 双递归版为零。Krt 返回前还有 `mov r12,rax; mov rax,r12`，以及编码为 `e9 00 00 00 00` 的跳向下一条指令的 `jmp`。
 
-代码来源：[KroInteger.inc](../../../Re.KrtC/src/compiler/Backend/Kro/KroInteger.inc) 的 `emit_extend_scalar`、`emit_integer_binary`、`emit_store_value`，以及 [KroRegisterPacking.inc](../../../Re.KrtC/src/compiler/Backend/Kro/KroRegisterPacking.inc) 的 `emit_load_packed_field`。这些层各自保证类型归一化，叠加后留下重复操作。
+代码来源：[KroInteger.inc](../../../Re.KrtC/src/Compiler/Backend/Kro/KroInteger.inc) 的 `emit_extend_scalar`、`emit_integer_binary`、`emit_store_value`，以及 [KroRegisterPacking.inc](../../../Re.KrtC/src/Compiler/Backend/Kro/KroRegisterPacking.inc) 的 `emit_load_packed_field`。这些层各自保证类型归一化，叠加后留下重复操作。
 
 ### 3. GCC 普通 `-O2` 将一支递归合入循环
 

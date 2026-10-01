@@ -5,10 +5,10 @@
 ## 可复现命令
 
 ```sh
-python3 Test/SelfHost/bootstrap.py
+python3 Test/SelfHost/Bootstrap.py
 SELFHOST_COMPILER="$PWD/build/selfhost/stage2/program" python3 -m unittest discover -s Test/SelfHost
-python3 Test/SelfHost/run_standard_library.py
-python3 Test/SelfHost/compare_daily.py --work build/selfhost-comparison/current --fail-on-wrong
+python3 Test/SelfHost/RunStandardLibrary.py
+python3 Test/SelfHost/CompareDaily.py --work build/selfhost-comparison/current --fail-on-wrong
 ./SelfHost/krtc build Test/SelfHost/examples/language-project
 ./Test/SelfHost/examples/language-project/bin/release/LanguageDemo
 ```
@@ -43,7 +43,7 @@ ArkLink 也修复了两处实际链接问题：命令行曾只保留最后一个
 
 ## 差分验收方法
 
-`compare_daily.py` 仍使用原来的 62 项固定用例，包含合法和非法程序。期望输出与退出码独立定义，Re.KrtC 只是比较对象。SelfHost 使用现有的无优化后端，Re 使用 `-O2`；这不是等优化级别的性能比较。报告保留命令、stdout/stderr、超时、产物、编译器/驱动/库源码哈希；测试期间工具或库变化会令 `complete` 为 false。
+`CompareDaily.py` 仍使用原来的 62 项固定用例，包含合法和非法程序。期望输出与退出码独立定义，Re.KrtC 只是比较对象。SelfHost 使用现有的无优化后端，Re 使用 `-O2`；这不是等优化级别的性能比较。报告保留命令、stdout/stderr、超时、产物、编译器/驱动/库源码哈希；测试期间工具或库变化会令 `complete` 为 false。
 
 `--fail-on-wrong` 检查错算、崩溃、超时、错误产物和非法接受。明确拒绝的合法用例另行统计，不能算作能力已支持。`.Length` 属性与 `.Length()` 方法分别测试；目前两种编译器都拒绝这两个 Length 方法形式。
 

@@ -35,11 +35,11 @@ Kairote Lang 是一个现代的、高性能的编程语言，本指南面向希�
 
 #### 词法分析器 (Lexer)
 
-位置：`src/compiler/frontend/lexer/`
+位置：`src/Compiler/Frontend/Lexer/`
 
 主要文件：
-- `tokenizer.c` - 词法分析器实现
-- `tokenizer.h` - 词法分析器接口
+- `Tokenizer.c` - 词法分析器实现
+- `Tokenizer.h` - 词法分析器接口
 
 功能：
 - 将源代码转换为标记（Token）流
@@ -47,12 +47,12 @@ Kairote Lang 是一个现代的、高性能的编程语言，本指南面向希�
 
 #### 语法分析器 (Parser)
 
-位置：`src/compiler/frontend/parser/`
+位置：`src/Compiler/Frontend/Parser/`
 
 主要文件：
-- `parser.c` - 语法分析器实现
-- `ast.c` - AST节点操作
-- `ast.h` - AST节点定义
+- `Parser.c` - 语法分析器实现
+- `Ast.c` - AST节点操作
+- `Ast.h` - AST节点定义
 
 功能：
 - 将标记流转换为抽象语法树（AST）
@@ -60,11 +60,11 @@ Kairote Lang 是一个现代的、高性能的编程语言，本指南面向希�
 
 #### 语义分析器 (Semantic Analyzer)
 
-位置：`src/compiler/frontend/semantic/`
+位置：`src/Compiler/Frontend/Semantic/`
 
 主要文件：
-- `semantic_analyzer.c` - 语义分析器实现
-- `symbol_table.c` - 符号表管理
+- `SemanticAnalyzer.c` - 语义分析器实现
+- `SymbolTable.c` - 符号表管理
 - `generics.c` - 泛型处理
 
 功能：
@@ -77,10 +77,10 @@ Kairote Lang 是一个现代的、高性能的编程语言，本指南面向希�
 
 #### IR生成器
 
-位置：`src/compiler/middle/codegen/`
+位置：`src/Compiler/Middle/Codegen/`
 
 主要文件：
-- `ir_gen.c` - IR生成实现
+- `IrGen.c` - IR生成实现
 - `type_checker.c` - 类型检查器
 
 功能：
@@ -90,11 +90,11 @@ Kairote Lang 是一个现代的、高性能的编程语言，本指南面向希�
 
 #### IR优化器
 
-位置：`src/compiler/middle/ir/`
+位置：`src/Compiler/Middle/Ir/`
 
 主要文件：
-- `ir.c` - IR操作
-- `ir_optimizer.c` - IR优化实现
+- `Ir.c` - IR操作
+- `IrOptimizer.c` - IR优化实现
 - `ir_definitions.h` - IR定义
 
 功能：
@@ -107,10 +107,10 @@ Kairote Lang 是一个现代的、高性能的编程语言，本指南面向希�
 
 #### x86代码生成器
 
-位置：`src/compiler/backend/x86/`
+位置：`src/Compiler/Backend/X86/`
 
 主要文件：
-- `x86_codegen.c` - x86代码生成
+- `X86Codegen.c` - x86代码生成
 - `x86_codeopt.c` - x86代码优化
 
 功能：
@@ -120,10 +120,10 @@ Kairote Lang 是一个现代的、高性能的编程语言，本指南面向希�
 
 #### 字节码生成器
 
-位置：`src/compiler/backend/vm/`
+位置：`src/Compiler/Backend/Vm/`
 
 主要文件：
-- `vm_codegen.c` - 字节码生成
+- `VmCodegen.c` - 字节码生成
 - `vm.h` - 虚拟机定义
 
 功能：
@@ -132,11 +132,11 @@ Kairote Lang 是一个现代的、高性能的编程语言，本指南面向希�
 
 ### 运行时系统
 
-位置：`src/runtime/`
+位置：`Re.KrtC/src/Runtime/Krt/`，标准库位于 `libs/System/`。
 
 主要文件：
-- `runtime.c` - 运行时函数实现
-- `runtime.h` - 运行时接口
+- `Runtime.krt` - 运行时入口
+- `Memory.krt`、`Sys.krt` - 内存与系统调用支持
 
 功能：
 - 内存管理
@@ -242,30 +242,30 @@ match ExtraWhitespace /\s\+$/
 
 ```
 src/
-├── compiler/               # 编译器核心
-│   ├── driver/            # 驱动程序
-│   ├── frontend/          # 前端（词法、语法、语义分析）
-│   ├── middle/            # 中端（IR生成和优化）
-│   ├── backend/           # 后端（代码生成）
-│   └── pipeline/          # 编译流水线
-├── core/                  # 核心工具
-│   ├── memory/            # 内存管理
-│   ├── platform/          # 平台抽象
-│   └── utils/             # 通用工具
-├── runtime/               # 运行时系统
-└── vm/                    # 虚拟机
+├── Compiler/               # 编译器核心
+│   ├── Driver/            # 驱动程序
+│   ├── Frontend/          # 前端（词法、语法、语义分析）
+│   ├── Middle/            # 中端（IR生成和优化）
+│   ├── Backend/           # 后端（代码生成）
+│   └── Pipeline/          # 编译流水线
+├── Core/                  # 核心工具
+│   ├── Memory/            # 内存管理
+│   ├── Platform/          # 平台抽象
+│   └── Utils/             # 通用工具
+├── Runtime/               # Kairote运行时源代码
+└── Bytecode/              # 字节码定义
 ```
 
 ### 命名约定
 
 #### 文件命名
 
-- C源文件：小写字母，下划线分隔（如 `semantic_analyzer.c`）
-- 头文件：小写字母，下划线分隔（如 `semantic_analyzer.h`）
+- C源文件与头文件：PascalCase（如 `SemanticAnalyzer.c`、`SemanticAnalyzer.h`），对应文件使用同一主干。
+- 模块目录：PascalCase（如 `Compiler/Frontend/Parser/`）；测试文件使用 `test_` 前缀并放在 `Test/` 下。
 
 #### 函数命名
 
-- 公共API：模块前缀 + 下划线 + 描述性名称（如 `KrtCompilerCreate`）
+- 公共API：`Krt` 前缀 + PascalCase（如 `KrtCompilerCreate`）；既有接口在迁移时保持兼容。
 - 内部函数：小写字母，下划线分隔（如 `process_statement`）
 
 #### 变量命名
@@ -284,7 +284,7 @@ src/
 
 ```c
 /**
- * @file semantic_analyzer.c
+ * @file SemanticAnalyzer.c
  * @brief 语义分析器实现
  * @author Kairote Lang Team
  * @date 2023-01-01
@@ -396,7 +396,7 @@ KrtVmCodegenGenerate(ir_builder->module, &chunk);
 
 ### 编译器驱动
 
-位置：`src/compiler/driver/compiler.c`
+位置：`src/Compiler/Driver/Compiler.c`
 
 主要函数：
 - `KrtCompilerCreate` - 创建编译器实例
@@ -420,7 +420,7 @@ KrtCompilerDestroy(compiler);
 
 #### 1. 扩展词法分析器
 
-在 `src/compiler/frontend/lexer/tokenizer.h` 中添加新的Token类型：
+在 `src/Compiler/Frontend/Lexer/Tokenizer.h` 中添加新的Token类型：
 
 ```c
 typedef enum {
@@ -430,7 +430,7 @@ typedef enum {
 } KrtTokenType;
 ```
 
-在 `src/compiler/frontend/lexer/tokenizer.c` 中实现词法规则：
+在 `src/Compiler/Frontend/Lexer/Tokenizer.c` 中实现词法规则：
 
 ```c
 case 'n':
@@ -442,7 +442,7 @@ case 'n':
 
 #### 2. 扩展语法分析器
 
-在 `src/compiler/frontend/parser/ast.h` 中添加新的AST节点类型：
+在 `src/Compiler/Frontend/Parser/Ast.h` 中添加新的AST节点类型：
 
 ```c
 typedef enum {
@@ -452,7 +452,7 @@ typedef enum {
 } ASTNodeType;
 ```
 
-在 `src/compiler/frontend/parser/parser.c` 中添加解析逻辑：
+在 `src/Compiler/Frontend/Parser/Parser.c` 中添加解析逻辑：
 
 ```c
 static ASTNode* parse_new_feature(Parser* parser) {
@@ -464,7 +464,7 @@ static ASTNode* parse_new_feature(Parser* parser) {
 
 #### 3. 扩展语义分析器
 
-在 `src/compiler/frontend/semantic/semantic_analyzer.c` 中添加语义检查：
+在 `src/Compiler/Frontend/Semantic/SemanticAnalyzer.c` 中添加语义检查：
 
 ```c
 static void analyze_new_feature(SemanticAnalyzer* analyzer, ASTNode* node) {
@@ -476,7 +476,7 @@ static void analyze_new_feature(SemanticAnalyzer* analyzer, ASTNode* node) {
 
 #### 4. 扩展代码生成器
 
-在 `src/compiler/backend/x86/x86_codegen.c` 中添加代码生成逻辑：
+在 `src/Compiler/Backend/X86/X86Codegen.c` 中添加代码生成逻辑：
 
 ```c
 static void generate_new_feature(X86CodeGenerator* generator, ASTNode* node) {
@@ -489,7 +489,7 @@ static void generate_new_feature(X86CodeGenerator* generator, ASTNode* node) {
 #### 1. 创建后端目录
 
 ```
-src/compiler/backend/new_platform/
+src/Compiler/Backend/NewPlatform/
 ├── new_platform_codegen.c
 ├── new_platform_codegen.h
 ├── new_platform_codeopt.c
@@ -512,7 +512,7 @@ void new_platform_generate(FILE* output, KrtIRModule* module) {
 
 #### 3. 集成到编译器
 
-在 `src/compiler/driver/compiler.c` 中添加新的目标平台：
+在 `src/Compiler/Driver/Compiler.c` 中添加新的目标平台：
 
 ```c
 case KRT_TARGET_NEW_PLATFORM:
@@ -524,7 +524,7 @@ case KRT_TARGET_NEW_PLATFORM:
 
 #### 1. 创建优化器
 
-在 `src/compiler/middle/ir/ir_optimizer.c` 中添加新的优化函数：
+在 `src/Compiler/Middle/Ir/IrOptimizer.c` 中添加新的优化函数：
 
 ```c
 static void optimize_new_feature(IROptimizer* optimizer, KrtIRModule* module) {
@@ -590,7 +590,7 @@ gdb ./e_sharp
 
 ```c
 // tests/unit/test_tokenizer.c
-#include "src/compiler/frontend/lexer/tokenizer.h"
+#include "src/Compiler/Frontend/Lexer/Tokenizer.h"
 #include <assert.h>
 #include <stdio.h>
 
@@ -598,13 +598,13 @@ void test_tokenizer() {
     Lexer* lexer = lexer_create("var x = 42;");
     Token token = lexer_next_token(lexer);
     assert(token.type == TOKEN_VAR);
-    
+
     token = lexer_next_token(lexer);
     assert(token.type == TOKEN_IDENTIFIER);
     assert(strcmp(token.value, "x") == 0);
-    
+
     // 更多测试...
-    
+
     lexer_destroy(lexer);
     printf("Tokenizer tests passed!\n");
 }

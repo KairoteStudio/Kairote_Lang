@@ -20,7 +20,7 @@
 
 ## 原因与改动
 
-[KroInteger.inc](../../Re.KrtC/src/compiler/Backend/Kro/KroInteger.inc) 原先对普通 `int32` 运算也装载、扩展 `RDX` / `R8` 高位，而实际算术只用低 64 位；读参数、执行运算、转换和保存结果时还反复生成移位扩展序列。[KroRegisterPacking.inc](../../Re.KrtC/src/compiler/Backend/Kro/KroRegisterPacking.inc) 对独占寄存器的变量也执行掩码合并。
+[KroInteger.inc](../../Re.KrtC/src/Compiler/Backend/Kro/KroInteger.inc) 原先对普通 `int32` 运算也装载、扩展 `RDX` / `R8` 高位，而实际算术只用低 64 位；读参数、执行运算、转换和保存结果时还反复生成移位扩展序列。[KroRegisterPacking.inc](../../Re.KrtC/src/Compiler/Backend/Kro/KroRegisterPacking.inc) 对独占寄存器的变量也执行掩码合并。
 
 修复让普通整数运算、复制、转换、条件和返回只处理必要的低位；8 / 16 / 32 位截断与扩展使用原生 `movsx` / `movzx` / `movsxd` 等指令。独占寄存器的位段写入直接移动，共享位段仍保留掩码合并，超过 64 位的整数仍保留高位计算。移位的计数和宽整数条件单独保留必要的高位检查。
 

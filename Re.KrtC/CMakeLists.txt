@@ -17,7 +17,7 @@ find_package(Threads REQUIRED)
 add_executable(KrtC ${KRTC_SOURCES})
 target_compile_features(KrtC PRIVATE c_std_11)
 set_target_properties(KrtC PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES)
-target_include_directories(KrtC PRIVATE src src/Core src/Tools src/Bytecode Shared stub_include vm)
+target_include_directories(KrtC PRIVATE src src/Core src/Tools src/Bytecode Shared StubInclude vm)
 target_compile_options(KrtC PRIVATE -Wall -Wextra -Wformat=2 -Wshadow
     -Werror=unused-variable -Werror=unused-function -Werror=unused-parameter
     -Werror=unused-but-set-variable -Werror=implicit-function-declaration)

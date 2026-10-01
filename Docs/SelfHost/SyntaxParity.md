@@ -4,7 +4,7 @@
 
 ## 验收规则
 
-- 原版依据是 `Re.KrtC/src/compiler/Frontend/Parser/` 的可达入口及实际执行结果；Token 或 AST 枚举存在不构成支持证据。
+- 原版依据是 `Re.KrtC/src/Compiler/Frontend/Parser/` 的可达入口及实际执行结果；Token 或 AST 枚举存在不构成支持证据。
 - 解析需要保留声明、类型、参数、子表达式及源码位置。跳过 Token 或平衡大括号不能算成功实现。
 - 正例分别验证 AST、绑定和实际程序行为；负例必须在有限时间内拒绝，且失败不得留下可误用的新产物。
 - 自编译另行验证完整源码生成后续编译器、跨代固定点和执行结果。Stage 1 探针通过不能替代完整自举。
@@ -22,7 +22,7 @@
 | 异常 | 跨函数 throw、类/基类匹配及标量精确匹配的 catch、多个 catch、catch-all、rethrow、finally；覆盖正常出口、未匹配异常、catch 内抛出及 return/break/continue。 | `test_native_exceptions.py` |
 | 数值 | 2–64 偶数整数位宽及符号规则、int128/uint128、float32/float64 的字面量、运算、比较、转换与存储。 | `test_native_numeric.py`、`test_native_floating.py` |
 | 全局状态与回调 | 可变全局量/静态字段、初始化顺序、函数与静态方法取址、类型化函数指针、间接调用和 ref。 | `test_globals_functions.py` |
-| 驱动与库 | 多文件、源码导入、文件边界、位置诊断、工程构建/缓存；真实仓库标准库使用原有契约测试验收。 | `test_driver.py`、`test_project.py`、`run_standard_library.py` |
+| 驱动与库 | 多文件、源码导入、文件边界、位置诊断、工程构建/缓存；真实仓库标准库使用原有契约测试验收。 | `test_driver.py`、`test_project.py`、`RunStandardLibrary.py` |
 
 表中测试位于 `Test/SelfHost/`。它们证明所断言的行为，不证明整行能力已经覆盖原版的所有变体。字符串索引、Length 和 foreach 使用 UTF-8 字节语义。
 
@@ -44,8 +44,8 @@
 python3 -m unittest Test.SelfHost.test_parser Test.SelfHost.test_contract Test.SelfHost.test_lexer
 python3 -m unittest Test.SelfHost.test_native_collections Test.SelfHost.test_native_generics \
   Test.SelfHost.test_native_exceptions Test.SelfHost.test_inheritance Test.SelfHost.test_namespaces
-python3 Test/SelfHost/bootstrap.py
-python3 Test/SelfHost/run_standard_library.py --compiler build/selfhost/stage2/program
+python3 Test/SelfHost/Bootstrap.py
+python3 Test/SelfHost/RunStandardLibrary.py --compiler build/selfhost/stage2/program
 ```
 
 `test_parser` 包含函数关键字/跨度、循环体与兄弟关系、lambda 参数保留、类型元表达式以及部分 Token 和结合方向检查；这些属于解析证据。集合、泛型、异常和命名空间测试支持 `SELFHOST_COMPILER`，可显式指定已生成的 Stage 2 进行执行验证。

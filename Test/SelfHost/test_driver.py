@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from SelfHost import compile as driver
+from SelfHost import Compile as driver
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPILER = Path(os.environ.get('SELFHOST_COMPILER', ROOT / 'build/selfhost/stage2/program'))
@@ -141,7 +141,7 @@ class DriverIntegrationTests(unittest.TestCase):
         return path
 
     def compile(self, *arguments):
-        return subprocess.run([sys.executable, str(ROOT / 'SelfHost/compile.py'), '--compiler', str(COMPILER),
+        return subprocess.run([sys.executable, str(ROOT / 'SelfHost/Compile.py'), '--compiler', str(COMPILER),
                                '--linker', str(LINKER), *map(str, arguments)], cwd=self.work,
                               capture_output=True, text=True, timeout=30)
 

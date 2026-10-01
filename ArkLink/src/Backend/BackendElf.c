@@ -304,13 +304,14 @@ static int nim_add(NameIndexMap* m, const char* name, uint32_t idx) {
     if (m->count == m->capacity) {
         size_t new_cap = m->capacity ? m->capacity * 2 : 16;
         const char** nn = (const char**)realloc(m->names, new_cap * sizeof(const char*));
-        uint32_t* ni = (uint32_t*)realloc(m->indices, new_cap * sizeof(uint32_t));
-        if (!nn || !ni) {
-            free(nn);
-            free(ni);
+        if (!nn) {
             return 0;
         }
         m->names = nn;
+        uint32_t* ni = (uint32_t*)realloc(m->indices, new_cap * sizeof(uint32_t));
+        if (!ni) {
+            return 0;
+        }
         m->indices = ni;
         m->capacity = new_cap;
     }
@@ -325,81 +326,208 @@ static int reloc_filter_by_section(const ArkResolverReloc* reloc, void* user_dat
     return reloc->section_index == target_sec_idx;
 }
 
-ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, ArkBackendOutput* output) {
-    (void)ctx;
-    if (!input || !output) {
-        return ARK_LINK_ERR_INVALID_ARGUMENT;
+typedef struct {
+    uint64_t vaddr;
+    uint64_t offset;
+    uint64_t size;
+} ElfMetaSection;
+
+/* Owns temporary linking resources until elf_publish transfers the image. */
+typedef struct {
+    ArkBackendInput* input;
+    ArkImageLayout* layout;
+    ElfMetaSection* meta_secs;
+    Elf64_Rela* rela_dyn_data;
+    Elf64_Rela* rela_plt_data;
+    Elf64_Sym* symtab;
+    Elf64_Sym* dynsym;
+    Elf64_Dyn* dyntab;
+    uint32_t* sec_name_off;
+    size_t* relocs_per_sec;
+    Elf64_Rela** rela_arrays;
+    uint8_t* out_buf;
+    Elf64_Shdr* shdrs;
+    uint64_t page_size;
+    uint64_t image_base;
+    uint64_t dynstr_actual_size;
+    uint64_t file_size;
+    uint64_t shdr_offset;
+    uint64_t rx_end;
+    uint64_t rw_start;
+    uint64_t tls_offset;
+    uint64_t tls_vaddr;
+    uint64_t tls_filesz;
+    uint64_t tls_memsz;
+    uint64_t tls_align;
+    uint64_t seg1_filesz;
+    uint64_t seg1_memsz;
+    uint64_t seg2_offset;
+    uint64_t seg2_vaddr;
+    uint64_t rw_filesz;
+    uint64_t rw_memsz;
+    size_t ns;
+    size_t rela_dyn_count;
+    size_t rela_plt_count;
+    size_t func_import_count;
+    size_t rela_sections;
+    size_t elf_shnum;
+    size_t rela_shidx_base;
+    size_t symtab_shidx;
+    size_t strtab_shidx;
+    size_t shstrtab_shidx;
+    size_t interp_shidx;
+    size_t dynsym_shidx;
+    size_t dynstr_shidx;
+    size_t dynamic_shidx;
+    size_t hash_shidx;
+    size_t init_array_shidx;
+    size_t fini_array_shidx;
+    size_t reladyn_shidx;
+    size_t plt_shidx;
+    size_t gotplt_shidx;
+    size_t rela_idx;
+    size_t next_sym_idx;
+    size_t total_syms;
+    size_t dyntab_count;
+    size_t phdr_load_count;
+    int has_dynamic;
+    int has_tls;
+    int n_static_loads;
+    NameIndexMap sym_map;
+    NameIndexMap sym_map2;
+    NameIndexMap name_off_map;
+    NameIndexMap module_off;
+    NameIndexMap symbol_off;
+    NameIndexMap module_emitted;
+    NameIndexMap dynsym_idx_map;
+    NameIndexMap plt_idx_map;
+    ElfStrBuilder dynstr;
+    ElfStrBuilder strtab;
+    ElfStrBuilder shstrtab;
+    Elf64_Phdr static_loads[48];
+} ElfLinkState;
+
+static uint64_t elf_section_vaddr(ElfLinkState* state, size_t index) {
+    const ArkSectionLayout* section = ark_layout_get_section(state->layout, index);
+    return section ? section->virtual_address : 0;
+}
+
+static uint64_t elf_section_offset(ElfLinkState* state, size_t index) {
+    const ArkSectionLayout* section = ark_layout_get_section(state->layout, index);
+    return section ? section->file_offset : 0;
+}
+
+static uint64_t elf_section_vsize(ElfLinkState* state, size_t index) {
+    const ArkSectionLayout* section = ark_layout_get_section(state->layout, index);
+    return section ? section->virtual_size : 0;
+}
+static uint64_t elf_meta_vaddr(ElfLinkState* state, size_t index) {
+    return state->meta_secs ? state->meta_secs[index].vaddr : 0;
+}
+
+static uint64_t elf_meta_offset(ElfLinkState* state, size_t index) {
+    return state->meta_secs ? state->meta_secs[index].offset : 0;
+}
+
+static uint64_t elf_meta_size(ElfLinkState* state, size_t index) {
+    return state->meta_secs ? state->meta_secs[index].size : 0;
+}
+
+static void elf_free_relocations(ElfLinkState* state) {
+    if (state->rela_arrays) {
+        for (size_t i = 0; i < state->rela_sections; i++) {
+            free(state->rela_arrays[i]);
+        }
+        free(state->rela_arrays);
+        state->rela_arrays = NULL;
     }
-    memset(output, 0, sizeof(ArkBackendOutput));
+}
 
-    const uint64_t page_size = 0x1000;
-    uint64_t image_base = input->image_base ? input->image_base : 0x400000;
-    size_t ns = input->section_count;
+static void elf_cleanup(ElfLinkState* state) {
+    elf_free_relocations(state);
+    free(state->rela_dyn_data);
+    free(state->rela_plt_data);
+    free(state->symtab);
+    free(state->dynsym);
+    free(state->dyntab);
+    free(state->meta_secs);
+    free(state->sec_name_off);
+    free(state->relocs_per_sec);
+    free(state->out_buf);
+    free(state->shdrs);
+    sb_free(&state->strtab);
+    sb_free(&state->shstrtab);
+    sb_free(&state->dynstr);
+    nim_free(&state->sym_map);
+    nim_free(&state->sym_map2);
+    nim_free(&state->name_off_map);
+    nim_free(&state->module_off);
+    nim_free(&state->symbol_off);
+    nim_free(&state->module_emitted);
+    nim_free(&state->dynsym_idx_map);
+    nim_free(&state->plt_idx_map);
+    ark_layout_destroy(state->layout);
+}
 
-    ArkImageLayout* layout = ark_layout_create(input, (uint32_t)page_size, (uint32_t)page_size);
-    if (!layout) {
+static int elf_intern_symbol(ElfLinkState* state, const char* name) {
+    uint32_t index;
+    if (nim_lookup(&state->sym_map, name, &index)) {
+        return 1;
+    }
+    if (sb_add(&state->strtab, name) == UINT32_MAX || !nim_add(&state->sym_map, name, (uint32_t)state->next_sym_idx)) {
+        return 0;
+    }
+    state->next_sym_idx++;
+    return 1;
+}
+
+static ArkLinkResult elf_prepare(ElfLinkState* state) {
+    state->page_size = 0x1000;
+    state->image_base = state->input->image_base ? state->input->image_base : 0x400000;
+    state->ns = state->input->section_count;
+
+    state->layout = ark_layout_create(state->input, (uint32_t)state->page_size, (uint32_t)state->page_size);
+    if (!state->layout) {
         return ARK_LINK_ERR_MEMORY;
     }
-    image_base = layout->image_base;
+    state->image_base = state->layout->image_base;
 
-    typedef struct {
-        uint64_t vaddr;
-        uint64_t offset;
-        uint64_t size;
-    } ElfMetaSection;
-    ElfMetaSection* meta_secs = NULL;
-    Elf64_Rela* rela_dyn_data = NULL;
-    size_t rela_dyn_count = 0;
-    Elf64_Rela* rela_plt_data = NULL;
-    size_t rela_plt_count = 0;
-    size_t func_import_count = 0;
-    Elf64_Sym* symtab = NULL;
-    Elf64_Sym* dynsym = NULL;
-    Elf64_Dyn* dyntab = NULL;
-    ElfStrBuilder dynstr = {0};
-    uint32_t* sec_name_off = NULL;
-    size_t* relocs_per_sec = NULL;
-    ElfStrBuilder strtab = {0};
-    ElfStrBuilder shstrtab = {0};
-    Elf64_Rela** rela_arrays = NULL;
-
-    relocs_per_sec = (size_t*)calloc(ns ? ns : 1, sizeof(size_t));
-    if (!relocs_per_sec) {
-        ark_layout_destroy(layout);
+    state->relocs_per_sec = (size_t*)calloc(state->ns ? state->ns : 1, sizeof(size_t));
+    if (!state->relocs_per_sec) {
         return ARK_LINK_ERR_MEMORY;
     }
-    for (size_t i = 0; i < input->reloc_count; i++) {
-        uint32_t s = input->relocs[i].section_index;
-        if (s < ns) {
-            relocs_per_sec[s]++;
+    for (size_t i = 0; i < state->input->reloc_count; i++) {
+        uint32_t s = state->input->relocs[i].section_index;
+        if (s < state->ns) {
+            state->relocs_per_sec[s]++;
         }
     }
-    size_t rela_sections = 0;
-    for (size_t i = 0; i < ns; i++) {
-        if (relocs_per_sec[i] > 0) {
-            rela_sections++;
+    state->rela_sections = 0;
+    for (size_t i = 0; i < state->ns; i++) {
+        if (state->relocs_per_sec[i] > 0) {
+            state->rela_sections++;
         }
     }
 
-    int has_dynamic = (input->import_count > 0) ? 1 : 0;
-    int has_tls = 0;
-    for (size_t i = 0; i < ns; i++) {
-        if (is_tls_kind((ArkSectionKind)input->sections[i].kind)) {
-            has_tls = 1;
+    state->has_dynamic = (state->input->import_count > 0) ? 1 : 0;
+    state->has_tls = 0;
+    for (size_t i = 0; i < state->ns; i++) {
+        if (is_tls_kind((ArkSectionKind)state->input->sections[i].kind)) {
+            state->has_tls = 1;
             break;
         }
     }
 
-    uint64_t dynstr_actual_size = 1;
-    if (has_dynamic) {
-        const char** seen_names = (const char**)calloc(input->import_count * 2 + 2, sizeof(const char*));
+    state->dynstr_actual_size = 1;
+    if (state->has_dynamic) {
+        const char** seen_names = (const char**)calloc(state->input->import_count * 2 + 2, sizeof(const char*));
         if (!seen_names) {
-            goto oom;
+            return ARK_LINK_ERR_MEMORY;
         }
         size_t seen_count = 0;
-        for (size_t i = 0; i < input->import_count; i++) {
-            const char* sym = input->imports[i].symbol;
-            const char* mod = input->imports[i].module;
+        for (size_t i = 0; i < state->input->import_count; i++) {
+            const char* sym = state->input->imports[i].symbol;
+            const char* mod = state->input->imports[i].module;
             int sym_seen = 0, mod_seen = 0;
             for (size_t k = 0; k < seen_count; k++) {
                 if (!sym_seen && seen_names[k] && strcmp(seen_names[k], sym) == 0) {
@@ -410,156 +538,137 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
                 }
             }
             if (sym && !sym_seen) {
-                dynstr_actual_size += (uint64_t)strlen(sym) + 1;
+                state->dynstr_actual_size += (uint64_t)strlen(sym) + 1;
                 seen_names[seen_count++] = sym;
             }
             if (mod && !mod_seen) {
-                dynstr_actual_size += (uint64_t)strlen(mod) + 1;
+                state->dynstr_actual_size += (uint64_t)strlen(mod) + 1;
                 seen_names[seen_count++] = mod;
             }
         }
         free(seen_names);
     }
-    const size_t dyn_extra = (size_t)(has_dynamic ? 10 : 0);
-    size_t elf_shnum = 1 + ns + rela_sections + 3 + dyn_extra;
-    size_t rela_shidx_base = 1 + ns;
-    size_t symtab_shidx = rela_shidx_base + rela_sections;
-    size_t strtab_shidx = symtab_shidx + 1;
-    size_t shstrtab_shidx = strtab_shidx + 1;
-    size_t interp_shidx = has_dynamic ? (shstrtab_shidx + 1) : 0;
-    size_t dynsym_shidx = has_dynamic ? (shstrtab_shidx + 2) : 0;
-    size_t dynstr_shidx = has_dynamic ? (shstrtab_shidx + 3) : 0;
-    size_t dynamic_shidx = has_dynamic ? (shstrtab_shidx + 4) : 0;
-    size_t hash_shidx = has_dynamic ? (shstrtab_shidx + 5) : 0;
-    size_t init_array_shidx = has_dynamic ? (shstrtab_shidx + 6) : 0;
-    size_t fini_array_shidx = has_dynamic ? (shstrtab_shidx + 7) : 0;
-    size_t reladyn_shidx = has_dynamic ? (shstrtab_shidx + 8) : 0;
-    size_t plt_shidx = has_dynamic ? (shstrtab_shidx + 9) : 0;
-    size_t gotplt_shidx = has_dynamic ? (shstrtab_shidx + 10) : 0;
+    const size_t dyn_extra = (size_t)(state->has_dynamic ? 10 : 0);
+    state->elf_shnum = 1 + state->ns + state->rela_sections + 3 + dyn_extra;
+    state->rela_shidx_base = 1 + state->ns;
+    state->symtab_shidx = state->rela_shidx_base + state->rela_sections;
+    state->strtab_shidx = state->symtab_shidx + 1;
+    state->shstrtab_shidx = state->strtab_shidx + 1;
+    state->interp_shidx = state->has_dynamic ? (state->shstrtab_shidx + 1) : 0;
+    state->dynsym_shidx = state->has_dynamic ? (state->shstrtab_shidx + 2) : 0;
+    state->dynstr_shidx = state->has_dynamic ? (state->shstrtab_shidx + 3) : 0;
+    state->dynamic_shidx = state->has_dynamic ? (state->shstrtab_shidx + 4) : 0;
+    state->hash_shidx = state->has_dynamic ? (state->shstrtab_shidx + 5) : 0;
+    state->init_array_shidx = state->has_dynamic ? (state->shstrtab_shidx + 6) : 0;
+    state->fini_array_shidx = state->has_dynamic ? (state->shstrtab_shidx + 7) : 0;
+    state->reladyn_shidx = state->has_dynamic ? (state->shstrtab_shidx + 8) : 0;
+    state->plt_shidx = state->has_dynamic ? (state->shstrtab_shidx + 9) : 0;
+    state->gotplt_shidx = state->has_dynamic ? (state->shstrtab_shidx + 10) : 0;
 
-    if (!sb_init(&shstrtab)) {
-        free(relocs_per_sec);
-        ark_layout_destroy(layout);
+    if (!sb_init(&state->shstrtab)) {
         return ARK_LINK_ERR_MEMORY;
     }
-    sec_name_off = (uint32_t*)calloc(elf_shnum, sizeof(uint32_t));
-    if (!sec_name_off) {
-        sb_free(&shstrtab);
-        free(relocs_per_sec);
-        ark_layout_destroy(layout);
+    state->sec_name_off = (uint32_t*)calloc(state->elf_shnum, sizeof(uint32_t));
+    if (!state->sec_name_off) {
         return ARK_LINK_ERR_MEMORY;
     }
-    sec_name_off[0] = 0;
+    state->sec_name_off[0] = 0;
     size_t occ[6] = {0, 0, 0, 0, 0, 0};
-    for (size_t i = 0; i < ns; i++) {
-        ArkSectionKind k = (ArkSectionKind)input->sections[i].kind;
+    for (size_t i = 0; i < state->ns; i++) {
+        ArkSectionKind k = (ArkSectionKind)state->input->sections[i].kind;
         size_t kidx = (k == ARK_SECTION_CODE)     ? 0
                       : (k == ARK_SECTION_DATA)   ? 1
                       : (k == ARK_SECTION_RODATA) ? 2
                       : (k == ARK_SECTION_BSS)    ? 3
                       : (k == ARK_SECTION_TDATA)  ? 4
                                                   : 5;
-        sec_name_off[1 + i] = get_unique_name(&shstrtab, k, occ[kidx]++);
+        state->sec_name_off[1 + i] = get_unique_name(&state->shstrtab, k, occ[kidx]++);
     }
-    size_t rela_idx = 0;
-    for (size_t i = 0; i < ns; i++) {
-        if (relocs_per_sec[i] == 0) {
+    state->rela_idx = 0;
+    for (size_t i = 0; i < state->ns; i++) {
+        if (state->relocs_per_sec[i] == 0) {
             continue;
         }
-        const char* target_name = (const char*)shstrtab.buffer->data + sec_name_off[1 + i];
-        sec_name_off[rela_shidx_base + rela_idx] = get_rela_name(&shstrtab, target_name);
-        rela_idx++;
+        const char* target_name = (const char*)state->shstrtab.buffer->data + state->sec_name_off[1 + i];
+        state->sec_name_off[state->rela_shidx_base + state->rela_idx] = get_rela_name(&state->shstrtab, target_name);
+        state->rela_idx++;
     }
-    sec_name_off[symtab_shidx] = sb_add(&shstrtab, ".symtab");
-    sec_name_off[strtab_shidx] = sb_add(&shstrtab, ".strtab");
-    sec_name_off[shstrtab_shidx] = sb_add(&shstrtab, ".shstrtab");
-    if (has_dynamic) {
-        sec_name_off[interp_shidx] = sb_add(&shstrtab, ".interp");
-        sec_name_off[dynsym_shidx] = sb_add(&shstrtab, ".dynsym");
-        sec_name_off[dynstr_shidx] = sb_add(&shstrtab, ".dynstr");
-        sec_name_off[dynamic_shidx] = sb_add(&shstrtab, ".dynamic");
-        sec_name_off[hash_shidx] = sb_add(&shstrtab, ".hash");
-        sec_name_off[init_array_shidx] = sb_add(&shstrtab, ".init_array");
-        sec_name_off[fini_array_shidx] = sb_add(&shstrtab, ".fini_array");
-        sec_name_off[reladyn_shidx] = sb_add(&shstrtab, ".rela.dyn");
-        sec_name_off[plt_shidx] = sb_add(&shstrtab, ".plt");
-        sec_name_off[gotplt_shidx] = sb_add(&shstrtab, ".got.plt");
+    state->sec_name_off[state->symtab_shidx] = sb_add(&state->shstrtab, ".symtab");
+    state->sec_name_off[state->strtab_shidx] = sb_add(&state->shstrtab, ".strtab");
+    state->sec_name_off[state->shstrtab_shidx] = sb_add(&state->shstrtab, ".shstrtab");
+    if (state->has_dynamic) {
+        state->sec_name_off[state->interp_shidx] = sb_add(&state->shstrtab, ".interp");
+        state->sec_name_off[state->dynsym_shidx] = sb_add(&state->shstrtab, ".dynsym");
+        state->sec_name_off[state->dynstr_shidx] = sb_add(&state->shstrtab, ".dynstr");
+        state->sec_name_off[state->dynamic_shidx] = sb_add(&state->shstrtab, ".dynamic");
+        state->sec_name_off[state->hash_shidx] = sb_add(&state->shstrtab, ".hash");
+        state->sec_name_off[state->init_array_shidx] = sb_add(&state->shstrtab, ".init_array");
+        state->sec_name_off[state->fini_array_shidx] = sb_add(&state->shstrtab, ".fini_array");
+        state->sec_name_off[state->reladyn_shidx] = sb_add(&state->shstrtab, ".rela.dyn");
+        state->sec_name_off[state->plt_shidx] = sb_add(&state->shstrtab, ".plt");
+        state->sec_name_off[state->gotplt_shidx] = sb_add(&state->shstrtab, ".got.plt");
     }
-    if (sec_name_off[symtab_shidx] == (uint32_t)-1 || sec_name_off[strtab_shidx] == (uint32_t)-1 ||
-        sec_name_off[shstrtab_shidx] == (uint32_t)-1) {
-        sb_free(&shstrtab);
-        free(sec_name_off);
-        free(relocs_per_sec);
-        ark_layout_destroy(layout);
+    if (state->sec_name_off[state->symtab_shidx] == (uint32_t)-1 ||
+        state->sec_name_off[state->strtab_shidx] == (uint32_t)-1 ||
+        state->sec_name_off[state->shstrtab_shidx] == (uint32_t)-1) {
         return ARK_LINK_ERR_MEMORY;
     }
 
-    if (!sb_init(&strtab)) {
-        sb_free(&shstrtab);
-        free(sec_name_off);
-        free(relocs_per_sec);
-        ark_layout_destroy(layout);
+    if (!sb_init(&state->strtab)) {
         return ARK_LINK_ERR_MEMORY;
     }
-    sb_add(&strtab, "");
-    NameIndexMap sym_map = {0};
-    size_t next_sym_idx = 1 + ns;
+    sb_add(&state->strtab, "");
 
-#define INTERN_SYM(name_ptr, out_idx)                                                                                  \
-    do {                                                                                                               \
-        if (!nim_lookup(&sym_map, (name_ptr), (out_idx))) {                                                            \
-            uint32_t no = sb_add(&strtab, (name_ptr));                                                                 \
-            if (no == (uint32_t)-1)                                                                                    \
-                goto oom;                                                                                              \
-            if (!nim_add(&sym_map, (name_ptr), (uint32_t)next_sym_idx))                                                \
-                goto oom;                                                                                              \
-            *(out_idx) = (uint32_t)next_sym_idx++;                                                                     \
-        }                                                                                                              \
-    } while (0)
+    state->next_sym_idx = 1 + state->ns;
 
-    for (size_t i = 0; i < input->export_count; i++) {
-        const char* n = input->exports[i].name;
+    for (size_t i = 0; i < state->input->export_count; i++) {
+        const char* n = state->input->exports[i].name;
         if (!n) {
             continue;
         }
-        uint32_t idx;
-        INTERN_SYM(n, &idx);
+        if (!elf_intern_symbol(state, n)) {
+            return ARK_LINK_ERR_MEMORY;
+        }
     }
-    for (size_t i = 0; i < input->import_count; i++) {
-        const char* sym = input->imports[i].symbol;
+    for (size_t i = 0; i < state->input->import_count; i++) {
+        const char* sym = state->input->imports[i].symbol;
         if (!sym) {
             continue;
         }
-        uint32_t idx;
-        INTERN_SYM(sym, &idx);
+        if (!elf_intern_symbol(state, sym)) {
+            return ARK_LINK_ERR_MEMORY;
+        }
     }
-    for (size_t i = 0; i < input->reloc_count; i++) {
-        const ArkResolverSymbol* s = input->relocs[i].symbol;
+    for (size_t i = 0; i < state->input->reloc_count; i++) {
+        const ArkResolverSymbol* s = state->input->relocs[i].symbol;
         if (!s || !s->name) {
             continue;
         }
-        uint32_t idx;
-        INTERN_SYM(s->name, &idx);
-    }
-#undef INTERN_SYM
-
-    size_t total_syms = next_sym_idx;
-    nim_free(&sym_map);
-
-    for (size_t i = 0; i < input->reloc_count; i++) {
-        ArkResolverReloc* reloc = &input->relocs[i];
-        if (reloc->symbol && reloc->symbol->section_index < ns) {
-            uint64_t sec_vaddr = ark_layout_get_section(layout, reloc->symbol->section_index)
-                                     ? ark_layout_get_section(layout, reloc->symbol->section_index)->virtual_address
-                                     : 0;
-            reloc->symbol_rva = (uint32_t)(sec_vaddr + reloc->symbol->value);
-#ifdef ARK_DEBUG
-#endif
+        if (!elf_intern_symbol(state, s->name)) {
+            return ARK_LINK_ERR_MEMORY;
         }
     }
 
-    for (size_t i = 0; i < ns; i++) {
-        ArkSectionBuffer* target = &input->sections[i];
+    state->total_syms = state->next_sym_idx;
+    nim_free(&state->sym_map);
+
+    return ARK_LINK_OK;
+}
+
+static ArkLinkResult elf_plan_layout(ElfLinkState* state) {
+    for (size_t i = 0; i < state->input->reloc_count; i++) {
+        ArkResolverReloc* reloc = &state->input->relocs[i];
+        if (reloc->symbol && reloc->symbol->section_index < state->ns) {
+            uint64_t sec_vaddr =
+                ark_layout_get_section(state->layout, reloc->symbol->section_index)
+                    ? ark_layout_get_section(state->layout, reloc->symbol->section_index)->virtual_address
+                    : 0;
+            reloc->symbol_rva = (uint32_t)(sec_vaddr + reloc->symbol->value);
+        }
+    }
+
+    for (size_t i = 0; i < state->ns; i++) {
+        ArkSectionBuffer* target = &state->input->sections[i];
         if (!target->data) {
             continue;
         }
@@ -568,194 +677,184 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
         }
 
         uint32_t target_sec_idx = (uint32_t)i;
-        ark_reloc_process_all(input->relocs, input->reloc_count, ark_reloc_apply_elf, reloc_filter_by_section,
-                              &target_sec_idx, target->data, target->size, layout);
+        ark_reloc_process_all(state->input->relocs, state->input->reloc_count, ark_reloc_apply_elf,
+                              reloc_filter_by_section, &target_sec_idx, target->data, target->size, state->layout);
     }
 
-#define SEC_VADDR(sec_idx)                                                                                             \
-    (ark_layout_get_section(layout, (sec_idx)) ? ark_layout_get_section(layout, (sec_idx))->virtual_address : 0)
-#define SEC_OFFSET(sec_idx)                                                                                            \
-    (ark_layout_get_section(layout, (sec_idx)) ? ark_layout_get_section(layout, (sec_idx))->file_offset : 0)
-#define SEC_FSIZE(sec_idx)                                                                                             \
-    (ark_layout_get_section(layout, (sec_idx)) ? ark_layout_get_section(layout, (sec_idx))->file_size : 0)
-#define SEC_VSIZE(sec_idx)                                                                                             \
-    (ark_layout_get_section(layout, (sec_idx)) ? ark_layout_get_section(layout, (sec_idx))->virtual_size : 0)
-
-    if (elf_shnum > 0) {
-        meta_secs = (ElfMetaSection*)calloc(elf_shnum, sizeof(ElfMetaSection));
-        if (!meta_secs) {
-            free(relocs_per_sec);
-            ark_layout_destroy(layout);
+    if (state->elf_shnum > 0) {
+        state->meta_secs = (ElfMetaSection*)calloc(state->elf_shnum, sizeof(ElfMetaSection));
+        if (!state->meta_secs) {
             return ARK_LINK_ERR_MEMORY;
         }
     }
 
-#define META_VADDR(idx) (meta_secs ? meta_secs[(idx)].vaddr : 0)
-#define META_OFFSET(idx) (meta_secs ? meta_secs[(idx)].offset : 0)
-#define META_SIZE(idx) (meta_secs ? meta_secs[(idx)].size : 0)
+    state->file_size = state->layout->file_size;
 
-    uint64_t file_size = layout->file_size;
+    uint64_t cur_offset = state->file_size;
+    state->rx_end = cur_offset;
 
-    uint64_t cur_offset = file_size;
-    uint64_t rx_end = cur_offset;
-
-    if (has_dynamic) {
+    if (state->has_dynamic) {
         static const char interp_path[] = "/lib64/ld-linux-x86-64.so.2";
         size_t interp_size = sizeof(interp_path);
-        meta_secs[interp_shidx].offset = cur_offset;
-        meta_secs[interp_shidx].vaddr = image_base + cur_offset;
-        meta_secs[interp_shidx].size = (uint64_t)interp_size;
+        state->meta_secs[state->interp_shidx].offset = cur_offset;
+        state->meta_secs[state->interp_shidx].vaddr = state->image_base + cur_offset;
+        state->meta_secs[state->interp_shidx].size = (uint64_t)interp_size;
         cur_offset += interp_size;
     }
 
-    rela_idx = 0;
-    for (size_t i = 0; i < ns; i++) {
-        if (relocs_per_sec[i] == 0) {
+    state->rela_idx = 0;
+    for (size_t i = 0; i < state->ns; i++) {
+        if (state->relocs_per_sec[i] == 0) {
             continue;
         }
         cur_offset = ark_backend_align_up(cur_offset, sizeof(uint64_t));
-        meta_secs[rela_shidx_base + rela_idx].offset = cur_offset;
-        meta_secs[rela_shidx_base + rela_idx].vaddr = has_dynamic ? (image_base + cur_offset) : 0;
-        meta_secs[rela_shidx_base + rela_idx].size = (uint64_t)(relocs_per_sec[i] * sizeof(Elf64_Rela));
-        cur_offset += meta_secs[rela_shidx_base + rela_idx].size;
-        rela_idx++;
+        state->meta_secs[state->rela_shidx_base + state->rela_idx].offset = cur_offset;
+        state->meta_secs[state->rela_shidx_base + state->rela_idx].vaddr =
+            state->has_dynamic ? (state->image_base + cur_offset) : 0;
+        state->meta_secs[state->rela_shidx_base + state->rela_idx].size =
+            (uint64_t)(state->relocs_per_sec[i] * sizeof(Elf64_Rela));
+        cur_offset += state->meta_secs[state->rela_shidx_base + state->rela_idx].size;
+        state->rela_idx++;
     }
 
     cur_offset = ark_backend_align_up(cur_offset, sizeof(uint64_t));
-    meta_secs[symtab_shidx].offset = cur_offset;
-    meta_secs[symtab_shidx].vaddr = 0;
-    meta_secs[symtab_shidx].size = 0;
-    cur_offset += (uint64_t)(total_syms * sizeof(Elf64_Sym));
+    state->meta_secs[state->symtab_shidx].offset = cur_offset;
+    state->meta_secs[state->symtab_shidx].vaddr = 0;
+    state->meta_secs[state->symtab_shidx].size = 0;
+    cur_offset += (uint64_t)(state->total_syms * sizeof(Elf64_Sym));
 
     cur_offset = ark_backend_align_up(cur_offset, 1);
-    meta_secs[strtab_shidx].offset = cur_offset;
-    meta_secs[strtab_shidx].vaddr = 0;
-    meta_secs[strtab_shidx].size = 0;
-    cur_offset += strtab.buffer->size;
+    state->meta_secs[state->strtab_shidx].offset = cur_offset;
+    state->meta_secs[state->strtab_shidx].vaddr = 0;
+    state->meta_secs[state->strtab_shidx].size = 0;
+    cur_offset += state->strtab.buffer->size;
 
     cur_offset = ark_backend_align_up(cur_offset, 1);
-    meta_secs[shstrtab_shidx].offset = cur_offset;
-    meta_secs[shstrtab_shidx].vaddr = 0;
-    meta_secs[shstrtab_shidx].size = shstrtab.buffer->size;
-    cur_offset += shstrtab.buffer->size;
+    state->meta_secs[state->shstrtab_shidx].offset = cur_offset;
+    state->meta_secs[state->shstrtab_shidx].vaddr = 0;
+    state->meta_secs[state->shstrtab_shidx].size = state->shstrtab.buffer->size;
+    cur_offset += state->shstrtab.buffer->size;
 
-    if (has_dynamic) {
+    if (state->has_dynamic) {
         cur_offset = ark_backend_align_up(cur_offset, sizeof(uint64_t));
-        meta_secs[dynsym_shidx].offset = cur_offset;
-        meta_secs[dynsym_shidx].vaddr = image_base + cur_offset;
-        meta_secs[dynsym_shidx].size = 0;
-        cur_offset += (uint64_t)((1 + input->import_count) * sizeof(Elf64_Sym));
+        state->meta_secs[state->dynsym_shidx].offset = cur_offset;
+        state->meta_secs[state->dynsym_shidx].vaddr = state->image_base + cur_offset;
+        state->meta_secs[state->dynsym_shidx].size = 0;
+        cur_offset += (uint64_t)((1 + state->input->import_count) * sizeof(Elf64_Sym));
 
         cur_offset = ark_backend_align_up(cur_offset, 1);
-        meta_secs[dynstr_shidx].offset = cur_offset;
-        meta_secs[dynstr_shidx].vaddr = image_base + cur_offset;
-        meta_secs[dynstr_shidx].size = dynstr_actual_size;
-        cur_offset += dynstr_actual_size;
+        state->meta_secs[state->dynstr_shidx].offset = cur_offset;
+        state->meta_secs[state->dynstr_shidx].vaddr = state->image_base + cur_offset;
+        state->meta_secs[state->dynstr_shidx].size = state->dynstr_actual_size;
+        cur_offset += state->dynstr_actual_size;
 
         {
             size_t hash_nbuckets = 1;
             size_t hash_export_func_count = 0;
-            for (size_t i = 0; i < input->export_count; i++) {
-                if (input->exports[i].is_function) {
+            for (size_t i = 0; i < state->input->export_count; i++) {
+                if (state->input->exports[i].is_function) {
                     hash_export_func_count++;
                 }
             }
-            size_t hash_nchain = 1 + input->import_count + hash_export_func_count + 1;
+            size_t hash_nchain = 1 + state->input->import_count + hash_export_func_count + 1;
             size_t hash_size = (2 + hash_nbuckets + hash_nchain) * sizeof(uint32_t);
             cur_offset = ark_backend_align_up(cur_offset, sizeof(uint64_t));
-            meta_secs[hash_shidx].offset = cur_offset;
-            meta_secs[hash_shidx].vaddr = image_base + cur_offset;
-            meta_secs[hash_shidx].size = (uint64_t)hash_size;
+            state->meta_secs[state->hash_shidx].offset = cur_offset;
+            state->meta_secs[state->hash_shidx].vaddr = state->image_base + cur_offset;
+            state->meta_secs[state->hash_shidx].size = (uint64_t)hash_size;
             cur_offset += hash_size;
         }
 
         cur_offset = ark_backend_align_up(cur_offset, sizeof(uint64_t));
-        meta_secs[reladyn_shidx].offset = cur_offset;
-        meta_secs[reladyn_shidx].vaddr = image_base + cur_offset;
-        meta_secs[reladyn_shidx].size = (uint64_t)(input->import_count * sizeof(Elf64_Rela));
-        cur_offset += meta_secs[reladyn_shidx].size;
+        state->meta_secs[state->reladyn_shidx].offset = cur_offset;
+        state->meta_secs[state->reladyn_shidx].vaddr = state->image_base + cur_offset;
+        state->meta_secs[state->reladyn_shidx].size = (uint64_t)(state->input->import_count * sizeof(Elf64_Rela));
+        cur_offset += state->meta_secs[state->reladyn_shidx].size;
 
         cur_offset = ark_backend_align_up(cur_offset, sizeof(uint64_t));
-        meta_secs[init_array_shidx].offset = cur_offset;
-        meta_secs[init_array_shidx].vaddr = image_base + cur_offset;
-        meta_secs[init_array_shidx].size = 0;
-        meta_secs[fini_array_shidx].offset = cur_offset;
-        meta_secs[fini_array_shidx].vaddr = image_base + cur_offset;
-        meta_secs[fini_array_shidx].size = 0;
+        state->meta_secs[state->init_array_shidx].offset = cur_offset;
+        state->meta_secs[state->init_array_shidx].vaddr = state->image_base + cur_offset;
+        state->meta_secs[state->init_array_shidx].size = 0;
+        state->meta_secs[state->fini_array_shidx].offset = cur_offset;
+        state->meta_secs[state->fini_array_shidx].vaddr = state->image_base + cur_offset;
+        state->meta_secs[state->fini_array_shidx].size = 0;
 
-        func_import_count = 0;
-        for (size_t i = 0; i < input->import_count; i++) {
+        state->func_import_count = 0;
+        for (size_t i = 0; i < state->input->import_count; i++) {
 
-            if (input->imports[i].is_function) {
-                func_import_count++;
+            if (state->input->imports[i].is_function) {
+                state->func_import_count++;
             }
         }
 
-        if (func_import_count > 0) {
+        if (state->func_import_count > 0) {
             size_t plt_entry_size = 16;
-            size_t plt_size = (1 + func_import_count) * plt_entry_size;
+            size_t plt_size = (1 + state->func_import_count) * plt_entry_size;
 
             cur_offset = ark_backend_align_up(cur_offset, 16);
-            meta_secs[plt_shidx].offset = cur_offset;
-            meta_secs[plt_shidx].vaddr = image_base + cur_offset;
-            meta_secs[plt_shidx].size = plt_size;
+            state->meta_secs[state->plt_shidx].offset = cur_offset;
+            state->meta_secs[state->plt_shidx].vaddr = state->image_base + cur_offset;
+            state->meta_secs[state->plt_shidx].size = plt_size;
             cur_offset += plt_size;
 
-            size_t gotplt_entries = 3 + func_import_count;
+            size_t gotplt_entries = 3 + state->func_import_count;
             size_t gotplt_size = gotplt_entries * sizeof(uint64_t);
 
             cur_offset = ark_backend_align_up(cur_offset, sizeof(uint64_t));
-            meta_secs[gotplt_shidx].offset = cur_offset;
-            meta_secs[gotplt_shidx].vaddr = image_base + cur_offset;
-            meta_secs[gotplt_shidx].size = gotplt_size;
+            state->meta_secs[state->gotplt_shidx].offset = cur_offset;
+            state->meta_secs[state->gotplt_shidx].vaddr = state->image_base + cur_offset;
+            state->meta_secs[state->gotplt_shidx].size = gotplt_size;
             cur_offset += gotplt_size;
 
         } else {
-            meta_secs[plt_shidx].offset = 0;
-            meta_secs[plt_shidx].vaddr = 0;
-            meta_secs[plt_shidx].size = 0;
-            meta_secs[gotplt_shidx].offset = 0;
-            meta_secs[gotplt_shidx].vaddr = 0;
-            meta_secs[gotplt_shidx].size = 0;
+            state->meta_secs[state->plt_shidx].offset = 0;
+            state->meta_secs[state->plt_shidx].vaddr = 0;
+            state->meta_secs[state->plt_shidx].size = 0;
+            state->meta_secs[state->gotplt_shidx].offset = 0;
+            state->meta_secs[state->gotplt_shidx].vaddr = 0;
+            state->meta_secs[state->gotplt_shidx].size = 0;
         }
     }
 
     cur_offset = ark_backend_align_up(cur_offset, sizeof(uint64_t));
-    uint64_t shdr_offset = cur_offset;
-    uint64_t shdr_size = (uint64_t)(elf_shnum * sizeof(Elf64_Shdr));
+    state->shdr_offset = cur_offset;
+    uint64_t shdr_size = (uint64_t)(state->elf_shnum * sizeof(Elf64_Shdr));
     cur_offset += shdr_size;
 
-    rx_end = ark_backend_align_up(cur_offset, page_size);
+    state->rx_end = ark_backend_align_up(cur_offset, state->page_size);
 
-    uint64_t rw_start = rx_end;
-    uint64_t rw_cur = rx_end;
-    uint64_t tls_offset = 0, tls_vaddr = 0;
-    uint64_t tls_filesz = 0, tls_memsz = 0, tls_align = 1;
+    state->rw_start = state->rx_end;
+    uint64_t rw_cur = state->rx_end;
+    state->tls_offset = 0;
+    state->tls_vaddr = 0;
+    state->tls_filesz = 0;
+    state->tls_memsz = 0;
+    state->tls_align = 1;
 
-    if (has_dynamic) {
+    if (state->has_dynamic) {
         rw_cur = ark_backend_align_up(rw_cur, sizeof(uint64_t));
-        meta_secs[dynamic_shidx].offset = rw_cur;
-        meta_secs[dynamic_shidx].vaddr = image_base + rw_cur;
-        size_t dynamic_upper = 10 + input->import_count + (rela_sections > 0 ? 3 : 0);
-        meta_secs[dynamic_shidx].size = (uint64_t)(dynamic_upper * sizeof(Elf64_Dyn));
-        rw_cur += meta_secs[dynamic_shidx].size;
+        state->meta_secs[state->dynamic_shidx].offset = rw_cur;
+        state->meta_secs[state->dynamic_shidx].vaddr = state->image_base + rw_cur;
+        size_t dynamic_upper = 10 + state->input->import_count + (state->rela_sections > 0 ? 3 : 0);
+        state->meta_secs[state->dynamic_shidx].size = (uint64_t)(dynamic_upper * sizeof(Elf64_Dyn));
+        rw_cur += state->meta_secs[state->dynamic_shidx].size;
     }
 
-    file_size = cur_offset;
-    if (rw_cur > file_size) {
-        file_size = rw_cur;
+    state->file_size = cur_offset;
+    if (rw_cur > state->file_size) {
+        state->file_size = rw_cur;
     }
-    if (layout->file_size > file_size) {
-        file_size = layout->file_size;
+    if (state->layout->file_size > state->file_size) {
+        state->file_size = state->layout->file_size;
     }
 
     uint64_t code_file_end = 0;
-    if (has_dynamic && interp_shidx > 0) {
-        code_file_end = meta_secs[interp_shidx].offset;
+    if (state->has_dynamic && state->interp_shidx > 0) {
+        code_file_end = state->meta_secs[state->interp_shidx].offset;
     } else {
-        for (size_t i = 0; i < ns; i++) {
-            if ((ArkSectionKind)input->sections[i].kind == ARK_SECTION_CODE) {
-                code_file_end = meta_secs[i + 1].offset + meta_secs[i + 1].size;
+        for (size_t i = 0; i < state->ns; i++) {
+            if ((ArkSectionKind)state->input->sections[i].kind == ARK_SECTION_CODE) {
+                code_file_end = state->meta_secs[i + 1].offset + state->meta_secs[i + 1].size;
                 break;
             }
         }
@@ -764,33 +863,33 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
         }
     }
 
-    uint64_t seg1_filesz = 0, seg1_memsz = 0;
-    uint64_t seg2_offset = 0, seg2_vaddr = 0;
-    uint64_t rw_filesz = 0, rw_memsz = 0;
-    Elf64_Phdr static_loads[48];
-    int n_static_loads = 0;
-    size_t phdr_load_count = 0;
-    if (!has_dynamic && !has_tls) {
+    state->seg1_filesz = 0;
+    state->seg1_memsz = 0;
+    state->seg2_offset = 0;
+    state->seg2_vaddr = 0;
+    state->rw_filesz = 0;
+    state->rw_memsz = 0;
+    state->n_static_loads = 0;
+    state->phdr_load_count = 0;
+    if (!state->has_dynamic && !state->has_tls) {
         uint32_t cur_flags = 0;
-        for (size_t i = 0; i < ns; i++) {
-            ArkSectionKind k = (ArkSectionKind)input->sections[i].kind;
+        for (size_t i = 0; i < state->ns; i++) {
+            ArkSectionKind k = (ArkSectionKind)state->input->sections[i].kind;
             if (k != ARK_SECTION_CODE && k != ARK_SECTION_DATA && k != ARK_SECTION_RODATA && k != ARK_SECTION_BSS &&
                 k != ARK_SECTION_TDATA) {
                 continue;
             }
-            const ArkSectionLayout* lsec = ark_layout_get_section(layout, i);
-            uint64_t va = SEC_VADDR(i);
-            uint64_t vsz = SEC_VSIZE(i);
-            uint64_t off = lsec ? lsec->file_offset : meta_secs[i + 1].offset;
+            const ArkSectionLayout* lsec = ark_layout_get_section(state->layout, i);
+            uint64_t va = elf_section_vaddr(state, i);
+            uint64_t vsz = elf_section_vsize(state, i);
+            uint64_t off = lsec ? lsec->file_offset : state->meta_secs[i + 1].offset;
             uint32_t f = (k == ARK_SECTION_CODE) ? (PF_R | PF_X) : (k == ARK_SECTION_RODATA) ? PF_R : (PF_R | PF_W);
             uint64_t filesz_add = (k == ARK_SECTION_BSS) ? 0 : vsz;
 
-            if (n_static_loads > 0 && cur_flags == f) {
-                Elf64_Phdr* c = &static_loads[n_static_loads - 1];
+            if (state->n_static_loads > 0 && cur_flags == f) {
+                Elf64_Phdr* c = &state->static_loads[state->n_static_loads - 1];
                 uint64_t fend = off + filesz_add;
                 uint64_t vend = va + vsz;
-                if (fend > c->p_offset + c->p_filesz) { /* 同权限但文件上不相邻则开新段,这个{}为空是正常的 */
-                }
                 if ((uint64_t)(c->p_offset + c->p_filesz) >= off || fend <= (uint64_t)(c->p_offset + c->p_filesz)) {
                     if (fend > (uint64_t)(c->p_offset + c->p_filesz)) {
                         c->p_filesz = fend - c->p_offset;
@@ -801,10 +900,10 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
                     continue;
                 }
             }
-            if (n_static_loads >= 48) {
+            if (state->n_static_loads >= 48) {
                 break;
             }
-            Elf64_Phdr* seg = &static_loads[n_static_loads++];
+            Elf64_Phdr* seg = &state->static_loads[state->n_static_loads++];
             memset(seg, 0, sizeof(*seg));
             seg->p_type = PT_LOAD;
             seg->p_flags = f;
@@ -813,213 +912,228 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
             seg->p_paddr = va;
             seg->p_filesz = filesz_add;
             seg->p_memsz = vsz;
-            seg->p_align = page_size;
+            seg->p_align = state->page_size;
             cur_flags = f;
         }
-        if (n_static_loads > 0) {
-            seg1_filesz = static_loads[0].p_filesz;
-            seg1_memsz = static_loads[0].p_memsz;
+        if (state->n_static_loads > 0) {
+            state->seg1_filesz = state->static_loads[0].p_filesz;
+            state->seg1_memsz = state->static_loads[0].p_memsz;
         } else {
-            seg1_filesz = ark_backend_align_up(code_file_end, page_size);
-            seg1_memsz = seg1_filesz;
+            state->seg1_filesz = ark_backend_align_up(code_file_end, state->page_size);
+            state->seg1_memsz = state->seg1_filesz;
         }
     } else {
-        seg1_filesz = ark_backend_align_up(code_file_end, page_size);
-        seg1_memsz = seg1_filesz;
+        state->seg1_filesz = ark_backend_align_up(code_file_end, state->page_size);
+        state->seg1_memsz = state->seg1_filesz;
 
-        uint64_t data_start = has_dynamic ? meta_secs[interp_shidx].offset : rw_start;
-        seg2_offset = data_start;
-        seg2_vaddr = image_base + data_start;
+        uint64_t data_start = state->has_dynamic ? state->meta_secs[state->interp_shidx].offset : state->rw_start;
+        state->seg2_offset = data_start;
+        state->seg2_vaddr = state->image_base + data_start;
 
-        uint64_t data_end = file_size;
+        uint64_t data_end = state->file_size;
         if (data_end < data_start) {
             data_end = data_start;
         }
-        rw_filesz = data_end - data_start;
-        rw_memsz = rw_filesz;
+        state->rw_filesz = data_end - data_start;
+        state->rw_memsz = state->rw_filesz;
     }
 
-    symtab = (Elf64_Sym*)calloc(total_syms ? total_syms : 1, sizeof(Elf64_Sym));
-    if (!symtab) {
-        goto oom;
+    return ARK_LINK_OK;
+}
+
+static ArkLinkResult elf_build_symbols(ElfLinkState* state) {
+    state->symtab = (Elf64_Sym*)calloc(state->total_syms ? state->total_syms : 1, sizeof(Elf64_Sym));
+    if (!state->symtab) {
+        return ARK_LINK_ERR_MEMORY;
     }
-    for (size_t i = 0; i < ns; i++) {
-        Elf64_Sym* s = &symtab[1 + i];
+    for (size_t i = 0; i < state->ns; i++) {
+        Elf64_Sym* s = &state->symtab[1 + i];
         s->st_info = ELF_ST_INFO(STB_LOCAL, STT_SECTION);
         s->st_other = 0;
         s->st_shndx = (uint16_t)(1 + i);
-        s->st_value = SEC_VADDR(i);
-        s->st_size = SEC_VSIZE(i);
+        s->st_value = elf_section_vaddr(state, i);
+        s->st_size = elf_section_vsize(state, i);
     }
-    next_sym_idx = 1 + ns;
-    NameIndexMap sym_map2 = {0};
-    for (size_t i = 0; i < input->export_count; i++) {
-        const char* n = input->exports[i].name;
+    state->next_sym_idx = 1 + state->ns;
+
+    for (size_t i = 0; i < state->input->export_count; i++) {
+        const char* n = state->input->exports[i].name;
         if (!n) {
             continue;
         }
         uint32_t idx;
-        if (!nim_lookup(&sym_map2, n, &idx)) {
-            idx = (uint32_t)next_sym_idx++;
-            Elf64_Sym* s = &symtab[idx];
-            s->st_info = ELF_ST_INFO(STB_GLOBAL, input->exports[i].is_function ? STT_FUNC : STT_OBJECT);
+        if (!nim_lookup(&state->sym_map2, n, &idx)) {
+            idx = (uint32_t)state->next_sym_idx++;
+            Elf64_Sym* s = &state->symtab[idx];
+            s->st_info = ELF_ST_INFO(STB_GLOBAL, state->input->exports[i].is_function ? STT_FUNC : STT_OBJECT);
             s->st_other = 0;
-            if (input->exports[i].section_index < ns) {
-                s->st_shndx = (uint16_t)input->exports[i].section_index;
-                s->st_value = SEC_VADDR(input->exports[i].section_index) + input->exports[i].offset;
+            if (state->input->exports[i].section_index < state->ns) {
+                s->st_shndx = (uint16_t)state->input->exports[i].section_index;
+                s->st_value =
+                    elf_section_vaddr(state, state->input->exports[i].section_index) + state->input->exports[i].offset;
                 s->st_size = 0;
             } else {
                 s->st_shndx = SHN_ABS;
-                s->st_value = input->exports[i].value;
+                s->st_value = state->input->exports[i].value;
                 s->st_size = 0;
             }
-            nim_add(&sym_map2, n, idx);
+            if (!nim_add(&state->sym_map2, n, idx)) {
+                return ARK_LINK_ERR_MEMORY;
+            }
         }
     }
-    for (size_t i = 0; i < input->import_count; i++) {
-        const char* sym = input->imports[i].symbol;
+    for (size_t i = 0; i < state->input->import_count; i++) {
+        const char* sym = state->input->imports[i].symbol;
         if (!sym) {
             continue;
         }
         uint32_t idx;
-        if (!nim_lookup(&sym_map2, sym, &idx)) {
-            idx = (uint32_t)next_sym_idx++;
-            Elf64_Sym* s = &symtab[idx];
+        if (!nim_lookup(&state->sym_map2, sym, &idx)) {
+            idx = (uint32_t)state->next_sym_idx++;
+            Elf64_Sym* s = &state->symtab[idx];
             s->st_info = ELF_ST_INFO(STB_GLOBAL, STT_NOTYPE);
             s->st_other = 0;
             s->st_shndx = SHN_UNDEF;
             s->st_value = 0;
             s->st_size = 0;
-            nim_add(&sym_map2, sym, idx);
+            if (!nim_add(&state->sym_map2, sym, idx)) {
+                return ARK_LINK_ERR_MEMORY;
+            }
         }
     }
-    for (size_t i = 0; i < input->reloc_count; i++) {
-        const ArkResolverSymbol* ss = input->relocs[i].symbol;
+    for (size_t i = 0; i < state->input->reloc_count; i++) {
+        const ArkResolverSymbol* ss = state->input->relocs[i].symbol;
         if (!ss || !ss->name) {
             continue;
         }
         uint32_t idx;
-        if (!nim_lookup(&sym_map2, ss->name, &idx)) {
-            idx = (uint32_t)next_sym_idx++;
-            Elf64_Sym* s = &symtab[idx];
+        if (!nim_lookup(&state->sym_map2, ss->name, &idx)) {
+            idx = (uint32_t)state->next_sym_idx++;
+            Elf64_Sym* s = &state->symtab[idx];
             uint8_t bind = (ss->binding == ARK_BIND_WEAK) ? STB_WEAK : STB_GLOBAL;
             uint8_t type = STT_NOTYPE;
             s->st_info = ELF_ST_INFO(bind, type);
             s->st_other = (ss->visibility == ARK_VISIBILITY_HIDDEN) ? 2 : 0;
-            if (ss->section_index < ns) {
+            if (ss->section_index < state->ns) {
                 s->st_shndx = (uint16_t)(1 + ss->section_index);
-                s->st_value = SEC_VADDR(ss->section_index) + ss->value;
+                s->st_value = elf_section_vaddr(state, ss->section_index) + ss->value;
             } else {
                 s->st_shndx = SHN_UNDEF;
                 s->st_value = 0;
             }
             s->st_size = ss->size;
-            nim_add(&sym_map2, ss->name, idx);
+            if (!nim_add(&state->sym_map2, ss->name, idx)) {
+                return ARK_LINK_ERR_MEMORY;
+            }
         }
     }
-    nim_free(&sym_map2);
-    free(strtab.buffer->data);
-    sb_init(&strtab);
-    sb_add(&strtab, "");
-    NameIndexMap name_off_map = {0};
-    size_t next_global_idx = (size_t)(1 + ns);
-    for (size_t i = 0; i < input->export_count; i++) {
-        const char* n = input->exports[i].name;
+    nim_free(&state->sym_map2);
+    sb_free(&state->strtab);
+    if (!sb_init(&state->strtab)) {
+        return ARK_LINK_ERR_MEMORY;
+    }
+    sb_add(&state->strtab, "");
+
+    size_t next_global_idx = (size_t)(1 + state->ns);
+    for (size_t i = 0; i < state->input->export_count; i++) {
+        const char* n = state->input->exports[i].name;
         if (!n) {
             continue;
         }
         uint32_t lookup;
-        if (nim_lookup(&name_off_map, n, &lookup)) {
+        if (nim_lookup(&state->name_off_map, n, &lookup)) {
             continue;
         }
-        uint32_t off = sb_add(&strtab, n);
+        uint32_t off = sb_add(&state->strtab, n);
         if (off == (uint32_t)-1) {
-            goto oom;
+            return ARK_LINK_ERR_MEMORY;
         }
 
-        Elf64_Sym* s = &symtab[next_global_idx];
+        Elf64_Sym* s = &state->symtab[next_global_idx];
         s->st_name = off;
-        uint64_t export_sec_idx = input->exports[i].section_index;
-#ifdef ARK_DEBUG
-        if (layout && export_sec_idx < layout->section_count) {
-        } else if (!layout) {
-        } else {
-        }
-#endif
-        uint64_t sec_vaddr = SEC_VADDR(export_sec_idx);
-        s->st_value = sec_vaddr + input->exports[i].value;
+        uint64_t export_sec_idx = state->input->exports[i].section_index;
+        uint64_t sec_vaddr = elf_section_vaddr(state, export_sec_idx);
+        s->st_value = sec_vaddr + state->input->exports[i].value;
         s->st_size = 0;
-        s->st_info = ELF_ST_INFO(STB_GLOBAL, input->exports[i].is_function ? STT_FUNC : STT_OBJECT);
+        s->st_info = ELF_ST_INFO(STB_GLOBAL, state->input->exports[i].is_function ? STT_FUNC : STT_OBJECT);
         s->st_other = 0;
-        s->st_shndx = input->exports[i].section_index < ns ? (uint16_t)(input->exports[i].section_index + 1) : SHN_ABS;
+        s->st_shndx = state->input->exports[i].section_index < state->ns
+                          ? (uint16_t)(state->input->exports[i].section_index + 1)
+                          : SHN_ABS;
 
-        nim_add(&name_off_map, n, off);
+        if (!nim_add(&state->name_off_map, n, off)) {
+            return ARK_LINK_ERR_MEMORY;
+        }
         next_global_idx++;
     }
-    for (size_t i = 0; i < input->import_count; i++) {
-        const char* sym = input->imports[i].symbol;
+    for (size_t i = 0; i < state->input->import_count; i++) {
+        const char* sym = state->input->imports[i].symbol;
         if (!sym) {
             continue;
         }
         uint32_t lookup;
-        if (nim_lookup(&name_off_map, sym, &lookup)) {
+        if (nim_lookup(&state->name_off_map, sym, &lookup)) {
             continue;
         }
-        uint32_t off = sb_add(&strtab, sym);
+        uint32_t off = sb_add(&state->strtab, sym);
         if (off == (uint32_t)-1) {
-            goto oom;
+            return ARK_LINK_ERR_MEMORY;
         }
-        symtab[next_global_idx].st_name = off;
-        nim_add(&name_off_map, sym, off);
+        state->symtab[next_global_idx].st_name = off;
+        if (!nim_add(&state->name_off_map, sym, off)) {
+            return ARK_LINK_ERR_MEMORY;
+        }
         next_global_idx++;
     }
-    for (size_t i = 0; i < input->reloc_count; i++) {
-        const ArkResolverSymbol* ss = input->relocs[i].symbol;
+    for (size_t i = 0; i < state->input->reloc_count; i++) {
+        const ArkResolverSymbol* ss = state->input->relocs[i].symbol;
         if (!ss || !ss->name) {
             continue;
         }
         uint32_t lookup;
-        if (nim_lookup(&name_off_map, ss->name, &lookup)) {
+        if (nim_lookup(&state->name_off_map, ss->name, &lookup)) {
             continue;
         }
-        uint32_t off = sb_add(&strtab, ss->name);
+        uint32_t off = sb_add(&state->strtab, ss->name);
         if (off == (uint32_t)-1) {
-            goto oom;
+            return ARK_LINK_ERR_MEMORY;
         }
-        symtab[next_global_idx].st_name = off;
-        nim_add(&name_off_map, ss->name, off);
+        state->symtab[next_global_idx].st_name = off;
+        if (!nim_add(&state->name_off_map, ss->name, off)) {
+            return ARK_LINK_ERR_MEMORY;
+        }
         next_global_idx++;
     }
-    nim_free(&name_off_map);
-    rela_arrays = (Elf64_Rela**)calloc(rela_sections ? rela_sections : 1, sizeof(Elf64_Rela*));
-    if (!rela_arrays) {
-        goto oom;
+    nim_free(&state->name_off_map);
+    return ARK_LINK_OK;
+}
+
+static ArkLinkResult elf_build_relocations(ElfLinkState* state) {
+    state->rela_arrays = (Elf64_Rela**)calloc(state->rela_sections ? state->rela_sections : 1, sizeof(Elf64_Rela*));
+    if (!state->rela_arrays) {
+        return ARK_LINK_ERR_MEMORY;
     }
-    rela_idx = 0;
-    for (size_t i = 0; i < ns; i++) {
-        if (relocs_per_sec[i] == 0) {
+    state->rela_idx = 0;
+    for (size_t i = 0; i < state->ns; i++) {
+        if (state->relocs_per_sec[i] == 0) {
             continue;
         }
-        rela_arrays[rela_idx] = (Elf64_Rela*)calloc(relocs_per_sec[i], sizeof(Elf64_Rela));
-        if (!rela_arrays[rela_idx]) {
-            for (size_t k = 0; k < rela_idx; k++) {
-                free(rela_arrays[k]);
-            }
-            free(rela_arrays);
-            rela_arrays = NULL;
-            goto oom;
+        state->rela_arrays[state->rela_idx] = (Elf64_Rela*)calloc(state->relocs_per_sec[i], sizeof(Elf64_Rela));
+        if (!state->rela_arrays[state->rela_idx]) {
+            return ARK_LINK_ERR_MEMORY;
         }
         size_t cur = 0;
-        for (size_t j = 0; j < input->reloc_count; j++) {
-            const ArkResolverReloc* r = &input->relocs[j];
+        for (size_t j = 0; j < state->input->reloc_count; j++) {
+            const ArkResolverReloc* r = &state->input->relocs[j];
             if (r->section_index != i) {
                 continue;
             }
             uint32_t sym_idx = 0;
             if (r->symbol && r->symbol->name) {
-                for (uint32_t k = 1 + (uint32_t)ns; k < total_syms; k++) {
-                    if (symtab[k].st_name < strtab.buffer->size &&
-                        strcmp((const char*)strtab.buffer->data + symtab[k].st_name, r->symbol->name) == 0) {
+                for (uint32_t k = 1 + (uint32_t)state->ns; k < state->total_syms; k++) {
+                    if (state->symtab[k].st_name < state->strtab.buffer->size &&
+                        strcmp((const char*)state->strtab.buffer->data + state->symtab[k].st_name, r->symbol->name) ==
+                            0) {
                         sym_idx = k;
                         break;
                     }
@@ -1049,222 +1163,209 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
             if (r->symbol && r->symbol->section_index == 0 && r->symbol->import_module != NULL) {
                 continue;
             }
-            rela_arrays[rela_idx][cur].r_offset = SEC_VADDR(r->section_index) + r->offset;
-            rela_arrays[rela_idx][cur].r_info = ELF_R_INFO(sym_idx, r_type);
-            rela_arrays[rela_idx][cur].r_addend = r->addend;
+            state->rela_arrays[state->rela_idx][cur].r_offset = elf_section_vaddr(state, r->section_index) + r->offset;
+            state->rela_arrays[state->rela_idx][cur].r_info = ELF_R_INFO(sym_idx, r_type);
+            state->rela_arrays[state->rela_idx][cur].r_addend = r->addend;
             cur++;
         }
-        rela_idx++;
+        state->rela_idx++;
     }
 
-    dynsym = NULL;
-    memset(&dynstr, 0, sizeof(dynstr));
-    dyntab = NULL;
-    size_t dyntab_count = 0;
+    state->dynsym = NULL;
+    memset(&state->dynstr, 0, sizeof(state->dynstr));
+    state->dyntab = NULL;
+    state->dyntab_count = 0;
 
-#define FREE_RELA_ARRAYS()                                                                                             \
-    do {                                                                                                               \
-        if (rela_arrays) {                                                                                             \
-            for (size_t k = 0; k < rela_sections; k++)                                                                 \
-                free(rela_arrays[k]);                                                                                  \
-            free(rela_arrays);                                                                                         \
-            rela_arrays = NULL;                                                                                        \
-        }                                                                                                              \
-    } while (0)
-    if (has_dynamic) {
-        if (!sb_init(&dynstr)) {
-            FREE_RELA_ARRAYS();
-            goto oom;
+    return ARK_LINK_OK;
+}
+
+static ArkLinkResult elf_build_dynamic(ElfLinkState* state) {
+    if (state->has_dynamic) {
+        if (!sb_init(&state->dynstr)) {
+            return ARK_LINK_ERR_MEMORY;
         }
-        NameIndexMap module_off = {0};
-        NameIndexMap symbol_off = {0};
+
         size_t unique_modules = 0;
-        for (size_t i = 0; i < input->import_count; i++) {
-            const char* sym = input->imports[i].symbol;
-            const char* mod = input->imports[i].module;
-            if (sym && !nim_lookup(&symbol_off, sym, NULL)) {
-                uint32_t off = sb_add(&dynstr, sym);
+        for (size_t i = 0; i < state->input->import_count; i++) {
+            const char* sym = state->input->imports[i].symbol;
+            const char* mod = state->input->imports[i].module;
+            if (sym && !nim_lookup(&state->symbol_off, sym, NULL)) {
+                uint32_t off = sb_add(&state->dynstr, sym);
                 if (off == (uint32_t)-1) {
-                    nim_free(&module_off);
-                    nim_free(&symbol_off);
-                    sb_free(&dynstr);
-                    FREE_RELA_ARRAYS();
-                    goto oom;
+                    return ARK_LINK_ERR_MEMORY;
                 }
-                nim_add(&symbol_off, sym, off);
+                if (!nim_add(&state->symbol_off, sym, off)) {
+                    return ARK_LINK_ERR_MEMORY;
+                }
             }
-            if (mod && !nim_lookup(&module_off, mod, NULL)) {
-                uint32_t off = sb_add(&dynstr, mod);
+            if (mod && !nim_lookup(&state->module_off, mod, NULL)) {
+                uint32_t off = sb_add(&state->dynstr, mod);
                 if (off == (uint32_t)-1) {
-                    nim_free(&module_off);
-                    nim_free(&symbol_off);
-                    sb_free(&dynstr);
-                    FREE_RELA_ARRAYS();
-                    goto oom;
+                    return ARK_LINK_ERR_MEMORY;
                 }
-                nim_add(&module_off, mod, off);
+                if (!nim_add(&state->module_off, mod, off)) {
+                    return ARK_LINK_ERR_MEMORY;
+                }
                 unique_modules++;
             }
         }
 
         size_t export_sym_count = 0;
-        for (size_t i = 0; i < input->export_count; i++) {
-            if (input->exports[i].is_function) {
+        for (size_t i = 0; i < state->input->export_count; i++) {
+            if (state->input->exports[i].is_function) {
                 export_sym_count++;
             }
         }
 
-        size_t dynsym_n = 1 + input->import_count + export_sym_count;
-        dynsym = (Elf64_Sym*)calloc(dynsym_n, sizeof(Elf64_Sym));
-        if (!dynsym) {
-            nim_free(&module_off);
-            nim_free(&symbol_off);
-            sb_free(&dynstr);
-            FREE_RELA_ARRAYS();
-            goto oom;
+        size_t dynsym_n = 1 + state->input->import_count + export_sym_count;
+        state->dynsym = (Elf64_Sym*)calloc(dynsym_n, sizeof(Elf64_Sym));
+        if (!state->dynsym) {
+            return ARK_LINK_ERR_MEMORY;
         }
 
-        size_t export_dynsym_idx = 1 + input->import_count;
-        for (size_t i = 0; i < input->export_count; i++) {
-            if (!input->exports[i].is_function) {
+        size_t export_dynsym_idx = 1 + state->input->import_count;
+        for (size_t i = 0; i < state->input->export_count; i++) {
+            if (!state->input->exports[i].is_function) {
                 continue;
             }
 
-            const char* sym = input->exports[i].name;
-            Elf64_Sym* s = &dynsym[export_dynsym_idx];
+            const char* sym = state->input->exports[i].name;
+            Elf64_Sym* s = &state->dynsym[export_dynsym_idx];
             s->st_info = ELF_ST_INFO(STB_GLOBAL, STT_FUNC);
             s->st_other = 0;
-            s->st_shndx =
-                input->exports[i].section_index < ns ? (uint16_t)(input->exports[i].section_index + 1) : SHN_ABS;
-            s->st_value = input->exports[i].offset;
+            s->st_shndx = state->input->exports[i].section_index < state->ns
+                              ? (uint16_t)(state->input->exports[i].section_index + 1)
+                              : SHN_ABS;
+            s->st_value = state->input->exports[i].offset;
             s->st_size = 0;
             uint32_t name_off = 0;
-            if (sym && !nim_lookup(&symbol_off, sym, &name_off)) {
-                name_off = sb_add(&dynstr, sym);
-                if (name_off != (uint32_t)-1) {
-                    nim_add(&symbol_off, sym, name_off);
+            if (sym && !nim_lookup(&state->symbol_off, sym, &name_off)) {
+                name_off = sb_add(&state->dynstr, sym);
+                if (name_off == (uint32_t)-1) {
+                    return ARK_LINK_ERR_MEMORY;
+                } else {
+                    if (!nim_add(&state->symbol_off, sym, name_off)) {
+                        return ARK_LINK_ERR_MEMORY;
+                    }
                 }
             }
             s->st_name = name_off;
             export_dynsym_idx++;
         }
 
-        for (size_t i = 0; i < input->import_count; i++) {
-            const char* sym = input->imports[i].symbol;
-            Elf64_Sym* s = &dynsym[1 + i];
+        for (size_t i = 0; i < state->input->import_count; i++) {
+            const char* sym = state->input->imports[i].symbol;
+            Elf64_Sym* s = &state->dynsym[1 + i];
             s->st_info = ELF_ST_INFO(STB_GLOBAL, STT_NOTYPE);
             s->st_other = 0;
             s->st_shndx = SHN_UNDEF;
             s->st_value = 0;
             s->st_size = 0;
-            s->st_name = (sym && nim_lookup(&symbol_off, sym, &s->st_name)) ? s->st_name : 0;
+            s->st_name = (sym && nim_lookup(&state->symbol_off, sym, &s->st_name)) ? s->st_name : 0;
         }
 
-        size_t rela_count_for_dyn = rela_sections;
-        dyntab_count = 5 + unique_modules + 4 + (rela_count_for_dyn > 0 ? 3 : 0) + 1;
-        dyntab = (Elf64_Dyn*)calloc(dyntab_count, sizeof(Elf64_Dyn));
-        if (!dyntab) {
-            nim_free(&module_off);
-            nim_free(&symbol_off);
-            sb_free(&dynstr);
-            FREE_RELA_ARRAYS();
-            goto oom;
+        size_t rela_count_for_dyn = state->rela_sections;
+        state->dyntab_count = 5 + unique_modules + 4 + (rela_count_for_dyn > 0 ? 3 : 0) + 1;
+        state->dyntab = (Elf64_Dyn*)calloc(state->dyntab_count, sizeof(Elf64_Dyn));
+        if (!state->dyntab) {
+            return ARK_LINK_ERR_MEMORY;
         }
         size_t di = 0;
-        dyntab[di].d_tag = DT_STRTAB;
-        dyntab[di].d_val = META_VADDR(dynstr_shidx);
+        state->dyntab[di].d_tag = DT_STRTAB;
+        state->dyntab[di].d_val = elf_meta_vaddr(state, state->dynstr_shidx);
         di++;
-        dyntab[di].d_tag = DT_SYMTAB;
-        dyntab[di].d_val = META_VADDR(dynsym_shidx);
+        state->dyntab[di].d_tag = DT_SYMTAB;
+        state->dyntab[di].d_val = elf_meta_vaddr(state, state->dynsym_shidx);
         di++;
-        dyntab[di].d_tag = DT_STRSZ;
-        dyntab[di].d_val = 0;
+        state->dyntab[di].d_tag = DT_STRSZ;
+        state->dyntab[di].d_val = 0;
         di++;
-        dyntab[di].d_tag = DT_SYMENT;
-        dyntab[di].d_val = sizeof(Elf64_Sym);
+        state->dyntab[di].d_tag = DT_SYMENT;
+        state->dyntab[di].d_val = sizeof(Elf64_Sym);
         di++;
-        dyntab[di].d_tag = DT_HASH;
-        dyntab[di].d_val = META_VADDR(hash_shidx);
+        state->dyntab[di].d_tag = DT_HASH;
+        state->dyntab[di].d_val = elf_meta_vaddr(state, state->hash_shidx);
         di++;
 
-        NameIndexMap module_emitted = {0};
-        for (size_t i = 0; i < input->import_count; i++) {
-            const char* mod = input->imports[i].module;
+        for (size_t i = 0; i < state->input->import_count; i++) {
+            const char* mod = state->input->imports[i].module;
             if (!mod) {
                 continue;
             }
-            if (nim_lookup(&module_emitted, mod, NULL)) {
+            if (nim_lookup(&state->module_emitted, mod, NULL)) {
                 continue;
             }
             uint32_t name_off = 0;
-            if (!nim_lookup(&module_off, mod, &name_off)) {
+            if (!nim_lookup(&state->module_off, mod, &name_off)) {
                 continue;
             }
-            dyntab[di].d_tag = DT_NEEDED;
-            dyntab[di].d_val = name_off;
+            state->dyntab[di].d_tag = DT_NEEDED;
+            state->dyntab[di].d_val = name_off;
             di++;
-            nim_add(&module_emitted, mod, 1);
+            if (!nim_add(&state->module_emitted, mod, 1)) {
+                return ARK_LINK_ERR_MEMORY;
+            }
         }
-        nim_free(&module_emitted);
+        nim_free(&state->module_emitted);
 
-        dyntab[di].d_tag = DT_INIT_ARRAY;
-        dyntab[di].d_val = META_VADDR(init_array_shidx);
+        state->dyntab[di].d_tag = DT_INIT_ARRAY;
+        state->dyntab[di].d_val = elf_meta_vaddr(state, state->init_array_shidx);
         di++;
-        dyntab[di].d_tag = DT_INIT_ARRAYSZ;
-        dyntab[di].d_val = 0;
+        state->dyntab[di].d_tag = DT_INIT_ARRAYSZ;
+        state->dyntab[di].d_val = 0;
         di++;
 
-        dyntab[di].d_tag = DT_FINI_ARRAY;
-        dyntab[di].d_val = META_VADDR(fini_array_shidx);
+        state->dyntab[di].d_tag = DT_FINI_ARRAY;
+        state->dyntab[di].d_val = elf_meta_vaddr(state, state->fini_array_shidx);
         di++;
-        dyntab[di].d_tag = DT_FINI_ARRAYSZ;
-        dyntab[di].d_val = 0;
+        state->dyntab[di].d_tag = DT_FINI_ARRAYSZ;
+        state->dyntab[di].d_val = 0;
         di++;
 
         if (rela_count_for_dyn > 0) {
 
             uint64_t first_rela_vaddr = 0;
             uint64_t total_rela_size = 0;
-            rela_idx = 0;
-            for (size_t i = 0; i < ns; i++) {
-                if (relocs_per_sec[i] == 0) {
+            state->rela_idx = 0;
+            for (size_t i = 0; i < state->ns; i++) {
+                if (state->relocs_per_sec[i] == 0) {
                     continue;
                 }
                 if (first_rela_vaddr == 0) {
-                    first_rela_vaddr = META_VADDR(rela_shidx_base + rela_idx);
+                    first_rela_vaddr = elf_meta_vaddr(state, state->rela_shidx_base + state->rela_idx);
                 }
-                total_rela_size += META_SIZE(rela_shidx_base + rela_idx);
-                rela_idx++;
+                total_rela_size += elf_meta_size(state, state->rela_shidx_base + state->rela_idx);
+                state->rela_idx++;
             }
-            dyntab[di].d_tag = DT_RELA;
-            dyntab[di].d_val = first_rela_vaddr;
+            state->dyntab[di].d_tag = DT_RELA;
+            state->dyntab[di].d_val = first_rela_vaddr;
             di++;
-            dyntab[di].d_tag = DT_RELASZ;
-            dyntab[di].d_val = total_rela_size;
+            state->dyntab[di].d_tag = DT_RELASZ;
+            state->dyntab[di].d_val = total_rela_size;
             di++;
-            dyntab[di].d_tag = DT_RELAENT;
-            dyntab[di].d_val = sizeof(Elf64_Rela);
+            state->dyntab[di].d_tag = DT_RELAENT;
+            state->dyntab[di].d_val = sizeof(Elf64_Rela);
             di++;
         }
-        dyntab[di].d_tag = DT_NULL;
-        dyntab[di].d_val = 0;
+        state->dyntab[di].d_tag = DT_NULL;
+        state->dyntab[di].d_val = 0;
         di++;
 
-        meta_secs[dynsym_shidx].size = (uint64_t)(dynsym_n * sizeof(Elf64_Sym));
-        meta_secs[dynstr_shidx].size = (uint64_t)dynstr.buffer->size;
-        meta_secs[dynamic_shidx].size = (uint64_t)(dyntab_count * sizeof(Elf64_Dyn));
+        state->meta_secs[state->dynsym_shidx].size = (uint64_t)(dynsym_n * sizeof(Elf64_Sym));
+        state->meta_secs[state->dynstr_shidx].size = (uint64_t)state->dynstr.buffer->size;
+        state->meta_secs[state->dynamic_shidx].size = (uint64_t)(state->dyntab_count * sizeof(Elf64_Dyn));
 
-        for (size_t i = 0; i < dyntab_count; i++) {
-            if (dyntab[i].d_tag == DT_STRSZ) {
-                dyntab[i].d_val = dynstr.buffer->size;
+        for (size_t i = 0; i < state->dyntab_count; i++) {
+            if (state->dyntab[i].d_tag == DT_STRSZ) {
+                state->dyntab[i].d_val = state->dynstr.buffer->size;
                 break;
             }
         }
 
-        func_import_count = 0;
-        for (size_t i = 0; i < input->import_count; i++) {
-            if (input->imports[i].is_function) {
-                func_import_count++;
+        state->func_import_count = 0;
+        for (size_t i = 0; i < state->input->import_count; i++) {
+            if (state->input->imports[i].is_function) {
+                state->func_import_count++;
             }
         }
 
@@ -1272,21 +1373,22 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
         size_t glob_dat_count = 0;
         size_t abs64_import_count = 0;
 
-        for (size_t i = 0; i < input->reloc_count; i++) {
-            const ArkResolverReloc* r = &input->relocs[i];
+        for (size_t i = 0; i < state->input->reloc_count; i++) {
+            const ArkResolverReloc* r = &state->input->relocs[i];
             if (!r->symbol || r->symbol->section_index != 0) {
                 continue;
             }
 
             int is_func = 0;
-            for (size_t j = 0; j < input->import_count; j++) {
-                if (input->imports[j].is_function && strcmp(input->imports[j].symbol, r->symbol->name) == 0) {
+            for (size_t j = 0; j < state->input->import_count; j++) {
+                if (state->input->imports[j].is_function &&
+                    strcmp(state->input->imports[j].symbol, r->symbol->name) == 0) {
                     is_func = 1;
                     break;
                 }
             }
 
-            if (is_func && func_import_count > 0) {
+            if (is_func && state->func_import_count > 0) {
                 jump_slot_count++;
             } else if (!is_func) {
                 glob_dat_count++;
@@ -1295,135 +1397,141 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
             }
         }
 
-        rela_dyn_count = glob_dat_count + abs64_import_count;
-        rela_plt_count = jump_slot_count;
+        state->rela_dyn_count = glob_dat_count + abs64_import_count;
+        state->rela_plt_count = jump_slot_count;
 
-        if (rela_dyn_count > 0) {
-            meta_secs[reladyn_shidx].size = (uint64_t)(rela_dyn_count * sizeof(Elf64_Rela));
-            rela_dyn_data = (Elf64_Rela*)calloc(rela_dyn_count, sizeof(Elf64_Rela));
-            if (!rela_dyn_data) {
-                FREE_RELA_ARRAYS();
-                goto oom;
+        if (state->rela_dyn_count > 0) {
+            state->meta_secs[state->reladyn_shidx].size = (uint64_t)(state->rela_dyn_count * sizeof(Elf64_Rela));
+            state->rela_dyn_data = (Elf64_Rela*)calloc(state->rela_dyn_count, sizeof(Elf64_Rela));
+            if (!state->rela_dyn_data) {
+                return ARK_LINK_ERR_MEMORY;
             }
         } else {
-            meta_secs[reladyn_shidx].size = 0;
+            state->meta_secs[state->reladyn_shidx].size = 0;
         }
 
-        if (rela_plt_count > 0) {
-            rela_plt_data = (Elf64_Rela*)calloc(rela_plt_count, sizeof(Elf64_Rela));
-            if (!rela_plt_data) {
-                FREE_RELA_ARRAYS();
-                goto oom;
+        if (state->rela_plt_count > 0) {
+            state->rela_plt_data = (Elf64_Rela*)calloc(state->rela_plt_count, sizeof(Elf64_Rela));
+            if (!state->rela_plt_data) {
+                return ARK_LINK_ERR_MEMORY;
             }
         }
 
-        NameIndexMap dynsym_idx_map = {0};
-        NameIndexMap plt_idx_map = {0};
         size_t current_plt_idx = 1;
 
-        for (size_t i = 0; i < input->import_count; i++) {
-            const char* sym = input->imports[i].symbol;
-            nim_add(&dynsym_idx_map, sym, (uint32_t)(1 + i));
+        for (size_t i = 0; i < state->input->import_count; i++) {
+            const char* sym = state->input->imports[i].symbol;
+            if (!nim_add(&state->dynsym_idx_map, sym, (uint32_t)(1 + i))) {
+                return ARK_LINK_ERR_MEMORY;
+            }
 
-            if (input->imports[i].is_function) {
-                nim_add(&plt_idx_map, sym, (uint32_t)current_plt_idx++);
+            if (state->input->imports[i].is_function) {
+                if (!nim_add(&state->plt_idx_map, sym, (uint32_t)current_plt_idx++)) {
+                    return ARK_LINK_ERR_MEMORY;
+                }
             }
         }
 
         size_t dr_idx = 0;
         size_t pr_idx = 0;
 
-        for (size_t i = 0; i < input->reloc_count; i++) {
-            const ArkResolverReloc* r = &input->relocs[i];
+        for (size_t i = 0; i < state->input->reloc_count; i++) {
+            const ArkResolverReloc* r = &state->input->relocs[i];
             if (!r->symbol || r->symbol->section_index != 0) {
                 continue;
             }
 
             const char* sym_name = r->symbol->name;
             uint32_t dyn_sym_idx = 0;
-            if (!nim_lookup(&dynsym_idx_map, sym_name, &dyn_sym_idx)) {
+            if (!nim_lookup(&state->dynsym_idx_map, sym_name, &dyn_sym_idx)) {
                 continue;
             }
 
             uint32_t plt_entry = 0;
-            int is_func_with_plt = (nim_lookup(&plt_idx_map, sym_name, &plt_entry) && func_import_count > 0);
+            int is_func_with_plt =
+                (nim_lookup(&state->plt_idx_map, sym_name, &plt_entry) && state->func_import_count > 0);
 
             if (is_func_with_plt) {
-                uint64_t gotplt_entry_vaddr = META_VADDR(gotplt_shidx) + (3 + (plt_entry - 1)) * sizeof(uint64_t);
+                uint64_t gotplt_entry_vaddr =
+                    elf_meta_vaddr(state, state->gotplt_shidx) + (3 + (plt_entry - 1)) * sizeof(uint64_t);
 
-                rela_plt_data[pr_idx].r_offset = gotplt_entry_vaddr;
-                rela_plt_data[pr_idx].r_info = ELF_R_INFO(dyn_sym_idx, R_X86_64_JUMP_SLOT);
-                rela_plt_data[pr_idx].r_addend = 0;
+                state->rela_plt_data[pr_idx].r_offset = gotplt_entry_vaddr;
+                state->rela_plt_data[pr_idx].r_info = ELF_R_INFO(dyn_sym_idx, R_X86_64_JUMP_SLOT);
+                state->rela_plt_data[pr_idx].r_addend = 0;
                 pr_idx++;
 
             } else {
-                uint64_t target_vaddr = SEC_VADDR(r->section_index) + r->offset;
+                uint64_t target_vaddr = elf_section_vaddr(state, r->section_index) + r->offset;
 
                 if (glob_dat_count > 0) {
-                    rela_dyn_data[dr_idx].r_offset = target_vaddr;
-                    rela_dyn_data[dr_idx].r_info = ELF_R_INFO(dyn_sym_idx, R_X86_64_GLOB_DAT);
-                    rela_dyn_data[dr_idx].r_addend = 0;
+                    state->rela_dyn_data[dr_idx].r_offset = target_vaddr;
+                    state->rela_dyn_data[dr_idx].r_info = ELF_R_INFO(dyn_sym_idx, R_X86_64_GLOB_DAT);
+                    state->rela_dyn_data[dr_idx].r_addend = 0;
                 } else {
-                    rela_dyn_data[dr_idx].r_offset = target_vaddr;
-                    rela_dyn_data[dr_idx].r_info = ELF_R_INFO(dyn_sym_idx, R_X86_64_64);
-                    rela_dyn_data[dr_idx].r_addend = r->addend;
+                    state->rela_dyn_data[dr_idx].r_offset = target_vaddr;
+                    state->rela_dyn_data[dr_idx].r_info = ELF_R_INFO(dyn_sym_idx, R_X86_64_64);
+                    state->rela_dyn_data[dr_idx].r_addend = r->addend;
                 }
                 dr_idx++;
             }
         }
-        nim_free(&dynsym_idx_map);
-        nim_free(&plt_idx_map);
+        nim_free(&state->dynsym_idx_map);
+        nim_free(&state->plt_idx_map);
 
-        for (size_t i = 0; i < dyntab_count; i++) {
-            if (dyntab[i].d_tag == DT_RELA) {
-                dyntab[i].d_val = META_VADDR(reladyn_shidx);
-            } else if (dyntab[i].d_tag == DT_RELASZ) {
-                dyntab[i].d_val = META_SIZE(reladyn_shidx);
+        for (size_t i = 0; i < state->dyntab_count; i++) {
+            if (state->dyntab[i].d_tag == DT_RELA) {
+                state->dyntab[i].d_val = elf_meta_vaddr(state, state->reladyn_shidx);
+            } else if (state->dyntab[i].d_tag == DT_RELASZ) {
+                state->dyntab[i].d_val = elf_meta_size(state, state->reladyn_shidx);
             }
         }
 
-        if (func_import_count > 0 && rela_plt_count > 0) {
+        if (state->func_import_count > 0 && state->rela_plt_count > 0) {
             size_t null_idx = 0;
-            for (size_t i = 0; i < dyntab_count; i++) {
-                if (dyntab[i].d_tag == DT_NULL) {
+            for (size_t i = 0; i < state->dyntab_count; i++) {
+                if (state->dyntab[i].d_tag == DT_NULL) {
                     null_idx = i;
                     break;
                 }
             }
 
             if (null_idx >= 5) {
-                dyntab[null_idx - 5].d_tag = DT_JMPREL;
-                dyntab[null_idx - 5].d_val = META_VADDR(reladyn_shidx) + META_SIZE(reladyn_shidx);
-                if (rela_plt_count == 0 || rela_plt_count > UINT32_MAX / sizeof(Elf64_Rela)) {
-                    rela_plt_count = func_import_count > 0 ? func_import_count : 0;
+                state->dyntab[null_idx - 5].d_tag = DT_JMPREL;
+                state->dyntab[null_idx - 5].d_val =
+                    elf_meta_vaddr(state, state->reladyn_shidx) + elf_meta_size(state, state->reladyn_shidx);
+                if (state->rela_plt_count == 0 || state->rela_plt_count > UINT32_MAX / sizeof(Elf64_Rela)) {
+                    state->rela_plt_count = state->func_import_count > 0 ? state->func_import_count : 0;
                 }
-                dyntab[null_idx - 4].d_tag = DT_PLTRELSZ;
-                dyntab[null_idx - 4].d_val = (uint64_t)(rela_plt_count * sizeof(Elf64_Rela));
-                dyntab[null_idx - 3].d_tag = DT_PLTGOT;
-                dyntab[null_idx - 3].d_val = META_VADDR(gotplt_shidx);
-                dyntab[null_idx - 2].d_tag = DT_PLTREL;
-                dyntab[null_idx - 2].d_val = sizeof(Elf64_Rela);
+                state->dyntab[null_idx - 4].d_tag = DT_PLTRELSZ;
+                state->dyntab[null_idx - 4].d_val = (uint64_t)(state->rela_plt_count * sizeof(Elf64_Rela));
+                state->dyntab[null_idx - 3].d_tag = DT_PLTGOT;
+                state->dyntab[null_idx - 3].d_val = elf_meta_vaddr(state, state->gotplt_shidx);
+                state->dyntab[null_idx - 2].d_tag = DT_PLTREL;
+                state->dyntab[null_idx - 2].d_val = sizeof(Elf64_Rela);
 
                 int use_lazy_binding = 1;
                 if (!use_lazy_binding) {
-                    dyntab[null_idx - 1].d_tag = DT_BIND_NOW;
-                    dyntab[null_idx - 1].d_val = 0;
+                    state->dyntab[null_idx - 1].d_tag = DT_BIND_NOW;
+                    state->dyntab[null_idx - 1].d_val = 0;
 
                 } else {
                 }
 
-                (void)META_OFFSET(reladyn_shidx);
+                (void)elf_meta_offset(state, state->reladyn_shidx);
             }
         }
 
-        nim_free(&module_off);
-        nim_free(&symbol_off);
+        nim_free(&state->module_off);
+        nim_free(&state->symbol_off);
     }
 
-    uint8_t* out_buf = (uint8_t*)calloc(1, file_size);
-    if (!out_buf) {
-        FREE_RELA_ARRAYS();
-        goto oom;
+    return ARK_LINK_OK;
+}
+
+static ArkLinkResult elf_write_headers(ElfLinkState* state) {
+    state->out_buf = (uint8_t*)calloc(1, state->file_size);
+    if (!state->out_buf) {
+        return ARK_LINK_ERR_MEMORY;
     }
 
     Elf64_Ehdr ehdr = {0};
@@ -1436,98 +1544,100 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
     ehdr.e_ident[6] = EV_CURRENT;
     ehdr.e_ident[7] = ELFOSABI_NONE;
 
-    if (ark_backend_should_use_dynamic_elf(input)) {
+    if (ark_backend_should_use_dynamic_elf(state->input)) {
         ehdr.e_type = ET_DYN;
     } else {
         ehdr.e_type = ET_EXEC;
     }
     ehdr.e_machine = EM_X86_64;
     ehdr.e_version = EV_CURRENT;
-    ehdr.e_entry = image_base;
-    if (input->entry_section < ns) {
-        ehdr.e_entry = SEC_VADDR(input->entry_section) + input->entry_offset;
+    ehdr.e_entry = state->image_base;
+    if (state->input->entry_section < state->ns) {
+        ehdr.e_entry = elf_section_vaddr(state, state->input->entry_section) + state->input->entry_offset;
     } else {
         // 留空,别动
     }
     ehdr.e_phoff = sizeof(Elf64_Ehdr);
-    ehdr.e_shoff = shdr_offset;
+    ehdr.e_shoff = state->shdr_offset;
     ehdr.e_flags = 0;
     ehdr.e_ehsize = sizeof(Elf64_Ehdr);
     ehdr.e_phentsize = sizeof(Elf64_Phdr);
 
-    int has_relro = has_dynamic && func_import_count > 0;
+    int has_relro = state->has_dynamic && state->func_import_count > 0;
     int needs_gnu_stack = 1;
     ehdr.e_shentsize = sizeof(Elf64_Shdr);
-    ehdr.e_shnum = (uint16_t)elf_shnum;
-    ehdr.e_shstrndx = (uint16_t)shstrtab_shidx;
-    if (!has_dynamic && !has_tls) {
-        for (int li = 0; li < n_static_loads; li++) {
-            memcpy(out_buf + sizeof(Elf64_Ehdr) + phdr_load_count * sizeof(Elf64_Phdr), &static_loads[li],
-                   sizeof(Elf64_Phdr));
-            phdr_load_count++;
+    ehdr.e_shnum = (uint16_t)state->elf_shnum;
+    ehdr.e_shstrndx = (uint16_t)state->shstrtab_shidx;
+    if (!state->has_dynamic && !state->has_tls) {
+        for (int li = 0; li < state->n_static_loads; li++) {
+            memcpy(state->out_buf + sizeof(Elf64_Ehdr) + state->phdr_load_count * sizeof(Elf64_Phdr),
+                   &state->static_loads[li], sizeof(Elf64_Phdr));
+            state->phdr_load_count++;
         }
     } else {
         Elf64_Phdr phdr0 = {0};
         phdr0.p_type = PT_LOAD;
         phdr0.p_flags = PF_R | PF_X;
         phdr0.p_offset = 0;
-        phdr0.p_vaddr = image_base;
-        phdr0.p_paddr = image_base;
-        phdr0.p_filesz = seg1_filesz;
-        phdr0.p_memsz = seg1_memsz;
-        phdr0.p_align = page_size;
-        memcpy(out_buf + sizeof(Elf64_Ehdr), &phdr0, sizeof(phdr0));
-        phdr_load_count++;
+        phdr0.p_vaddr = state->image_base;
+        phdr0.p_paddr = state->image_base;
+        phdr0.p_filesz = state->seg1_filesz;
+        phdr0.p_memsz = state->seg1_memsz;
+        phdr0.p_align = state->page_size;
+        memcpy(state->out_buf + sizeof(Elf64_Ehdr), &phdr0, sizeof(phdr0));
+        state->phdr_load_count++;
 
         Elf64_Phdr phdr1 = {0};
         phdr1.p_type = PT_LOAD;
         phdr1.p_flags = PF_R | PF_W;
-        phdr1.p_offset = seg2_offset;
-        phdr1.p_vaddr = seg2_vaddr;
-        phdr1.p_paddr = seg2_vaddr;
-        phdr1.p_filesz = rw_filesz;
-        phdr1.p_memsz = rw_memsz;
-        phdr1.p_align = page_size;
-        memcpy(out_buf + sizeof(Elf64_Ehdr) + phdr_load_count * sizeof(Elf64_Phdr), &phdr1, sizeof(phdr1));
-        phdr_load_count++;
+        phdr1.p_offset = state->seg2_offset;
+        phdr1.p_vaddr = state->seg2_vaddr;
+        phdr1.p_paddr = state->seg2_vaddr;
+        phdr1.p_filesz = state->rw_filesz;
+        phdr1.p_memsz = state->rw_memsz;
+        phdr1.p_align = state->page_size;
+        memcpy(state->out_buf + sizeof(Elf64_Ehdr) + state->phdr_load_count * sizeof(Elf64_Phdr), &phdr1,
+               sizeof(phdr1));
+        state->phdr_load_count++;
     }
 
-    ehdr.e_phnum = (uint16_t)(phdr_load_count + (has_tls ? 1 : 0) + (has_relro ? 1 : 0) + (needs_gnu_stack ? 1 : 0));
-    memcpy(out_buf, &ehdr, sizeof(ehdr));
+    ehdr.e_phnum =
+        (uint16_t)(state->phdr_load_count + (state->has_tls ? 1 : 0) + (has_relro ? 1 : 0) + (needs_gnu_stack ? 1 : 0));
+    memcpy(state->out_buf, &ehdr, sizeof(ehdr));
 
     Elf64_Phdr phdr2 = {0}, phdr3 = {0}, phdr_tls = {0};
-    size_t phdr_write_idx = phdr_load_count;
-    if (has_dynamic) {
+    size_t phdr_write_idx = state->phdr_load_count;
+    if (state->has_dynamic) {
         phdr2.p_type = PT_INTERP;
-        phdr2.p_offset = META_OFFSET(interp_shidx);
-        phdr2.p_vaddr = META_VADDR(interp_shidx);
-        phdr2.p_paddr = META_VADDR(interp_shidx);
-        phdr2.p_filesz = META_SIZE(interp_shidx);
-        phdr2.p_memsz = META_SIZE(interp_shidx);
+        phdr2.p_offset = elf_meta_offset(state, state->interp_shidx);
+        phdr2.p_vaddr = elf_meta_vaddr(state, state->interp_shidx);
+        phdr2.p_paddr = elf_meta_vaddr(state, state->interp_shidx);
+        phdr2.p_filesz = elf_meta_size(state, state->interp_shidx);
+        phdr2.p_memsz = elf_meta_size(state, state->interp_shidx);
         phdr2.p_align = 1;
-        memcpy(out_buf + sizeof(Elf64_Ehdr) + phdr_write_idx * sizeof(Elf64_Phdr), &phdr2, sizeof(phdr2));
+        memcpy(state->out_buf + sizeof(Elf64_Ehdr) + phdr_write_idx * sizeof(Elf64_Phdr), &phdr2, sizeof(phdr2));
         phdr_write_idx++;
 
         phdr3.p_type = PT_DYNAMIC;
-        phdr3.p_offset = META_OFFSET(dynamic_shidx);
-        phdr3.p_vaddr = META_VADDR(dynamic_shidx);
-        phdr3.p_paddr = META_VADDR(dynamic_shidx);
-        phdr3.p_filesz = META_SIZE(dynamic_shidx);
-        phdr3.p_memsz = META_SIZE(dynamic_shidx);
+        phdr3.p_offset = elf_meta_offset(state, state->dynamic_shidx);
+        phdr3.p_vaddr = elf_meta_vaddr(state, state->dynamic_shidx);
+        phdr3.p_paddr = elf_meta_vaddr(state, state->dynamic_shidx);
+        phdr3.p_filesz = elf_meta_size(state, state->dynamic_shidx);
+        phdr3.p_memsz = elf_meta_size(state, state->dynamic_shidx);
         phdr3.p_align = sizeof(uint64_t);
-        memcpy(out_buf + sizeof(Elf64_Ehdr) + phdr_write_idx * sizeof(Elf64_Phdr), &phdr3, sizeof(phdr3));
+        memcpy(state->out_buf + sizeof(Elf64_Ehdr) + phdr_write_idx * sizeof(Elf64_Phdr), &phdr3, sizeof(phdr3));
         phdr_write_idx++;
     }
-    if (has_tls) {
+    if (state->has_tls) {
         phdr_tls.p_type = PT_TLS;
-        phdr_tls.p_offset = tls_offset;
-        phdr_tls.p_vaddr = tls_vaddr;
-        phdr_tls.p_paddr = tls_vaddr;
-        phdr_tls.p_filesz = tls_filesz;
-        phdr_tls.p_memsz = tls_memsz;
+        phdr_tls.p_offset = state->tls_offset;
+        phdr_tls.p_vaddr = state->tls_vaddr;
+        phdr_tls.p_paddr = state->tls_vaddr;
+        phdr_tls.p_filesz = state->tls_filesz;
+        phdr_tls.p_memsz = state->tls_memsz;
         phdr_tls.p_flags = PF_R | PF_W;
-        phdr_tls.p_align = tls_align;
-        memcpy(out_buf + sizeof(Elf64_Ehdr) + phdr_write_idx * sizeof(Elf64_Phdr), &phdr_tls, sizeof(phdr_tls));
+        phdr_tls.p_align = state->tls_align;
+        memcpy(state->out_buf + sizeof(Elf64_Ehdr) + phdr_write_idx * sizeof(Elf64_Phdr), &phdr_tls, sizeof(phdr_tls));
         phdr_write_idx++;
     }
 
@@ -1536,17 +1646,18 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
         phdr_relro.p_type = PT_GNU_RELRO;
         phdr_relro.p_flags = PF_R;
 
-        uint64_t relro_start = META_VADDR(gotplt_shidx);
-        uint64_t relro_end = META_VADDR(dynamic_shidx) + META_SIZE(dynamic_shidx);
+        uint64_t relro_start = elf_meta_vaddr(state, state->gotplt_shidx);
+        uint64_t relro_end = elf_meta_vaddr(state, state->dynamic_shidx) + elf_meta_size(state, state->dynamic_shidx);
 
-        phdr_relro.p_offset = META_OFFSET(gotplt_shidx);
+        phdr_relro.p_offset = elf_meta_offset(state, state->gotplt_shidx);
         phdr_relro.p_vaddr = relro_start;
         phdr_relro.p_paddr = relro_start;
         phdr_relro.p_filesz = (uint64_t)(relro_end - relro_start);
         phdr_relro.p_memsz = (uint64_t)(relro_end - relro_start);
-        phdr_relro.p_align = page_size;
+        phdr_relro.p_align = state->page_size;
 
-        memcpy(out_buf + sizeof(Elf64_Ehdr) + phdr_write_idx * sizeof(Elf64_Phdr), &phdr_relro, sizeof(phdr_relro));
+        memcpy(state->out_buf + sizeof(Elf64_Ehdr) + phdr_write_idx * sizeof(Elf64_Phdr), &phdr_relro,
+               sizeof(phdr_relro));
     }
 
     if (needs_gnu_stack) {
@@ -1560,45 +1671,56 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
         phdr_stack.p_memsz = 0;
         phdr_stack.p_align = 16;
 
-        memcpy(out_buf + sizeof(Elf64_Ehdr) + phdr_write_idx * sizeof(Elf64_Phdr), &phdr_stack, sizeof(phdr_stack));
+        memcpy(state->out_buf + sizeof(Elf64_Ehdr) + phdr_write_idx * sizeof(Elf64_Phdr), &phdr_stack,
+               sizeof(phdr_stack));
     }
 
-    for (size_t i = 0; i < ns; i++) {
-        if (is_bss_kind((ArkSectionKind)input->sections[i].kind)) {
+    return ARK_LINK_OK;
+}
+
+static ArkLinkResult elf_write_contents(ElfLinkState* state) {
+    for (size_t i = 0; i < state->ns; i++) {
+        if (is_bss_kind((ArkSectionKind)state->input->sections[i].kind)) {
             continue;
         }
-        if (input->sections[i].data && input->sections[i].size > 0) {
-            memcpy(out_buf + SEC_OFFSET(i), input->sections[i].data, input->sections[i].size);
+        if (state->input->sections[i].data && state->input->sections[i].size > 0) {
+            memcpy(state->out_buf + elf_section_offset(state, i), state->input->sections[i].data,
+                   state->input->sections[i].size);
         }
     }
-    rela_idx = 0;
-    for (size_t i = 0; i < ns; i++) {
-        if (relocs_per_sec[i] == 0) {
+    state->rela_idx = 0;
+    for (size_t i = 0; i < state->ns; i++) {
+        if (state->relocs_per_sec[i] == 0) {
             continue;
         }
-        if (rela_arrays[rela_idx]) {
-            memcpy(out_buf + META_OFFSET(rela_shidx_base + rela_idx), rela_arrays[rela_idx],
-                   relocs_per_sec[i] * sizeof(Elf64_Rela));
+        if (state->rela_arrays[state->rela_idx]) {
+            memcpy(state->out_buf + elf_meta_offset(state, state->rela_shidx_base + state->rela_idx),
+                   state->rela_arrays[state->rela_idx], state->relocs_per_sec[i] * sizeof(Elf64_Rela));
         }
-        free(rela_arrays[rela_idx]);
-        rela_idx++;
+        free(state->rela_arrays[state->rela_idx]);
+        state->rela_idx++;
     }
-    free(rela_arrays);
-    rela_arrays = NULL;
-    memcpy(out_buf + META_OFFSET(symtab_shidx), symtab, total_syms * sizeof(Elf64_Sym));
-    memcpy(out_buf + META_OFFSET(strtab_shidx), strtab.buffer->data, strtab.buffer->size);
-    memcpy(out_buf + META_OFFSET(shstrtab_shidx), shstrtab.buffer->data, shstrtab.buffer->size);
-    if (has_dynamic) {
+    free(state->rela_arrays);
+    state->rela_arrays = NULL;
+    memcpy(state->out_buf + elf_meta_offset(state, state->symtab_shidx), state->symtab,
+           state->total_syms * sizeof(Elf64_Sym));
+    memcpy(state->out_buf + elf_meta_offset(state, state->strtab_shidx), state->strtab.buffer->data,
+           state->strtab.buffer->size);
+    memcpy(state->out_buf + elf_meta_offset(state, state->shstrtab_shidx), state->shstrtab.buffer->data,
+           state->shstrtab.buffer->size);
+    if (state->has_dynamic) {
         static const char interp_path[] = "/lib64/ld-linux-x86-64.so.2";
 
-        memcpy(out_buf + META_OFFSET(interp_shidx), interp_path, sizeof(interp_path));
-        memcpy(out_buf + META_OFFSET(dynsym_shidx), dynsym, META_SIZE(dynsym_shidx));
-        memcpy(out_buf + META_OFFSET(dynstr_shidx), dynstr.buffer->data, META_SIZE(dynstr_shidx));
+        memcpy(state->out_buf + elf_meta_offset(state, state->interp_shidx), interp_path, sizeof(interp_path));
+        memcpy(state->out_buf + elf_meta_offset(state, state->dynsym_shidx), state->dynsym,
+               elf_meta_size(state, state->dynsym_shidx));
+        memcpy(state->out_buf + elf_meta_offset(state, state->dynstr_shidx), state->dynstr.buffer->data,
+               elf_meta_size(state, state->dynstr_shidx));
 
-        if (META_OFFSET(hash_shidx) > 0 && META_SIZE(hash_shidx) > 0) {
+        if (elf_meta_offset(state, state->hash_shidx) > 0 && elf_meta_size(state, state->hash_shidx) > 0) {
             size_t hash_nbuckets = 1;
-            size_t hash_nchain = 1 + input->import_count + 1;
-            uint8_t* hash_data = out_buf + META_OFFSET(hash_shidx);
+            size_t hash_nchain = 1 + state->input->import_count + 1;
+            uint8_t* hash_data = state->out_buf + elf_meta_offset(state, state->hash_shidx);
             uint32_t hash_header[3] = {(uint32_t)hash_nbuckets, (uint32_t)hash_nchain, 0};
             memcpy(hash_data, hash_header, sizeof(hash_header));
             for (size_t i = 0; i < hash_nchain; i++) {
@@ -1607,33 +1729,37 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
             }
         }
 
-        memcpy(out_buf + META_OFFSET(dynamic_shidx), dyntab, META_SIZE(dynamic_shidx));
+        memcpy(state->out_buf + elf_meta_offset(state, state->dynamic_shidx), state->dyntab,
+               elf_meta_size(state, state->dynamic_shidx));
 
-        if (rela_dyn_data && rela_dyn_count > 0) {
-            memcpy(out_buf + META_OFFSET(reladyn_shidx), rela_dyn_data, META_SIZE(reladyn_shidx));
-            free(rela_dyn_data);
-            rela_dyn_data = NULL;
+        if (state->rela_dyn_data && state->rela_dyn_count > 0) {
+            memcpy(state->out_buf + elf_meta_offset(state, state->reladyn_shidx), state->rela_dyn_data,
+                   elf_meta_size(state, state->reladyn_shidx));
+            free(state->rela_dyn_data);
+            state->rela_dyn_data = NULL;
         }
 
-        if (rela_plt_data && rela_plt_count > 0) {
-            uint64_t rela_plt_offset = META_OFFSET(reladyn_shidx) + META_SIZE(reladyn_shidx);
-            memcpy(out_buf + rela_plt_offset, rela_plt_data, rela_plt_count * sizeof(Elf64_Rela));
-            free(rela_plt_data);
-            rela_plt_data = NULL;
+        if (state->rela_plt_data && state->rela_plt_count > 0) {
+            uint64_t rela_plt_offset =
+                elf_meta_offset(state, state->reladyn_shidx) + elf_meta_size(state, state->reladyn_shidx);
+            memcpy(state->out_buf + rela_plt_offset, state->rela_plt_data, state->rela_plt_count * sizeof(Elf64_Rela));
+            free(state->rela_plt_data);
+            state->rela_plt_data = NULL;
         }
 
-        if (func_import_count > 0 && META_SIZE(plt_shidx) > 0 && META_SIZE(gotplt_shidx) > 0) {
+        if (state->func_import_count > 0 && elf_meta_size(state, state->plt_shidx) > 0 &&
+            elf_meta_size(state, state->gotplt_shidx) > 0) {
 
-            if (META_OFFSET(plt_shidx) == 0 || META_OFFSET(gotplt_shidx) == 0) {
-                func_import_count = 0;
+            if (elf_meta_offset(state, state->plt_shidx) == 0 || elf_meta_offset(state, state->gotplt_shidx) == 0) {
+                state->func_import_count = 0;
             } else {
-                uint8_t* plt_base = out_buf + META_OFFSET(plt_shidx);
-                uint64_t plt_vaddr = META_VADDR(plt_shidx);
-                uint64_t gotplt_vaddr = META_VADDR(gotplt_shidx);
+                uint8_t* plt_base = state->out_buf + elf_meta_offset(state, state->plt_shidx);
+                uint64_t plt_vaddr = elf_meta_vaddr(state, state->plt_shidx);
+                uint64_t gotplt_vaddr = elf_meta_vaddr(state, state->gotplt_shidx);
 
-                size_t expected_plt_size = (1 + func_import_count) * 16;
-                if (META_SIZE(plt_shidx) < expected_plt_size) {
-                    func_import_count = (META_SIZE(plt_shidx) / 16) - 1;
+                size_t expected_plt_size = (1 + state->func_import_count) * 16;
+                if (elf_meta_size(state, state->plt_shidx) < expected_plt_size) {
+                    state->func_import_count = (elf_meta_size(state, state->plt_shidx) / 16) - 1;
                 }
 
                 plt_base[0] = 0xff;
@@ -1651,7 +1777,7 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
                 plt_base[14] = 0x40;
                 plt_base[15] = 0x00;
 
-                for (size_t i = 0; i < func_import_count; i++) {
+                for (size_t i = 0; i < state->func_import_count; i++) {
                     uint8_t* entry = plt_base + (1 + i) * 16;
                     uint64_t entry_vaddr = plt_vaddr + (1 + i) * 16;
                     uint64_t got_entry_vaddr = gotplt_vaddr + (3 + i) * sizeof(uint64_t);
@@ -1672,19 +1798,19 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
             }
         }
 
-        if (func_import_count > 0 && META_SIZE(gotplt_shidx) > 0) {
-            uint8_t* gotplt_base = out_buf + META_OFFSET(gotplt_shidx);
-            uint64_t plt_vaddr = META_VADDR(plt_shidx);
+        if (state->func_import_count > 0 && elf_meta_size(state, state->gotplt_shidx) > 0) {
+            uint8_t* gotplt_base = state->out_buf + elf_meta_offset(state, state->gotplt_shidx);
+            uint64_t plt_vaddr = elf_meta_vaddr(state, state->plt_shidx);
 
-            size_t required_got_entries = 3 + func_import_count;
-            if (META_SIZE(gotplt_shidx) < required_got_entries * sizeof(uint64_t)) {
-                func_import_count = (META_SIZE(gotplt_shidx) / sizeof(uint64_t)) - 3;
-                if ((int64_t)func_import_count < 0) {
-                    func_import_count = 0;
+            size_t required_got_entries = 3 + state->func_import_count;
+            if (elf_meta_size(state, state->gotplt_shidx) < required_got_entries * sizeof(uint64_t)) {
+                state->func_import_count = (elf_meta_size(state, state->gotplt_shidx) / sizeof(uint64_t)) - 3;
+                if ((int64_t)state->func_import_count < 0) {
+                    state->func_import_count = 0;
                 }
             }
 
-            uint64_t dynamic_addr = META_VADDR(dynamic_shidx);
+            uint64_t dynamic_addr = elf_meta_vaddr(state, state->dynamic_shidx);
             memcpy(gotplt_base + 0 * sizeof(uint64_t), &dynamic_addr, sizeof(uint64_t));
 
             uint64_t zero = 0;
@@ -1692,7 +1818,7 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
 
             memcpy(gotplt_base + 2 * sizeof(uint64_t), &zero, sizeof(uint64_t));
 
-            for (size_t i = 0; i < func_import_count; i++) {
+            for (size_t i = 0; i < state->func_import_count; i++) {
 
                 uint64_t push_instr_addr = plt_vaddr + (1 + i) * 16 + 6;
                 memcpy(gotplt_base + (3 + i) * sizeof(uint64_t), &push_instr_addr, sizeof(uint64_t));
@@ -1700,247 +1826,248 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
         }
     }
 
-    Elf64_Shdr* shdrs = (Elf64_Shdr*)calloc(elf_shnum, sizeof(Elf64_Shdr));
-    if (!shdrs) {
-        free(out_buf);
-        goto oom;
+    return ARK_LINK_OK;
+}
+
+static ArkLinkResult elf_write_section_headers(ElfLinkState* state) {
+    state->shdrs = (Elf64_Shdr*)calloc(state->elf_shnum, sizeof(Elf64_Shdr));
+    if (!state->shdrs) {
+        return ARK_LINK_ERR_MEMORY;
     }
 
-    for (size_t i = 0; i < ns; i++) {
-        Elf64_Shdr* sh = &shdrs[1 + i];
-        const ArkSectionLayout* sl = ark_layout_get_section(layout, i);
-        sh->sh_name = sec_name_off[1 + i];
-        sh->sh_type = is_bss_kind((ArkSectionKind)input->sections[i].kind) ? SHT_NOBITS : kind_to_sh_type();
-        sh->sh_flags = kind_to_sh_flags((ArkSectionKind)input->sections[i].kind, input->sections[i].flags);
-        sh->sh_addr = SEC_VADDR(i);
-        sh->sh_offset = SEC_OFFSET(i);
-        sh->sh_size = SEC_VSIZE(i);
+    for (size_t i = 0; i < state->ns; i++) {
+        Elf64_Shdr* sh = &state->shdrs[1 + i];
+        const ArkSectionLayout* sl = ark_layout_get_section(state->layout, i);
+        sh->sh_name = state->sec_name_off[1 + i];
+        sh->sh_type = is_bss_kind((ArkSectionKind)state->input->sections[i].kind) ? SHT_NOBITS : kind_to_sh_type();
+        sh->sh_flags =
+            kind_to_sh_flags((ArkSectionKind)state->input->sections[i].kind, state->input->sections[i].flags);
+        sh->sh_addr = elf_section_vaddr(state, i);
+        sh->sh_offset = elf_section_offset(state, i);
+        sh->sh_size = elf_section_vsize(state, i);
         sh->sh_link = 0;
         sh->sh_info = 0;
-        sh->sh_addralign = sl ? sl->alignment : input->sections[i].alignment;
+        sh->sh_addralign = sl ? sl->alignment : state->input->sections[i].alignment;
         sh->sh_entsize = 0;
     }
 
-    rela_idx = 0;
-    for (size_t i = 0; i < ns; i++) {
-        if (relocs_per_sec[i] == 0) {
+    state->rela_idx = 0;
+    for (size_t i = 0; i < state->ns; i++) {
+        if (state->relocs_per_sec[i] == 0) {
             continue;
         }
-        Elf64_Shdr* sh = &shdrs[rela_shidx_base + rela_idx];
-        sh->sh_name = sec_name_off[rela_shidx_base + rela_idx];
+        Elf64_Shdr* sh = &state->shdrs[state->rela_shidx_base + state->rela_idx];
+        sh->sh_name = state->sec_name_off[state->rela_shidx_base + state->rela_idx];
         sh->sh_type = SHT_RELA;
         sh->sh_flags = 0;
-        sh->sh_addr = META_VADDR(rela_shidx_base + rela_idx);
-        sh->sh_offset = META_OFFSET(rela_shidx_base + rela_idx);
-        sh->sh_size = META_SIZE(rela_shidx_base + rela_idx);
-        sh->sh_link = (uint32_t)symtab_shidx;
+        sh->sh_addr = elf_meta_vaddr(state, state->rela_shidx_base + state->rela_idx);
+        sh->sh_offset = elf_meta_offset(state, state->rela_shidx_base + state->rela_idx);
+        sh->sh_size = elf_meta_size(state, state->rela_shidx_base + state->rela_idx);
+        sh->sh_link = (uint32_t)state->symtab_shidx;
         sh->sh_info = (uint32_t)(1 + i);
         sh->sh_addralign = sizeof(uint64_t);
         sh->sh_entsize = sizeof(Elf64_Rela);
-        rela_idx++;
+        state->rela_idx++;
     }
 
     {
-        Elf64_Shdr* sh = &shdrs[symtab_shidx];
-        sh->sh_name = sec_name_off[symtab_shidx];
+        Elf64_Shdr* sh = &state->shdrs[state->symtab_shidx];
+        sh->sh_name = state->sec_name_off[state->symtab_shidx];
         sh->sh_type = SHT_SYMTAB;
         sh->sh_flags = 0;
-        sh->sh_addr = META_VADDR(symtab_shidx);
-        sh->sh_offset = META_OFFSET(symtab_shidx);
-        sh->sh_size = (uint64_t)(total_syms * sizeof(Elf64_Sym));
-        sh->sh_link = (uint32_t)strtab_shidx;
-        sh->sh_info = (uint32_t)(1 + ns);
+        sh->sh_addr = elf_meta_vaddr(state, state->symtab_shidx);
+        sh->sh_offset = elf_meta_offset(state, state->symtab_shidx);
+        sh->sh_size = (uint64_t)(state->total_syms * sizeof(Elf64_Sym));
+        sh->sh_link = (uint32_t)state->strtab_shidx;
+        sh->sh_info = (uint32_t)(1 + state->ns);
         sh->sh_addralign = sizeof(uint64_t);
         sh->sh_entsize = sizeof(Elf64_Sym);
     }
 
     {
-        Elf64_Shdr* sh = &shdrs[strtab_shidx];
-        sh->sh_name = sec_name_off[strtab_shidx];
+        Elf64_Shdr* sh = &state->shdrs[state->strtab_shidx];
+        sh->sh_name = state->sec_name_off[state->strtab_shidx];
         sh->sh_type = SHT_STRTAB;
         sh->sh_flags = 0;
-        sh->sh_addr = META_VADDR(strtab_shidx);
-        sh->sh_offset = META_OFFSET(strtab_shidx);
-        sh->sh_size = strtab.buffer->size;
+        sh->sh_addr = elf_meta_vaddr(state, state->strtab_shidx);
+        sh->sh_offset = elf_meta_offset(state, state->strtab_shidx);
+        sh->sh_size = state->strtab.buffer->size;
         sh->sh_link = 0;
         sh->sh_info = 0;
         sh->sh_addralign = 1;
         sh->sh_entsize = 0;
     }
     {
-        Elf64_Shdr* sh = &shdrs[shstrtab_shidx];
-        sh->sh_name = sec_name_off[shstrtab_shidx];
+        Elf64_Shdr* sh = &state->shdrs[state->shstrtab_shidx];
+        sh->sh_name = state->sec_name_off[state->shstrtab_shidx];
         sh->sh_type = SHT_STRTAB;
         sh->sh_flags = 0;
-        sh->sh_addr = META_VADDR(shstrtab_shidx);
-        sh->sh_offset = META_OFFSET(shstrtab_shidx);
-        sh->sh_size = shstrtab.buffer->size;
+        sh->sh_addr = elf_meta_vaddr(state, state->shstrtab_shidx);
+        sh->sh_offset = elf_meta_offset(state, state->shstrtab_shidx);
+        sh->sh_size = state->shstrtab.buffer->size;
         sh->sh_link = 0;
         sh->sh_info = 0;
         sh->sh_addralign = 1;
         sh->sh_entsize = 0;
     }
-    if (has_dynamic) {
+    if (state->has_dynamic) {
         Elf64_Shdr* sh;
-        sh = &shdrs[interp_shidx];
-        sh->sh_name = sec_name_off[interp_shidx];
+        sh = &state->shdrs[state->interp_shidx];
+        sh->sh_name = state->sec_name_off[state->interp_shidx];
         sh->sh_type = SHT_PROGBITS;
         sh->sh_flags = SHF_ALLOC;
-        sh->sh_addr = META_VADDR(interp_shidx);
-        sh->sh_offset = META_OFFSET(interp_shidx);
-        sh->sh_size = META_SIZE(interp_shidx);
+        sh->sh_addr = elf_meta_vaddr(state, state->interp_shidx);
+        sh->sh_offset = elf_meta_offset(state, state->interp_shidx);
+        sh->sh_size = elf_meta_size(state, state->interp_shidx);
         sh->sh_link = 0;
         sh->sh_info = 0;
         sh->sh_addralign = 1;
         sh->sh_entsize = 0;
 
-        sh = &shdrs[dynsym_shidx];
-        sh->sh_name = sec_name_off[dynsym_shidx];
+        sh = &state->shdrs[state->dynsym_shidx];
+        sh->sh_name = state->sec_name_off[state->dynsym_shidx];
         sh->sh_type = SHT_DYNSYM;
         sh->sh_flags = SHF_ALLOC;
-        sh->sh_addr = META_VADDR(dynsym_shidx);
-        sh->sh_offset = META_OFFSET(dynsym_shidx);
-        sh->sh_size = META_SIZE(dynsym_shidx);
-        sh->sh_link = (uint32_t)dynstr_shidx;
+        sh->sh_addr = elf_meta_vaddr(state, state->dynsym_shidx);
+        sh->sh_offset = elf_meta_offset(state, state->dynsym_shidx);
+        sh->sh_size = elf_meta_size(state, state->dynsym_shidx);
+        sh->sh_link = (uint32_t)state->dynstr_shidx;
         sh->sh_info = 1;
         sh->sh_addralign = sizeof(uint64_t);
         sh->sh_entsize = sizeof(Elf64_Sym);
 
-        sh = &shdrs[dynstr_shidx];
-        sh->sh_name = sec_name_off[dynstr_shidx];
+        sh = &state->shdrs[state->dynstr_shidx];
+        sh->sh_name = state->sec_name_off[state->dynstr_shidx];
         sh->sh_type = SHT_STRTAB;
         sh->sh_flags = SHF_ALLOC;
-        sh->sh_addr = META_VADDR(dynstr_shidx);
-        sh->sh_offset = META_OFFSET(dynstr_shidx);
-        sh->sh_size = META_SIZE(dynstr_shidx);
+        sh->sh_addr = elf_meta_vaddr(state, state->dynstr_shidx);
+        sh->sh_offset = elf_meta_offset(state, state->dynstr_shidx);
+        sh->sh_size = elf_meta_size(state, state->dynstr_shidx);
         sh->sh_link = 0;
         sh->sh_info = 0;
         sh->sh_addralign = 1;
         sh->sh_entsize = 0;
 
-        sh = &shdrs[dynamic_shidx];
-        sh->sh_name = sec_name_off[dynamic_shidx];
+        sh = &state->shdrs[state->dynamic_shidx];
+        sh->sh_name = state->sec_name_off[state->dynamic_shidx];
         sh->sh_type = SHT_DYNAMIC;
         sh->sh_flags = SHF_ALLOC | SHF_WRITE;
-        sh->sh_addr = META_VADDR(dynamic_shidx);
-        sh->sh_offset = META_OFFSET(dynamic_shidx);
-        sh->sh_size = META_SIZE(dynamic_shidx);
-        sh->sh_link = (uint32_t)dynstr_shidx;
+        sh->sh_addr = elf_meta_vaddr(state, state->dynamic_shidx);
+        sh->sh_offset = elf_meta_offset(state, state->dynamic_shidx);
+        sh->sh_size = elf_meta_size(state, state->dynamic_shidx);
+        sh->sh_link = (uint32_t)state->dynstr_shidx;
         sh->sh_info = 0;
         sh->sh_addralign = sizeof(uint64_t);
         sh->sh_entsize = sizeof(Elf64_Dyn);
 
-        sh = &shdrs[init_array_shidx];
-        sh->sh_name = sec_name_off[init_array_shidx];
+        sh = &state->shdrs[state->init_array_shidx];
+        sh->sh_name = state->sec_name_off[state->init_array_shidx];
         sh->sh_type = SHT_INIT_ARRAY;
         sh->sh_flags = SHF_ALLOC | SHF_WRITE;
-        sh->sh_addr = META_VADDR(init_array_shidx);
-        sh->sh_offset = META_OFFSET(init_array_shidx);
-        sh->sh_size = META_SIZE(init_array_shidx);
+        sh->sh_addr = elf_meta_vaddr(state, state->init_array_shidx);
+        sh->sh_offset = elf_meta_offset(state, state->init_array_shidx);
+        sh->sh_size = elf_meta_size(state, state->init_array_shidx);
         sh->sh_link = 0;
         sh->sh_info = 0;
         sh->sh_addralign = sizeof(uint64_t);
         sh->sh_entsize = sizeof(uint64_t);
 
-        sh = &shdrs[fini_array_shidx];
-        sh->sh_name = sec_name_off[fini_array_shidx];
+        sh = &state->shdrs[state->fini_array_shidx];
+        sh->sh_name = state->sec_name_off[state->fini_array_shidx];
         sh->sh_type = SHT_FINI_ARRAY;
         sh->sh_flags = SHF_ALLOC | SHF_WRITE;
-        sh->sh_addr = META_VADDR(fini_array_shidx);
-        sh->sh_offset = META_OFFSET(fini_array_shidx);
-        sh->sh_size = META_SIZE(fini_array_shidx);
+        sh->sh_addr = elf_meta_vaddr(state, state->fini_array_shidx);
+        sh->sh_offset = elf_meta_offset(state, state->fini_array_shidx);
+        sh->sh_size = elf_meta_size(state, state->fini_array_shidx);
         sh->sh_link = 0;
         sh->sh_info = 0;
         sh->sh_addralign = sizeof(uint64_t);
         sh->sh_entsize = sizeof(uint64_t);
 
-        sh = &shdrs[reladyn_shidx];
-        sh->sh_name = sec_name_off[reladyn_shidx];
+        sh = &state->shdrs[state->reladyn_shidx];
+        sh->sh_name = state->sec_name_off[state->reladyn_shidx];
         sh->sh_type = SHT_RELA;
         sh->sh_flags = SHF_ALLOC;
-        sh->sh_addr = META_VADDR(reladyn_shidx);
-        sh->sh_offset = META_OFFSET(reladyn_shidx);
-        sh->sh_size = META_SIZE(reladyn_shidx);
-        sh->sh_link = (uint32_t)dynsym_shidx;
+        sh->sh_addr = elf_meta_vaddr(state, state->reladyn_shidx);
+        sh->sh_offset = elf_meta_offset(state, state->reladyn_shidx);
+        sh->sh_size = elf_meta_size(state, state->reladyn_shidx);
+        sh->sh_link = (uint32_t)state->dynsym_shidx;
         sh->sh_info = 0;
         sh->sh_addralign = sizeof(uint64_t);
         sh->sh_entsize = sizeof(Elf64_Rela);
 
-        sh = &shdrs[plt_shidx];
-        sh->sh_name = sec_name_off[plt_shidx];
+        sh = &state->shdrs[state->plt_shidx];
+        sh->sh_name = state->sec_name_off[state->plt_shidx];
         sh->sh_type = SHT_PROGBITS;
         sh->sh_flags = SHF_ALLOC | SHF_EXECINSTR;
-        sh->sh_addr = META_VADDR(plt_shidx);
-        sh->sh_offset = META_OFFSET(plt_shidx);
-        sh->sh_size = META_SIZE(plt_shidx);
+        sh->sh_addr = elf_meta_vaddr(state, state->plt_shidx);
+        sh->sh_offset = elf_meta_offset(state, state->plt_shidx);
+        sh->sh_size = elf_meta_size(state, state->plt_shidx);
         sh->sh_link = 0;
         sh->sh_info = 0;
         sh->sh_addralign = 16;
         sh->sh_entsize = 16;
 
-        sh = &shdrs[gotplt_shidx];
-        sh->sh_name = sec_name_off[gotplt_shidx];
+        sh = &state->shdrs[state->gotplt_shidx];
+        sh->sh_name = state->sec_name_off[state->gotplt_shidx];
         sh->sh_type = SHT_PROGBITS;
         sh->sh_flags = SHF_ALLOC | SHF_WRITE;
-        sh->sh_addr = META_VADDR(gotplt_shidx);
-        sh->sh_offset = META_OFFSET(gotplt_shidx);
-        sh->sh_size = META_SIZE(gotplt_shidx);
+        sh->sh_addr = elf_meta_vaddr(state, state->gotplt_shidx);
+        sh->sh_offset = elf_meta_offset(state, state->gotplt_shidx);
+        sh->sh_size = elf_meta_size(state, state->gotplt_shidx);
         sh->sh_link = 0;
         sh->sh_info = 0;
         sh->sh_addralign = sizeof(uint64_t);
         sh->sh_entsize = sizeof(uint64_t);
     }
-    memcpy(out_buf + shdr_offset, shdrs, elf_shnum * sizeof(Elf64_Shdr));
-    free(shdrs);
+    memcpy(state->out_buf + state->shdr_offset, state->shdrs, state->elf_shnum * sizeof(Elf64_Shdr));
 
-    if (ns > 0) {
-        ArkSectionRvaMap* maps = (ArkSectionRvaMap*)calloc(ns, sizeof(ArkSectionRvaMap));
+    return ARK_LINK_OK;
+}
+
+static ArkLinkResult elf_publish(ElfLinkState* state, ArkBackendOutput* output) {
+    if (state->ns > 0) {
+        ArkSectionRvaMap* maps = (ArkSectionRvaMap*)calloc(state->ns, sizeof(ArkSectionRvaMap));
         if (!maps) {
-            free(out_buf);
-            goto oom;
+            return ARK_LINK_ERR_MEMORY;
         }
-        for (size_t i = 0; i < ns; i++) {
-            maps[i].rva = (uint32_t)(SEC_VADDR(i) - image_base);
-            maps[i].size = (uint32_t)SEC_VSIZE(i);
-            maps[i].file_offset = (uint32_t)SEC_OFFSET(i);
-            maps[i].flags = input->sections[i].flags;
+        for (size_t i = 0; i < state->ns; i++) {
+            maps[i].rva = (uint32_t)(elf_section_vaddr(state, i) - state->image_base);
+            maps[i].size = (uint32_t)elf_section_vsize(state, i);
+            maps[i].file_offset = (uint32_t)elf_section_offset(state, i);
+            maps[i].flags = state->input->sections[i].flags;
         }
         output->section_maps = maps;
-        output->section_count = ns;
+        output->section_count = state->ns;
     }
-    output->data = out_buf;
-    output->size = file_size;
-    output->image_base = image_base;
+    output->data = state->out_buf;
+    output->size = state->file_size;
+    output->image_base = state->image_base;
 
-    if (has_dynamic) {
-        free(dynsym);
-        free(dyntab);
-        sb_free(&dynstr);
-    }
-    free(symtab);
-    free(meta_secs);
-    free(sec_name_off);
-    free(relocs_per_sec);
-    sb_free(&strtab);
-    sb_free(&shstrtab);
-    ark_layout_destroy(layout);
+    state->out_buf = NULL;
     return ARK_LINK_OK;
+}
 
-oom:
-    FREE_RELA_ARRAYS();
-    free(rela_plt_data);
-    if (has_dynamic) {
-        free(dynsym);
-        free(dyntab);
-        sb_free(&dynstr);
-        free(rela_dyn_data);
+ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, ArkBackendOutput* output) {
+    (void)ctx;
+    if (!input || !output) {
+        return ARK_LINK_ERR_INVALID_ARGUMENT;
     }
-    free(symtab);
-    free(meta_secs);
-    free(sec_name_off);
-    free(relocs_per_sec);
-    sb_free(&strtab);
-    sb_free(&shstrtab);
-    ark_layout_destroy(layout);
-    return ARK_LINK_ERR_MEMORY;
+    memset(output, 0, sizeof(*output));
+    ElfLinkState state = {.input = input};
+    ArkLinkResult (*const stages[])(ElfLinkState*) = {
+        elf_prepare,       elf_plan_layout,   elf_build_symbols,  elf_build_relocations,
+        elf_build_dynamic, elf_write_headers, elf_write_contents, elf_write_section_headers};
+    ArkLinkResult result = ARK_LINK_OK;
+    for (size_t i = 0; i < sizeof(stages) / sizeof(stages[0]); i++) {
+        result = stages[i](&state);
+        if (result != ARK_LINK_OK) {
+            break;
+        }
+    }
+    if (result == ARK_LINK_OK) {
+        result = elf_publish(&state, output);
+    }
+    elf_cleanup(&state);
+    return result;
 }

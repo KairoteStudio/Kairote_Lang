@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Executable entry point for the self-hosted compiler and project driver."""
 import sys
-from compile import main
+from Compile import main
 
 sys.exit(main())

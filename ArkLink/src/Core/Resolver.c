@@ -46,8 +46,7 @@ static int symbol_table_add(SymbolTable* table, const ArkResolverSymbol* sym) {
                 /* Native ABI definitions are strong: silently selecting one
                  * makes independently compiled calls depend on link order.
                  * Keep the legacy Re standard-library duplicate policy below. */
-                if (strncmp(sym->name, "_KRT1$", 6) == 0 &&
-                    table->symbols[i].binding == ARK_BIND_GLOBAL &&
+                if (strncmp(sym->name, "_KRT1$", 6) == 0 && table->symbols[i].binding == ARK_BIND_GLOBAL &&
                     sym->binding == ARK_BIND_GLOBAL) {
                     return 0;
                 }
@@ -436,10 +435,13 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
                     }
                 }
 
-                if (!reloc.symbol || (!reloc.symbol->defined &&
-                    (!reloc.symbol->import_module || !reloc.symbol->import_module[0]))) {
-                    fprintf(stderr, "Undefined symbol: %s\n", reloc.symbol && reloc.symbol->name ? reloc.symbol->name : "<invalid symbol index>");
-                    for (size_t m = 0; m < unit_count; m++) free(section_map[m]);
+                if (!reloc.symbol ||
+                    (!reloc.symbol->defined && (!reloc.symbol->import_module || !reloc.symbol->import_module[0]))) {
+                    fprintf(stderr, "Undefined symbol: %s\n",
+                            reloc.symbol && reloc.symbol->name ? reloc.symbol->name : "<invalid symbol index>");
+                    for (size_t m = 0; m < unit_count; m++) {
+                        free(section_map[m]);
+                    }
                     free(section_map);
                     free(unit_sec_start);
                     free(unit_sym_start);

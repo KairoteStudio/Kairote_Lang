@@ -6,11 +6,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-typedef enum {
-    PTR_UNIQUE,
-    PTR_SHARED,
-    PTR_WEAK
-} SmartPtrType;
+typedef enum { PTR_UNIQUE, PTR_SHARED, PTR_WEAK } SmartPtrType;
 
 typedef struct SharedControlBlock {
     atomic_int ref_count;

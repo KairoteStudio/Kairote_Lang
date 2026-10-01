@@ -52,9 +52,14 @@ int main(int argc, char** argv) {
             output_path = argv[++i];
         } else if ((strcmp(argv[i], "-t") == 0 || strcmp(argv[i], "--target") == 0) && i + 1 < argc) {
             const char* target_name = argv[++i];
-            if (strcmp(target_name, "elf") == 0) target = ARK_LINK_TARGET_ELF;
-            else if (strcmp(target_name, "pe") == 0) target = ARK_LINK_TARGET_PE;
-            else { fprintf(stderr, "Unknown target: %s\n", target_name); return 1; }
+            if (strcmp(target_name, "elf") == 0) {
+                target = ARK_LINK_TARGET_ELF;
+            } else if (strcmp(target_name, "pe") == 0) {
+                target = ARK_LINK_TARGET_PE;
+            } else {
+                fprintf(stderr, "Unknown target: %s\n", target_name);
+                return 1;
+            }
         } else if (argv[i][0] != '-') {
             input_paths[input_count++] = argv[i];
         }

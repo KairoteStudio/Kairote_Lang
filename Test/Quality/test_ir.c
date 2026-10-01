@@ -1,4 +1,4 @@
-#include "compiler/Middle/Ir/IrOptimizer.h"
+#include "Compiler/Middle/Ir/IrOptimizer.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>

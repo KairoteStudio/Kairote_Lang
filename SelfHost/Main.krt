@@ -1,4 +1,4 @@
-// Stable file protocol used by bootstrap.py and compile.py. Every compiler
+// Stable file protocol used by Bootstrap.py and Compile.py. Every compiler
 // generation reads the source module and writes the same native KRO format.
 int32 main() {
     if (!KrtCompilePath("program.krt", "stage1-probe.kro")) { return 1; }

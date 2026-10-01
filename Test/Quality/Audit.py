@@ -13,7 +13,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
-SOURCE_ROOTS = [ROOT / "Re.KrtC/src", ROOT / "Re.KrtC/Shared", ROOT / "Re.KrtC/stub_include",
+SOURCE_ROOTS = [ROOT / "Re.KrtC/src", ROOT / "Re.KrtC/Shared", ROOT / "Re.KrtC/StubInclude",
                 ROOT / "ArkLink/src", ROOT / "ArkLink/include"]
 
 
@@ -22,7 +22,7 @@ def main():
     parser.add_argument("--output", type=Path, default=HERE / "AuditResults.json")
     parser.add_argument("--jobs", type=int, default=4)
     args = parser.parse_args()
-    standards = subprocess.run([sys.executable, str(HERE / "CheckStandards.py")],
+    standards = subprocess.run([sys.executable, str(HERE / "CheckStandards.py"), "--all", "--strict-lengths"],
                                cwd=ROOT, capture_output=True, text=True, timeout=90)
     sources = sorted({p for root in SOURCE_ROOTS for p in root.rglob("*") if p.suffix in (".c", ".h", ".inc")})
     units = [p for p in sources if p.suffix == ".c"]
@@ -34,7 +34,7 @@ def main():
         def check(item):
             index, compiler, source = item
             includes = [ROOT / "ArkLink/include"] if "ArkLink" in source.parts else [
-                ROOT / "Re.KrtC" / name for name in ("src", "src/Core", "src/Tools", "src/Bytecode", "Shared", "stub_include", "vm")]
+                ROOT / "Re.KrtC" / name for name in ("src", "src/Core", "src/Tools", "src/Bytecode", "Shared", "StubInclude", "vm")]
             alignment = "-Wcast-align" if "clang" in compiler else "-Wcast-align=strict"
             flags = ["-std=gnu11", "-O2", "-Wall", "-Wextra", "-Wformat=2", "-Wshadow", "-Wundef", alignment]
             command = [compiler, *flags, *["-I" + str(path) for path in includes], "-c", str(source), "-o", f"{directory}/{index}.o"]

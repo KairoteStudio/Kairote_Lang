@@ -18,7 +18,7 @@ class GlobalsAndFunctionPointers(unittest.TestCase):
             path = work / 'main.krt'
             path.write_text(source)
             binary = work / 'program'
-            compiled = subprocess.run([sys.executable, str(ROOT / 'SelfHost/compile.py'), str(path),
+            compiled = subprocess.run([sys.executable, str(ROOT / 'SelfHost/Compile.py'), str(path),
                                        '--compiler', str(COMPILER), '-o', str(binary)],
                                       capture_output=True, text=True, timeout=60)
             if rejected:

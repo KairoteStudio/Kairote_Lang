@@ -9,35 +9,38 @@ static KrtBuildSummary g_build_summary = {0};
 static int g_current_task_line_active = 0;
 
 void KrtTaskReport(const char* stage, const char* file, KrtTaskResult result, double duration, KrtTaskStats* stats) {
-    if (!stage || !stats) return;
+    if (!stage || !stats) {
+        return;
+    }
 
     const char* status = "";
     const char* color = KRT_COL_RESET;
     switch (result) {
-        case KRT_TASK_RESULT_EXECUTED:
-            stats->executed++;
-            break;
-        case KRT_TASK_RESULT_UP_TO_DATE:
-            stats->up_to_date++;
-            status = " UP-TO-DATE";
-            color = KRT_COL_YELLOW;
-            break;
-        case KRT_TASK_RESULT_SKIPPED:
-            stats->skipped++;
-            status = " SKIPPED";
-            color = KRT_COL_GRAY;
-            break;
-        case KRT_TASK_RESULT_FAILED:
-            stats->executed++;
-            stats->failed++;
-            break;
+    case KRT_TASK_RESULT_EXECUTED:
+        stats->executed++;
+        break;
+    case KRT_TASK_RESULT_UP_TO_DATE:
+        stats->up_to_date++;
+        status = " UP-TO-DATE";
+        color = KRT_COL_YELLOW;
+        break;
+    case KRT_TASK_RESULT_SKIPPED:
+        stats->skipped++;
+        status = " SKIPPED";
+        color = KRT_COL_GRAY;
+        break;
+    case KRT_TASK_RESULT_FAILED:
+        stats->executed++;
+        stats->failed++;
+        break;
     }
 
     if (g_current_task_line_active) {
         KrtPrintf(ANSI_CURSOR_UP ANSI_CLEAR_LINE);
     }
 
-    if (result == KRT_TASK_RESULT_EXECUTED || result == KRT_TASK_RESULT_UP_TO_DATE || result == KRT_TASK_RESULT_SKIPPED) {
+    if (result == KRT_TASK_RESULT_EXECUTED || result == KRT_TASK_RESULT_UP_TO_DATE ||
+        result == KRT_TASK_RESULT_SKIPPED) {
         KrtPrintf("%s>%s %s", KrtColor(KRT_COL_CYAN), KrtColor(KRT_COL_RESET), stage);
         if (file && file[0] != '\0') {
             KrtPrintf(" %s%s%s", KrtColor(KRT_COL_GRAY), file, KrtColor(KRT_COL_RESET));
@@ -65,10 +68,11 @@ void KrtTaskReport(const char* stage, const char* file, KrtTaskResult result, do
     }
 }
 
-static void KrtShowIdleStatus(void) {
+static void show_idle_status(void) {
     if (g_current_task_line_active) {
         KrtPrintf(ANSI_CURSOR_UP ANSI_CLEAR_LINE);
-        KrtPrintf("%s>%s %sIDLE%s\n", KrtColor(KRT_COL_CYAN), KrtColor(KRT_COL_RESET), KrtColor(KRT_COL_GRAY), KrtColor(KRT_COL_RESET));
+        KrtPrintf("%s>%s %sIDLE%s\n", KrtColor(KRT_COL_CYAN), KrtColor(KRT_COL_RESET), KrtColor(KRT_COL_GRAY),
+                  KrtColor(KRT_COL_RESET));
         g_current_task_line_active = 0;
     }
 }
@@ -79,7 +83,9 @@ void KrtBuildSummaryReset(void) {
 }
 
 void KrtBuildSummaryAccumulate(const KrtTaskStats* stats, double duration, int failed) {
-    if (!stats) return;
+    if (!stats) {
+        return;
+    }
     g_build_summary.stats.executed += stats->executed;
     g_build_summary.stats.up_to_date += stats->up_to_date;
     g_build_summary.stats.skipped += stats->skipped;
@@ -96,15 +102,14 @@ void KrtPrintBuildSummary(void) {
         return;
     }
 
-    KrtShowIdleStatus();
+    show_idle_status();
     KrtOutputCacheFlush();
 
     const char* status_text = g_build_summary.failed ? "FAILED" : "SUCCESSFUL";
     const char* status_color = g_build_summary.failed ? KRT_COL_RED : KRT_COL_GREEN;
 
-    KrtPrintf("\n%s%sBUILD %s%s in %.1fs\n",
-           KrtColor(KRT_COL_BOLD), KrtColor(status_color), status_text, KrtColor(KRT_COL_RESET),
-           g_build_summary.total_duration);
+    KrtPrintf("\n%s%sBUILD %s%s in %.1fs\n", KrtColor(KRT_COL_BOLD), KrtColor(status_color), status_text,
+              KrtColor(KRT_COL_RESET), g_build_summary.total_duration);
 
     int executed = g_build_summary.stats.executed;
     int up_to_date = g_build_summary.stats.up_to_date;
@@ -120,17 +125,23 @@ void KrtPrintBuildSummary(void) {
             first = 0;
         }
         if (up_to_date > 0) {
-            if (!first) KrtPrintf(", ");
+            if (!first) {
+                KrtPrintf(", ");
+            }
             KrtPrintf("%s%d up-to-date%s", KrtColor(KRT_COL_YELLOW), up_to_date, KrtColor(KRT_COL_RESET));
             first = 0;
         }
         if (skipped > 0) {
-            if (!first) KrtPrintf(", ");
+            if (!first) {
+                KrtPrintf(", ");
+            }
             KrtPrintf("%s%d skipped%s", KrtColor(KRT_COL_GRAY), skipped, KrtColor(KRT_COL_RESET));
             first = 0;
         }
         if (failed > 0) {
-            if (!first) KrtPrintf(", ");
+            if (!first) {
+                KrtPrintf(", ");
+            }
             KrtPrintf("%s%d failed%s", KrtColor(KRT_COL_RED), failed, KrtColor(KRT_COL_RESET));
             first = 0;
         }

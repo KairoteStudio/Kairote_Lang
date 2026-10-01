@@ -3,18 +3,9 @@
 
 #include "../../Core/Utils/KrtCommon.h"
 
-typedef enum {
-    KRT_PROJ_TYPE_CONSOLE,
-    KRT_PROJ_TYPE_LIBRARY,
-    KRT_PROJ_TYPE_WEB,
-    KRT_PROJ_TYPE_SYSTEM
-} KrtProjectType;
+typedef enum { KRT_PROJ_TYPE_CONSOLE, KRT_PROJ_TYPE_LIBRARY, KRT_PROJ_TYPE_WEB, KRT_PROJ_TYPE_SYSTEM } KrtProjectType;
 
-typedef enum {
-    KRT_PROJ_CONFIG_DEBUG,
-    KRT_PROJ_CONFIG_RELEASE,
-    KRT_PROJ_CONFIG_CUSTOM
-} KrtProjectConfig;
+typedef enum { KRT_PROJ_CONFIG_DEBUG, KRT_PROJ_CONFIG_RELEASE, KRT_PROJ_CONFIG_CUSTOM } KrtProjectConfig;
 
 typedef struct KrtProjectDependency {
     char* name;

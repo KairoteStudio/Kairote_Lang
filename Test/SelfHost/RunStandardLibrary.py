@@ -70,7 +70,7 @@ def main():
     os.environ['SELFHOST_COMPILER'] = str(compiler)
     os.environ['KRTC'] = str(ROOT / 'SelfHost/krtc')
     os.environ['KRT_STDLIB_TEST_LEVELS'] = '0'
-    tracked = [compiler, ROOT / 'SelfHost/compile.py', ROOT / 'SelfHost/project.py',
+    tracked = [compiler, ROOT / 'SelfHost/Compile.py', ROOT / 'SelfHost/Project.py',
                ROOT / 'SelfHost/krtc', *sorted((ROOT / 'libs').rglob('*.krt'))]
     before = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in tracked}
     suite = unittest.defaultTestLoader.discover(str(ROOT / 'Test/StandardLibrary'), pattern=args.pattern)
@@ -80,7 +80,7 @@ def main():
     report = {
         'schema': 1, 'compiler': str(compiler),
         'compiler_sha256': hashlib.sha256(compiler.read_bytes()).hexdigest(),
-        'driver_sha256': hashlib.sha256((ROOT / 'SelfHost/compile.py').read_bytes()).hexdigest(),
+        'driver_sha256': hashlib.sha256((ROOT / 'SelfHost/Compile.py').read_bytes()).hexdigest(),
         'optimization_levels': [0], 'tests_run': result.testsRun,
         'library_sources': {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
                             for path in sorted((ROOT / 'libs').rglob('*.krt'))},

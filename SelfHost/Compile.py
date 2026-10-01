@@ -315,7 +315,7 @@ def compile_files(argv=None, bundle=None):
                     raise DriverError('E_SIZE: combined source must contain 1 to 1048576 bytes')
                 compiler = args.compiler.resolve()
                 if not compiler.is_file():
-                    raise DriverError('E_COMPILER: Stage 2 is missing; run python3 Test/SelfHost/bootstrap.py first')
+                    raise DriverError('E_COMPILER: Stage 2 is missing; run python3 Test/SelfHost/Bootstrap.py first')
                 (work / 'program.krt').write_bytes(bundle.data)
                 if args.object:
                     (work / 'library.mode').touch()
@@ -372,9 +372,9 @@ def main(argv=None):
     if command_position is not None:
         argv = [argv[command_position], *argv[:command_position], *argv[command_position + 1:]]
         if __package__:
-            from . import project
+            from . import Project as project
         else:
-            import project
+            import Project as project
         return project.main(argv, sys.modules[__name__])
     return compile_files(argv)
 

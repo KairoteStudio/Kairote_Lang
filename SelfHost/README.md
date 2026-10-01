@@ -11,7 +11,7 @@ Kairote 编写的 Linux x86-64 编译器直接生成 KRO，再由 ArkLink 链接
 ```sh
 cmake -S . -B build
 cmake --build build --target KrtC ArkLink -j4
-python3 Test/SelfHost/bootstrap.py
+python3 Test/SelfHost/Bootstrap.py
 ```
 
 脚本优先使用上述构建产物，也支持 `KRTC`、`ARKLINK` 环境变量。只有生成 Stage 1 时调用 C 编写的 Stage 0；后续编译运行生成的 Kairote 编译器，链接运行 ArkLink。后续子进程使用空 PATH，没有中间 C 文件或 Stage 0 回退。
@@ -31,7 +31,7 @@ python3 Test/SelfHost/bootstrap.py
 ./SelfHost/krtc -I libs Test/SelfHost/examples/daily.krt -o build/daily
 ```
 
-也可以使用 `python3 SelfHost/compile.py`。省略 `-o` 时，在当前目录生成首个输入的文件名主干；`-c` 默认增加 `.kro` 后缀。兼容 `output 路径`，支持带空格的路径。
+也可以使用 `python3 SelfHost/Compile.py`。省略 `-o` 时，在当前目录生成首个输入的文件名主干；`-c` 默认增加 `.kro` 后缀。兼容 `output 路径`，支持带空格的路径。
 
 `-I` 添加模块搜索目录，默认包含仓库 `libs`。加载器支持文件级 `using System.Console;`、`using System;`、`using System.*;`、using 别名和 `import "helper.krt";`。依赖按确定顺序加载，同一文件只加载一次；循环依赖共享声明，缺失依赖会报错。每个文件的 namespace 和 using 作用域单独保存。
 
@@ -67,7 +67,7 @@ Python 驱动负责依赖加载、源码位置映射、临时文件、工程缓�
 标准库从仓库 `libs` 加载，经过同一原生编译路径；没有在 Python 中替代 Console、Math、Memory、Array、String、Convert 或 StringBuilder 的实现。`System.Exception` 提供普通对象形式的异常载荷，包含 Message、Code 和 ToString。完整库契约的覆盖情况以运行结果为准：
 
 ```sh
-python3 Test/SelfHost/run_standard_library.py --compiler build/selfhost/stage2/program
+python3 Test/SelfHost/RunStandardLibrary.py --compiler build/selfhost/stage2/program
 ```
 
 该命令使用原有 `Test/StandardLibrary` 契约测试，保存编译器与库源码哈希、每项结果及日志。成功加载某个模块不等于其全部契约已经通过。

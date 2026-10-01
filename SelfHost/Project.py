@@ -379,7 +379,7 @@ def build(project, args, driver):
     if project.cache == output or project.cache in output.parents:
         raise ProjectError(f'E_OUTPUT: output must be outside the project cache: {output}')
     if not compiler.is_file():
-        raise ProjectError('E_COMPILER: Stage 2 is missing; run python3 Test/SelfHost/bootstrap.py first')
+        raise ProjectError('E_COMPILER: Stage 2 is missing; run python3 Test/SelfHost/Bootstrap.py first')
     if args.command != 'check' and not library and not linker.is_file():
         raise ProjectError(f'E_LINK: linker not found: {linker}')
     fingerprint = {

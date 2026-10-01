@@ -1,7 +1,7 @@
 /* White-box CFG cases that well-formed source programs cannot construct. */
 #include <assert.h>
 #include <stdlib.h>
-#include "../../Re.KrtC/src/compiler/Backend/Kro/KroCodegen.c"
+#include "../../Re.KrtC/src/Compiler/Backend/Kro/KroCodegen.c"
 
 typedef struct {
     KROCodegenContext* context;

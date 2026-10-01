@@ -1,5 +1,5 @@
-#include "compiler/Frontend/Parser/ParserBase.h"
-#include "compiler/Frontend/Semantic/SemanticAnalyzer.h"
+#include "Compiler/Frontend/Parser/ParserBase.h"
+#include "Compiler/Frontend/Semantic/SemanticAnalyzer.h"
 #include <assert.h>
 #include <stdio.h>
 

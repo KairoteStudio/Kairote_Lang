@@ -18,17 +18,17 @@ def main():
     parser.add_argument("--leaks", action="store_true", help="Enable LSan on hosts without ptrace restrictions")
     args = parser.parse_args()
     prefix = "Re.KrtC/src/"
-    common = [prefix + "Core/Memory/Allocator.c", prefix + "Core/Memory/Arena.c", prefix + "compiler/Middle/Ir/IrMemory.c"]
+    common = [prefix + "Core/Memory/Allocator.c", prefix + "Core/Memory/Arena.c", prefix + "Compiler/Middle/Ir/IrMemory.c"]
     suites = {
         "test_memory": common,
-        "test_ir": common + [prefix + "compiler/Middle/Ir/" + name for name in ("Ir.c", "IrType.c", "IrOptimizer.c")] + [prefix + "compiler/Frontend/Lexer/Tokenizer.c"],
+        "test_ir": common + [prefix + "Compiler/Middle/Ir/" + name for name in ("Ir.c", "IrType.c", "IrOptimizer.c")] + [prefix + "Compiler/Frontend/Lexer/Tokenizer.c"],
         "test_linker": ["ArkLink/src/Backend/BackendCommon.c", prefix + "Tools/KroWriter.c"],
         "test_elf_failure": [],
         "test_backend_allocation": [],
         "test_frontend_allocation": [prefix + name for name in (
-            "compiler/Frontend/Parser/Ast.c", "compiler/Frontend/Semantic/SemanticAnalyzer.c",
-            "compiler/Frontend/Semantic/SymbolTable.c", "compiler/Frontend/Semantic/Generics.c",
-            "compiler/Frontend/CompilerError.c", "Core/Memory/Allocator.c", "Core/Memory/Arena.c",
+            "Compiler/Frontend/Parser/Ast.c", "Compiler/Frontend/Semantic/SemanticAnalyzer.c",
+            "Compiler/Frontend/Semantic/SymbolTable.c", "Compiler/Frontend/Semantic/Generics.c",
+            "Compiler/Frontend/CompilerError.c", "Core/Memory/Allocator.c", "Core/Memory/Arena.c",
             "Core/Utils/OutputCache.c")],
     }
     results = []

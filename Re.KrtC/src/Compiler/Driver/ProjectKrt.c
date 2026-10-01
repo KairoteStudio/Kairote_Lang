@@ -1,8 +1,8 @@
 #include "ProjectKrt.h"
 #include "ConfigManager.h"
 #include "../../Core/Utils/Path.h"
-#include "compiler/Frontend/Lexer/Tokenizer.h"
-#include "compiler/Frontend/Parser/Parser.h"
+#include "Compiler/Frontend/Lexer/Tokenizer.h"
+#include "Compiler/Frontend/Parser/Parser.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>

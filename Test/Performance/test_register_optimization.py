@@ -253,7 +253,7 @@ int32 main() {{
                 "-fsanitize=address,undefined", "-fno-omit-frame-pointer",
                 "-ffunction-sections", "-fdata-sections", "-I" + str(ROOT / "Re.KrtC/src"),
                 str(Path(__file__).with_name("test_register_allocation.c")),
-                str(ROOT / "Re.KrtC/src/compiler/Frontend/Lexer/Tokenizer.c"),
+                str(ROOT / "Re.KrtC/src/Compiler/Frontend/Lexer/Tokenizer.c"),
                 "-Wl,--gc-sections", "-lm", "-o", str(binary)],
                 check=True, capture_output=True, text=True, timeout=60)
             checked = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10,

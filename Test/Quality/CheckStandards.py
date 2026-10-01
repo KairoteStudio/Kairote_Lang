@@ -176,7 +176,7 @@ def public_declaration(declaration, header):
     return "static" not in declaration.modifiers or (header and bool(re.fullmatch(r"Krt[A-Z][A-Za-z0-9]*", declaration.name)))
 
 
-def check_rules(path, source, baseline):
+def check_rules(path, source, baseline, strict_lengths=False):
     relative = str(path.relative_to(ROOT))
     findings = []
     notices = []
@@ -191,10 +191,11 @@ def check_rules(path, source, baseline):
                 and not re.fullmatch(r"[a-z][a-z0-9_]*", name)):
             findings.append(f"{relative}:{line}: internal function {name} must use snake_case")
         if length > 500:
-            if old_functions.get(name, 0) > 500:
+            if not strict_lengths and old_functions.get(name, 0) > 500:
                 notices.append(f"{relative}:{line}: {name} has {length} lines (pre-existing; report under DevStand 1.4)")
             else:
-                findings.append(f"{relative}:{line}: {name} has {length} lines; split or report under DevStand 1.4")
+                action = "split under DevStand 1.4" if strict_lengths else "split or report under DevStand 1.4"
+                findings.append(f"{relative}:{line}: {name} has {length} lines; {action}")
     if relative.startswith("Re.KrtC/"):
         old_macros = set(MACRO.findall(code_only(baseline)))
         for macro in sorted(set(MACRO.findall(code_only(source))) - old_macros):
@@ -224,9 +225,9 @@ def check_rules(path, source, baseline):
     return findings, notices
 
 
-def check_source(path, baseline):
+def check_source(path, baseline, strict_lengths=False):
     source = path.read_text()
-    findings, notices = check_rules(path, source, baseline)
+    findings, notices = check_rules(path, source, baseline, strict_lengths)
     formatted = subprocess.run(
         ["clang-format", "--style=file:" + str(FORMAT), str(path)],
         text=True, capture_output=True, check=True,
@@ -236,22 +237,38 @@ def check_source(path, baseline):
     return findings, notices
 
 
+def baseline_name(name, original):
+    """Resolve an unambiguous naming migration without dropping its baseline."""
+    if name in original:
+        return name
+    key = name.replace("_", "").casefold()
+    candidates = [old for old in original if old.replace("_", "").casefold() == key]
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", default="main", help="Base revision used to distinguish existing interfaces")
+    parser.add_argument("--all", action="store_true", help="Check all production C sources, including unchanged files")
+    parser.add_argument("--strict-lengths", action="store_true", help="Fail on existing functions over 500 lines too")
     args = parser.parse_args()
     git("rev-parse", "--verify", args.base + "^{commit}")
     changed = set(git("diff", "--name-only", "-z", args.base).decode().split("\0"))
     changed.update(git("ls-files", "--others", "--exclude-standard", "-z").decode().split("\0"))
     tracked = set(git("ls-files", "-z").decode().split("\0"))
     original = set(git("ls-tree", "-r", "--name-only", "-z", args.base).decode().split("\0"))
-    paths = sorted(ROOT / name for name in changed if name and (ROOT / name).is_file()
+    selected = changed
+    if args.all:
+        roots = ("ArkLink/src/", "ArkLink/include/", "Re.KrtC/src/", "Re.KrtC/Shared/", "Re.KrtC/StubInclude/")
+        selected = changed | {name for name in tracked if name.startswith(roots)}
+    paths = sorted(ROOT / name for name in selected if name and (ROOT / name).is_file()
                    and Path(name).suffix in SOURCE_SUFFIXES)
     work = []
     for path in paths:
         name = str(path.relative_to(ROOT))
-        baseline = git("show", args.base + ":" + name).decode() if name in original else ""
-        work.append((path, baseline))
+        previous = baseline_name(name, original)
+        baseline = git("show", args.base + ":" + previous).decode() if previous else ""
+        work.append((path, baseline, args.strict_lengths))
     findings = []
     notices = []
     with ThreadPoolExecutor(max_workers=4) as executor:
@@ -260,6 +277,8 @@ def main():
             notices.extend(reports)
     for name in sorted(changed - original):
         if not name or not (ROOT / name).is_file():
+            continue
+        if baseline_name(name, original):
             continue
         path = Path(name)
         # The user explicitly excluded new JSON/ASM/KRO outputs from this PR.
@@ -277,7 +296,8 @@ def main():
         print("FAIL", finding)
     for notice in notices:
         print("REPORT", notice)
-    print(f"{len(paths)} changed C source/header/include files: {len(findings)} violations, {len(notices)} length reports")
+    scope = "selected" if args.all else "changed"
+    print(f"{len(paths)} {scope} C source/header/include files: {len(findings)} violations, {len(notices)} length reports")
     return bool(findings)
 
 

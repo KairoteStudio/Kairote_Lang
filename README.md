@@ -53,7 +53,7 @@ using System;
 public class Program
 {
     public static void Main(string[] args)
-    {        
+    {
         Console.WriteLine("Hello, KairoteLang!");
     }
 }
@@ -66,7 +66,7 @@ public class Program
 ### 环境要求
 
 - **操作系统**: Linux | Windows | macOS
-- **Zig**: 0.17.0+ (作为 C 编译器和构建系统)
+- **Zig**: 0.16.0（与 `Re.KrtC/build.zig` 的版本要求一致）
 - **C 标准库**: 需要 `libm` 和 `libpthread`
 
 ### 安装
@@ -90,7 +90,7 @@ zig build
 > cd ../ArkLink && cmake -S . -B build && cmake --build build
 > ```
 
-### 编写你的第一个 KairoteLang 程序 或 [学习文档](./docs/KrtC/doc/README.md)
+### 编写你的第一个 KairoteLang 程序 或 [学习文档](./Docs/KrtC/Doc/README.md)
 
 创建 `hello.krt` 文件：
 
@@ -141,17 +141,19 @@ Kairote_Lang/
 ├── Re.KrtC/                # 编译器核心 (KrtC → Re.KrtC)
 │   ├── src/
 │   │   ├── Core/           # 基础库（内存、平台、工具）
-│   │   ├── compiler/       # 编译器前端、中端、后端
+│   │   ├── Compiler/       # 编译器前端、中端、后端
 │   │   ├── Bytecode/       # 字节码定义
 │   │   └── Tools/          # 开发工具
 │   ├── Shared/             # 共享代码生成器
-│   ├── stub_include/       # 存根头文件
+│   ├── StubInclude/       # 存根头文件
 │   └── build.zig           # Zig 构建脚本
 ├── ArkLink/                # 链接器
 │   ├── src/                # 核心链接逻辑与后端
 │   └── include/            # 头文件
 ├── libs/                   # 标准库 (.krt)
-└── docs/                   # 文档
+├── SelfHost/               # 自举编译器
+├── Test/                   # 分类测试与质量检查
+└── Docs/                   # 文档
 ```
 
 ---
@@ -201,6 +203,8 @@ Kairote_Lang/
 
 ### 提交规范
 
+- 遵循 [开发规范](DevStand.md)，使用 `Test/Quality/ClangFormat.yaml` 的共享 C 格式配置。
+- 提交前运行 `python3 Test/Quality/CheckStandards.py --all --strict-lengths --base HEAD` 全量检查机械规范，运行 `python3 Test/Quality/Audit.py --jobs 4` 检查编译告警并执行严格规范检查。
 - 使用清晰的提交信息描述变更
 - 确保代码通过现有测试
 - 新增功能请附带测试用例

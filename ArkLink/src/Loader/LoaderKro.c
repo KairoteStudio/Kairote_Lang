@@ -43,7 +43,7 @@ typedef struct {
     uint32_t offset;
     uint32_t sym_idx;
     uint32_t type;
-    int32_t  addend;
+    int32_t addend;
 } KroReloc;
 
 #pragma pack(pop)
@@ -51,9 +51,13 @@ typedef struct {
 #define KRO_MAGIC 0x004F524B
 
 static const char* kro_string_at(const char* string_table, size_t table_size, uint32_t offset) {
-    if (!string_table || offset >= (uint32_t)table_size) return NULL;
+    if (!string_table || offset >= (uint32_t)table_size) {
+        return NULL;
+    }
     size_t max_len = table_size - offset;
-    if (!memchr(string_table + offset, '\0', max_len)) return NULL;
+    if (!memchr(string_table + offset, '\0', max_len)) {
+        return NULL;
+    }
     return string_table + offset;
 }
 
@@ -92,13 +96,13 @@ ArkLinkResult ark_link_load_kro(const char* path, ArkLinkUnit** unit) {
     new_unit->entry_point = header.entry_point;
 
     size_t header_size = sizeof(KroHeader);
-    size_t text_offset   = header_size;
-    size_t rodata_offset = text_offset   + header.text_size;
-    size_t data_offset   = rodata_offset + header.rodata_size;
-    size_t sym_offset    = data_offset   + header.data_size;
-    size_t text_reloc_offset  = sym_offset + header.sym_count * sizeof(KroSymbol);
+    size_t text_offset = header_size;
+    size_t rodata_offset = text_offset + header.text_size;
+    size_t data_offset = rodata_offset + header.rodata_size;
+    size_t sym_offset = data_offset + header.data_size;
+    size_t text_reloc_offset = sym_offset + header.sym_count * sizeof(KroSymbol);
     size_t rodata_reloc_offset = text_reloc_offset + header.text_reloc_count * sizeof(KroReloc);
-    size_t data_reloc_offset   = rodata_reloc_offset + header.rodata_reloc_count * sizeof(KroReloc);
+    size_t data_reloc_offset = rodata_reloc_offset + header.rodata_reloc_count * sizeof(KroReloc);
     size_t strtab_offset = data_reloc_offset + header.data_reloc_count * sizeof(KroReloc);
 
     if (header.text_size > 0) {
@@ -238,9 +242,13 @@ ArkLinkResult ark_link_load_kro(const char* path, ArkLinkUnit** unit) {
             ArkLinkSection* sec = &new_unit->sections[s];
 #ifdef KRO_DEBUG
 #endif
-            if (strcmp(sec->name, ".text") == 0) kro_to_actual[1] = (uint32_t)(s + 1);
-            else if (strcmp(sec->name, ".rodata") == 0) kro_to_actual[2] = (uint32_t)(s + 1);
-            else if (strcmp(sec->name, ".data") == 0) kro_to_actual[3] = (uint32_t)(s + 1);
+            if (strcmp(sec->name, ".text") == 0) {
+                kro_to_actual[1] = (uint32_t)(s + 1);
+            } else if (strcmp(sec->name, ".rodata") == 0) {
+                kro_to_actual[2] = (uint32_t)(s + 1);
+            } else if (strcmp(sec->name, ".data") == 0) {
+                kro_to_actual[3] = (uint32_t)(s + 1);
+            }
         }
 
         kro_to_actual[4] = 0;
@@ -275,9 +283,9 @@ ArkLinkResult ark_link_load_kro(const char* path, ArkLinkUnit** unit) {
             uint32_t count;
             uint32_t kro_sec_idx;
         } reloc_sections[] = {
-            { header.text_reloc_count,   1 },
-            { header.rodata_reloc_count, 2 },
-            { header.data_reloc_count,   3 },
+            {header.text_reloc_count, 1},
+            {header.rodata_reloc_count, 2},
+            {header.data_reloc_count, 3},
         };
 
         size_t reloc_offsets[] = {
@@ -287,13 +295,19 @@ ArkLinkResult ark_link_load_kro(const char* path, ArkLinkUnit** unit) {
         };
 
         for (int r = 0; r < 3; r++) {
-            if (reloc_sections[r].count == 0) continue;
+            if (reloc_sections[r].count == 0) {
+                continue;
+            }
 
             uint32_t actual_sec_idx = kro_to_actual[reloc_sections[r].kro_sec_idx];
-            if (actual_sec_idx == 0 || actual_sec_idx > new_unit->section_count) continue;
+            if (actual_sec_idx == 0 || actual_sec_idx > new_unit->section_count) {
+                continue;
+            }
 
             KroReloc* kro_relocs = (KroReloc*)malloc(reloc_sections[r].count * sizeof(KroReloc));
-            if (!kro_relocs) continue;
+            if (!kro_relocs) {
+                continue;
+            }
 
             fseek(file, (long)reloc_offsets[r], SEEK_SET);
             if (fread(kro_relocs, sizeof(KroReloc), reloc_sections[r].count, file) == reloc_sections[r].count) {

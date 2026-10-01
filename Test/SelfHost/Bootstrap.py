@@ -53,7 +53,7 @@ PROBES = {
 
 
 # Read the actual runtime sources: generated compilers receive one complete
-# input module directly, so these generation checks never depend on compile.py.
+# input module directly, so these generation checks never depend on Compile.py.
 CONSOLE_SOURCE = "\n".join((ROOT / "libs/System" / name).read_text()
                              for name in ("Sys.krt", "Console.krt"))
 PROBES.update({

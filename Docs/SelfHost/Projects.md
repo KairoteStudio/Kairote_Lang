@@ -2,7 +2,7 @@
 
 `SelfHost/krtc` runs the Python build driver and the verified native Stage 2
 compiler. It never falls back to Re.KrtC. Build Stage 2 with
-`python3 Test/SelfHost/bootstrap.py` before using the default compiler.
+`python3 Test/SelfHost/Bootstrap.py` before using the default compiler.
 
 ```sh
 ./SelfHost/krtc new console /tmp/hello-kairote
@@ -148,7 +148,7 @@ configuration language.
 
 ```sh
 python3 -m unittest Test.SelfHost.test_project Test.SelfHost.test_driver Test.SelfHost.test_native_linking
-python3 Test/SelfHost/run_standard_library.py --compiler build/selfhost/stage2/program
+python3 Test/SelfHost/RunStandardLibrary.py --compiler build/selfhost/stage2/program
 ```
 
 The standard-library runner executes the existing Re.KrtC library contract tests

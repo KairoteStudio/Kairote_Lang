@@ -43,7 +43,7 @@ fib 的计时来自程序内部 `CLOCK_MONOTONIC`，每次验证结果分别为 
 
 ## 全量扫描与回归结果
 
-扫描覆盖 `Re.KrtC/src`、`Shared`、`stub_include` 和 `ArkLink/src`、`include` 的全部自有 C 源码、头文件和 `.inc`，不扫描生成的构建缓存。共 65 个 C 翻译单元，两套编译器各编译一次，共 130 次检查：GCC 16.2.1 与 Clang 22.1.8，**0 警告、0 错误**。145 份源码的制表符缩进、尾随空白和末尾换行检查均通过。结果和逐文件 SHA-256 见 `AuditResults.json`。
+扫描覆盖 `Re.KrtC/src`、`Shared`、`StubInclude` 和 `ArkLink/src`、`include` 的全部自有 C 源码、头文件和 `.inc`，不扫描生成的构建缓存。共 65 个 C 翻译单元，两套编译器各编译一次，共 130 次检查：GCC 16.2.1 与 Clang 22.1.8，**0 警告、0 错误**。145 份源码的制表符缩进、尾随空白和末尾换行检查均通过。结果和逐文件 SHA-256 见 `AuditResults.json`。
 
 扫描启用 `-Wall -Wextra -Wformat=2 -Wshadow -Wundef` 及对齐告警。另列出 212 个在扫描到的 C/INC 实现中仅出现定义的外部 API 候选；清单会计入测试代码与头文件引用。这些候选可能用于公开接口、可选后端或动态调用，不能仅凭词法计数认定为死代码。可确定的未使用静态实现已清理，构建会拦截对应告警。
 

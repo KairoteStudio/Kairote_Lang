@@ -1326,8 +1326,8 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
         }
         if (instance_name && object && object->type != AST_THIS) {
             SymbolEntry* owner = semantic_analyzer_lookup_class(analyzer, instance_name);
-            SymbolEntry* field = owner && owner->nested_table
-                                     ? symbol_table_lookup(owner->nested_table, member_name) : NULL;
+            SymbolEntry* field =
+                owner && owner->nested_table ? symbol_table_lookup(owner->nested_table, member_name) : NULL;
             if (field && field->type == SYMBOL_FIELD) {
                 KRT_FREE(expr->data.member_access.resolved_class_name);
                 expr->data.member_access.resolved_class_name = KRT_STRDUP(instance_name);
