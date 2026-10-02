@@ -1,22 +1,55 @@
 """Build and execute three self-hosted generations; retain all evidence.
 
-Only seed() invokes the C-written Stage 0. Subsequent compilations execute the
-Kairote binary with an empty PATH and link its KRO using the absolute ArkLink
-path. No C source or external compiler is used as an intermediate backend.
+Only seed() invokes the C-written Stage 0 and assembles its single input module.
+Subsequent compiler generations read the original Kairote source files through
+their native CLI with an empty PATH. The Python harness records evidence and
+links emitted KROs through the absolute ArkLink path.
 """
 import argparse
 import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 SEED_DEFAULT = ROOT / "build/Re.KrtC/KrtC"
 LINKER_DEFAULT = ROOT / "build/ArkLink/ArkLink"
 KRTC = Path(os.environ.get("KRTC", SEED_DEFAULT if SEED_DEFAULT.exists() else ROOT / "Re.KrtC/build/KrtC")).resolve()
 ARKLINK = Path(os.environ.get("ARKLINK", LINKER_DEFAULT if LINKER_DEFAULT.exists() else ROOT / "ArkLink/build/ArkLink")).resolve()
+
+NATIVE_DRIVER_MODULES = (
+    "Test.SelfHost.test_native_driver", "Test.SelfHost.test_native_optimizer",
+    "Test.SelfHost.test_native_registers", "Test.SelfHost.test_native_ssa",
+    "Test.SelfHost.test_native_parameters", "Test.SelfHost.test_native_artifacts",
+    "Test.SelfHost.test_semantic_restoration", "Test.SelfHost.test_wide_precision",
+    "Test.SelfHost.test_named_arguments",
+    "Test.SelfHost.test_globals_functions.GlobalsAndFunctionPointers.test_function_type_results_preserve_nested_ref_and_object_shapes",
+    "Test.SelfHost.test_access_control", "Test.SelfHost.test_struct_values",
+    "Test.SelfHost.test_fixed_generic_values", "Test.SelfHost.test_value_programs",
+    "Test.SelfHost.test_function_containers", "Test.SelfHost.test_deep_inheritance",
+    "Test.SelfHost.test_http_server",
+    "Test.SelfHost.test_string_compound", "Test.SelfHost.test_aggregate_conditions",
+    "Test.SelfHost.test_struct_linkage", "Test.SelfHost.test_native_backend",
+    "Test.SelfHost.test_indirect_arguments",
+    "Test.SelfHost.test_struct_pointer_layout",
+    "Test.SelfHost.test_control_flow",
+    "Test.SelfHost.test_contextual_arguments",
+)
+
+
+def file_sha256(path):
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError as error:
+        raise RuntimeError(f"Cannot verify artifact {path}: {error}") from error
+
+
+def summary_sha256(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 PROBES = {
     "constant": ("int32 main() { return 7; }", 7),
@@ -52,8 +85,8 @@ PROBES = {
 }
 
 
-# Read the actual runtime sources: generated compilers receive one complete
-# input module directly, so these generation checks never depend on Compile.py.
+# Read the actual runtime sources for isolated language probes. Compiler
+# generations instead receive the original source-file paths through their CLI.
 CONSOLE_SOURCE = "\n".join((ROOT / "libs/System" / name).read_text()
                              for name in ("Sys.krt", "Console.krt"))
 PROBES.update({
@@ -146,19 +179,267 @@ PROBES.update({
 })
 
 
+ERROR_CASES = {
+    "syntax": "int32 main() { return (1 + ); }",
+    "undefined": "int32 main() { return missing; }",
+    "type": 'int32 main() { int32 value = "text"; return value; }',
+    "arity": "int32 f(int32 x) { return x; } int32 main() { return f(); }",
+    "reference": "void f(ref int32 x) { x=1; } int32 main() { f(ref 7); return 0; }",
+    "duplicate": "int32 main() { int32 x=1; int32 x=2; return x; }",
+    "return": "int32 main() { int32 x=1; }",
+    "break": "int32 main() { break; return 0; }",
+    "invalid_hex": "int32 main() { return 0x; }",
+    "invalid_hex_digit": "int32 main() { return 0xGG; }",
+    "literal_overflow": "int32 main() { uint64 x=18446744073709551616; return 0; }",
+    "array_length_mutation": "int32 main() { int32[] x=new int32[2]; x.Length=7; return 0; }",
+    "string_length_mutation": 'int32 main() { string x="abc"; x.Length=7; return 0; }',
+    "string_arithmetic": 'int32 main() { string x="abc"; string y=x-1; return 0; }',
+    "float_bitwise": "int32 main() { float64 x=3; return (int32)(x & 1); }",
+    "float_reference_width": "void f(ref float32 x) { x=1; } int32 main() { float64 x=0; f(ref x); return 0; }",
+    "float_array_index": "int32 main() { int32[] x=new int32[2]; return x[1.0]; }",
+    "wide_literal_overflow": "int32 main() { uint128 x=340282366920938463463374607431768211456; return 0; }",
+    "constructor_arity": "class Box {public Box(int32 x){}} int32 main(){Box b=new Box();return 0;}",
+    "foreach_scope": "int32 main(){foreach(var x in [1,2]){}return x;}",
+    "array_literal_mixed": 'int32 main(){int32[] x=[1,"wrong"];return 0;}',
+    "rethrow_without_catch": "int32 main(){throw;}",
+    "generic_instance_mismatch": "class Box<T>{T value;}int32 main(){Box<int32> b=new Box<string>();return 0;}",
+    "generic_inference_mismatch": 'T pick<T>(T a,T b){return a;}int32 main(){return pick(1,"wrong");}',
+    "generic_class_constraint": 'class H<T> where T:class{}int32 main(){H<int32> h=new H<int32>();return 0;}',
+    "generic_constructor_constraint": 'class A{public A(int32 n){}}T create<T>() where T:new(){return new T();}int32 main(){create<A>();return 0;}',
+    "inheritance_cycle": 'class A:B{}class B:A{}int32 main(){return 0;}',
+    "unchecked_downcast": 'class A{}class B:A{}int32 main(){A a=new A();B b=(B)a;return 0;}',
+    "abstract_instance": 'abstract class A{public abstract int32 Read();}int32 main(){A a=new A();return 0;}',
+    "missing_abstract_override": 'abstract class A{public abstract int32 Read();}class B:A{}int32 main(){return 0;}',
+    "missing_interface_method": 'interface I{int32 Read();}class A:I{}int32 main(){return 0;}',
+    "interface_cycle": 'interface I:J{}interface J:I{}int32 main(){return 0;}',
+    "unchecked_interface_cast": 'interface I{}class A{}int32 main(){A a=new A();I i=(I)a;return 0;}',
+
+}
+
 class Bootstrap:
     def __init__(self, work):
         self.work = Path(work).resolve()
         self.work.mkdir(parents=True, exist_ok=True)
         self.commands = []
         self.report = {"complete": False, "commands": self.commands, "hashes": {}, "probes": {}}
-        self.source = "\n".join(p.read_text() for p in sorted((ROOT / "SelfHost").rglob("*.krt")))
+        self.sources = sorted((ROOT / "SelfHost").rglob("*.krt"))
+        self.source = "\n".join(p.read_text() for p in self.sources)
         self.report["source_sha256"] = hashlib.sha256(self.source.encode()).hexdigest()
+        self.report["source_files"] = [str(path.relative_to(ROOT)) for path in self.sources]
+        self.report["source_file_sha256"] = {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
+                                            for path in self.sources}
         self.report["seed_compiler"] = str(KRTC)
         self.report["seed_sha256"] = hashlib.sha256(KRTC.read_bytes()).hexdigest()
+        self.report["linker"] = str(ARKLINK)
         self.report["linker_sha256"] = hashlib.sha256(ARKLINK.read_bytes()).hexdigest()
         (self.work / "Compiler.krt").write_text(self.source)
         (self.work / "empty-path").mkdir(exist_ok=True)
+
+    @classmethod
+    def load_resume(cls, work):
+        """Read a saved generation chain without seeding or replacing its report."""
+        build = cls.__new__(cls)
+        build.work = Path(work).resolve()
+        try:
+            build.report = json.loads((build.work / "report.json").read_text())
+            build.commands = build.report["commands"]
+            build.sources = sorted((ROOT / "SelfHost").rglob("*.krt"))
+            build.source = "\n".join(path.read_text() for path in build.sources)
+            build.validate_saved_stages()
+        except (OSError, KeyError, TypeError, ValueError) as error:
+            raise RuntimeError(f"Invalid saved bootstrap report: {error}") from error
+        return build
+
+    def source_hashes(self):
+        return {str(path.relative_to(ROOT)): file_sha256(path)
+                for path in sorted((ROOT / "SelfHost").rglob("*.krt"))}
+
+    def record_artifacts(self, *paths):
+        hashes = self.report.setdefault("artifact_sha256", {})
+        for path in paths:
+            hashes[str(Path(path).relative_to(self.work))] = file_sha256(path)
+
+    def artifact_paths(self):
+        paths = [self.work / "Compiler.krt", self.work / "Compiler.kro", self.work / "stage1"]
+        for name in ("stage2", "stage3", "stage4-check"):
+            paths.extend(self.work / name / filename for filename in ("stage1-probe.kro", "program"))
+        for label in ("stage1", "stage2", "stage3"):
+            for name in PROBES:
+                paths.extend(self.work / f"{label}-{name}" / filename
+                             for filename in ("program.krt", "stage1-probe.kro", "program"))
+        for label in ("stage2", "stage3"):
+            paths.extend(self.work / f"{label}-error-{name}" / "program.krt" for name in ERROR_CASES)
+        return paths
+
+    def evidence_snapshot(self):
+        inputs = {}
+        for directory in (ROOT / "Test/SelfHost", ROOT / "libs", ROOT / "examples"):
+            for path in sorted(directory.rglob("*")):
+                if path.is_file() and path.suffix in (".py", ".krt", ".kproj", ".json"):
+                    inputs[str(path.relative_to(ROOT))] = file_sha256(path)
+        return {
+            "source_file_sha256": self.source_hashes(),
+            "seed_sha256": file_sha256(KRTC), "linker_sha256": file_sha256(ARKLINK),
+            "artifact_sha256": {str(path.relative_to(self.work)): file_sha256(path)
+                                for path in self.artifact_paths()},
+            "acceptance_input_sha256": inputs,
+        }
+
+    def validate_saved_stages(self):
+        """Require the original source/tool identity and every prior successful gate."""
+        report = self.report
+        files = [str(path.relative_to(ROOT)) for path in self.sources]
+        if report.get("source_files") != files or report.get("source_file_sha256") != self.source_hashes():
+            raise RuntimeError("Compiler source files differ from the saved bootstrap")
+        source_hash = hashlib.sha256(self.source.encode()).hexdigest()
+        if report.get("source_sha256") != source_hash or file_sha256(self.work / "Compiler.krt") != source_hash:
+            raise RuntimeError("Seed source bundle differs from the saved bootstrap")
+        if report.get("seed_compiler") != str(KRTC) or report.get("seed_sha256") != file_sha256(KRTC):
+            raise RuntimeError("Seed compiler differs from the saved bootstrap")
+        if report.get("linker", str(ARKLINK)) != str(ARKLINK) or report.get("linker_sha256") != file_sha256(ARKLINK):
+            raise RuntimeError("Linker differs from the saved bootstrap")
+        empty_path = self.work / "empty-path"
+        if not empty_path.is_dir() or any(empty_path.iterdir()):
+            raise RuntimeError("Saved isolated PATH is missing or contains files")
+        if "source_file_sha256_after" in report and report["source_file_sha256_after"] != report["source_file_sha256"]:
+            raise RuntimeError("Saved bootstrap reports changed compiler sources")
+
+        def require_command(argv, cwd, isolated, status=0, stdout=None, stderr=None, count=1):
+            matches = [record for record in self.commands
+                       if record.get("argv") == list(map(str, argv)) and record.get("cwd") == str(cwd)
+                       and record.get("isolated_path") is isolated and record.get("returncode") == status
+                       and (stdout is None or record.get("stdout") == stdout)
+                       and (stderr is None or record.get("stderr") == stderr)]
+            if len(matches) < count:
+                raise RuntimeError(f"Missing successful saved command evidence: {argv}")
+
+        def require_object(name):
+            output = self.work / name / "stage1-probe.kro"
+            if report.get("hashes", {}).get(name) != file_sha256(output):
+                raise RuntimeError(f"Saved KRO hash differs: {name}")
+            return output
+
+        self._resume_link_checks = []
+        self._resume_seed_replay = False
+
+        def require_binary(output, binary, cwd):
+            if not binary.is_file() or not os.access(binary, os.X_OK):
+                raise RuntimeError(f"Saved executable is missing: {binary}")
+            recorded = report.get("artifact_sha256", {}).get(str(binary.relative_to(self.work)))
+            if recorded is not None:
+                if recorded != file_sha256(binary):
+                    raise RuntimeError(f"Saved executable hash differs: {binary}")
+            else:
+                # Reports predating executable hashes must prove the executable
+                # bytes. Stage 0 configures its embedded linker differently
+                # from the ArkLink CLI, so its seed requires isolated replay.
+                if binary == self.work / "stage1":
+                    self._resume_seed_replay = True
+                else:
+                    self._resume_link_checks.append((output, binary, cwd))
+
+        stage1 = self.work / "stage1"
+        require_command([KRTC, "-O2", self.work / "Compiler.krt", "output", stage1], self.work, False)
+        require_binary(self.work / "Compiler.kro", stage1, self.work)
+        generation_hashes = []
+        compiler = stage1
+        for name in ("stage2", "stage3", "stage4-check"):
+            cwd = self.work / name
+            output = require_object(name)
+            binary = cwd / "program"
+            require_command([compiler, *self.sources, "-c", "-o", output], cwd, True)
+            require_command([ARKLINK, output, "--target", "elf", "-o", binary], cwd, True)
+            require_binary(output, binary, cwd)
+            generation_hashes.append(report["hashes"][name])
+            compiler = binary
+        if len(set(generation_hashes)) != 1:
+            raise RuntimeError("Saved compiler generations are not a KRO fixed point")
+
+        expectations = {name: {"exit": status, "stdout": PROBE_STDOUT.get(name, ""),
+                               "source_sha256": hashlib.sha256(source.encode()).hexdigest()}
+                        for name, (source, status) in PROBES.items()}
+        if report.get("probe_expectations") != expectations:
+            raise RuntimeError("Saved language probe definitions differ")
+        for label in ("stage1", "stage2", "stage3"):
+            compiler = stage1 if label == "stage1" else self.work / label / "program"
+            for name, (source, status) in PROBES.items():
+                key = f"{label}-{name}"
+                cwd = self.work / key
+                if file_sha256(cwd / "program.krt") != expectations[name]["source_sha256"]:
+                    raise RuntimeError(f"Saved probe source differs: {key}")
+                output = require_object(key)
+                binary = cwd / "program"
+                if report.get("probes", {}).get(key) != status:
+                    raise RuntimeError(f"Saved probe did not pass: {key}")
+                require_command([compiler], cwd, True)
+                require_command([ARKLINK, output, "--target", "elf", "-o", binary], cwd, True)
+                require_command([binary], cwd, True, status, PROBE_STDOUT.get(name, ""))
+                require_binary(output, binary, cwd)
+                if label == "stage3" and report["hashes"][key] != report["hashes"][f"stage2-{name}"]:
+                    raise RuntimeError(f"Saved probe generations differ: {name}")
+        diagnostics = report.get("diagnostics", {})
+        if diagnostics.get("stage2") != diagnostics.get("stage3") or set(diagnostics.get("stage2", {})) != set(ERROR_CASES):
+            raise RuntimeError("Saved diagnostic generations are incomplete or differ")
+        for label in ("stage2", "stage3"):
+            for name, source in ERROR_CASES.items():
+                cwd = self.work / f"{label}-error-{name}"
+                if file_sha256(cwd / "program.krt") != hashlib.sha256(source.encode()).hexdigest():
+                    raise RuntimeError(f"Saved diagnostic source differs: {label}/{name}")
+                diagnostic = diagnostics[label][name]
+                if not diagnostic.startswith("E_") or (cwd / "stage1-probe.kro").exists():
+                    raise RuntimeError(f"Saved error produced an artifact or invalid diagnostic: {label}/{name}")
+                require_command([self.work / label / "program"], cwd, True, 1, stderr=diagnostic, count=2)
+        for path in self.artifact_paths():
+            digest = file_sha256(path)
+            recorded = report.get("artifact_sha256", {}).get(str(path.relative_to(self.work)))
+            if recorded is not None and recorded != digest:
+                raise RuntimeError(f"Saved artifact hash differs: {path}")
+
+    def resume_native_driver(self):
+        """Finish native acceptance after validating, never regenerating, the chain."""
+        self.validate_saved_stages()
+        before = self.evidence_snapshot()
+        if self._resume_seed_replay:
+            with tempfile.TemporaryDirectory(prefix="resume-seed-", dir=self.work) as directory:
+                cwd = Path(directory)
+                binary = cwd / "stage1"
+                self.run([KRTC, "-O2", self.work / "Compiler.krt", "output", binary], cwd)
+                if (file_sha256(binary) != file_sha256(self.work / "stage1") or
+                        file_sha256(cwd / "Compiler.kro") != file_sha256(self.work / "Compiler.kro")):
+                    raise RuntimeError("Saved seed executable or KRO differs from isolated Stage 0 replay")
+        for output, binary, cwd in self._resume_link_checks:
+            with tempfile.TemporaryDirectory(prefix="resume-link-", dir=self.work) as directory:
+                linked = Path(directory) / "program"
+                self.run([ARKLINK, output, "--target", "elf", "-o", linked], cwd, isolated=True)
+                if file_sha256(linked) != file_sha256(binary):
+                    raise RuntimeError(f"Saved executable does not match its KRO: {binary}")
+        if self.evidence_snapshot() != before:
+            raise RuntimeError("Bootstrap evidence changed during resume validation")
+        self.record_artifacts(*self.artifact_paths())
+        self.report["complete"] = False
+        history = {"command_index": len(self.commands), "basis_sha256": summary_sha256(before),
+                   "previous_failure": self.report.get("failure"),
+                   "validated_executables": len(self._resume_link_checks),
+                   "seed_replayed": self._resume_seed_replay}
+        self.report.setdefault("resumes", []).append(history)
+        self.save()
+        self.native_driver(self.work / "stage2/program", "stage2")
+        self.native_driver(self.work / "stage3/program", "stage3")
+        if self.evidence_snapshot() != before:
+            raise RuntimeError("Bootstrap evidence changed during resumed native acceptance")
+        history["complete"] = True
+        self.finish()
+
+    def finish(self):
+        self.report["source_file_sha256_after"] = self.source_hashes()
+        if self.report["source_file_sha256"] != self.report["source_file_sha256_after"]:
+            raise RuntimeError("Compiler sources changed during bootstrap")
+        if not all(self.report.get("native_driver", {}).get(label) for label in ("stage2", "stage3")):
+            raise RuntimeError("Both native compiler generations must pass acceptance")
+        self.report["artifact_sha256_after"] = self.evidence_snapshot()["artifact_sha256"]
+        self.report.pop("failure", None)
+        self.report["complete"] = True
+        self.save()
 
     def save(self):
         (self.work / "report.json").write_text(json.dumps(self.report, indent=2) + "\n")
@@ -182,6 +463,8 @@ class Bootstrap:
         binary = self.work / "stage1"
         self.run([KRTC, "-O2", self.work / "Compiler.krt", "output", binary], self.work)
         binary.chmod(0o755)
+        self.record_artifacts(self.work / "Compiler.krt", self.work / "Compiler.kro", binary)
+        self.save()
         return binary
 
     def compile(self, compiler, source, name):
@@ -199,8 +482,56 @@ class Bootstrap:
         binary = work / "program"
         self.run([ARKLINK, output, "--target", "elf", "-o", binary], work, isolated=True)
         binary.chmod(0o755)
+        self.record_artifacts(work / "program.krt", output, binary)
         self.save()
         return binary, digest
+
+    def compile_sources(self, compiler, sources, name):
+        """Exercise native source loading without generating a combined file."""
+        work = self.work / name
+        work.mkdir(exist_ok=True)
+        output = work / "stage1-probe.kro"
+        output.unlink(missing_ok=True)
+        self.run([compiler, *sources, "-c", "-o", output], work, isolated=True)
+        if not output.is_file():
+            raise RuntimeError(f"Native CLI produced no KRO: {work}")
+        digest = hashlib.sha256(output.read_bytes()).hexdigest()
+        self.report["hashes"][name] = digest
+        binary = work / "program"
+        self.run([ARKLINK, output, "--target", "elf", "-o", binary], work, isolated=True)
+        binary.chmod(0o755)
+        self.record_artifacts(output, binary)
+        self.save()
+        return binary, digest
+
+    def native_driver(self, compiler, label):
+        """Run direct CLI regressions while Python executables are absent from PATH."""
+        compiler = Path(compiler).resolve()
+        before = self.evidence_snapshot()
+        env = os.environ.copy()
+        env["SELFHOST_COMPILER"] = str(compiler)
+        env["ARKLINK"] = str(ARKLINK)
+        env["PATH"] = str(self.work / "empty-path")
+        argv = [sys.executable, "-m", "unittest", *NATIVE_DRIVER_MODULES]
+        result = subprocess.run(argv,
+                                cwd=ROOT, env=env, capture_output=True, text=True, timeout=180)
+        after = self.evidence_snapshot()
+        passed = result.returncode == 0 and before == after and re.search(r"\nOK\s*$", result.stderr) is not None
+        count = re.search(r"Ran (\d+) tests in", result.stderr)
+        self.commands.append({"argv": argv,
+                              "cwd": str(ROOT), "isolated_path": True, "returncode": result.returncode,
+                              "stdout": result.stdout, "stderr": result.stderr, "native_driver": label,
+                              "env": {name: env[name] for name in ("SELFHOST_COMPILER", "ARKLINK", "PATH")},
+                              "compiler_sha256": file_sha256(compiler), "runner_sha256": file_sha256(sys.executable),
+                              "evidence_before": before, "evidence_after": after,
+                              "evidence_before_sha256": summary_sha256(before),
+                              "evidence_after_sha256": summary_sha256(after),
+                              "test_count": int(count.group(1)) if count else None})
+        self.report.setdefault("native_driver", {})[label] = passed
+        self.save()
+        if not passed:
+            raise RuntimeError(f"Native CLI regressions failed for {label}:\n{result.stdout}{result.stderr}")
+        print(f"PASS {label}: native CLI, imports, diagnostics, projects and optimization", flush=True)
 
     def probes(self, compiler, label):
         hashes = {}
@@ -221,42 +552,7 @@ class Bootstrap:
         return hashes
 
     def errors(self, compiler, label):
-        cases = {
-            "syntax": "int32 main() { return (1 + ); }",
-            "undefined": "int32 main() { return missing; }",
-            "type": 'int32 main() { int32 value = "text"; return value; }',
-            "arity": "int32 f(int32 x) { return x; } int32 main() { return f(); }",
-            "reference": "void f(ref int32 x) { x=1; } int32 main() { f(ref 7); return 0; }",
-            "duplicate": "int32 main() { int32 x=1; int32 x=2; return x; }",
-            "return": "int32 main() { int32 x=1; }",
-            "break": "int32 main() { break; return 0; }",
-            "invalid_hex": "int32 main() { return 0x; }",
-            "invalid_hex_digit": "int32 main() { return 0xGG; }",
-            "literal_overflow": "int32 main() { uint64 x=18446744073709551616; return 0; }",
-            "array_length_mutation": "int32 main() { int32[] x=new int32[2]; x.Length=7; return 0; }",
-            "string_length_mutation": 'int32 main() { string x="abc"; x.Length=7; return 0; }',
-            "string_arithmetic": 'int32 main() { string x="abc"; string y=x-1; return 0; }',
-            "float_bitwise": "int32 main() { float64 x=3; return (int32)(x & 1); }",
-            "float_reference_width": "void f(ref float32 x) { x=1; } int32 main() { float64 x=0; f(ref x); return 0; }",
-            "float_array_index": "int32 main() { int32[] x=new int32[2]; return x[1.0]; }",
-            "wide_literal_overflow": "int32 main() { uint128 x=340282366920938463463374607431768211456; return 0; }",
-            "constructor_arity": "class Box {public Box(int32 x){}} int32 main(){Box b=new Box();return 0;}",
-            "foreach_scope": "int32 main(){foreach(var x in [1,2]){}return x;}",
-            "array_literal_mixed": 'int32 main(){int32[] x=[1,"wrong"];return 0;}',
-            "rethrow_without_catch": "int32 main(){throw;}",
-            "generic_instance_mismatch": "class Box<T>{T value;}int32 main(){Box<int32> b=new Box<string>();return 0;}",
-            "generic_inference_mismatch": 'T pick<T>(T a,T b){return a;}int32 main(){return pick(1,"wrong");}',
-            "generic_class_constraint": 'class H<T> where T:class{}int32 main(){H<int32> h=new H<int32>();return 0;}',
-            "generic_constructor_constraint": 'class A{public A(int32 n){}}T create<T>() where T:new(){return new T();}int32 main(){create<A>();return 0;}',
-            "inheritance_cycle": 'class A:B{}class B:A{}int32 main(){return 0;}',
-            "unchecked_downcast": 'class A{}class B:A{}int32 main(){A a=new A();B b=(B)a;return 0;}',
-            "abstract_instance": 'abstract class A{public abstract int32 Read();}int32 main(){A a=new A();return 0;}',
-            "missing_abstract_override": 'abstract class A{public abstract int32 Read();}class B:A{}int32 main(){return 0;}',
-            "missing_interface_method": 'interface I{int32 Read();}class A:I{}int32 main(){return 0;}',
-            "interface_cycle": 'interface I:J{}interface J:I{}int32 main(){return 0;}',
-            "unchecked_interface_cast": 'interface I{}class A{}int32 main(){A a=new A();I i=(I)a;return 0;}',
-
-        }
+        cases = ERROR_CASES
         diagnostics = {}
         for name, source in cases.items():
             work = self.work / f"{label}-error-{name}"
@@ -279,11 +575,11 @@ class Bootstrap:
         self.probes(stage1, "stage1")
         if probes_only:
             return
-        stage2, hash2 = self.compile(stage1, self.source, "stage2")
+        stage2, hash2 = self.compile_sources(stage1, self.sources, "stage2")
         print(f"Stage 2 linked: {hash2}", flush=True)
-        stage3, hash3 = self.compile(stage2, self.source, "stage3")
+        stage3, hash3 = self.compile_sources(stage2, self.sources, "stage3")
         print(f"Stage 3 linked: {hash3}", flush=True)
-        _, hash4 = self.compile(stage3, self.source, "stage4-check")
+        _, hash4 = self.compile_sources(stage3, self.sources, "stage4-check")
         if len({hash2, hash3, hash4}) != 1:
             raise RuntimeError("Compiler KRO differs across generations")
         probes2 = self.probes(stage2, "stage2")
@@ -292,21 +588,32 @@ class Bootstrap:
             raise RuntimeError("Probe KRO differs between Stage 2 and Stage 3")
         if self.errors(stage2, "stage2") != self.errors(stage3, "stage3"):
             raise RuntimeError("Diagnostics differ between Stage 2 and Stage 3")
-        self.report["complete"] = True
-        self.save()
+        self.native_driver(stage2, "stage2")
+        self.native_driver(stage3, "stage3")
+        self.finish()
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work", type=Path, default=ROOT / "build/selfhost")
     parser.add_argument("--probes-only", action="store_true", help="Develop native features without claiming bootstrap completion")
+    parser.add_argument("--resume-native-driver", action="store_true",
+                        help="Validate saved generations and rerun both complete native acceptance suites")
     args = parser.parse_args()
-    build = Bootstrap(args.work)
+    if args.probes_only and args.resume_native_driver:
+        parser.error("--probes-only cannot be combined with --resume-native-driver")
+    build = None
     try:
-        build.verify(args.probes_only)
+        build = Bootstrap.load_resume(args.work) if args.resume_native_driver else Bootstrap(args.work)
+        if args.resume_native_driver:
+            build.resume_native_driver()
+        else:
+            build.verify(args.probes_only)
     except (RuntimeError, subprocess.TimeoutExpired) as error:
-        build.report["failure"] = str(error)
-        build.save()
+        if build is not None:
+            build.report["complete"] = False
+            build.report["failure"] = str(error)
+            build.save()
         print(error, file=sys.stderr)
         return 1
     print(f"Evidence: {build.work / 'report.json'}")

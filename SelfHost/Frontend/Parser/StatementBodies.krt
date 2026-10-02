@@ -1,0 +1,29 @@
+// A branch body may be a braced block or one statement, including an empty ;.
+KrtAstNode KrtParserParseBody(KrtParser parser) {
+    if(KrtParserTokenText(parser,123)){return KrtParserParseBlock(parser);}
+    int64 start=parser.token.start;KrtAstNode block=KrtAstMake(KrtAstKind.Block,start,0);
+    KrtUsingScope previous_using=parser.current_using_scope;
+    parser.current_using_scope=KrtParserUsingScope(previous_using,null,start);block.native_using_scope=parser.current_using_scope;
+    if(KrtParserTokenText(parser,59)){KrtLexerNext(parser.lexer,parser.token);}
+    else{block.left=KrtParserParseStatement(parser);block.child_count=1;}
+    block.length=parser.token.start-start;KrtParserMarkUsingScope(block.left,parser.current_using_scope);parser.current_using_scope=previous_using;return block;
+}
+
+KrtAstNode KrtParserParseCaseBody(KrtParser parser,int64 start){
+    KrtAstNode body=KrtAstMake(KrtAstKind.Block,start,0);KrtAstNode tail=null;
+    KrtUsingScope previous=parser.current_using_scope;
+    parser.current_using_scope=KrtParserUsingScope(previous,null,start);body.native_using_scope=parser.current_using_scope;
+    while(!KrtParserTokenText(parser,125)&&!KrtParserIsWord(parser,"case")&&!KrtParserIsWord(parser,"default")&&parser.token.kind!=KrtTokenKind.Eof){
+        int64 statement_start=parser.token.start;int32 initial_errors=parser.errors;
+        KrtAstNode statement=KrtParserParseStatement(parser);
+        bool no_progress=parser.token.start==statement_start;
+        if(parser.errors!=initial_errors||no_progress||statement==null||statement.kind==KrtAstKind.Invalid){
+            if(no_progress&&parser.errors==initial_errors){KrtParserRecordError(parser);}
+            KrtParserSynchronize(parser,statement_start,false);
+            if(parser.token.start==statement_start&&!KrtParserTokenText(parser,125)&&!KrtParserIsWord(parser,"case")&&!KrtParserIsWord(parser,"default")&&parser.token.kind!=KrtTokenKind.Eof){KrtLexerNext(parser.lexer,parser.token);}
+            statement=KrtParserMalformed(statement,statement_start,parser.token.start);
+        }
+        if(body.left==null){body.left=statement;}else{tail.next=statement;}tail=statement;body.child_count=body.child_count+1;
+    }
+    body.length=parser.token.start-start;KrtParserMarkUsingScope(body,parser.current_using_scope);parser.current_using_scope=previous;return body;
+}

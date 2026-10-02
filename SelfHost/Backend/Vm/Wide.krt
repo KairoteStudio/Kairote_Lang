@@ -1,0 +1,57 @@
+// Match the native ABI: scalar wide integers use immutable boxes, while array
+// elements and references use packed 16-byte storage.
+int64 KrtVmWideBox(KrtVmState state, int128 value) {
+    int64 pointer = KrtVmAllocate(state,16,0,false);
+    if (pointer != 0) { unsafe(using krt.mem;) { *(int128*)pointer = value; } }
+    return pointer;
+}
+int128 KrtVmWideValue(KrtVmState state, int64 pointer) {
+    if (pointer == 0) { return 0; }
+    if (!KrtVmMemory(state,pointer,16)) { return 0; }
+    unsafe(using krt.mem;) { return *(int128*)pointer; }
+}
+int64 KrtVmWideBinary(KrtVmState state, int64 left, int64 right, int32 operation, bool unsigned_value) {
+    int128 a = KrtVmWideValue(state,left); int128 b = KrtVmWideValue(state,right); int128 result = 0;
+    if (operation == 43) { result = a + b; }
+    else if (operation == 45) { result = a - b; }
+    else if (operation == 42) { result = a * b; }
+    else if (operation == 38) { result = a & b; }
+    else if (operation == 124) { result = a | b; }
+    else if (operation == 94) { result = a ^ b; }
+    else if (operation == 106) { result = a << ((int64)b & 127); }
+    else if (operation == 107) { if (unsigned_value) { result = (int128)((uint128)a >> ((int64)b & 127)); } else { result = a >> ((int64)b & 127); } }
+    else if (operation == 47 || operation == 37) {
+        if (b == 0) { state.failed = true; return 0; }
+        if (unsigned_value) { if (operation == 47) { result = (int128)((uint128)a / (uint128)b); } else { result = (int128)((uint128)a % (uint128)b); } }
+        else { if (operation == 47) { result = a / b; } else { result = a % b; } }
+    }
+    else { state.failed = true; return 0; }
+    return KrtVmWideBox(state,result);
+}
+int64 KrtVmWideCompare(KrtVmState state, int64 left, int64 right, int32 operation, bool unsigned_value) {
+    int128 a = KrtVmWideValue(state,left); int128 b = KrtVmWideValue(state,right); bool result = false;
+    if (operation == 61) { result = a == b; } else if (operation == 101) { result = a != b; }
+    else if (unsigned_value) {
+        if (operation == 60) { result = (uint128)a < (uint128)b; } else if (operation == 62) { result = (uint128)a > (uint128)b; }
+        else if (operation == 102) { result = (uint128)a <= (uint128)b; } else if (operation == 103) { result = (uint128)a >= (uint128)b; }
+    }
+    else {
+        if (operation == 60) { result = a < b; } else if (operation == 62) { result = a > b; }
+        else if (operation == 102) { result = a <= b; } else if (operation == 103) { result = a >= b; }
+    }
+    return result ? 1 : 0;
+}
+int64 KrtVmWideFloat(KrtVmState state, int64 operand, int32 mode, int32 width) {
+    if (mode == 1 || mode == 2) {
+        int128 value = KrtVmWideValue(state,operand); float64 number = 0.0;
+        if (width == 4) {
+            if (mode == 1) { number = (float64)(float32)value; } else { number = (float64)(float32)(uint128)value; }
+        } else {
+            if (mode == 1) { number = (float64)value; } else { number = (float64)(uint128)value; }
+        }
+        return KrtVmFloatBits(number,width);
+    }
+    float64 number = KrtVmFloatValue(operand,width); int128 value = 0;
+    if (mode == 3) { value = (int128)number; } else { value = (int128)(uint128)number; }
+    return KrtVmWideBox(state,value);
+}

@@ -1271,9 +1271,38 @@ void KrtIrVarTypePush(KrtIRBuilder* builder, const char* name, int token, int is
     v->token = token;
     v->is_array = is_array;
     int collisions = 0;
-    for (int i = 0; i < builder->var_type_count - 1; i++) {
-        if (strcmp(builder->var_types[i].name, name) == 0) {
-            collisions++;
+    if (builder->current_function && builder->extensions) {
+        /* Scope exit removes visible bindings, but their IR storage remains in
+         * the function. Keep declaration history separate from visibility so
+         * later scopes cannot reuse a slot with a different storage type. */
+        size_t key_length = strlen(builder->current_function->name) + strlen(name) + 8;
+        char* key = (char*)KrtIrArenaAlloc(builder->arena, key_length);
+        if (!key) {
+            KRT_COMPILE_ERROR("Unable to allocate IR declaration name");
+        }
+        snprintf(key, key_length, "@decl:%s:%s", builder->current_function->name, name);
+        KrtIRVarTable* table = (KrtIRVarTable*)builder->extensions;
+        unsigned int bucket = hash_var_name(key) % KRT_VAR_TABLE_SIZE;
+        KrtIRVarEntry* history = table->buckets[bucket];
+        while (history && strcmp(history->name, key)) {
+            history = history->next;
+        }
+        if (!history) {
+            history = (KrtIRVarEntry*)KrtIrArenaAlloc(builder->arena, sizeof(KrtIRVarEntry));
+            if (!history) {
+                KRT_COMPILE_ERROR("Unable to allocate IR declaration history");
+            }
+            history->name = key;
+            history->current_version = 0;
+            history->next = table->buckets[bucket];
+            table->buckets[bucket] = history;
+        }
+        collisions = history->current_version++;
+    } else {
+        for (int i = 0; i < builder->var_type_count - 1; i++) {
+            if (strcmp(builder->var_types[i].name, name) == 0) {
+                collisions++;
+            }
         }
     }
     if (collisions == 0) {

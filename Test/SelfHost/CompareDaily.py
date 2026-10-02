@@ -3,7 +3,7 @@
 Failures are evidence, not an assertion that Re.KrtC defines the language. Exit 0
 means the comparison completed, not that all probes passed. Use --fail-on-wrong
 for a gate against silent wrong code, crashes and acceptance of invalid programs.
-Compile times include the public CLI (Python wrapper for SelfHost) and linking;
+Compile times include the native public CLI and linking;
 run times include process startup. These microbenchmarks are not broad claims.
 """
 import argparse
@@ -109,15 +109,16 @@ class Comparison:
         self.work = args.work.resolve()
         self.work.mkdir(parents=True, exist_ok=True)
         self.tools = {"selfhost": args.selfhost.resolve(), "rekrtc": args.rekrtc.resolve(),
-                      "wrapper": ROOT / "SelfHost/Compile.py", "comparison": Path(__file__).resolve()}
+                      "launcher": ROOT / "SelfHost/krtc", "comparison": Path(__file__).resolve()}
         for path in self.tools.values():
             if not path.is_file():
                 raise FileNotFoundError(path)
         self.report = {"schema": 1, "complete": False, "environment": {"platform": platform.platform(), "python": sys.version,
                        "cpu_count": os.cpu_count()}, "tools": {k: {"path": str(p), "sha256": sha(p)} for k, p in self.tools.items()},
-                       "method": "Independent expected exits/stdout; Re.KrtC is a comparator, not an oracle. Public CLI timing includes linking and Python startup. Runtime includes process startup. Re object measurement uses retained KRO because target eo also links. Length property and method forms are tested separately. Overflow probe expects fixed-width two's-complement wrapping.",
+                       "method": "Independent expected exits/stdout; Re.KrtC is a comparator, not an oracle. Native public CLI timing includes linking and process startup. Runtime includes process startup. Re object measurement uses retained KRO because target eo also links. Length property and method forms are tested separately. Overflow probe expects fixed-width two's-complement wrapping.",
                        "cases": [], "benchmarks": [], "commands": []}
         self.report["library_sources"] = {str(path.relative_to(ROOT)): sha(path) for path in sorted((ROOT / "libs").rglob("*.krt"))}
+        self.report["compiler_sources"] = {str(path.relative_to(ROOT)): sha(path) for path in sorted((ROOT / "SelfHost").rglob("*.krt"))}
 
     def save(self):
         (self.work / "report.json").write_text(json.dumps(self.report, indent=2) + "\n")
@@ -131,7 +132,7 @@ class Comparison:
             stdout, stderr = process.communicate(timeout=timeout)
             record.update(returncode=process.returncode, stdout=stdout.decode(errors="replace"), stderr=stderr.decode(errors="replace"), timeout=False)
         except subprocess.TimeoutExpired:
-            # Kill wrapper and compiler together; a malformed source must not leave
+            # Kill compiler and linker together; a malformed source must not leave
             # a spinning compiler behind or hold inherited output pipes open.
             os.killpg(process.pid, signal.SIGKILL)
             stdout, stderr = process.communicate()
@@ -146,7 +147,7 @@ class Comparison:
             if p.exists():
                 p.unlink()
         if label == "selfhost":
-            argv = [sys.executable, self.tools["wrapper"], *paths, "--compiler", self.tools[label], "-o", output]
+            argv = [self.tools[label], *paths, "-o", output]
             if object_only:
                 argv.append("-c")
         else:
@@ -227,8 +228,10 @@ class Comparison:
         self.report["tool_hashes_after"] = {k: sha(p) for k, p in self.tools.items()}
         self.report["tools_changed_during_run"] = [k for k, p in self.tools.items() if sha(p) != self.report["tools"][k]["sha256"]]
         self.report["library_sources_after"] = {str(path.relative_to(ROOT)): sha(path) for path in sorted((ROOT / "libs").rglob("*.krt"))}
+        self.report["compiler_sources_after"] = {str(path.relative_to(ROOT)): sha(path) for path in sorted((ROOT / "SelfHost").rglob("*.krt"))}
         self.report["complete"] = (not self.report["tools_changed_during_run"] and
-                                   self.report["library_sources"] == self.report["library_sources_after"])
+                                   self.report["library_sources"] == self.report["library_sources_after"] and
+                                   self.report["compiler_sources"] == self.report["compiler_sources_after"])
         self.save()
         print(json.dumps(self.report["summary"], indent=2))
         print("Report:", self.work / "report.json")

@@ -1,0 +1,142 @@
+// Native pre-link ABI2 validation. KRO payloads remain normal linker inputs;
+// their exact contracts are checked before any executable is published.
+class KrtDriverAbiRecord {
+    public int64 path;
+    public int64 nominal;
+    public int64 nominal_length;
+    public int64 contract;
+    public int64 contract_length;
+    public int64 name;
+    public bool defined;
+    public uint64 hash;
+    public int64 definition_path;
+    public KrtDriverAbiRecord hash_next;
+    public KrtDriverAbiRecord next;
+}
+class KrtDriverAbiState {
+    public KrtDriverAbiRecord records;
+    public KrtDriverAbiRecord tail;
+    public KrtDriverAbiRecord[] buckets;
+    public int32 capacity;
+    public int32 count;
+}
+int64 KrtDriverAbiWord(int64 data,int64 offset){unsafe(using krt.mem;){byte* bytes=(byte*)data;return(int64)bytes[offset]|((int64)bytes[offset+1]<<8)|((int64)bytes[offset+2]<<16)|((int64)bytes[offset+3]<<24);}}
+bool KrtDriverAbiRange(int64 offset,int64 size,int64 length){return offset>=0&&size>=0&&offset<=length&&size<=length-offset;}
+bool KrtDriverAbiEqual(int64 left,int64 left_length,int64 right,int64 right_length){if(left_length!=right_length){return false;}unsafe(using krt.mem;){byte* first=(byte*)left;byte* second=(byte*)right;int64 index=0;while(index<left_length){if(first[index]!=second[index]){return false;}index=index+1;}}return true;}
+uint64 KrtDriverAbiHash(int64 data,int64 length){uint64 hash=14695981039346656037;unsafe(using krt.mem;){byte* bytes=(byte*)data;int64 index=0;while(index<length){hash=(hash^(uint64)bytes[index])*1099511628211;index=index+1;}}return hash;}
+bool KrtDriverAbiFailure(string code,int64 path,string message){KrtDriverError(code,(string)KrtDriverConcat(KrtDriverConcat(path,(int64)": "),(int64)message));return false;}
+int64 KrtDriverAbiSymbolName(KrtDriverBuffer object,int64 symbols,int64 strings,int64 string_length,int64 index){
+    int64 offset=KrtDriverAbiWord(object.data,symbols+index*32);if(offset>=string_length){return 0;}
+    unsafe(using krt.mem;){byte* bytes=(byte*)(object.data+strings);int64 length=0;while(length<string_length-offset&&bytes[offset+length]!=0){length=length+1;}if(length==string_length-offset){return 0;}return object.data+strings+offset;}
+}
+// Objects use a checked mapping, independently of the source-reader budget.
+bool KrtDriverAbiReadBinary(int64 path,KrtDriverBuffer buffer){
+    int64 descriptor=syscall(2,path,0,0,0,0,0);if(descriptor<0){return false;}
+    int64 length=syscall(8,descriptor,0,2,0,0,0);
+    if(length<=0||length>1073741824){syscall(3,descriptor,0,0,0,0,0);return false;}
+    int64 data=syscall(9,0,length,1,2,descriptor,0);syscall(3,descriptor,0,0,0,0,0);
+    if(data<0&&data>=-4095){return false;}buffer.data=data;buffer.length=length;buffer.ok=true;return true;
+}
+bool KrtDriverAbiInsert(KrtDriverAbiState state,KrtDriverAbiRecord record){
+    if(state.capacity==0){state.capacity=256;state.buckets=new KrtDriverAbiRecord[256];}
+    if(state.count>=state.capacity*3/4&&state.capacity<1048576){
+        state.capacity=state.capacity*2;KrtDriverAbiRecord[] buckets=new KrtDriverAbiRecord[state.capacity];
+        KrtDriverAbiRecord existing=state.records;
+        while(existing!=null){int32 slot=(int32)(existing.hash&(uint64)(state.capacity-1));existing.hash_next=buckets[slot];buckets[slot]=existing;existing=existing.next;}
+        delete state.buckets;state.buckets=buckets;
+    }
+    record.hash=KrtDriverAbiHash(record.nominal,record.nominal_length);
+    int32 slot=(int32)(record.hash&(uint64)(state.capacity-1));KrtDriverAbiRecord existing=state.buckets[slot];
+    while(existing!=null){
+        if(record.hash==existing.hash&&KrtDriverAbiEqual(record.nominal,record.nominal_length,existing.nominal,existing.nominal_length)){
+            if(!KrtDriverAbiEqual(record.contract,record.contract_length,existing.contract,existing.contract_length)){
+                return KrtDriverAbiFailure("E_ABI_LAYOUT",record.path,(string)KrtDriverConcat((int64)"contract conflicts with ",existing.path));
+            }
+            if(record.defined&&existing.defined){return KrtDriverAbiFailure("E_ABI_SYMBOL",record.path,(string)KrtDriverConcat((int64)"duplicate public ABI2 definition in ",existing.definition_path));}
+            if(record.defined){existing.defined=true;existing.definition_path=record.path;}return true;
+        }
+        existing=existing.hash_next;
+    }
+    if(state.count>=1048576){return KrtDriverAbiFailure("E_ABI_MANIFEST",record.path,"ABI contract index exceeds 1048576 entries");}
+    if(record.defined){record.definition_path=record.path;}
+    record.hash_next=state.buckets[slot];state.buckets[slot]=record;state.count=state.count+1;
+    if(state.records==null){state.records=record;}else{state.tail.next=record;}state.tail=record;return true;
+}
+bool KrtDriverAbiRead(int64 path,KrtDriverAbiState state){
+    KrtDriverBuffer object=new KrtDriverBuffer();if(!KrtDriverAbiReadBinary(path,object)){return KrtDriverAbiFailure("E_ABI_MANIFEST",path,"unable to map object contracts (object budget: 1 GiB)");}
+    if(object.length<64||KrtDriverAbiWord(object.data,0)!=5198411||KrtDriverAbiWord(object.data,4)!=2){return KrtDriverAbiFailure("E_ABI_MANIFEST",path,"invalid KRO header");}
+    int64 text=KrtDriverAbiWord(object.data,16);int64 rodata=KrtDriverAbiWord(object.data,20);int64 data=KrtDriverAbiWord(object.data,24);
+    int64 count=KrtDriverAbiWord(object.data,48);int64 string_length=KrtDriverAbiWord(object.data,52);int64 relocations=KrtDriverAbiWord(object.data,56);
+    int64 relocation_sum=KrtDriverAbiWord(object.data,32)+KrtDriverAbiWord(object.data,36)+KrtDriverAbiWord(object.data,40);
+    int64 rodata_start=64+text;int64 symbols=rodata_start+rodata+data;int64 strings=symbols+count*32+relocations*16;
+    if(count>1048576||relocations>4194304||relocations!=relocation_sum||!KrtDriverAbiRange(64,text+rodata+data,object.length)||
+       !KrtDriverAbiRange(symbols,count*32+relocations*16,object.length)||!KrtDriverAbiRange(strings,string_length,object.length)){
+        return KrtDriverAbiFailure("E_ABI_MANIFEST",path,"KRO tables exceed object bounds");
+    }
+    int64 manifest=-1;int64 manifest_size=0;bool needs_manifest=false;int64 index=0;
+    bool[] required=new bool[(int32)count];bool[] recorded=new bool[(int32)count];
+    while(index<count){
+        int64 name=KrtDriverAbiSymbolName(object,symbols,strings,string_length,index);if(name==0){return KrtDriverAbiFailure("E_ABI_MANIFEST",path,"invalid symbol string");}
+        if(KrtDriverStringEqual(name,(int64)"_KRT_ABI2_MANIFEST")){
+            int64 offset=KrtDriverAbiWord(object.data,symbols+index*32+4);int64 size=KrtDriverAbiWord(object.data,symbols+index*32+8);
+            if(manifest>=0||KrtDriverAbiWord(object.data,symbols+index*32+12)!=2||KrtDriverAbiWord(object.data,symbols+index*32+16)!=0||KrtDriverAbiWord(object.data,symbols+index*32+20)!=2||!KrtDriverAbiRange(offset,size,rodata)){
+                return KrtDriverAbiFailure("E_ABI_MANIFEST",path,"manifest must be one local read-only symbol");
+            }
+            manifest=rodata_start+offset;manifest_size=size;
+        }
+        if(KrtDriverStartsWith(name,"_KRT2$")){required[(int32)index]=true;needs_manifest=true;}
+        index=index+1;
+    }
+    if(manifest<0){return !needs_manifest||KrtDriverAbiFailure("E_ABI_MANIFEST",path,"ABI2 symbol has no manifest");}
+    if(manifest_size<16||KrtDriverAbiWord(object.data,manifest)!=0x32494241){return KrtDriverAbiFailure("E_ABI_MANIFEST",path,"invalid ABI manifest header");}
+    if(KrtDriverAbiWord(object.data,manifest+4)!=2){return KrtDriverAbiFailure("E_ABI_VERSION",path,"unsupported ABI manifest version");}
+    int64 records=KrtDriverAbiWord(object.data,manifest+8);int64 length=KrtDriverAbiWord(object.data,manifest+12);
+    if(length!=manifest_size||records>count){return KrtDriverAbiFailure("E_ABI_MANIFEST",path,"invalid ABI manifest record count or length");}
+    int64 position=16;int64 record_index=0;
+    while(record_index<records){
+        if(!KrtDriverAbiRange(position,16,length)){return KrtDriverAbiFailure("E_ABI_MANIFEST",path,"truncated ABI record header");}
+        int64 symbol=KrtDriverAbiWord(object.data,manifest+position);int64 defined=KrtDriverAbiWord(object.data,manifest+position+4);
+        int64 nominal_length=KrtDriverAbiWord(object.data,manifest+position+8);int64 contract_length=KrtDriverAbiWord(object.data,manifest+position+12);position=position+16;
+        if(symbol>=count||defined>1||!required[(int32)symbol]||recorded[(int32)symbol]||nominal_length<6||contract_length<nominal_length+18||
+           !KrtDriverAbiRange(position,nominal_length+contract_length,length)){
+            return KrtDriverAbiFailure("E_ABI_MANIFEST",path,"invalid or duplicate ABI record");
+        }
+        int64 section=KrtDriverAbiWord(object.data,symbols+symbol*32+12);int64 binding=KrtDriverAbiWord(object.data,symbols+symbol*32+16);
+        int64 value=KrtDriverAbiWord(object.data,symbols+symbol*32+4);int64 size=KrtDriverAbiWord(object.data,symbols+symbol*32+8);
+        int64 symbol_type=KrtDriverAbiWord(object.data,symbols+symbol*32+20);
+        if(symbol_type!=1||(defined==1&&(section!=1||binding!=1||!KrtDriverAbiRange(value,size,text)))||
+           (defined==0&&(section!=0||binding!=1||value!=0||size!=0))){
+            return KrtDriverAbiFailure("E_ABI_MANIFEST",path,"ABI record disagrees with symbol definition");
+        }
+        KrtDriverAbiRecord record=new KrtDriverAbiRecord();record.path=path;record.defined=defined==1;
+        record.nominal=object.data+manifest+position;record.nominal_length=nominal_length;record.contract=record.nominal+nominal_length;record.contract_length=contract_length;
+        if(!KrtDriverAbiEqual(record.nominal,6,(int64)"_KRT1$",6)||!KrtDriverAbiEqual(record.contract,7,(int64)"KRTABI2",7)||
+           !KrtDriverAbiEqual(record.contract+7,nominal_length,record.nominal,nominal_length)){
+            return KrtDriverAbiFailure("E_ABI_MANIFEST",path,"invalid canonical contract identity");
+        }
+        record.name=KrtDriverAbiSymbolName(object,symbols,strings,string_length,symbol);
+        KrtLinkName expected=KrtLinkNameNew();KrtLinkText(expected,"_KRT2$");
+        unsafe(using krt.mem;){byte* nominal=(byte*)record.nominal;int64 character=6;while(character<nominal_length){if(nominal[character]==0){expected.valid=false;break;}KrtLinkByte(expected,nominal[character]);character=character+1;}}
+        KrtLinkText(expected,"$H");KrtAbiHex(expected,KrtDriverAbiHash(record.contract,contract_length));
+        if(!expected.valid||KrtDriverStringLength(record.name)!=expected.length){return KrtDriverAbiFailure("E_ABI_MANIFEST",path,"invalid ABI symbol name");}
+        unsafe(using krt.mem;){byte* actual=(byte*)record.name;int32 character=0;
+            while(character<expected.length&&actual[character]==expected.bytes[character]){character=character+1;}
+            if(character!=expected.length||actual[character]!=0){return KrtDriverAbiFailure("E_ABI_MANIFEST",path,"ABI symbol fingerprint disagrees with exact contract");}
+        }
+        if(!KrtDriverAbiInsert(state,record)){return false;}
+        recorded[(int32)symbol]=true;position=position+nominal_length+contract_length;record_index=record_index+1;
+    }
+    if(position!=length){return KrtDriverAbiFailure("E_ABI_MANIFEST",path,"trailing ABI record bytes");}
+    index=0;while(index<count){if(required[(int32)index]&&!recorded[(int32)index]){return KrtDriverAbiFailure("E_ABI_MANIFEST",path,"ABI2 symbol is missing its contract record");}index=index+1;}
+    return true;
+}
+bool KrtDriverAbiValidate(KrtDriverPath objects){
+    KrtDriverAbiState state=new KrtDriverAbiState();KrtDriverPath object=objects;
+    while(object!=null){if(!KrtDriverAbiRead(object.value,state)){return false;}object=object.next;}
+    KrtDriverAbiRecord record=state.records;
+    while(record!=null){
+        if(!record.defined){return KrtDriverAbiFailure("E_ABI_SYMBOL",record.path,(string)KrtDriverConcat((int64)"missing public ABI2 definition: ",record.name));}
+        record=record.next;
+    }
+    return true;
+}

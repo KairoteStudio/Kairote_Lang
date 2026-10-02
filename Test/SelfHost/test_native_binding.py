@@ -6,8 +6,9 @@ import subprocess
 import tempfile
 import unittest
 
+from Test.SelfHost.Bootstrap import KRTC
+
 ROOT = Path(__file__).resolve().parents[2]
-KRTC = Path(os.environ.get('KRTC', ROOT / 'Re.KrtC/build/KrtC')).resolve()
 
 
 class NativeBindingTests(unittest.TestCase):
@@ -32,9 +33,8 @@ class NativeBindingTests(unittest.TestCase):
             ('ref array element', 'void f(ref int32 x) { x=7; } int32 main() { int32[] x=new int32[2]; f(ref x[0]); return x[0]; }', True),
             ('grouped comparison', 'class Box { public int32 x; } int32 main() { Box b=new Box(); if((b.x < 2 || b.x > 7)) { return 1; } return 0; }', True),
         ]
-        parts = [str(path.relative_to(ROOT / 'SelfHost')) for folder in ('Frontend', 'Middle')
-                 for path in sorted((ROOT / 'SelfHost' / folder).rglob('*.krt'))]
-        prelude = '\n'.join((ROOT / 'SelfHost' / part).read_text() for part in parts)
+        parts = sorted(path for path in (ROOT / 'SelfHost').rglob('*.krt') if path.name != 'Main.krt')
+        prelude = '\n'.join(path.read_text() for path in parts)
         harness = '''
 bool check(string text) {
     unsafe(using krt.mem;) {

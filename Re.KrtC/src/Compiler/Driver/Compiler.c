@@ -130,10 +130,10 @@ static bool module_fits_kro_limits(KrtIRModule* module) {
                 }
             }
         }
-        if (locals > KRT_KRO_MAX_LOCAL_VARS || temporaries > KRT_KRO_MAX_TEMP_REGS) {
+        if (locals > KRT_KRO_MAX_LOCAL_VARS || temporaries > KRT_KRO_MAX_TEMP_STORAGE) {
         storage_limit:
             KrtError("KRO function %s exceeds the %d local or %d temporary storage limit", fn->name,
-                     KRT_KRO_MAX_LOCAL_VARS, KRT_KRO_MAX_TEMP_REGS);
+                     KRT_KRO_MAX_LOCAL_VARS, KRT_KRO_MAX_TEMP_STORAGE);
             return false;
         }
     }

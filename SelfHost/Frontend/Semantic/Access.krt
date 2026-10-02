@@ -1,0 +1,191 @@
+// Omitted access modifiers preserve Kairote's existing public default.
+int32 KrtNativeAccessMode(KrtAstNode declaration) {
+    if (declaration == null) { return 1; }
+    int32 access = declaration.syntax_modifiers & 8199;
+    if (access == 0) { return 1; }
+    return access;
+}
+
+KrtAstNode KrtNativeAccessOwner(KrtAstNode declaration) {
+    if (declaration == null) { return null; }
+    if (declaration.native_owner != null) { return declaration.native_owner; }
+    KrtAstNode context = declaration.native_context; int32 depth = 0;
+    while (context != null && depth < 64) {
+        if (context.kind == KrtAstKind.TypeDeclaration) { return context; }
+        if (context.native_owner != null) { return context.native_owner; }
+        context = context.native_context; depth = depth + 1;
+    }
+    return null;
+}
+
+KrtAstNode KrtNativeAccessOrigin(KrtAstNode declaration) {
+    int32 depth = 0;
+    while (declaration != null && declaration.native_generic_origin != null && depth < 64) {
+        declaration = declaration.native_generic_origin; depth = depth + 1;
+    }
+    return declaration;
+}
+
+bool KrtNativeAccessSameOwner(KrtAstNode first, KrtAstNode second) {
+    return first != null && second != null && KrtNativeAccessOrigin(first) == KrtNativeAccessOrigin(second);
+}
+
+bool KrtNativeAccessSameFile(KrtAstNode declaration, KrtAstNode caller) {
+    if (declaration == null || caller == null) { return false; }
+    KrtSourceBundle bundle = KrtDriverActiveBundle;
+    if (bundle == null) { return true; }
+    declaration = KrtNativeAccessOrigin(declaration); caller = KrtNativeAccessOrigin(caller);
+    KrtSourceFile file = bundle.files;
+    while (file != null) {
+        if (declaration.start >= file.start && declaration.start < file.start + file.length) {
+            return caller.start >= file.start && caller.start < file.start + file.length;
+        }
+        file = file.order_next;
+    }
+    return false;
+}
+
+// File-private declarations do not conflict with declarations in another
+// original source file. Unknown source positions never grant this exception.
+bool KrtNativeAccessSeparateFiles(KrtAstNode first, KrtAstNode second) {
+    if (first == null || second == null || KrtDriverActiveBundle == null) { return false; }
+    bool file_private = KrtNativeAccessMode(first) == 2 && KrtNativeAccessOwner(first) == null;
+    file_private = file_private || (KrtNativeAccessMode(second) == 2 && KrtNativeAccessOwner(second) == null);
+    if (!file_private) { return false; }
+    first = KrtNativeAccessOrigin(first); second = KrtNativeAccessOrigin(second);
+    KrtSourceFile first_file = null; KrtSourceFile second_file = null;
+    KrtSourceFile file = KrtDriverActiveBundle.files;
+    while (file != null) {
+        if (first.start >= file.start && first.start < file.start + file.length) { first_file = file; }
+        if (second.start >= file.start && second.start < file.start + file.length) { second_file = file; }
+        file = file.order_next;
+    }
+    return first_file != null && second_file != null && first_file != second_file;
+}
+
+bool KrtNativeAccessAllowedDepth(KrtAstNode declaration, KrtNativeBinding binding, KrtAstNode receiver_type, bool base_receiver, int32 depth) {
+    if (declaration == null || binding == null || binding.unit == null || depth > 64) { return false; }
+    KrtAstNode owner = KrtNativeAccessOwner(declaration);
+    if (owner != null && !KrtNativeAccessAllowedDepth(owner,binding,null,false,depth + 1)) { return false; }
+    int32 access = KrtNativeAccessMode(declaration);
+    // Every source root and import in this compilation belongs to one module.
+    // Object-file exports enforce the boundary to another compiled module.
+    if (access == 1 || access == 8192 || access == 8196) { return true; }
+    if (owner == null) { return access == 2 && KrtNativeAccessSameFile(declaration,binding.unit); }
+    KrtAstNode caller = KrtNativeAccessOwner(binding.unit);
+    if (KrtNativeAccessSameOwner(owner,caller)) { return true; }
+    if (access == 2 || caller == null || !KrtNativeDerivesFrom(caller,owner)) { return false; }
+    if (access != 4 && access != 6) { return false; }
+    // A derived class may use a protected instance member through its own
+    // static receiver type (or a descendant), and through this/base. Merely
+    // holding an unrelated Base or sibling instance grants no access.
+    return declaration.native_static || base_receiver || receiver_type == null || KrtNativeDerivesFrom(receiver_type,caller);
+}
+
+bool KrtNativeAccessAllowed(KrtAstNode declaration, KrtNativeBinding binding, KrtAstNode receiver_type, bool base_receiver) {
+    return KrtNativeAccessAllowedDepth(declaration,binding,receiver_type,base_receiver,0);
+}
+
+bool KrtNativeAccessError(KrtNativeBinding binding, KrtAstNode node) {
+    binding.module.native_error = 10;
+    if (binding.error_start < 0 && node != null) {
+        int64 position = node.start; KrtAstNode target = node;
+        if (node.kind == KrtAstKind.Call || (node.kind == KrtAstKind.Unary && node.op == 38)) { target = node.left; }
+        if (target != null) {
+            if (target.kind == KrtAstKind.Member) { position = target.name_start; }
+            else if (target.kind == KrtAstKind.Identifier) { position = target.start; }
+        }
+        if (node.kind == KrtAstKind.New || node.kind == KrtAstKind.TypeTest) { position = node.type_start; }
+        binding.error_start = position;
+    }
+    return false;
+}
+
+bool KrtNativeAccessTypeAllowedDepth(KrtAstNode type, KrtNativeBinding binding, int32 depth) {
+    if (type == null) { return true; }
+    if (depth > 64) { return false; }
+    if (type.native_element_type != null && !KrtNativeAccessTypeAllowedDepth(type.native_element_type,binding,depth + 1)) { return false; }
+    if (type.native_type != null) {
+        if (!KrtNativeAccessAllowed(type.native_type,binding,null,false)) { return false; }
+        KrtAstNode argument = type.native_type.native_type_arguments;
+        while (argument != null) {
+            if (!KrtNativeAccessTypeAllowedDepth(argument,binding,depth + 1)) { return false; }
+            argument = argument.next;
+        }
+    }
+    KrtAstNode signature = type.native_function_pointer;
+    if (signature != null) {
+        if (!KrtNativeAccessTypeAllowedDepth(signature.native_type,binding,depth + 1)) { return false; }
+        KrtAstNode parameter = signature.declarations;
+        while (parameter != null) {
+            if (!KrtNativeAccessTypeAllowedDepth(parameter,binding,depth + 1)) { return false; }
+            parameter = parameter.next;
+        }
+    }
+    return true;
+}
+
+bool KrtNativeAccessTypeAllowed(KrtAstNode type, KrtNativeBinding binding) {
+    return KrtNativeAccessTypeAllowedDepth(type,binding,0);
+}
+
+bool KrtNativeAccessExported(KrtAstNode declaration) {
+    int32 depth = 0;
+    while (declaration != null && depth < 64) {
+        if (KrtNativeAccessMode(declaration) != 1) { return false; }
+        declaration = KrtNativeAccessOwner(declaration); depth = depth + 1;
+    }
+    return declaration == null;
+}
+
+bool KrtNativeAccessOverrideAllowed(KrtAstNode method, KrtAstNode overridden) {
+    return KrtNativeAccessMode(method) == KrtNativeAccessMode(overridden);
+}
+
+bool KrtNativeAccessDeclarationValid(KrtAstNode declaration) {
+    if ((declaration.syntax_modifiers & 16384) != 0) { return false; }
+    int32 access = KrtNativeAccessMode(declaration);
+    if (access != 1 && access != 2 && access != 4 && access != 6 && access != 8192 && access != 8196) { return false; }
+    KrtAstNode owner = KrtNativeAccessOwner(declaration);
+    if (owner == null && (access & 4) != 0) { return false; }
+    if (owner != null && (owner.value == 3 || owner.value == 4) && access != 1) { return false; }
+    if (declaration.kind == KrtAstKind.Function && access == 2 && (declaration.native_virtual || declaration.native_abstract || declaration.native_override)) { return false; }
+    return true;
+}
+
+bool KrtNativeValidateAccess(KrtAstNode module, int64 source, KrtNativeModule output) {
+    bool valid = true; KrtAstNode declaration = module.declarations;
+    while (declaration != null) {
+        if (!KrtNativeAccessDeclarationValid(declaration)) {
+            if (valid) { output.error_start = declaration.start; }
+            KrtDiagnostic("E_MODIFIER",10,declaration.start); valid = false;
+        }
+        KrtAstNode field = declaration.body;
+        while (field != null) {
+            if (!KrtNativeAccessDeclarationValid(field)) {
+                if (valid) { output.error_start = field.start; }
+                KrtDiagnostic("E_MODIFIER",10,field.start); valid = false;
+            }
+            field = field.next;
+        }
+        declaration = declaration.next;
+    }
+    declaration = module.left;
+    while (declaration != null) {
+        if (!KrtNativeAccessDeclarationValid(declaration)) {
+            if (valid) { output.error_start = declaration.start; }
+            KrtDiagnostic("E_MODIFIER",10,declaration.start); valid = false;
+        }
+        declaration = declaration.next;
+    }
+    declaration = module.body;
+    while (declaration != null) {
+        if (!KrtNativeAccessDeclarationValid(declaration)) {
+            if (valid) { output.error_start = declaration.start; }
+            KrtDiagnostic("E_MODIFIER",10,declaration.start); valid = false;
+        }
+        declaration = declaration.next;
+    }
+    if (!valid) { module.native_error = 11; }
+    return valid;
+}

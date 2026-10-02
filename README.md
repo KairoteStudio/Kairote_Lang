@@ -90,6 +90,20 @@ zig build
 > cd ../ArkLink && cmake -S . -B build && cmake --build build
 > ```
 
+### SelfHost 原生编译器
+
+`SelfHost/**/*.krt` 实现编译器及日常驱动，包括源码依赖、诊断、工程配置、缓存和链接调用。生成 Stage 2 后，`SelfHost/krtc` 直接执行原生编译器；Python 仅用于自举与测试脚本。
+
+```bash
+cmake -S . -B build
+cmake --build build --target KrtC ArkLink -j4
+python3 Test/SelfHost/Bootstrap.py
+./SelfHost/krtc hello.krt -o hello
+./SelfHost/krtc build path/to/project
+```
+
+详见 [SelfHost 编译器](./SelfHost/README.md) 和 [工程构建](./Docs/SelfHost/Projects.md)。公有具体结构体对象使用 ABI2 完整布局契约；跨对象文件的命名类/接口/枚举、二进制泛型函数模板和通用外部 ABI 仍有明确限制。
+
 ### 编写你的第一个 KairoteLang 程序 或 [学习文档](./Docs/KrtC/Doc/README.md)
 
 创建 `hello.krt` 文件：

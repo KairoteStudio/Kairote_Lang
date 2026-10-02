@@ -345,6 +345,7 @@ typedef struct ASTNode {
             char* member_name;
             char* resolved_class_name;
             char* resolved_mangled_name;
+            bool resolved_is_array;
         } member_access;
         struct {
             KrtTokenType access_modifier;

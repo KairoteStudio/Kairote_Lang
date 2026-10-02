@@ -378,7 +378,7 @@ bool KrtSemanticValidateFunctionNames(KrtAstNode unit, int64 source) {
     while (declaration != null) {
         KrtAstNode other_type = declaration.next;
         while (other_type != null) {
-            if (declaration.native_generic_origin == null && other_type.native_generic_origin == null && KrtScopeEqual(declaration.native_scope, other_type.native_scope, source) &&
+            if (declaration.native_generic_origin == null && other_type.native_generic_origin == null && !KrtNativeAccessSeparateFiles(declaration,other_type) && KrtScopeEqual(declaration.native_scope, other_type.native_scope, source) &&
                 KrtSemanticSameName(source, declaration.name_start, declaration.name_length, other_type.name_start, other_type.name_length)) { return false; }
             other_type = other_type.next;
         }
@@ -388,7 +388,7 @@ bool KrtSemanticValidateFunctionNames(KrtAstNode unit, int64 source) {
     while (current != null) {
         KrtAstNode other = current.next;
         while (other != null) {
-            if (current.native_owner == other.native_owner && KrtScopeEqual(current.native_scope, other.native_scope, source) && current.parameter_count == other.parameter_count &&
+            if (current.native_owner == other.native_owner && !KrtNativeAccessSeparateFiles(current,other) && KrtScopeEqual(current.native_scope, other.native_scope, source) && current.parameter_count == other.parameter_count &&
                 KrtSemanticSameName(source, current.name_start, current.name_length, other.name_start, other.name_length)) {
                 bool same = true; int32 index = 0;
                 while (index < current.parameter_count) {

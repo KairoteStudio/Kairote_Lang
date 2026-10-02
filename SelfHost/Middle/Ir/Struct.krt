@@ -1,0 +1,73 @@
+// Aggregate values are addresses of typed, inline bytes. Copies are explicit
+// memory operations; no struct storage is replaced by a reference object.
+bool KrtNativeLowerAggregateFrame(KrtAstNode node, KrtNativeModule module) {
+    return node != null && node.native_frame_offset >= 0 && node.native_storage_size > 0 &&
+        KrtNativeEmit(module,(int32)KrtNativeOp.AggregateFrameAddress,node.native_frame_offset,node.native_storage_size) >= 0;
+}
+
+bool KrtNativeLowerAggregateCopy(KrtAstNode type, KrtNativeModule module) {
+    return type != null && type.native_storage_size > 0 && type.native_alignment > 0 &&
+        KrtNativeEmit(module,(int32)KrtNativeOp.AggregateCopy,type.native_storage_size,type.native_alignment) >= 0;
+}
+
+bool KrtNativeLowerAggregateZero(KrtAstNode type, KrtNativeModule module) {
+    return type != null && type.native_storage_size > 0 && type.native_alignment > 0 &&
+        KrtNativeEmit(module,(int32)KrtNativeOp.AggregateZero,type.native_storage_size,type.native_alignment) >= 0;
+}
+
+bool KrtNativeLowerFixedArrayAssignment(KrtAstNode statement, KrtAstNode ast, KrtNativeModule module, int64 source) {
+    KrtAstNode target = statement.left; KrtAstNode value = statement.right;
+    if (target == null || value == null || !target.native_array || !value.native_array || target.native_fixed_length <= 0 ||
+        target.native_fixed_length != value.native_fixed_length || KrtNativeSemanticStride(target) != KrtNativeSemanticStride(value) ||
+        target.native_storage_size <= 0 || target.native_storage_size != value.native_storage_size) { return false; }
+    // Fixed fields contain the element bytes directly. Whole-array assignment
+    // copies that storage and never writes a dynamic-array pointer or header.
+    return KrtNativeLowerLValue(target,ast,module,source) && KrtNativeLowerExpression(value,ast,module,source) &&
+        KrtNativeLowerAggregateCopy(target,module);
+}
+
+bool KrtNativeLowerAggregateDefault(KrtAstNode expression, KrtNativeModule module) {
+    return KrtNativeLowerAggregateFrame(expression,module) &&
+        KrtNativeEmit(module,(int32)KrtNativeOp.Dup,0,0) >= 0 && KrtNativeLowerAggregateZero(expression,module);
+}
+
+bool KrtNativeLowerAggregateArgument(KrtAstNode argument, KrtAstNode expected, KrtAstNode ast, KrtNativeModule module, int64 source) {
+    if (argument.native_argument_frame_offset < 0 || expected.native_storage_size <= 0) { return false; }
+    return KrtNativeEmit(module,(int32)KrtNativeOp.AggregateFrameAddress,argument.native_argument_frame_offset,expected.native_storage_size) >= 0 &&
+        KrtNativeLowerExpression(argument,ast,module,source) && KrtNativeLowerAggregateCopy(expected,module) &&
+        KrtNativeEmit(module,(int32)KrtNativeOp.AggregateFrameAddress,argument.native_argument_frame_offset,expected.native_storage_size) >= 0;
+}
+
+bool KrtNativeLowerCallReceiver(KrtAstNode call, KrtAstNode receiver, KrtAstNode ast, KrtNativeModule module, int64 source) {
+    if (call.native_receiver_frame_offset < 0) { return KrtNativeLowerExpression(receiver,ast,module,source); }
+    if (!KrtNativeAggregateKind(receiver) || receiver.native_storage_size <= 0) { return false; }
+    // A readonly or temporary receiver has its own mutable call copy. Evaluate
+    // it once before explicit arguments, preserving the source call order.
+    return KrtNativeEmit(module,(int32)KrtNativeOp.AggregateFrameAddress,call.native_receiver_frame_offset,receiver.native_storage_size) >= 0 &&
+        KrtNativeLowerExpression(receiver,ast,module,source) && KrtNativeLowerAggregateCopy(receiver,module) &&
+        KrtNativeEmit(module,(int32)KrtNativeOp.AggregateFrameAddress,call.native_receiver_frame_offset,receiver.native_storage_size) >= 0;
+}
+
+bool KrtNativeLowerAggregateParameters(KrtAstNode unit, KrtNativeModule module) {
+    KrtAstNode parameter = unit.declarations; int32 index = 0;
+    while (parameter != null && index < unit.parameter_count) {
+        bool receiver = index == 0 && unit.native_owner != null && unit.native_owner.value == 2 && !unit.native_static;
+        if (KrtNativeInlineValue(parameter) && !unit.parameter_refs[index] && !receiver) {
+            if (!KrtNativeLowerAggregateFrame(parameter,module) ||
+                KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,index,0) < 0 || !KrtNativeLowerAggregateCopy(parameter,module)) { return false; }
+        }
+        parameter = parameter.next; index = index + 1;
+    }
+    return true;
+}
+
+bool KrtNativeLowerAggregateNew(KrtAstNode expression, KrtAstNode ast, KrtNativeModule module, int64 source) {
+    if (!KrtNativeLowerAggregateDefault(expression,module)) { return false; }
+    if (expression.native_target != null) {
+        if (KrtNativeEmit(module,(int32)KrtNativeOp.Dup,0,0) < 0 ||
+            !KrtNativeLowerArguments(expression.right,expression.native_target,1,ast,module,source) ||
+            KrtNativeEmit(module,(int32)KrtNativeOp.Call,expression.native_target.value,expression.native_target.parameter_count) < 0 ||
+            KrtNativeEmit(module,(int32)KrtNativeOp.Drop,0,0) < 0) { return false; }
+    }
+    return true;
+}

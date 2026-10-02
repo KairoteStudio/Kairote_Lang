@@ -1,0 +1,145 @@
+// Native compilation, linking and output publication.
+bool KrtDriverOutputPathSafe(KrtDriverOptions options, KrtSourceBundle bundle, int64 path) {
+    if (KrtDriverStringEqual(path,options.compiler) || KrtDriverStringEqual(path,options.linker)) { KrtDriverError("E_OUTPUT","output would overwrite a tool"); return false; }
+    if (bundle != null) {
+        KrtSourceFile file = bundle.files;
+        while (file != null) {
+            if (KrtDriverStringEqual(path,file.path)) { KrtDriverError("E_OUTPUT","output would overwrite an input file"); return false; }
+            file = file.order_next;
+        }
+    }
+    KrtDriverPath object = options.objects;
+    while (object != null) {
+        if (KrtDriverStringEqual(path,object.value)) { KrtDriverError("E_OUTPUT","output would overwrite an input file"); return false; }
+        object = object.next;
+    }
+    return true;
+}
+
+bool KrtDriverOutputSafe(KrtDriverOptions options, KrtSourceBundle bundle) {
+    return KrtDriverOutputPathSafe(options,bundle,options.output);
+}
+
+int64 KrtDriverRetainedObject(KrtDriverOptions options, KrtSourceBundle bundle) {
+    if (!options.keep_temp || bundle == null || options.object_mode || options.target >= 2) { return 0; }
+    if (options.retained_output != 0) { return options.retained_output; }
+    int64 first = bundle.files.path;
+    if (options.sources != null) { first = options.sources.value; }
+    int64 path = KrtDriverAbsolutePath(KrtDriverConcat(KrtDriverStem(first),(int64)".kro"));
+    if (KrtDriverStringEqual(path,options.output)) { path = KrtDriverConcat(options.output,(int64)".kro"); }
+    return path;
+}
+
+int32 KrtDriverCompileBundle(KrtDriverOptions options, KrtSourceBundle bundle) {
+    bool previous_quiet = KrtDriverQuiet; KrtDriverQuiet = options.quiet;
+    KrtDriverOptimization = options.optimization;
+    int32 previous_target = KrtDriverArtifactTarget; KrtDriverArtifactTarget = options.target;
+    if (options.object_mode) { KrtDriverArtifactTarget = 1; }
+    if (options.target >= 2 && (bundle == null || options.objects != null)) {
+        KrtDriverError("E_OPTION","IR, assembly and VM targets require source files without precompiled objects");
+        KrtDriverQuiet = previous_quiet; KrtDriverArtifactTarget = previous_target; return 1;
+    }
+    int64 retained = KrtDriverRetainedObject(options,bundle);
+    int64 vm_sidecar = 0;
+    if (options.target == 4) { vm_sidecar = KrtDriverConcat(options.output,(int64)".ebc"); }
+    if (!KrtDriverOutputSafe(options,bundle)) { KrtDriverQuiet = previous_quiet; KrtDriverArtifactTarget = previous_target; return 1; }
+    if ((retained != 0 && !KrtDriverOutputPathSafe(options,bundle,retained)) ||
+        (vm_sidecar != 0 && !KrtDriverOutputPathSafe(options,bundle,vm_sidecar))) {
+        KrtDriverQuiet = previous_quiet; KrtDriverArtifactTarget = previous_target; return 1;
+    }
+    int64 temporary = KrtDriverTemporaryPath((int64)"/tmp",(int64)"kairote-native-");
+    int64 created = syscall(83,temporary,448,0,0,0,0); int32 attempts = 0;
+    while (created == -17 && attempts < 128) {
+        temporary = KrtDriverTemporaryPath((int64)"/tmp",(int64)"kairote-native-");
+        created = syscall(83,temporary,448,0,0,0,0); attempts = attempts + 1;
+    }
+    if (created != 0) { KrtDriverError("E_OUTPUT","unable to create temporary build directory"); KrtDriverQuiet = previous_quiet; KrtDriverArtifactTarget = previous_target; return 1; }
+    int64 object_path = KrtDriverJoinPath(temporary,(int64)"module.kro");
+    KrtDriverPath link_objects = null; bool ok = true;
+    if (bundle != null) {
+        KrtDriverActiveBundle = bundle;
+        if (!KrtSourcesValidate(bundle)) { ok = false; }
+        if (ok && (bundle.length < 0 || bundle.length > 16777216)) { KrtDriverError("E_SIZE","combined source must contain 0 to 16777216 bytes"); ok = false; }
+        if (ok) {
+            KrtKroObject object = new KrtKroObject();
+            KrtDriverLastModule = null; KrtDriverLastVm = null;
+            ok = KrtCompileNativeSourceMode((string)bundle.data,(int32)bundle.length,object,options.object_mode);
+            if (ok && options.show_ir) { ok = KrtArtifactWriteIr(KrtDriverLastModule,1); }
+            if (ok && !options.check) {
+                if (options.target == 2) { ok = KrtArtifactIr(KrtDriverLastModule,object_path); }
+                else if (options.target == 3) { ok = KrtArtifactAssembly(object,KrtDriverLastModule,object_path); }
+                else if (options.target == 4) {
+                    ok = KrtDriverLastVm != null && KrtDriverLastVm.ok && KrtDriverWriteFile(object_path,KrtDriverLastVm.data,KrtDriverLastVm.length);
+                } else { ok = KrtKroWriteObjectToPath(object,(string)object_path); }
+                if (!ok) { KrtDriverError("E_OUTPUT","unable to write compiler artifact"); }
+            }
+        }
+        KrtDriverActiveBundle = null;
+        if (ok) { link_objects = KrtDriverAppend(link_objects,object_path); }
+    }
+    KrtDriverPath input = options.objects;
+    while (input != null && ok) {
+        if (!KrtDriverFileExists(input.value)) { KrtDriverError("E_INPUT",(string)KrtDriverConcat((int64)"object file not found: ",input.value)); ok = false; }
+        else { link_objects = KrtDriverAppend(link_objects,input.value); }
+        input = input.next;
+    }
+    if (ok && !options.check) {
+        int64 artifact = object_path;
+        bool executable = !options.object_mode && options.target < 2;
+        if(executable&&!KrtDriverAbiValidate(link_objects)){ok=false;}
+        if (executable&&ok) {
+            artifact = KrtDriverJoinPath(temporary,(int64)"program");
+            KrtDriverPath command = link_objects;
+            command = KrtDriverAppend(command,(int64)"--target"); command = KrtDriverAppend(command,(int64)"elf");
+            command = KrtDriverAppend(command,(int64)"-o"); command = KrtDriverAppend(command,artifact);
+            int32 linked = KrtDriverRun(options.linker,command);
+            if (linked != 0 || !KrtDriverFileExists(artifact)) { KrtDriverError("E_LINK","native linker failed"); ok = false; }
+        }
+        if (ok && !KrtDriverPublish(artifact,options.output,executable)) { KrtDriverError("E_OUTPUT","unable to publish output"); ok = false; }
+        if (ok && retained != 0 && !KrtDriverPublish(object_path,retained,false)) { KrtDriverError("E_OUTPUT","unable to preserve KRO object"); ok = false; }
+        if (ok && vm_sidecar != 0 && !KrtDriverPublish(artifact,vm_sidecar,false)) { KrtDriverError("E_OUTPUT","unable to publish VM sidecar"); ok = false; }
+    }
+    KrtDriverRemoveTree(temporary); KrtDriverQuiet = previous_quiet; KrtDriverArtifactTarget = previous_target;
+    return ok ? 0 : 1;
+}
+
+int32 KrtDriverCompile(KrtDriverOptions options) {
+    bool previous_quiet = KrtDriverQuiet; KrtDriverQuiet = options.quiet;
+    KrtDriverPath roots = null; KrtDriverPath input = options.sources;
+    while (input != null) {
+        int64 path = KrtDriverAbsolutePath(input.value);
+        if (path == 0) { KrtDriverError("E_INPUT","unable to resolve input path"); KrtDriverQuiet = previous_quiet; return 1; }
+        if (KrtDriverEndsWith(path,".kro")) { options.objects = KrtDriverAppend(options.objects,path); }
+        else { roots = KrtDriverAppend(roots,path); }
+        input = input.next;
+    }
+    if (roots == null && options.objects == null) { KrtDriverError("E_INPUT","no input files specified"); KrtDriverQuiet = previous_quiet; return 1; }
+    if (options.object_mode && options.objects != null) { KrtDriverError("E_OPTION","-c accepts source files; omit -c to link existing KRO objects"); KrtDriverQuiet = previous_quiet; return 1; }
+    if (options.output == 0) {
+        int64 first = 0;
+        if (options.sources != null) { first = options.sources.value; }
+        else { first = options.objects.value; }
+        int64 name = KrtDriverStem(first);
+        if (options.object_mode) { name = KrtDriverConcat(name,(int64)".kro"); }
+        else if (options.target == 2) { name = (int64)"output.ir"; }
+        else if (options.target == 3) { name = (int64)"output.asm"; }
+        else if (options.target == 4) { name = (int64)"output.ebc"; }
+        else if (options.eo_executable) { name = (int64)"output.exe"; }
+        options.output = KrtDriverAbsolutePath(name);
+    }
+    KrtSourceBundle bundle = null;
+    if (roots != null) {
+        bundle = new KrtSourceBundle();
+        if (!KrtSourcesCollect(roots,options.includes,options.library_root,bundle)) { KrtDriverQuiet = previous_quiet; return 1; }
+    }
+    if (options.list_sources || options.emit_source) {
+        if (bundle != null && options.list_sources) {
+            KrtSourceFile file = bundle.files;
+            while (file != null) { KrtDriverPrint((string)file.path); KrtDriverPrint("\n"); file = file.order_next; }
+        }
+        if (bundle != null && options.emit_source) { KrtDriverWriteAll(1,bundle.data,bundle.length); }
+        KrtDriverQuiet = previous_quiet; return 0;
+    }
+    KrtDriverQuiet = previous_quiet;
+    return KrtDriverCompileBundle(options,bundle);
+}

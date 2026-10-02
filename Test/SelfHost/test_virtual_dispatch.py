@@ -4,7 +4,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
-from Test.SelfHost.bootstrap import Bootstrap
+from Test.SelfHost.Bootstrap import Bootstrap
 
 
 class NativeVirtualTests(unittest.TestCase):

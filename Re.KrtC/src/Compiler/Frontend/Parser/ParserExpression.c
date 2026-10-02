@@ -513,6 +513,23 @@ ASTNode* parser_parse_primary(Parser* parser) {
                 return NULL;
             }
 
+            if (parser->current_token.type == TOKEN_LEFT_BRACKET) {
+                parser_advance(parser);
+                ASTNode* size = parser_parse_expression(parser);
+                if (!size || parser->current_token.type != TOKEN_RIGHT_BRACKET) {
+                    return NULL;
+                }
+                parser_advance(parser);
+                ASTNode* node = KrtParserCreateNode(parser, AST_NEW_ARRAY_EXPRESSION, token.line, token.column);
+                if (!node) {
+                    return NULL;
+                }
+                node->data.new_array_expr.type_token = TOKEN_IDENTIFIER;
+                node->data.new_array_expr.element_type = class_name;
+                node->data.new_array_expr.size = size;
+                return node;
+            }
+
             ASTNode** args = NULL;
             int arg_count = 0;
             int arg_capacity = 8;

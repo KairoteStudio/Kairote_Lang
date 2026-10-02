@@ -2,21 +2,20 @@
 // the runtime class identity; allocation metadata at -16/-8 remains untouched.
 bool KrtNativeDerivesFrom(KrtAstNode actual_class, KrtAstNode expected_class) {
     if (actual_class == null || expected_class == null) { return false; }
-    if (expected_class.value == 3) { return KrtNativeImplements(actual_class, expected_class); }
-    int32 depth = 0;
-    while (actual_class != null && depth < 1024) {
-        if (actual_class == expected_class) { return true; }
-        actual_class = actual_class.native_base; depth = depth + 1;
-    }
-    return false;
+    return KrtNativeInheritanceDistance(actual_class,expected_class) >= 0;
 }
 
 int32 KrtNativeInheritanceDistance(KrtAstNode actual_class, KrtAstNode expected_class) {
     if (expected_class != null && expected_class.value == 3 && KrtNativeImplements(actual_class, expected_class)) { return KrtNativeInterfaceDistance(actual_class, expected_class); }
     int32 distance = 0;
-    while (actual_class != null && distance < 1024) {
+    KrtAstNode slow = actual_class; KrtAstNode fast = actual_class;
+    while (actual_class != null) {
         if (actual_class == expected_class) { return distance; }
         actual_class = actual_class.native_base; distance = distance + 1;
+        if (slow != null) { slow = slow.native_base; }
+        if (fast != null) { fast = fast.native_base; }
+        if (fast != null) { fast = fast.native_base; }
+        if (slow != null && slow == fast) { return -1; }
     }
     return -1;
 }
@@ -33,22 +32,20 @@ KrtAstNode KrtNativeFieldOwner(KrtAstNode type, int64 source, int64 start, int64
     return null;
 }
 
-bool KrtNativeResolveInheritance(KrtAstNode type, KrtAstNode module, int64 source) {
+bool KrtNativeResolveInheritanceInner(KrtAstNode type, KrtAstNode module, int64 source) {
     if (type == null || type.native_inheritance_state == 1 || type.native_inheritance_state == 3) { return false; }
     if (type.native_inheritance_state == 2) { return true; }
     if (type.value == 4) { return type.left == null; }
-    if (type.value != 1 && type.value != 3) { return false; }
     if (type.native_generic_parameters != null) { return true; }
-    type.native_inheritance_state = 1;
-    int32 size = 8;
-    if (!KrtNativeResolveTypeBases(type, module, source)) { type.native_inheritance_state = 3; return false; }
-    if (type.native_base != null) { size = type.native_base.native_size; }
-    KrtAstNode field = type.body;
-    while (field != null) {
-        if (!field.native_static) { field.native_offset = size; size = size + 8; }
-        field = field.next;
+    if (type.value == 2) {
+        if (type.left != null) { return KrtNativeLayoutError(module,type,null); }
+        bool valid = KrtNativeResolveLayout(type,module,source);
+        type.native_inheritance_state = valid ? 2 : 3; return valid;
     }
-    type.native_size = size;
+    if (type.value != 1 && type.value != 3) { return false; }
+    type.native_inheritance_state = 1;
+    if (!KrtNativeResolveTypeBases(type, module, source)) { type.native_inheritance_state = 3; return false; }
+    if (!KrtNativeResolveLayout(type,module,source)) { type.native_inheritance_state = 3; return false; }
     KrtAstNode method = type.declarations;
     while (method != null && method.native_owner == type) {
         if ((method.native_base_call != null && (method.op != 220 || type.native_base == null))) { type.native_inheritance_state = 3; return false; }
@@ -65,6 +62,7 @@ bool KrtNativeResolveInheritance(KrtAstNode type, KrtAstNode module, int64 sourc
 }
 
 bool KrtNativePrepareInheritance(KrtAstNode module, int64 source, KrtNativeModule output) {
+    if (!KrtNativeValidateAccess(module,source,output)) { return false; }
     KrtAstNode type = module.declarations;
     while (type != null) {
         if (!KrtNativeResolveInheritance(type, module, source)) { output.error_start = type.start; return false; }

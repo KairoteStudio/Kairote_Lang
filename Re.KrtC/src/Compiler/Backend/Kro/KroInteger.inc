@@ -161,19 +161,18 @@ static void emit_load_pair(KROCodegenContext* ctx, KrtIRValue* value, int low, i
     emit_load_high(ctx, value, low, high);
 }
 
+#include "KroFloatCasts.inc"
+
 static void emit_load_for_type(KROCodegenContext* ctx, KrtIRValue* value, KrtTokenType type, int low, int high) {
     emit_load_value_to_reg(ctx, value, low);
     bool source_float = value->value_type == TOKEN_FLOAT32 || value->value_type == TOKEN_FLOAT64;
     bool target_float = type == TOKEN_FLOAT32 || type == TOKEN_FLOAT64;
     if (target_float && !source_float) {
-        emit_byte(ctx, 0xF2);
-        emit_byte(ctx, 0x48 | (low >= 8 ? 1 : 0));
-        emit_bytes(ctx, (const uint8_t*)"\x0F\x2A", 2);
-        emit_byte(ctx, 0xC0 | (low & 7));
-        emit_byte(ctx, 0x66);
-        emit_byte(ctx, 0x48 | (low >= 8 ? 1 : 0));
-        emit_bytes(ctx, (const uint8_t*)"\x0F\x7E", 2);
-        emit_byte(ctx, 0xC0 | (low & 7));
+        emit_load_high(ctx, value, low, high);
+        emit_integer_float_cast(ctx, low, high, KrtTokenIsUnsigned(value->value_type), type == TOKEN_FLOAT32 ? 4 : 8);
+    } else if (source_float && KrtTokenIntegerBits(type) > 64) {
+        emit_float_wide_cast(ctx, low, high);
+        return;
     } else if (source_float && KrtTokenIntegerBits(type)) {
         emit_byte(ctx, 0x66);
         emit_byte(ctx, 0x48 | (low >= 8 ? 1 : 0));

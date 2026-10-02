@@ -383,7 +383,8 @@ static bool plan_cross_block_temporaries(KROCodegenContext* ctx, KrtIRFunction* 
             has_predecessor[target] = true;
         }
     }
-    int definition_block[KRT_KRO_MAX_TEMP_REGS];
+    int* definition_block = KRT_MALLOC((size_t)ctx->temp_slot_count * sizeof(*definition_block));
+    if (!definition_block) { return false; }
     for (int i = 0; i < ctx->temp_slot_count; i++) {
         if (!eligible[i]) {
             continue;
@@ -430,6 +431,7 @@ static bool plan_cross_block_temporaries(KROCodegenContext* ctx, KrtIRFunction* 
             }
         }
     }
+    KRT_FREE(definition_block);
     /* TRE adds backedges after this analysis. It re-executes each dominating
      * definition on the next iteration; entry definitions are excluded because
      * the guarded tail-loop rotation can bypass that block. Parameter updates
@@ -451,8 +453,8 @@ static void allocate_temporary_registers(KROCodegenContext* ctx, KrtIRFunction* 
             permanent |= 1u << i;
         }
     }
-    bool cross_block[KRT_KRO_MAX_TEMP_REGS];
-    bool global_intervals = plan_cross_block_temporaries(ctx, func, cross_block);
+    bool* cross_block = KRT_CALLOC(ctx->temp_slot_count ? ctx->temp_slot_count : 1, sizeof(*cross_block));
+    bool global_intervals = cross_block && plan_cross_block_temporaries(ctx, func, cross_block);
     KROTempSlot* owners[KRT_KRO_PACKED_REG_COUNT] = {0};
     int position = 0;
     for (KrtIRBasicBlock* block = func->entry_block; block; block = block->next) {
@@ -505,6 +507,7 @@ static void allocate_temporary_registers(KROCodegenContext* ctx, KrtIRFunction* 
             }
         }
     }
+    KRT_FREE(cross_block);
 }
 
 static void plan_tail_register_updates(KROCodegenContext* ctx, KrtIRFunction* func);

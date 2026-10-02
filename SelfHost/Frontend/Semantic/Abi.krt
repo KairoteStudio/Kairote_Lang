@@ -1,0 +1,149 @@
+// ABI2 contracts are canonical bytes, independent of source positions and AST
+// identities. Digests name symbols; exact manifests decide compatibility.
+class KrtAbiBytes {
+    public byte[] data;
+    public int32 count;
+    public int32 capacity;
+    public bool ok;
+}
+class KrtAbiType {
+    public KrtAstNode declaration;
+    public KrtAbiBytes identity;
+    public KrtAbiBytes layout;
+    public KrtAbiType next;
+}
+class KrtAbiSignature {
+    public KrtAbiBytes nominal;
+    public KrtAbiBytes contract;
+    public KrtAbiType types;
+    public bool supported;
+    public bool uses_struct;
+}
+
+KrtAbiBytes KrtAbiNew() {
+    KrtAbiBytes bytes=new KrtAbiBytes();bytes.capacity=256;bytes.data=new byte[256];bytes.ok=true;return bytes;
+}
+void KrtAbiByte(KrtAbiBytes bytes,int32 value) {
+    if(!bytes.ok||value<0||value>255){bytes.ok=false;return;}
+    if(bytes.count>=bytes.capacity){
+        int32 size=bytes.capacity*2;if(size>16777216){bytes.ok=false;return;}
+        byte[] expanded=new byte[size];int32 index=0;
+        while(index<bytes.count){expanded[index]=bytes.data[index];index=index+1;}
+        delete bytes.data;bytes.data=expanded;bytes.capacity=size;
+    }
+    bytes.data[bytes.count]=(byte)value;bytes.count=bytes.count+1;
+}
+void KrtAbiWord(KrtAbiBytes bytes,int32 value){int32 index=0;while(index<4){KrtAbiByte(bytes,(value>>(index*8))&255);index=index+1;}}
+void KrtAbiLong(KrtAbiBytes bytes,uint64 value){int32 index=0;while(index<8){KrtAbiByte(bytes,(int32)((value>>(index*8))&255));index=index+1;}}
+void KrtAbiAppend(KrtAbiBytes bytes,KrtAbiBytes other){if(other==null||!other.ok){bytes.ok=false;return;}int32 index=0;while(index<other.count){KrtAbiByte(bytes,other.data[index]);index=index+1;}}
+void KrtAbiText(KrtAbiBytes bytes,string value){unsafe(using krt.mem;){byte* text=(byte*)(int64)value;int32 index=0;while(text[index]!=0){KrtAbiByte(bytes,text[index]);index=index+1;}}}
+void KrtAbiName(KrtAbiBytes bytes,KrtLinkName value){if(!value.valid){bytes.ok=false;return;}KrtAbiWord(bytes,value.length);int32 index=0;while(index<value.length){KrtAbiByte(bytes,value.bytes[index]);index=index+1;}}
+int32 KrtAbiCompare(KrtAbiBytes left,KrtAbiBytes right){int32 index=0;while(index<left.count&&index<right.count){if(left.data[index]!=right.data[index]){return(int32)left.data[index]-(int32)right.data[index];}index=index+1;}return left.count-right.count;}
+uint64 KrtAbiHash(KrtAbiBytes bytes){uint64 hash=14695981039346656037;int32 index=0;while(index<bytes.count){hash=(hash^(uint64)bytes.data[index])*1099511628211;index=index+1;}return hash;}
+void KrtAbiHex(KrtLinkName name,uint64 value){int32 shift=60;while(shift>=0){int32 digit=(int32)((value>>shift)&15);KrtLinkByte(name,digit<10?48+digit:87+digit);shift=shift-4;}}
+
+KrtAbiBytes KrtAbiTypeIdentity(KrtAstNode declaration,int64 source){
+    KrtLinkName name=KrtLinkNameNew();KrtLinkByte(name,83);KrtLinkDeclaration(name,declaration,source);
+    KrtAstNode argument=declaration.native_type_arguments;
+    if(argument!=null){KrtLinkByte(name,60);while(argument!=null){KrtLinkType(name,argument,source,0);KrtLinkByte(name,59);argument=argument.next;}KrtLinkByte(name,62);}
+    KrtAbiBytes identity=KrtAbiNew();KrtAbiName(identity,name);return identity;
+}
+KrtAbiType KrtAbiRegister(KrtAbiSignature signature,KrtAstNode declaration,int64 source){
+    signature.uses_struct=true;
+    if(declaration.value!=2||declaration.native_generic_parameters!=null||declaration.native_layout_state!=2||!KrtNativeAccessExported(declaration)){signature.supported=false;return null;}
+    KrtAbiBytes identity=KrtAbiTypeIdentity(declaration,source);KrtAbiType item=signature.types;KrtAbiType previous=null;
+    while(item!=null){int32 order=KrtAbiCompare(identity,item.identity);if(order==0){return item;}if(order<0){break;}previous=item;item=item.next;}
+    KrtAbiType inserted=new KrtAbiType();inserted.declaration=declaration;inserted.identity=identity;inserted.next=item;
+    if(previous==null){signature.types=inserted;}else{previous.next=inserted;}return inserted;
+}
+void KrtAbiShape(KrtAbiBytes bytes,KrtAstNode type,KrtAbiSignature signature,int64 source,int32 depth){
+    if(type==null||depth>64){bytes.ok=false;signature.supported=false;return;}
+    KrtAbiByte(bytes,type.native_ref?1:0);KrtAbiByte(bytes,type.native_nullable?1:0);KrtAbiLong(bytes,type.native_pointee_nullable);
+    if(type.native_fixed_length>0){
+        KrtAbiByte(bytes,70);KrtAbiWord(bytes,type.native_fixed_length);KrtAbiWord(bytes,type.native_storage_size);KrtAbiWord(bytes,type.native_alignment);
+        KrtAbiShape(bytes,KrtNativeArrayElement(type),signature,source,depth+1);return;
+    }
+    if(type.native_array){KrtAbiByte(bytes,65);KrtAbiWord(bytes,KrtNativeSemanticStride(type));KrtAbiShape(bytes,KrtNativeArrayElement(type),signature,source,depth+1);return;}
+    if(type.native_string){KrtAbiByte(bytes,83);return;}
+    if(type.native_pointer_depth>0||type.native_stride>0){KrtAbiByte(bytes,80);KrtAbiWord(bytes,KrtNativeSemanticStride(type));KrtAbiShape(bytes,KrtNativeArrayElement(type),signature,source,depth+1);return;}
+    if(type.native_void_pointer){KrtAbiByte(bytes,86);return;}
+    if(type.native_function_pointer!=null){
+        KrtAbiByte(bytes,102);KrtAstNode shape=type.native_function_pointer;KrtAbiWord(bytes,shape.parameter_count);
+        KrtAstNode parameter=shape.declarations;while(parameter!=null){KrtAbiShape(bytes,parameter,signature,source,depth+1);parameter=parameter.next;}
+        KrtAbiByte(bytes,shape.native_readonly?1:0);if(!shape.native_readonly){KrtAbiShape(bytes,shape.native_type,signature,source,depth+1);}return;
+    }
+    if(type.native_type!=null){
+        if(type.native_type.value!=2){signature.supported=false;bytes.ok=false;return;}
+        KrtAbiType item=KrtAbiRegister(signature,type.native_type,source);if(item==null){bytes.ok=false;return;}
+        KrtAbiByte(bytes,67);KrtAbiAppend(bytes,item.identity);KrtAbiWord(bytes,type.native_type.native_storage_size);KrtAbiWord(bytes,type.native_type.native_alignment);return;
+    }
+    KrtAstNode scalar=KrtAstMake(KrtAstKind.Type,type.start,0);KrtNativeCopyType(scalar,type);scalar.native_ref=false;
+    KrtLinkName name=KrtLinkNameNew();KrtLinkType(name,scalar,source,0);KrtAbiByte(bytes,105);KrtAbiName(bytes,name);
+}
+
+KrtAbiSignature KrtAbiFunction(KrtAstNode declaration,KrtAstNode module,int64 source,bool include_result){
+    KrtAbiSignature result=new KrtAbiSignature();result.supported=true;result.contract=KrtAbiNew();result.nominal=KrtAbiNew();
+    KrtLinkName legacy=KrtNativeFunctionLinkNameLegacy(declaration,module,source,include_result);
+    if(!legacy.valid){result.supported=false;result.contract.ok=false;return result;}
+    int32 index=0;while(index<legacy.length){KrtAbiByte(result.nominal,legacy.bytes[index]);index=index+1;}
+    KrtAbiText(result.contract,"KRTABI2");KrtAbiAppend(result.contract,result.nominal);
+    KrtAbiWord(result.contract,declaration.parameter_count);KrtAbiByte(result.contract,declaration.native_owner!=null&&!declaration.native_static?1:0);
+    bool readonly_receiver=declaration.native_owner!=null&&declaration.native_owner.value==2&&!declaration.native_static&&(declaration.syntax_modifiers&16)!=0;
+    KrtAbiByte(result.contract,readonly_receiver?1:0);
+    KrtAstNode shape=KrtAstMake(KrtAstKind.Function,declaration.start,0);
+    shape.native_scope=declaration.native_scope;shape.native_context=declaration.native_context;shape.native_using_scope=declaration.native_using_scope;
+    shape.type_start=declaration.type_start;shape.type_length=declaration.type_length;shape.parameter_count=declaration.parameter_count;
+    shape.parameter_type_starts=declaration.parameter_type_starts;shape.parameter_type_lengths=declaration.parameter_type_lengths;shape.parameter_refs=declaration.parameter_refs;
+    if(!KrtNativePrepareFunctionShape(shape,module,source)){result.supported=false;result.contract.ok=false;return result;}
+    if(declaration.native_owner!=null&&declaration.native_owner.value==2){KrtAbiRegister(result,declaration.native_owner,source);}
+    KrtAstNode parameter=shape.declarations;index=0;
+    while(parameter!=null){
+        bool receiver=index==0&&declaration.native_owner!=null&&!declaration.native_static&&declaration.native_owner.value==2;
+        KrtAbiByte(result.contract,receiver?2:(parameter.native_ref?1:0));KrtAbiShape(result.contract,parameter,result,source,0);
+        index=index+1;parameter=parameter.next;
+    }
+    if(include_result){KrtAbiByte(result.contract,shape.native_readonly?1:0);if(!shape.native_readonly){KrtAbiShape(result.contract,shape.native_type,result,source,0);KrtAbiByte(result.contract,KrtNativeInlineValue(shape.native_type)?1:0);}}
+    // Discovery can insert a preceding graph node, so restart after each new
+    // record. Layout is immutable and pointer cycles are nominal references.
+    bool pending=true;int32 processed=0;
+    while(pending&&result.supported){
+        pending=false;KrtAbiType item=result.types;
+        while(item!=null){
+            if(item.layout==null){
+                if(processed>=16384){result.supported=false;result.contract.ok=false;break;}processed=processed+1;pending=true;
+                item.layout=KrtAbiNew();KrtAbiAppend(item.layout,item.identity);KrtAstNode type=item.declaration;
+                KrtAbiWord(item.layout,type.native_storage_size);KrtAbiWord(item.layout,type.native_alignment);
+                KrtAstNode type_argument=type.native_type_arguments;int32 type_arguments=0;
+                while(type_argument!=null){type_arguments=type_arguments+1;type_argument=type_argument.next;}
+                KrtAbiWord(item.layout,type_arguments);type_argument=type.native_type_arguments;
+                while(type_argument!=null){KrtAbiShape(item.layout,type_argument,result,source,0);type_argument=type_argument.next;}
+                KrtAstNode field=type.body;int32 fields=0;while(field!=null){if(!field.native_static){fields=fields+1;}field=field.next;}KrtAbiWord(item.layout,fields);
+                field=type.body;while(field!=null){
+                    if(!field.native_static){
+                        KrtLinkName field_name=KrtLinkNameNew();int64 character=0;
+                        while(character<field.name_length){KrtLinkByte(field_name,(int32)KrtNameAt(source,field.name_start,field.name_length,character));character=character+1;}
+                        KrtAbiName(item.layout,field_name);KrtAbiWord(item.layout,field.native_offset);KrtAbiWord(item.layout,KrtNativeValueStorage(field));KrtAbiWord(item.layout,KrtNativeValueAlignment(field));
+                        KrtAbiShape(item.layout,field,result,source,0);
+                    }
+                    field=field.next;
+                }
+                if(!item.layout.ok){result.supported=false;}
+            }
+            item=item.next;
+        }
+    }
+    KrtAbiWord(result.contract,processed);KrtAbiType item=result.types;
+    while(item!=null){if(item.layout==null){result.contract.ok=false;break;}KrtAbiWord(result.contract,item.layout.count);KrtAbiAppend(result.contract,item.layout);item=item.next;}
+    return result;
+}
+
+KrtLinkName KrtAbiLinkName(KrtAbiSignature signature){
+    KrtLinkName name=KrtLinkNameNew();KrtLinkText(name,"_KRT2$");int32 index=6;
+    while(index<signature.nominal.count){KrtLinkByte(name,signature.nominal.data[index]);index=index+1;}
+    KrtLinkText(name,"$H");KrtAbiHex(name,KrtAbiHash(signature.contract));
+    if(!signature.supported||!signature.contract.ok){name.valid=false;}return name;
+}
+
+bool KrtNativeAbiSignatureSupported(KrtAstNode declaration,KrtAstNode module,int64 source){
+    KrtAbiSignature signature=KrtAbiFunction(declaration,module,source,true);return signature.supported&&signature.contract.ok;
+}

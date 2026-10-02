@@ -1,0 +1,170 @@
+// Application entry, options and compilation orchestration are self-hosted.
+class KrtDriverOptions {
+    public KrtDriverPath sources;
+    public KrtDriverPath objects;
+    public KrtDriverPath includes;
+    public int64 output;
+    public int64 compiler;
+    public int64 linker;
+    public int64 library_root;
+    public int64 configuration;
+    public int64 command;
+    public int64 name;
+    public int64 retained_output;
+    public int32 jobs;
+    public bool object_mode;
+    public bool check;
+    public bool rebuild;
+    public bool quiet;
+    public bool list_sources;
+    public bool emit_source;
+    public bool help;
+    public bool version;
+    public int32 optimization;
+    public bool optimization_set;
+    public int32 target;
+    public bool target_set;
+    public bool eo_executable;
+    public bool keep_temp;
+    public bool show_ir;
+}
+
+bool KrtDriverWord(int64 word, string expected) { return KrtDriverStringEqual(word, (int64)expected); }
+
+bool KrtDriverProjectCommand(int64 word) {
+    return KrtDriverWord(word,"new") || KrtDriverWord(word,"build") || KrtDriverWord(word,"check") ||
+        KrtDriverWord(word,"clean") || KrtDriverWord(word,"project-info") || KrtDriverWord(word,"run-vm");
+}
+
+bool KrtDriverParseArguments(KrtDriverPath arguments, KrtDriverOptions options) {
+    int64 repository = KrtDriverRepository();
+    options.compiler = KrtDriverExecutablePath();
+    options.optimization = 2;
+    options.jobs = 8;
+    options.library_root = KrtDriverJoinPath(repository,(int64)"libs");
+    options.linker = KrtDriverJoinPath(repository,(int64)"build/ArkLink/ArkLink");
+    if (!KrtDriverFileExists(options.linker)) { options.linker = KrtDriverJoinPath(repository,(int64)"ArkLink/build/ArkLink"); }
+    options.configuration = KrtDriverGetEnv("KRT_CONFIG");
+    if (KrtDriverStringLength(options.configuration) == 0) { options.configuration = (int64)"release"; }
+    bool literal = false;
+    while (arguments != null) {
+        int64 word = arguments.value;
+        if (!literal && KrtDriverWord(word,"--")) { literal = true; arguments = arguments.next; continue; }
+        if (!literal && (KrtDriverWord(word,"help") || KrtDriverWord(word,"--help") || KrtDriverWord(word,"-h"))) { options.help = true; arguments = arguments.next; continue; }
+        if (!literal && (KrtDriverWord(word,"version") || KrtDriverWord(word,"--version"))) { options.version = true; arguments = arguments.next; continue; }
+        if (!literal && (KrtDriverWord(word,"--show-ir") || KrtDriverWord(word,"--ir"))) { options.show_ir = true; arguments = arguments.next; continue; }
+        if (!literal && KrtDriverWord(word,"--keep-temp")) { options.keep_temp = true; arguments = arguments.next; continue; }
+        if (!literal && (KrtDriverWord(word,"-c") || KrtDriverWord(word,"--object") || KrtDriverWord(word,"--emit-kro"))) { options.object_mode = true; options.target = 1; options.target_set = true; options.eo_executable = false; arguments = arguments.next; continue; }
+        if (!literal && KrtDriverWord(word,"--check")) { options.check = true; arguments = arguments.next; continue; }
+        if (!literal && KrtDriverWord(word,"--rebuild")) { options.rebuild = true; arguments = arguments.next; continue; }
+        if (!literal && KrtDriverWord(word,"--list-sources")) { options.list_sources = true; arguments = arguments.next; continue; }
+        if (!literal && KrtDriverWord(word,"--emit-source")) { options.emit_source = true; arguments = arguments.next; continue; }
+        if (!literal && KrtDriverStartsWith(word,"-j") && KrtDriverStringLength(word) > 2) {
+            int32 jobs = KrtDriverJobs(word + 2); if (jobs == 0) { KrtDriverError("E_OPTION","jobs must be between 1 and 256"); return false; }
+            options.jobs = jobs; arguments = arguments.next; continue;
+        }
+        if (!literal && KrtDriverStartsWith(word,"-O") && KrtDriverStringLength(word) != 2) {
+            if (KrtDriverStringLength(word) != 3) { KrtDriverError("E_OPTION","optimization level must be -O0, -O1, -O2 or -O3"); return false; }
+            unsafe(using krt.mem;) { int32 level = (int32)((byte*)word)[2]-48;
+                if (level < 0 || level > 3) { KrtDriverError("E_OPTION","optimization level must be -O0, -O1, -O2 or -O3"); return false; }
+                options.optimization = level; options.optimization_set = true;
+            } arguments = arguments.next; continue;
+        }
+        bool output = !literal && (KrtDriverWord(word,"-o") || KrtDriverWord(word,"--output") || KrtDriverWord(word,"output"));
+        bool include = !literal && (KrtDriverWord(word,"-I") || KrtDriverWord(word,"--include"));
+        bool compiler = !literal && KrtDriverWord(word,"--compiler");
+        bool linker = !literal && KrtDriverWord(word,"--linker");
+        bool configuration = !literal && KrtDriverWord(word,"--config");
+        bool name = !literal && KrtDriverWord(word,"--name");
+        bool optimization = !literal && KrtDriverWord(word,"-O");
+        bool target = !literal && (KrtDriverWord(word,"target") || KrtDriverWord(word,"--target"));
+        bool jobs = !literal && (KrtDriverWord(word,"-j") || KrtDriverWord(word,"--jobs"));
+        if (output || include || compiler || linker || configuration || name || optimization || target || jobs) {
+            if (arguments.next == null) { KrtDriverError("E_OPTION","expected a value after option"); return false; }
+            arguments = arguments.next; int64 value = arguments.value;
+            if (output) { options.output = KrtDriverAbsolutePath(value); }
+            if (include) { options.includes = KrtDriverAppend(options.includes,KrtDriverAbsolutePath(value)); }
+            if (compiler) { options.compiler = KrtDriverAbsolutePath(value); }
+            if (linker) { options.linker = KrtDriverAbsolutePath(value); }
+            if (configuration) { options.configuration = value; }
+            if (name) { options.name = value; }
+            if (jobs) { int32 count = KrtDriverJobs(value); if (count == 0) { KrtDriverError("E_OPTION","jobs must be between 1 and 256"); return false; } options.jobs = count; }
+            if (optimization) {
+                if (KrtDriverStringLength(value) != 1) { KrtDriverError("E_OPTION","optimization level must be 0, 1, 2 or 3"); return false; }
+                unsafe(using krt.mem;) { int32 level = (int32)((byte*)value)[0]-48;
+                    if (level < 0 || level > 3) { KrtDriverError("E_OPTION","optimization level must be 0, 1, 2 or 3"); return false; }
+                    options.optimization = level; options.optimization_set = true;
+                }
+            }
+            if (target) {
+                options.target_set = true; options.object_mode = false; options.eo_executable = false;
+                if (KrtDriverWord(value,"exe")) { options.target = 0; }
+                else if (KrtDriverWord(value,"eo")) { options.target = 1; options.eo_executable = true; options.keep_temp = true; }
+                else if (KrtDriverWord(value,"ir")) { options.target = 2; }
+                else if (KrtDriverWord(value,"asm")) { options.target = 3; }
+                else if (KrtDriverWord(value,"vm")) { options.target = 4; }
+                else { KrtDriverError("E_OPTION",(string)KrtDriverConcat((int64)"unknown target type: ",value)); return false; }
+            }
+            arguments = arguments.next; continue;
+        }
+        if (!literal && KrtDriverStartsWith(word,"-I") && KrtDriverStringLength(word) > 2) {
+            options.includes = KrtDriverAppend(options.includes,KrtDriverAbsolutePath(word+2)); arguments = arguments.next; continue;
+        }
+        if (!literal && KrtDriverStartsWith(word,"-")) {
+            if (KrtDriverStartsWith(word,"-O")) { KrtDriverError("E_OPTION","optimization level must be -O0, -O1, -O2 or -O3"); }
+            else { KrtDriverError("E_OPTION",(string)KrtDriverConcat((int64)"unknown option: ",word)); }
+            return false;
+        }
+        if (!literal && options.sources == null && options.command == 0 && KrtDriverProjectCommand(word)) { options.command = word; }
+        else { options.sources = KrtDriverAppend(options.sources,word); }
+        arguments = arguments.next;
+    }
+    return true;
+}
+
+int32 KrtDriverJobs(int64 value) {
+    int64 length = KrtDriverStringLength(value); if (length < 1 || length > 3) { return 0; }
+    int32 jobs = 0;
+    unsafe(using krt.mem;) { byte* digits = (byte*)value; int32 index = 0;
+        while (index < length) { if (digits[index] < 48 || digits[index] > 57) { return 0; } jobs = jobs * 10 + (int32)digits[index] - 48; index = index + 1; }
+    }
+    if (jobs < 1 || jobs > 256) { return 0; } return jobs;
+}
+
+void KrtDriverUsage() {
+    KrtDriverPrint("Usage: krtc [options] source.krt ...\n       krtc new TYPE DIRECTORY [--name NAME]\n       krtc build|check|clean [PROJECT] [--config NAME]\n       krtc run-vm BYTECODE\n\nhelp / --help    version / --version\n-O0 / -O1 / -O2 / -O3  Optimization level, default -O2\ntarget exe|ir|asm|vm|eo   -o / output PATH   -c Emit KRO object\n-j N / --jobs N  Parallel project compilation, default 8\n--keep-temp  Preserve intermediate files    --show-ir / --ir\n--check  Validate only    -I PATH  Module directory\n--linker PATH    --compiler PATH    --rebuild\n");
+}
+bool KrtDriverIsProjectPath(int64 path) {
+    if (KrtDriverIsDirectory(path)) { return true; }
+    if (KrtDriverStringEqual(KrtProjectName(path),(int64)"project.krt")) { return true; }
+    return KrtDriverEndsWith(path,".json") || KrtDriverEndsWith(path,".esproj");
+}
+
+int32 KrtDriverMain() {
+    KrtDriverPath arguments = KrtDriverArguments();
+    if (arguments == null) { KrtDriverError("E_DRIVER","unable to read process arguments"); return 1; }
+    // Keep the original object contract available to native test harnesses.
+    if (arguments.next == null) {
+        if (KrtDriverFileExists((int64)"program.krt")) { return KrtCompilePath("program.krt","stage1-probe.kro") ? 0 : 1; }
+        KrtDriverUsage(); return 0;
+    }
+    KrtDriverOptions options = new KrtDriverOptions();
+    if (!KrtDriverParseArguments(arguments.next,options)) { return 1; }
+    if (options.help) {
+        KrtDriverUsage();
+        return 0;
+    }
+    if (options.version) { KrtDriverPrint("Kairote Lang Compiler Version: 0.00.0006cc (SelfHost native)\n"); return 0; }
+    if (options.command != 0) {
+        if (KrtDriverWord(options.command,"run-vm")) {
+            if (options.sources == null || options.sources.next != null) { KrtDriverError("E_OPTION","run-vm expects one bytecode path"); return 1; }
+            return KrtVmRun(KrtDriverAbsolutePath(options.sources.value));
+        }
+        if ((KrtDriverWord(options.command,"build") || KrtDriverWord(options.command,"check")) && options.sources != null && !KrtDriverIsProjectPath(options.sources.value)) {
+            options.check = KrtDriverWord(options.command,"check"); return KrtDriverCompile(options);
+        }
+        return KrtDriverProject(options);
+    }
+    if (options.sources != null && KrtDriverIsProjectPath(options.sources.value)) { options.command = (int64)"build"; return KrtDriverProject(options); }
+    return KrtDriverCompile(options);
+}

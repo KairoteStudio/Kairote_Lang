@@ -5,7 +5,7 @@ import subprocess
 import tempfile
 import unittest
 
-from Test.SelfHost.bootstrap import Bootstrap
+from Test.SelfHost.Bootstrap import Bootstrap
 
 
 class NativeExceptionTests(unittest.TestCase):

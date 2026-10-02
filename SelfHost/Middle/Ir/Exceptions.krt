@@ -1,12 +1,3 @@
-// Handler contexts are compile-time state. Native TryEnter records unwind state.
-class KrtNativeExceptionFrame {
-    public KrtNativeExceptionFrame previous;
-    public KrtAstNode finally_body;
-    public int32 record_slot;
-    public int32 loop_depth;
-    public bool active_handler;
-}
-
 bool KrtNativeLowerSavedThrow(KrtNativeModule module, int32 record_slot) {
     return KrtNativeEmit(module, (int32)KrtNativeOp.CatchValue, record_slot, 0) >= 0 &&
         KrtNativeEmit(module, (int32)KrtNativeOp.CatchType, record_slot, 0) >= 0 &&
@@ -29,8 +20,12 @@ bool KrtNativeLowerThrow(KrtAstNode statement, KrtAstNode module_ast, KrtNativeM
 }
 
 bool KrtNativeLowerCleanup(KrtAstNode module_ast, KrtAstNode unit, KrtNativeModule module, int64 source, int32[] breaks, int32[] continues, ref int32 depth, bool returning) {
+    return KrtNativeLowerCleanupAtDepth(module_ast, unit, module, source, breaks, continues, ref depth, returning, depth);
+}
+
+bool KrtNativeLowerCleanupAtDepth(KrtAstNode module_ast, KrtAstNode unit, KrtNativeModule module, int64 source, int32[] breaks, int32[] continues, ref int32 depth, bool returning, int32 cleanup_depth) {
     KrtNativeExceptionFrame saved = module.exception_frame; KrtNativeExceptionFrame frame = saved;
-    while (frame != null && (returning || frame.loop_depth >= depth)) {
+    while (frame != null && (returning || frame.loop_depth >= cleanup_depth)) {
         module.exception_frame = frame.previous;
         if (frame.active_handler && KrtNativeEmit(module, (int32)KrtNativeOp.TryLeave, frame.record_slot, 0) < 0) { return false; }
         if (frame.finally_body != null && !KrtNativeLowerBlock(frame.finally_body, module_ast, unit, module, source, breaks, continues, ref depth)) { return false; }

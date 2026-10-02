@@ -1,0 +1,88 @@
+// Fork workers execute native compilation directly. Their address spaces keep
+// compiler globals independent, while the parent publishes deterministic results.
+static int64 KrtDriverLastErrorCode = 0;
+
+class KrtDriverCompileTask {
+    public KrtDriverOptions options;
+    public int64 source;
+    public int64 output;
+    public int64 cached;
+    public int64 log_path;
+    public int64 pid;
+    public int32 status;
+    public KrtDriverCompileTask next;
+}
+
+bool KrtDriverDeferredCode(int64 code) {
+    return KrtDriverStringEqual(code,(int64)"E_MODULE") || KrtDriverStringEqual(code,(int64)"E_LOWER") ||
+        KrtDriverStringEqual(code,(int64)"E_UNDEFINED_METHOD") || KrtDriverStringEqual(code,(int64)"E_GENERIC_CONSTRAINT") ||
+        KrtDriverStringEqual(code,(int64)"E_LIBRARY_SYMBOL") || KrtDriverStringEqual(code,(int64)"E_LIBRARY_DATA") ||
+        KrtDriverStringEqual(code,(int64)"E_IMPORT") || KrtDriverStringEqual(code,(int64)"E_LINKAGE");
+}
+
+void KrtDriverCompileWorker(KrtDriverCompileTask task) {
+    int64 log = syscall(2,task.log_path,577,384,0,0,0);
+    if (log < 0) { syscall(60,3,0,0,0,0,0); return; }
+    if (syscall(33,log,2,0,0,0,0) < 0 || syscall(33,log,1,0,0,0,0) < 0) { syscall(60,3,0,0,0,0,0); return; }
+    if (log != 1 && log != 2) { syscall(3,log,0,0,0,0,0); }
+    KrtDriverLastErrorCode = 0; KrtDriverQuiet = false; task.options.quiet = false;
+    int32 status = KrtDriverCompile(task.options); int32 result = 2;
+    if (status == 0 && KrtDriverFileExists(task.options.output)) { result = 0; }
+    else if (status != 0 && KrtDriverDeferredCode(KrtDriverLastErrorCode)) { result = 1; }
+    syscall(60,result,0,0,0,0,0);
+}
+
+void KrtDriverWorkerDiagnostic(KrtDriverCompileTask task) {
+    KrtDriverError("E_WORKER",(string)KrtDriverConcat((int64)"compilation worker failed: ",task.source));
+    if (task.status == 3) { KrtDriverError("E_OUTPUT",(string)KrtDriverConcat((int64)"unable to open worker diagnostic output: ",task.log_path)); }
+    KrtDriverBuffer log = new KrtDriverBuffer();
+    if (KrtDriverReadFile(task.log_path,log) && log.length > 0) { KrtDriverWriteAll(2,log.data,log.length); }
+    if (task.status < 0) { KrtDriverError("E_WORKER",(string)KrtDriverConcat((int64)"worker terminated by signal ",KrtDriverNumber(-task.status))); }
+}
+
+bool KrtDriverParallelCompile(KrtDriverCompileTask tasks, int32 jobs) {
+    if (jobs < 1 || jobs > 256) { KrtDriverError("E_OPTION","jobs must be between 1 and 256"); return false; }
+    int32 total = 0; KrtDriverCompileTask task = tasks;
+    while (task != null) { task.status = -1; task.pid = 0; total = total + 1; task = task.next; }
+    if (total == 0) { return true; }
+    if (jobs > total) { jobs = total; }
+    int64 message = KrtDriverConcat((int64)"compiling units: ",KrtDriverNumber(total));
+    message = KrtDriverConcat(message,KrtDriverConcat((int64)" files, up to ",KrtDriverNumber(jobs)));
+    KrtDriverPrint((string)KrtDriverConcat(message,(int64)" jobs\n"));
+    KrtDriverCompileTask pending = tasks; int32 active = 0; bool ok = true;
+    while (pending != null || active > 0) {
+        while (ok && pending != null && active < jobs) {
+            int64 pid = syscall(57,0,0,0,0,0,0);
+            if (pid == 0) { KrtDriverCompileWorker(pending); syscall(60,2,0,0,0,0,0); return false; }
+            if (pid < 0) { KrtDriverError("E_WORKER","unable to fork compilation worker"); ok = false; break; }
+            pending.pid = pid; pending.status = -2; pending = pending.next; active = active + 1;
+        }
+        if (active == 0) { break; }
+        int32 status = 0; int64 waited = 0;
+        unsafe(using krt.mem;) { waited = syscall(61,-1,(int64)&status,0,0,0,0); }
+        if (waited == -4) { continue; }
+        if (waited < 0) { KrtDriverError("E_WORKER","unable to wait for compilation worker"); ok = false; break; }
+        task = tasks; while (task != null && task.pid != waited) { task = task.next; }
+        if (task == null || task.status != -2) { KrtDriverError("E_WORKER","unexpected compilation worker state"); ok = false; continue; }
+        active = active - 1;
+        if ((status & 127) != 0) { task.status = -(status & 127); ok = false; }
+        else { task.status = (status >> 8) & 255; if (task.status > 1) { ok = false; } }
+        if (!ok) { pending = null; }
+    }
+    // Reap every child before a caller can remove its temporary output directory.
+    if (active > 0) {
+        task = tasks;
+        while (task != null) {
+            if (task.status == -2) {
+                int32 status = 0; int64 waited = 0;
+                unsafe(using krt.mem;) { waited = syscall(61,task.pid,(int64)&status,0,0,0,0); while (waited == -4) { waited = syscall(61,task.pid,(int64)&status,0,0,0,0); } }
+                if (waited < 0) { task.status = 2; }
+                else if ((status & 127) != 0) { task.status = -(status & 127); }
+                else { task.status = (status >> 8) & 255; }
+            }
+            task = task.next;
+        }
+    }
+    task = tasks; while (task != null) { if (task.status > 1 || (task.status < 0 && task.pid > 0)) { KrtDriverWorkerDiagnostic(task); } task = task.next; }
+    return ok;
+}

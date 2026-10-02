@@ -2,7 +2,7 @@
 
 The tests import repository library sources through the normal driver. They are
 the same tests used for Re.KrtC, with independently asserted runtime behavior.
-No native optimizer is claimed and no failed compile falls back to Re.KrtC.
+This run uses -O0 to isolate language and library behavior from optimization.
 """
 import argparse
 import hashlib
@@ -70,8 +70,8 @@ def main():
     os.environ['SELFHOST_COMPILER'] = str(compiler)
     os.environ['KRTC'] = str(ROOT / 'SelfHost/krtc')
     os.environ['KRT_STDLIB_TEST_LEVELS'] = '0'
-    tracked = [compiler, ROOT / 'SelfHost/Compile.py', ROOT / 'SelfHost/Project.py',
-               ROOT / 'SelfHost/krtc', *sorted((ROOT / 'libs').rglob('*.krt'))]
+    tracked = [compiler, ROOT / 'SelfHost/krtc', *sorted((ROOT / 'SelfHost').rglob('*.krt')),
+               *sorted((ROOT / 'libs').rglob('*.krt'))]
     before = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in tracked}
     suite = unittest.defaultTestLoader.discover(str(ROOT / 'Test/StandardLibrary'), pattern=args.pattern)
     with (args.work / 'tests.log').open('w') as stream:
@@ -80,7 +80,9 @@ def main():
     report = {
         'schema': 1, 'compiler': str(compiler),
         'compiler_sha256': hashlib.sha256(compiler.read_bytes()).hexdigest(),
-        'driver_sha256': hashlib.sha256((ROOT / 'SelfHost/Compile.py').read_bytes()).hexdigest(),
+        'launcher_sha256': hashlib.sha256((ROOT / 'SelfHost/krtc').read_bytes()).hexdigest(),
+        'compiler_sources': {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
+                             for path in sorted((ROOT / 'SelfHost').rglob('*.krt'))},
         'optimization_levels': [0], 'tests_run': result.testsRun,
         'library_sources': {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
                             for path in sorted((ROOT / 'libs').rglob('*.krt'))},

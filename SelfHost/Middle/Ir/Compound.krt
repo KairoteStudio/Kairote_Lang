@@ -1,0 +1,45 @@
+int32 KrtNativeCompoundOperation(int32 operation) {
+    if (operation == 108) { return 43; } if (operation == 109) { return 45; }
+    if (operation == 110) { return 42; } if (operation == 111) { return 47; }
+    if (operation == 112) { return 37; } if (operation == 117) { return 38; }
+    if (operation == 118) { return 124; } if (operation == 119) { return 94; }
+    if (operation == 120) { return 106; } if (operation == 121) { return 107; }
+    return -1;
+}
+
+// Preserve the address across the read/update/store so field and index targets
+// are evaluated once, including calls in the receiver and subscript.
+bool KrtNativeLowerCompound(KrtAstNode statement, KrtAstNode module_ast, KrtNativeModule module, int64 source) {
+    int32 operation = KrtNativeCompoundOperation(statement.op);
+    if (operation < 0) { return false; }
+    if (statement.left.native_string) {
+        // Read the immutable string value before the RHS can update the same
+        // storage. The saved lvalue address is evaluated only once.
+        return operation == 43 && KrtNativeLowerLValue(statement.left,module_ast,module,source) &&
+            KrtNativeEmit(module,(int32)KrtNativeOp.Dup,0,0) >= 0 &&
+            KrtNativeEmit(module,(int32)KrtNativeOp.Load,0,8) >= 0 &&
+            KrtNativeLowerExpression(statement.right,module_ast,module,source) &&
+            KrtNativeEmit(module,(int32)KrtNativeOp.StringConcat,0,0) >= 0 &&
+            KrtNativeEmit(module,(int32)KrtNativeOp.Store,0,KrtNativeWidth(statement.left)) >= 0;
+    }
+    if ((KrtNativeWideKind(statement.left) || KrtNativeWideKind(statement.right)) &&
+        KrtNativeFloatKind(statement.left) == 0 && KrtNativeFloatKind(statement.right) == 0) {
+        return KrtNativeLowerWideCompound(statement, module_ast, module, source);
+    }
+    if (KrtNativeFloatKind(statement.left) != 0 || KrtNativeFloatKind(statement.right) != 0) {
+        return KrtNativeLowerFloatingCompound(statement, module_ast, module, source);
+    }
+    int32 arithmetic = KrtNativeBinaryOp(operation);
+    if (arithmetic < 0 || !KrtNativeLowerLValue(statement.left, module_ast, module, source) ||
+        KrtNativeEmit(module, (int32)KrtNativeOp.Dup, 0, 0) < 0 ||
+        KrtNativeEmit(module, (int32)KrtNativeOp.Load, 0, KrtNativeValueWidth(statement.left)) < 0 ||
+        !KrtNativeLowerExpression(statement.right, module_ast, module, source)) { return false; }
+    int32 stride = KrtNativeSemanticStride(statement.left);
+    if ((operation == 43 || operation == 45) && stride > 0) {
+        if (KrtNativeEmit(module, (int32)KrtNativeOp.Const, stride, 0) < 0 ||
+            KrtNativeEmit(module, (int32)KrtNativeOp.Mul, 0, 0) < 0) { return false; }
+    }
+    return KrtNativeEmit(module, arithmetic, 0, statement.left.native_unsigned ? 1 : 0) >= 0 &&
+        KrtNativeEmit(module, (int32)KrtNativeOp.Cast, KrtNativeValueWidth(statement.left), 0) >= 0 &&
+        KrtNativeEmit(module, (int32)KrtNativeOp.Store, 0, KrtNativeWidth(statement.left)) >= 0;
+}

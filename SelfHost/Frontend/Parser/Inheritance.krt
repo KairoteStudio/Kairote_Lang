@@ -3,11 +3,14 @@ KrtAstNode KrtParserBaseTypes(KrtParser parser) {
     if (!KrtParserTokenText(parser, 58)) { return null; }
     KrtLexerNext(parser.lexer, parser.token);
     KrtAstNode first = null; KrtAstNode tail = null;
-    while (parser.errors == 0) {
+    int32 previous_errors = parser.errors;
+    while (parser.errors == previous_errors) {
         int64 start = parser.token.start;
         if (!KrtParserSkipNativeType(parser)) { KrtParserRecordError(parser); return first; }
         KrtAstNode base_type = KrtAstMake(KrtAstKind.Type, start, parser.token.start - start);
+        base_type.syntax_type=parser.last_type;
         base_type.type_start = start; base_type.type_length = KrtParserTypeSpanLength(parser, start, base_type.length);
+        base_type.length=base_type.type_length;base_type.child_count=1;
         if (first == null) { first = base_type; } else { tail.next = base_type; } tail = base_type;
         if (!KrtParserTokenText(parser, 44)) { break; }
         KrtLexerNext(parser.lexer, parser.token);
@@ -23,8 +26,9 @@ bool KrtParserBaseConstructor(KrtParser parser, KrtAstNode method) {
     KrtLexerNext(parser.lexer, parser.token);
     if (!KrtParserTokenText(parser, 40)) { KrtParserRecordError(parser); return false; }
     KrtLexerNext(parser.lexer, parser.token); KrtAstNode tail = null;
-    while (!KrtParserTokenText(parser, 41) && parser.errors == 0) {
-        KrtAstNode argument = KrtParserParseExpression(parser, 1);
+    int32 previous_errors = parser.errors;
+    while (!KrtParserTokenText(parser, 41) && parser.errors == previous_errors) {
+        KrtAstNode argument = KrtParserParseArgument(parser);
         if (call.right == null) { call.right = argument; } else { tail.next = argument; } tail = argument;
         call.parameter_count = call.parameter_count + 1;
         if (!KrtParserTokenText(parser, 44)) { break; }

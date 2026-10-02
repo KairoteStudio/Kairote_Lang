@@ -4,7 +4,6 @@ import os
 from pathlib import Path
 import struct
 import subprocess
-import sys
 import tempfile
 import unittest
 
@@ -38,7 +37,7 @@ class NativeLinkingTests(unittest.TestCase):
         self.work = Path(work.name)
 
     def invoke(self, *args):
-        return subprocess.run([sys.executable, str(ROOT / 'SelfHost/Compile.py'), *map(str, args),
+        return subprocess.run([str(ROOT / 'SelfHost/krtc'), *map(str, args),
                                '--compiler', str(COMPILER), '--linker', str(LINKER)],
                               cwd=self.work, capture_output=True, text=True, timeout=60)
 
@@ -188,6 +187,70 @@ class NativeLinkingTests(unittest.TestCase):
         self.assertEqual(len({name for name, _ in generic_methods}), 2)
         self.assertTrue(all(symbol[4] == 0 for _, symbol in generic_methods))
         caller = self.object('main', 'extern int32 answer(); int32 main(){return answer();}')
+        self.execute([caller, library])
+
+    def test_generic_function_arguments_and_owner_are_in_symbol_identity(self):
+        library = self.object('generic-identities', '''
+int32 marker<T>(){return 7;}
+class Owner<T>{public static int32 marker<U>(){return 7;}}
+int32 answer(){return marker<int32*>()+marker<int32**>()+marker<int32*>()+
+Owner<int32>.marker<string>()+Owner<int32>.marker<int32>()+Owner<string>.marker<int32>();}
+''')
+        symbols = read_object(library)[1]
+        markers = [name.split('$local', 1)[0] for name, _ in symbols if 'marker$' in name]
+        self.assertEqual(len(markers), 5)
+        self.assertEqual(len(set(markers)), 5)
+        self.assertIn('_KRT1$marker$G<Pi32;>$$i32', markers)
+        self.assertIn('_KRT1$marker$G<PPi32;>$$i32', markers)
+        owner_markers = [name for name in markers if '.marker$' in name]
+        self.assertEqual(len(owner_markers), 3)
+        self.assertTrue(all('.G<' in name and '.marker$G<' in name for name in owner_markers), owner_markers)
+        caller = self.object('main', 'extern int32 answer();int32 main(){return answer();}')
+        self.execute([caller, library])
+
+    def test_multiple_pointer_depths_have_separate_external_symbols(self):
+        library = self.object('pointer-depths', '''
+int32 read(int32* value){unsafe(using krt.mem;){return *value;}}
+int32 read(int32** value){unsafe(using krt.mem;){return **value+1;}}
+''')
+        names = {name for name, _ in read_object(library)[1]}
+        self.assertIn('_KRT1$read$Pi32;$i32', names)
+        self.assertIn('_KRT1$read$PPi32;$i32', names)
+        caller = self.object('main', '''
+extern int32 read(int32* value);extern int32 read(int32** value);
+int32 main(){unsafe(using krt.mem;){int32 value=20;int32* pointer=&value;
+return read(pointer)+read(&pointer)+1;}}
+''')
+        self.execute([caller, library])
+
+    def test_callback_shape_pointer_depth_is_encoded_inside_the_signature(self):
+        library = self.object('pointer-callback', '''
+int32 apply(fn(int32*)->int32 callback,int32* value){return callback(value);}
+''')
+        names = {name for name, _ in read_object(library)[1]}
+        self.assertIn('_KRT1$apply$fn(Pi32;)>i32;Pi32;$i32', names)
+        caller = self.object('main', '''
+extern int32 apply(fn(int32*)->int32 callback,int32* value);
+int32 read(int32* value){unsafe(using krt.mem;){return *value;}}
+int32 main(){unsafe(using krt.mem;){int32 value=42;return apply(&read,&value);}}
+''')
+        self.execute([caller, library])
+
+    def test_character_abi_symbols_are_distinct_from_unsigned_bytes(self):
+        library = self.object('characters', '''
+char letter(char value){return value;}
+uint8 byte_value(uint8 value){return value;}
+char first(char[] values){return values[0];}
+''')
+        names = {name for name, _ in read_object(library)[1]}
+        self.assertIn('_KRT1$letter$c;$c', names)
+        self.assertIn('_KRT1$byte_value$u8;$u8', names)
+        self.assertIn('_KRT1$first$Ac;$c', names)
+        caller = self.object('main', '''
+extern char letter(char value);extern uint8 byte_value(uint8 value);extern char first(char[] values);
+int32 main(){char[] letters=['B'];if(letter('A')!=65 || byte_value((uint8)67)!=67 || first(letters)!=66){return 1;}
+delete letters;return 42;}
+''')
         self.execute([caller, library])
 
     def test_project_uses_native_library_object_and_rebuilds_on_library_change(self):

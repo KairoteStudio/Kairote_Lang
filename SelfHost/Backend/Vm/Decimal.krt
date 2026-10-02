@@ -1,0 +1,88 @@
+// Exact binary-double to six-significant-digit general format (%g).
+// Decimal rounding uses integer digits and ties to even.
+int64 KrtVmNumberText(int64 bits) {
+    uint64 raw = (uint64)bits; bool negative = (raw >> 63) != 0;
+    int32 exponent_bits = (int32)((raw >> 52) & 2047); uint64 significand = raw & 4503599627370495;
+    int64 result = 0;
+    if (exponent_bits == 2047) {
+        result = (int64)"inf"; if (significand != 0) { result = (int64)"nan"; }
+        if (negative) { result = KrtDriverConcat((int64)"-",result); } return result;
+    }
+    if (exponent_bits == 0 && significand == 0) { if (negative) { return (int64)"-0"; } return (int64)"0"; }
+    int32 power = -1074;
+    if (exponent_bits != 0) { significand = significand | 4503599627370496; power = exponent_bits - 1075; }
+    uint32[] limbs = new uint32[128]; int32 count = 1;
+    limbs[0] = (uint32)(significand % 1000000000); uint64 high = significand / 1000000000;
+    if (high != 0) { limbs[1] = (uint32)high; count = 2; }
+    int32 scale = 0; int32 repetitions = power; int32 multiplier = 2;
+    if (power < 0) { scale = -power; repetitions = -power; multiplier = 5; }
+    int32 repeat = 0;
+    while (repeat < repetitions) {
+        uint64 carry = 0; int32 index = 0;
+        while (index < count) {
+            uint64 value = (uint64)limbs[index] * (uint64)multiplier + carry;
+            limbs[index] = (uint32)(value % 1000000000); carry = value / 1000000000; index = index + 1;
+        }
+        if (carry != 0) { if (count >= 128) { return 0; } limbs[count] = (uint32)carry; count = count + 1; }
+        repeat = repeat + 1;
+    }
+    int64 digits = KrtDriverAlloc((int64)count * 9 + 1); if (digits == 0) { return 0; }
+    int64 first = KrtDriverNumber(limbs[count - 1]); int64 length = KrtDriverStringLength(first);
+    unsafe(using krt.mem;) {
+        byte* output = (byte*)digits; byte* source = (byte*)first; int64 index = 0;
+        while (index < length) { output[index] = source[index]; index = index + 1; }
+        int32 limb = count - 2;
+        while (limb >= 0) {
+            uint32 number = limbs[limb]; int32 place = 8;
+            while (place >= 0) { output[length + place] = (byte)(48 + number % 10); number = number / 10; place = place - 1; }
+            length = length + 9; limb = limb - 1;
+        }
+        output[length] = 0;
+    }
+    int32 exponent = (int32)length - scale - 1; int32 rounded = 0;
+    unsafe(using krt.mem;) {
+        byte* source = (byte*)digits; int32 index = 0;
+        while (index < 6) { rounded = rounded * 10; if (index < length) { rounded = rounded + (int32)source[index] - 48; } index = index + 1; }
+        if (length > 6) {
+            bool remainder = false; index = 7;
+            while (index < length) { if (source[index] != 48) { remainder = true; break; } index = index + 1; }
+            if (source[6] > 53 || (source[6] == 53 && (remainder || (rounded & 1) != 0))) { rounded = rounded + 1; }
+        }
+    }
+    if (rounded == 1000000) { rounded = 100000; exponent = exponent + 1; }
+    int64 significant = KrtDriverNumber(rounded); int64 significant_length = 6;
+    unsafe(using krt.mem;) { byte* source = (byte*)significant;
+        while (significant_length > 1 && source[significant_length - 1] == 48) { significant_length = significant_length - 1; }
+    }
+    int64 text = KrtDriverAlloc(48); if (text == 0) { return 0; } int64 position = 0;
+    unsafe(using krt.mem;) {
+        byte* output = (byte*)text; byte* source = (byte*)significant;
+        if (negative) { output[position] = 45; position = position + 1; }
+        if (exponent < -4 || exponent >= 6) {
+            output[position] = source[0]; position = position + 1;
+            if (significant_length > 1) { output[position] = 46; position = position + 1; int32 index = 1;
+                while (index < significant_length) { output[position] = source[index]; position = position + 1; index = index + 1; }
+            }
+            output[position] = 101; position = position + 1;
+            if (exponent < 0) { output[position] = 45; exponent = -exponent; } else { output[position] = 43; } position = position + 1;
+            int64 exponent_text = KrtDriverNumber(exponent); int64 exponent_length = KrtDriverStringLength(exponent_text); byte* exponent_digits = (byte*)exponent_text;
+            if (exponent_length < 2) { output[position] = 48; position = position + 1; }
+            int32 index = 0; while (index < exponent_length) { output[position] = exponent_digits[index]; position = position + 1; index = index + 1; }
+        }
+        else if (exponent < 0) {
+            output[position] = 48; output[position + 1] = 46; position = position + 2; int32 zeros = -exponent - 1;
+            while (zeros > 0) { output[position] = 48; position = position + 1; zeros = zeros - 1; }
+            int32 index = 0; while (index < significant_length) { output[position] = source[index]; position = position + 1; index = index + 1; }
+        }
+        else {
+            int32 decimal_point = exponent + 1; int32 index = 0;
+            while (index < significant_length || index < decimal_point) {
+                if (index == decimal_point) { output[position] = 46; position = position + 1; }
+                output[position] = 48; if (index < significant_length) { output[position] = source[index]; }
+                position = position + 1; index = index + 1;
+            }
+        }
+        output[position] = 0;
+    }
+    return text;
+}

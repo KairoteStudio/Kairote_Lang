@@ -1,0 +1,16 @@
+bool KrtParserIsCompoundOperation(int32 operation) {
+    return (operation >= 108 && operation <= 112) || (operation >= 117 && operation <= 121);
+}
+
+KrtAstNode KrtParserParseForIncrement(KrtParser parser) {
+    int64 start = parser.token.start;
+    KrtAstNode expression = KrtParserParseExpression(parser, 1);
+    int32 operation = KrtParserOperator(parser);
+    bool compound = KrtParserIsCompoundOperation(operation);
+    if (!compound && !KrtParserTokenText(parser, 61)) { return expression; }
+    KrtLexerNext(parser.lexer, parser.token);
+    KrtAstNode value = KrtParserParseExpression(parser, 1);
+    KrtAstNode result = KrtAstMake(compound ? KrtAstKind.CompoundAssign : KrtAstKind.Assign, start, parser.token.start - start);
+    result.left = expression; result.right = value; result.op = operation; result.child_count = 2;
+    return result;
+}

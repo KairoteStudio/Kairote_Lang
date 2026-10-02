@@ -1,7 +1,332 @@
-enum KrtTokenKind { Eof = 0, Identifier = 1, Integer = 2, String = 3, Character = 4, Punctuation = 5, Invalid = 6, Floating = 7 }
+// Numeric values match Re.KrtC Tokenizer.h, including IntegerWidths.def.
+enum KrtTokenKind {
+    Eof = 0,
+    Identifier = 1,
+    Number = 2,
+    String = 3,
+    CharLiteral = 4,
+    TypeString = 5,
+    Plus = 6,
+    Minus = 7,
+    Multiply = 8,
+    Divide = 9,
+    Modulo = 10,
+    Assign = 11,
+    Equal = 12,
+    NotEqual = 13,
+    Less = 14,
+    Greater = 15,
+    LessEqual = 16,
+    GreaterEqual = 17,
+    LeftParen = 18,
+    RightParen = 19,
+    LeftBrace = 20,
+    RightBrace = 21,
+    LeftBracket = 22,
+    RightBracket = 23,
+    Comma = 24,
+    Semicolon = 25,
+    Colon = 26,
+    DoubleColon = 27,
+    Dot = 28,
+    Arrow = 29,
+    Pipe = 30,
+    Dollar = 31,
+    Function = 32,
+    Fn = 33,
+    Var = 34,
+    Let = 35,
+    If = 36,
+    Else = 37,
+    While = 38,
+    Do = 39,
+    For = 40,
+    Foreach = 41,
+    In = 42,
+    Return = 43,
+    Print = 44,
+    True = 45,
+    False = 46,
+    Null = 47,
+    Underscore = 48,
+    Fixed = 49,
+    Async = 50,
+    Await = 51,
+    And = 52,
+    Or = 53,
+    Not = 54,
+    New = 55,
+    Delete = 56,
+    Class = 57,
+    Struct = 58,
+    Interface = 59,
+    Enum = 60,
+    Namespace = 61,
+    This = 62,
+    Base = 63,
+    Public = 64,
+    Private = 65,
+    Protected = 66,
+    Static = 67,
+    Virtual = 68,
+    Abstract = 69,
+    Override = 70,
+    Using = 71,
+    Console = 72,
+    Increment = 73,
+    Decrement = 74,
+    PlusAssign = 75,
+    MinusAssign = 76,
+    MulAssign = 77,
+    DivAssign = 78,
+    ModAssign = 79,
+    Int2 = 80,
+    Int4 = 81,
+    Int6 = 82,
+    Int8 = 83,
+    Int10 = 84,
+    Int12 = 85,
+    Int14 = 86,
+    Int16 = 87,
+    Int18 = 88,
+    Int20 = 89,
+    Int22 = 90,
+    Int24 = 91,
+    Int26 = 92,
+    Int28 = 93,
+    Int30 = 94,
+    Int32 = 95,
+    Int34 = 96,
+    Int36 = 97,
+    Int38 = 98,
+    Int40 = 99,
+    Int42 = 100,
+    Int44 = 101,
+    Int46 = 102,
+    Int48 = 103,
+    Int50 = 104,
+    Int52 = 105,
+    Int54 = 106,
+    Int56 = 107,
+    Int58 = 108,
+    Int60 = 109,
+    Int62 = 110,
+    Int64 = 111,
+    Int66 = 112,
+    Int68 = 113,
+    Int70 = 114,
+    Int72 = 115,
+    Int74 = 116,
+    Int76 = 117,
+    Int78 = 118,
+    Int80 = 119,
+    Int82 = 120,
+    Int84 = 121,
+    Int86 = 122,
+    Int88 = 123,
+    Int90 = 124,
+    Int92 = 125,
+    Int94 = 126,
+    Int96 = 127,
+    Int98 = 128,
+    Int100 = 129,
+    Int102 = 130,
+    Int104 = 131,
+    Int106 = 132,
+    Int108 = 133,
+    Int110 = 134,
+    Int112 = 135,
+    Int114 = 136,
+    Int116 = 137,
+    Int118 = 138,
+    Int120 = 139,
+    Int122 = 140,
+    Int124 = 141,
+    Int126 = 142,
+    Int128 = 143,
+    Uint2 = 144,
+    Uint4 = 145,
+    Uint6 = 146,
+    Uint8 = 147,
+    Uint10 = 148,
+    Uint12 = 149,
+    Uint14 = 150,
+    Uint16 = 151,
+    Uint18 = 152,
+    Uint20 = 153,
+    Uint22 = 154,
+    Uint24 = 155,
+    Uint26 = 156,
+    Uint28 = 157,
+    Uint30 = 158,
+    Uint32 = 159,
+    Uint34 = 160,
+    Uint36 = 161,
+    Uint38 = 162,
+    Uint40 = 163,
+    Uint42 = 164,
+    Uint44 = 165,
+    Uint46 = 166,
+    Uint48 = 167,
+    Uint50 = 168,
+    Uint52 = 169,
+    Uint54 = 170,
+    Uint56 = 171,
+    Uint58 = 172,
+    Uint60 = 173,
+    Uint62 = 174,
+    Uint64 = 175,
+    Uint66 = 176,
+    Uint68 = 177,
+    Uint70 = 178,
+    Uint72 = 179,
+    Uint74 = 180,
+    Uint76 = 181,
+    Uint78 = 182,
+    Uint80 = 183,
+    Uint82 = 184,
+    Uint84 = 185,
+    Uint86 = 186,
+    Uint88 = 187,
+    Uint90 = 188,
+    Uint92 = 189,
+    Uint94 = 190,
+    Uint96 = 191,
+    Uint98 = 192,
+    Uint100 = 193,
+    Uint102 = 194,
+    Uint104 = 195,
+    Uint106 = 196,
+    Uint108 = 197,
+    Uint110 = 198,
+    Uint112 = 199,
+    Uint114 = 200,
+    Uint116 = 201,
+    Uint118 = 202,
+    Uint120 = 203,
+    Uint122 = 204,
+    Uint124 = 205,
+    Uint126 = 206,
+    Uint128 = 207,
+    Float32 = 208,
+    Float64 = 209,
+    Bool = 210,
+    Char = 211,
+    Void = 212,
+    Tilde = 213,
+    BitwiseAnd = 214,
+    BitwiseOr = 215,
+    BitwiseXor = 216,
+    Lshift = 217,
+    Rshift = 218,
+    Unsafe = 219,
+    Point = 220,
+    Power = 221,
+    Try = 222,
+    Catch = 223,
+    Finally = 224,
+    Throw = 225,
+    Exception = 226,
+    Template = 227,
+    Typename = 228,
+    Where = 229,
+    Question = 230,
+    QuestionColon = 231,
+    NullCoalescing = 232,
+    QuestionDot = 233,
+    Switch = 234,
+    Case = 235,
+    Break = 236,
+    Continue = 237,
+    Default = 238,
+    Get = 239,
+    Set = 240,
+    From = 241,
+    Select = 242,
+    Orderby = 243,
+    Group = 244,
+    By = 245,
+    Join = 246,
+    On = 247,
+    Equals = 248,
+    Into = 249,
+    Lambda = 250,
+    Attribute = 251,
+    Is = 252,
+    As = 253,
+    Const = 254,
+    Extern = 255,
+    Yield = 256,
+    Lock = 257,
+    Match = 258,
+    With = 259,
+    When = 260,
+    Params = 261,
+    Operator = 262,
+    Delegate = 263,
+    Sizeof = 264,
+    Stackalloc = 265,
+    OpAddition = 266,
+    OpSubtraction = 267,
+    OpMultiply = 268,
+    OpDivision = 269,
+    OpModulo = 270,
+    OpEquality = 271,
+    OpInequality = 272,
+    OpLess = 273,
+    OpGreater = 274,
+    OpLessEqual = 275,
+    OpGreaterEqual = 276,
+    OpBitwiseAnd = 277,
+    OpBitwiseOr = 278,
+    OpBitwiseXor = 279,
+    OpLeftShift = 280,
+    OpRightShift = 281,
+    OpUnaryPlus = 282,
+    OpUnaryMinus = 283,
+    OpLogicalNot = 284,
+    OpBitwiseNot = 285,
+    OpIncrement = 286,
+    OpDecrement = 287,
+    OpTrue = 288,
+    OpFalse = 289,
+    OpImplicit = 290,
+    OpExplicit = 291,
+    Auto = 292,
+    AndAssign = 293,
+    OrAssign = 294,
+    XorAssign = 295,
+    LshiftAssign = 296,
+    RshiftAssign = 297,
+    Unknown = 298,
+    Integer = 2, Character = 4, Floating = 2, Invalid = 298
+}
+
+// Identifier covers identifier-shaped words; kind distinguishes reserved words.
+// Re.KrtC NUMBER includes integer/floating spellings, distinguished by category.
+enum KrtTokenCategory { Eof = 0, Identifier = 1, Integer = 2, String = 3, Character = 4, Punctuation = 5, Invalid = 6, Floating = 7 }
+
+KrtTokenCategory KrtTokenCategoryForKind(KrtTokenKind value) {
+    if (value == KrtTokenKind.Eof) { return KrtTokenCategory.Eof; }
+    if (value == KrtTokenKind.Number) { return KrtTokenCategory.Integer; }
+    if (value == KrtTokenKind.String) { return KrtTokenCategory.String; }
+    if (value == KrtTokenKind.CharLiteral) { return KrtTokenCategory.Character; }
+    if (value == KrtTokenKind.Unknown) { return KrtTokenCategory.Invalid; }
+    if ((value >= KrtTokenKind.Plus && value <= KrtTokenKind.Dollar) ||
+        (value >= KrtTokenKind.And && value <= KrtTokenKind.Not) ||
+        (value >= KrtTokenKind.Increment && value <= KrtTokenKind.ModAssign) ||
+        (value >= KrtTokenKind.Tilde && value <= KrtTokenKind.Rshift) ||
+        value == KrtTokenKind.Power ||
+        (value >= KrtTokenKind.Question && value <= KrtTokenKind.QuestionDot) ||
+        value == KrtTokenKind.Lambda ||
+        value == KrtTokenKind.Attribute ||
+        (value >= KrtTokenKind.AndAssign && value <= KrtTokenKind.RshiftAssign)) { return KrtTokenCategory.Punctuation; }
+    return KrtTokenCategory.Identifier;
+}
 
 class KrtToken {
     public KrtTokenKind kind;
+    public KrtTokenCategory category;
     public int64 start;
     public int64 length;
     public int64 line;
@@ -9,25 +334,26 @@ class KrtToken {
     public int32 error;
 
     public void Reset(int64 source_start, int64 source_line, int64 source_column) {
-        start = source_start;
-        length = 0;
-        line = source_line;
-        column = source_column;
-        error = 0;
-        kind = KrtTokenKind.Eof;
+        start = source_start; length = 0; line = source_line; column = source_column;
+        error = 0; kind = KrtTokenKind.Eof; category = KrtTokenCategory.Eof;
     }
-
-    public void SetKind(KrtTokenKind value) { kind = value; }
-    public void SetError(int32 value) { error = value; kind = KrtTokenKind.Invalid; }
+    public void SetKind(KrtTokenKind value) { kind = value; category = KrtTokenCategoryForKind(value); }
+    public void SetCategory(KrtTokenCategory value) {
+        category = value;
+        if (value == KrtTokenCategory.Floating) { kind = KrtTokenKind.Number; }
+    }
+    public void SetError(int32 value) { error = value; kind = KrtTokenKind.Unknown; category = KrtTokenCategory.Invalid; }
     public void SetLength(int64 value) { length = value; }
 }
 
-// The source language permits instance methods, while the bootstrap AST keeps
-// type bodies opaque.  These receiver-first forms preserve the same ABI for
-// the self-hosted lowering pass and are selected for member calls by name.
 void Reset(KrtToken token, int64 source_start, int64 source_line, int64 source_column) {
-    token.start = source_start; token.length = 0; token.line = source_line; token.column = source_column; token.error = 0; token.kind = KrtTokenKind.Eof;
+    token.start = source_start; token.length = 0; token.line = source_line; token.column = source_column;
+    token.error = 0; token.kind = KrtTokenKind.Eof; token.category = KrtTokenCategory.Eof;
 }
-void SetKind(KrtToken token, KrtTokenKind value) { token.kind = value; }
-void SetError(KrtToken token, int32 value) { token.error = value; token.kind = KrtTokenKind.Invalid; }
+void SetKind(KrtToken token, KrtTokenKind value) { token.kind = value; token.category = KrtTokenCategoryForKind(value); }
+void SetCategory(KrtToken token, KrtTokenCategory value) {
+    token.category = value;
+    if (value == KrtTokenCategory.Floating) { token.kind = KrtTokenKind.Number; }
+}
+void SetError(KrtToken token, int32 value) { token.error = value; token.kind = KrtTokenKind.Unknown; token.category = KrtTokenCategory.Invalid; }
 void SetLength(KrtToken token, int64 value) { token.length = value; }

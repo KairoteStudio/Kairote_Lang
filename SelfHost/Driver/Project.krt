@@ -1,0 +1,532 @@
+// Native project discovery, globbing, lifecycle and successful-build cache.
+// The manifest is length-prefixed binary data so arbitrary filesystem names
+// never need a host-language serializer or shell interpretation.
+class KrtProjectGlob {
+    public KrtDriverPath paths;
+    public int32 depth;
+    public bool ok;
+}
+class KrtProjectRecord {
+    public int64 output;
+    public int64 cached;
+    public uint64 hash;
+    public KrtProjectRecord next;
+}
+class KrtProjectManifest {
+    public bool valid;
+    public uint64 key;
+    public uint64 artifact_hash;
+    public int64 project;
+    public int64 output;
+    public KrtProjectRecord objects;
+}
+int32 KrtProjectPathCompare(int64 first, int64 second) {
+    unsafe(using krt.mem;) { byte* a = (byte*)first; byte* b = (byte*)second; int64 i = 0;
+        while (a[i] == b[i]) { if (a[i] == 0) { return 0; } i++; }
+        return a[i] < b[i] ? -1 : 1;
+    }
+}
+KrtDriverPath KrtProjectSortedPath(KrtDriverPath head, int64 path) {
+    KrtDriverPath previous = null; KrtDriverPath current = head;
+    while (current != null && KrtProjectPathCompare(current.value,path) < 0) { previous = current; current = current.next; }
+    if (current != null && KrtDriverStringEqual(current.value,path)) { return head; }
+    KrtDriverPath item = new KrtDriverPath(); item.value = path; item.next = current;
+    if (previous == null) { return item; } previous.next = item; return head;
+}
+bool KrtProjectPublish(int64 source, int64 target, bool executable) {
+    return KrtDriverMakeDirectories(KrtDriverDirectory(target)) && KrtDriverPublish(source,target,executable);
+}
+uint64 KrtProjectHashBytes(uint64 hash, int64 data, int64 length) {
+    unsafe(using krt.mem;) { byte* bytes = (byte*)data; int64 i = 0;
+        while (i < length) { hash = (hash ^ (uint64)bytes[i])*1099511628211; i++; }
+    } return hash;
+}
+uint64 KrtProjectHashString(uint64 hash, int64 value) {
+    hash = KrtProjectHashBytes(hash,value,KrtDriverStringLength(value)); return (hash ^ 255)*1099511628211;
+}
+uint64 KrtProjectFileHash(int64 path) {
+    if (!KrtDriverFileExists(path)) { return 0; }
+    int64 descriptor = syscall(2,path,0,0,0,0,0); if (descriptor < 0) { return 0; }
+    int64 data = KrtDriverAlloc(8192); if (data == 0) { syscall(3,descriptor,0,0,0,0,0); return 0; }
+    uint64 hash = 14695981039346656037;
+    while (true) {
+        int64 count = syscall(0,descriptor,data,8192,0,0,0);
+        if (count == -4) { continue; }
+        if (count < 0) { syscall(3,descriptor,0,0,0,0,0); return 0; }
+        if (count == 0) { break; } hash = KrtProjectHashBytes(hash,data,count);
+    }
+    syscall(3,descriptor,0,0,0,0,0); return hash;
+}
+int64 KrtProjectHex(uint64 value) {
+    int64 result = KrtDriverAlloc(17);
+    unsafe(using krt.mem;) { byte* bytes = (byte*)result; byte* digits = (byte*)(int64)"0123456789abcdef"; int64 index = 16;
+        bytes[index] = 0; while (index > 0) { index--; bytes[index] = digits[value % 16]; value = value/16; }
+    } return result;
+}
+int64 KrtProjectName(int64 path) {
+    int64 length = KrtDriverStringLength(path); int64 index = length;
+    unsafe(using krt.mem;) { byte* bytes = (byte*)path; while (index > 0 && bytes[index-1] != 47) { index--; } }
+    return KrtDriverCopyString(path+index,length-index);
+}
+bool KrtProjectPatternMatch(int64 pattern, int64 name) {
+    // '*' backtracking is linear in common filename patterns. Bracket classes
+    // and '?' use byte matching, matching filesystem glob's path semantics.
+    unsafe(using krt.mem;) { byte* p = (byte*)pattern; byte* n = (byte*)name;
+        int64 pi = 0; int64 ni = 0; int64 star = -1; int64 retry = 0;
+        if (n[0] == 46 && p[0] != 46) { return false; }
+        while (n[ni] != 0) {
+            if (p[pi] == 42) { star = pi++; retry = ni; continue; }
+            bool matched = p[pi] == 63 || (p[pi] != 0 && p[pi] == n[ni]); int64 next = pi+1;
+            if (p[pi] == 91) {
+                int64 end = pi+1; while (p[end] != 0 && p[end] != 93) { end++; }
+                if (p[end] == 93) {
+                    int64 cursor = pi+1; bool negate = p[cursor] == 33; if (negate) { cursor++; } bool found = false;
+                    while (cursor < end) { if (cursor+2 < end && p[cursor+1] == 45) {
+                            if (n[ni] >= p[cursor] && n[ni] <= p[cursor+2]) { found = true; } cursor += 3;
+                        } else { if (n[ni] == p[cursor]) { found = true; } cursor++; }
+                    } matched = negate ? !found : found; next = end+1;
+                }
+            }
+            if (matched) { pi = next; ni++; }
+            else if (star >= 0) { pi = star+1; retry++; ni = retry; }
+            else { return false; }
+        } while (p[pi] == 42) { pi++; } return p[pi] == 0;
+    }
+}
+void KrtProjectGlobWalk(KrtProjectGlob glob, int64 directory, int64 pattern) {
+    if (!glob.ok) { return; } glob.depth = glob.depth+1;
+    if (glob.depth > 128) { KrtDriverError("E_INPUT","source pattern directory nesting limit exceeded"); glob.ok = false; glob.depth = glob.depth-1; return; }
+    int64 length = KrtDriverStringLength(pattern); int64 end = 0;
+    unsafe(using krt.mem;) { byte* bytes = (byte*)pattern; while (end < length && bytes[end] != 47) { end++; } }
+    int64 component = KrtDriverCopyString(pattern,end); int64 remainder = 0; if (end < length) { remainder = pattern+end+1; }
+    if (KrtProjectEqual(component,"**")) {
+        if (remainder != 0) { KrtProjectGlobWalk(glob,directory,remainder); }
+        KrtDriverPath entries = KrtDriverListEntries(directory);
+        while (entries != null) {
+            int64 name = KrtProjectName(entries.value); bool hidden = false;
+            unsafe(using krt.mem;) { hidden = ((byte*)name)[0] == 46; }
+            if (!hidden) {
+                if (KrtDriverIsDirectory(entries.value)) { KrtProjectGlobWalk(glob,entries.value,pattern); }
+                else if (remainder == 0 && KrtDriverFileExists(entries.value)) { glob.paths = KrtProjectSortedPath(glob.paths,entries.value); }
+            } entries = entries.next;
+        }
+    } else {
+        bool magic = false;
+        unsafe(using krt.mem;) { byte* bytes = (byte*)component; int64 i = 0;
+            while (bytes[i] != 0) { if (bytes[i] == 42 || bytes[i] == 63 || bytes[i] == 91) { magic = true; } i++; }
+        }
+        KrtDriverPath entries = null;
+        if (magic) { entries = KrtDriverListEntries(directory); }
+        else { int64 direct = KrtDriverJoinPath(directory,component); if (KrtDriverFileExists(direct) || KrtDriverIsDirectory(direct)) { entries = KrtProjectAppend(null,direct,false); } }
+        while (entries != null) {
+            if (!magic || KrtProjectPatternMatch(component,KrtProjectName(entries.value))) {
+                if (remainder != 0 && KrtDriverIsDirectory(entries.value)) { KrtProjectGlobWalk(glob,entries.value,remainder); }
+                else if (remainder == 0 && KrtDriverFileExists(entries.value) && !KrtDriverIsDirectory(entries.value)) { glob.paths = KrtProjectSortedPath(glob.paths,KrtDriverAbsolutePath(entries.value)); }
+            } entries = entries.next;
+        }
+    } glob.depth = glob.depth-1;
+}
+KrtDriverPath KrtProjectGlobPaths(int64 directory, int64 pattern) {
+    KrtProjectGlob glob = new KrtProjectGlob(); glob.ok = true;
+    unsafe(using krt.mem;) { if (((byte*)pattern)[0] == 47) { directory = (int64)"/"; pattern++; } }
+    KrtProjectGlobWalk(glob,directory,pattern); if (glob.ok) { return glob.paths; } return null;
+}
+KrtDriverPath KrtProjectSpecs(int64 value) {
+    KrtDriverPath specs = null; int64 length = KrtDriverStringLength(value); int64 index = 0;
+    unsafe(using krt.mem;) { byte* bytes = (byte*)value;
+        while (index < length) {
+            while (index < length && (bytes[index] == 32 || bytes[index] == 9 || bytes[index] == 44 || bytes[index] == 59)) { index++; }
+            int64 start = index;
+            while (index < length && bytes[index] != 32 && bytes[index] != 9 && bytes[index] != 44 && bytes[index] != 59) { index++; }
+            if (index > start) { specs = KrtProjectAppend(specs,KrtDriverCopyString(value+start,index-start),false); }
+        }
+    } return specs;
+}
+bool KrtProjectAdd(KrtProject project, int64 path) {
+    path = KrtDriverAbsolutePath(path);
+    if (!KrtDriverFileExists(path) || KrtDriverIsDirectory(path)) { KrtDriverError("E_INPUT",(string)KrtProjectCat((int64)"source or library not found: ",path)); return false; }
+    if (KrtProjectEnds(KrtProjectLower(path),".kro")) { project.objects = KrtProjectAppend(project.objects,path,true); }
+    else { project.sources = KrtProjectAppend(project.sources,path,true); } return true;
+}
+int64 KrtProjectLibraryRelative(int64 library) {
+    int64 length = KrtDriverStringLength(library); if (KrtProjectEnds(library,".*")) { length -= 2; }
+    int64 relative = KrtDriverCopyString(library,length);
+    unsafe(using krt.mem;) { byte* bytes = (byte*)relative; int64 i = 0; while (i < length) { if (bytes[i] == 46) { bytes[i] = 47; } i++; } }
+    return relative;
+}
+bool KrtProjectResolveLibraries(KrtProject project, int64 library_root) {
+    KrtDriverPath specifications = null; KrtDriverPath original = project.libraries;
+    while (original != null) {
+        int64 direct = KrtDriverJoinPath(project.directory,original.value);
+        if (KrtDriverFileExists(direct) || KrtDriverIsDirectory(direct)) { specifications = KrtProjectAppend(specifications,original.value,false); }
+        else { KrtDriverPath parts = KrtProjectSpecs(original.value); while (parts != null) { specifications = KrtProjectAppend(specifications,parts.value,false); parts = parts.next; } }
+        original = original.next;
+    }
+    KrtDriverPath item = specifications;
+    while (item != null) {
+        int64 selected = KrtDriverJoinPath(project.directory,item.value);
+        if (!KrtDriverFileExists(selected) && !KrtDriverIsDirectory(selected)) {
+            selected = 0;
+            if (!KrtProjectEnds(item.value,".krt") && !KrtProjectEnds(item.value,".kro")) {
+                int64 relative = KrtProjectLibraryRelative(item.value);
+                KrtDriverPath search = KrtProjectAppend(null,project.directory,false);
+                search = KrtProjectAppend(search,KrtDriverJoinPath(project.directory,(int64)"libs"),false);
+                KrtDriverPath include = project.includes; while (include != null) { search = KrtProjectAppend(search,include.value,true); include = include.next; }
+                search = KrtProjectAppend(search,library_root,true); search = KrtProjectAppend(search,KrtDriverJoinPath(library_root,(int64)"System"),true);
+                while (search != null && selected == 0) {
+                    int64 candidate = KrtDriverJoinPath(search.value,relative);
+                    if (KrtDriverFileExists(candidate) || KrtDriverIsDirectory(candidate)) { selected = candidate; }
+                    else if (!KrtProjectEnds(item.value,".*")) { candidate = KrtProjectCat(candidate,(int64)".krt"); if (KrtDriverFileExists(candidate)) { selected = candidate; } }
+                    search = search.next;
+                }
+            }
+        }
+        if (selected == 0) { KrtDriverError("E_IMPORT",(string)KrtProjectCat((int64)"library not found: ",item.value)); return false; }
+        if (KrtDriverIsDirectory(selected)) {
+            KrtDriverPath matches = KrtDriverListKrtFiles(selected);
+            if (matches == null) { KrtDriverError("E_IMPORT","library contains no source files"); return false; }
+            while (matches != null) { if (!KrtProjectAdd(project,matches.value)) { return false; } matches = matches.next; }
+        } else if (!KrtProjectAdd(project,selected)) { return false; }
+        item = item.next;
+    } return true;
+}
+int64 KrtProjectFind(int64 path) {
+    path = KrtDriverAbsolutePath(path);
+    if (KrtDriverIsDirectory(path)) {
+        int64 candidate = KrtDriverJoinPath(path,(int64)"project.krt"); if (KrtDriverFileExists(candidate)) { return candidate; }
+        candidate = KrtDriverJoinPath(path,(int64)"project.json"); if (KrtDriverFileExists(candidate)) { return candidate; }
+        KrtDriverError("E_PROJECT","no project.krt or project.json found"); return 0;
+    } if (!KrtDriverFileExists(path)) { KrtDriverError("E_PROJECT","project file not found"); return 0; } return path;
+}
+bool KrtProjectKind(int64 kind) {
+    return KrtProjectEqual(kind,"console") || KrtProjectEqual(kind,"exe") || KrtProjectEqual(kind,"system") || KrtProjectEqual(kind,"web") || KrtProjectEqual(kind,"library") || KrtProjectEqual(kind,"lib") || KrtProjectEqual(kind,"dll");
+}
+bool KrtProjectIsLibrary(KrtProject project) {
+    return KrtProjectEqual(project.kind,"library") || KrtProjectEqual(project.kind,"lib") || KrtProjectEqual(project.kind,"dll");
+}
+int32 KrtProjectOptimization(int64 text) {
+    if (KrtDriverStartsWith(text,"-O")) { text += 2; } else if (KrtDriverStartsWith(text,"O")) { text++; }
+    if (KrtDriverStringLength(text) != 1) { return -1; }
+    unsafe(using krt.mem;) { int32 level = (int32)((byte*)text)[0]-48; if (level >= 0 && level <= 3) { return level; } }
+    return -1;
+}
+int32 KrtProjectTarget(int64 text) {
+    if (KrtProjectEqual(text,"elf") || KrtProjectEqual(text,"linux-x86_64") || KrtProjectEqual(text,"exe")) { return 0; }
+    if (KrtProjectEqual(text,"eo")) { return 1; } if (KrtProjectEqual(text,"ir")) { return 2; }
+    if (KrtProjectEqual(text,"asm")) { return 3; } if (KrtProjectEqual(text,"vm")) { return 4; } return -1;
+}
+bool KrtProjectExecutable(KrtDriverOptions options) {
+    return !options.object_mode && options.target < 2;
+}
+KrtProject KrtProjectLoad(int64 path, int64 configuration, int64 library_root, bool clean) {
+    path = KrtProjectFind(path); if (path == 0) { return null; }
+    KrtProject project = new KrtProject(); project.path = path; project.directory = KrtDriverDirectory(path); project.configuration = configuration;
+    // Cleaning follows only the last successful manifest, so a changed or
+    // invalid configuration and deleted dependencies cannot block cleanup.
+    if (clean) { return project; }
+    KrtDriverBuffer source = new KrtDriverBuffer(); KrtDriverReadFile(path,source);
+    if (!source.ok) { KrtDriverError("E_PROJECT","unable to read project configuration"); return null; }
+    if (KrtSourcesUtf8Error(source.data,source.length) >= 0) { KrtDriverError("E_ENCODING","project configuration is not valid UTF-8"); return null; }
+    if (!KrtProjectParse(project,source)) { return null; }
+    if (project.name == 0) { project.name = KrtProjectName(project.directory); } if (project.kind == 0) { project.kind = (int64)"console"; }
+    if (project.optimization == 0) { project.optimization = (int64)"2"; } if (project.target == 0) { project.target = (int64)"elf"; }
+    if (!KrtProjectKind(project.kind)) { KrtDriverError("E_PROJECT","unsupported project type; choose console, system, or library"); return null; }
+    if (KrtProjectOptimization(project.optimization) < 0) { KrtDriverError("E_OPTION","project optimization level must be 0, 1, 2 or 3"); return null; }
+    if (KrtProjectTarget(project.target) < 0) { KrtDriverError("E_OPTION","native project target must be elf, linux-x86_64, exe, eo, ir, asm or vm"); return null; }
+    KrtDriverPath include = project.includes;
+    while (include != null) { include.value = KrtDriverAbsolutePath(KrtDriverJoinPath(project.directory,include.value)); include = include.next; }
+    if (!clean) {
+        if (project.patterns == null) { KrtDriverError("E_PROJECT","no Sources defined"); return null; }
+        KrtDriverPath pattern = project.patterns;
+        while (pattern != null) { KrtDriverPath matches = KrtProjectGlobPaths(project.directory,pattern.value);
+            if (matches == null) {
+                KrtDriverPath parts = KrtProjectSpecs(pattern.value);
+                while (parts != null) { KrtDriverPath selected = KrtProjectGlobPaths(project.directory,parts.value);
+                    if (selected == null) { KrtDriverError("E_INPUT",(string)KrtProjectCat((int64)"source pattern matched no files: ",parts.value)); return null; }
+                    while (selected != null) { matches = KrtProjectAppend(matches,selected.value,true); selected = selected.next; } parts = parts.next;
+                }
+                if (matches == null) { KrtDriverError("E_INPUT",(string)KrtProjectCat((int64)"source pattern matched no files: ",pattern.value)); return null; }
+            }
+            while (matches != null) { if (!KrtDriverStringEqual(matches.value,path) && !KrtProjectAdd(project,matches.value)) { return null; } matches = matches.next; }
+            pattern = pattern.next;
+        }
+        if (!KrtProjectResolveLibraries(project,library_root)) { return null; }
+        if (project.sources == null) { KrtDriverError("E_PROJECT","no source files selected"); return null; }
+    }
+    if (project.output == 0) { project.output = KrtProjectCat(KrtProjectCat((int64)"bin/",configuration),KrtProjectCat((int64)"/",project.name)); }
+    bool separator = false;
+    unsafe(using krt.mem;) { byte* bytes = (byte*)project.output; int64 i = 0; while (bytes[i] != 0) { if (bytes[i] == 47 || bytes[i] == 92) { separator = true; } i++; } }
+    if (!separator) { project.output = KrtProjectCat(KrtProjectCat((int64)"bin/",KrtDriverPlatform()),KrtProjectCat((int64)"/",project.output)); }
+    if (KrtProjectIsLibrary(project) && !KrtProjectEnds(project.output,".kro")) { project.output = KrtProjectCat(project.output,(int64)".kro"); }
+    project.output = KrtDriverAbsolutePath(KrtDriverJoinPath(project.directory,project.output)); return project;
+}
+int64 KrtProjectCache(KrtProject project) {
+    int64 identifier = KrtProjectHex(KrtProjectHashString(14695981039346656037,project.path));
+    return KrtDriverJoinPath(KrtDriverJoinPath(project.directory,(int64)".krtcache"),identifier);
+}
+void KrtProjectStore64(int64 data, int64 offset, uint64 value) {
+    unsafe(using krt.mem;) { byte* bytes = (byte*)data; int64 i = 0; while (i < 8) { bytes[offset+i] = (byte)(value & 255); value = value >> 8; i++; } }
+}
+uint64 KrtProjectRead64(int64 data, int64 offset) {
+    unsafe(using krt.mem;) { byte* bytes = (byte*)data; uint64 value = 0; int64 i = 8;
+        while (i > 0) { i--; value = (value << 8) | (uint64)bytes[offset+i]; } return value;
+    }
+}
+int64 KrtProjectStoreString(int64 data, int64 offset, int64 text) {
+    int64 length = KrtDriverStringLength(text); KrtProjectStore64(data,offset,(uint64)length); offset += 8;
+    unsafe(using krt.mem;) { byte* target = (byte*)data; byte* source = (byte*)text; int64 i = 0; while (i < length) { target[offset+i] = source[i]; i++; } }
+    return offset+length;
+}
+class KrtProjectManifestReader { public int64 data; public int64 length; public int64 position; public bool ok; }
+uint64 KrtProjectManifestNumber(KrtProjectManifestReader reader) {
+    if (!reader.ok || reader.position > reader.length-8) { reader.ok = false; return 0; }
+    uint64 value = KrtProjectRead64(reader.data,reader.position); reader.position = reader.position+8; return value;
+}
+int64 KrtProjectManifestString(KrtProjectManifestReader reader) {
+    uint64 length = KrtProjectManifestNumber(reader);
+    if (!reader.ok || length > (uint64)(reader.length-reader.position)) { reader.ok = false; return 0; }
+    int64 result = KrtDriverCopyString(reader.data+reader.position,(int64)length); reader.position = reader.position+(int64)length; return result;
+}
+KrtProjectManifest KrtProjectReadManifest(int64 cache, int64 project_path) {
+    KrtProjectManifest manifest = new KrtProjectManifest(); KrtDriverBuffer file = new KrtDriverBuffer(); KrtDriverReadFile(KrtDriverJoinPath(cache,(int64)"manifest.krtcache"),file);
+    if (!file.ok || file.length < 48 || KrtProjectRead64(file.data,0) != 3620692004850487883) { return manifest; }
+    KrtProjectManifestReader reader = new KrtProjectManifestReader(); reader.data = file.data; reader.length = file.length; reader.position = 8; reader.ok = true;
+    manifest.key = KrtProjectManifestNumber(reader); manifest.artifact_hash = KrtProjectManifestNumber(reader);
+    manifest.project = KrtProjectManifestString(reader); manifest.output = KrtProjectManifestString(reader); uint64 count = KrtProjectManifestNumber(reader);
+    if (count > 16384) { return manifest; } KrtProjectRecord tail = null; uint64 i = 0;
+    while (reader.ok && i < count) { KrtProjectRecord record = new KrtProjectRecord(); record.output = KrtProjectManifestString(reader); record.cached = KrtProjectManifestString(reader);
+        record.hash = KrtProjectManifestNumber(reader); if (tail == null) { manifest.objects = record; } else { tail.next = record; } tail = record; i++;
+    }
+    manifest.valid = reader.ok && reader.position == reader.length && KrtDriverStringEqual(manifest.project,project_path); return manifest;
+}
+bool KrtProjectWriteManifest(int64 cache, KrtProjectManifest manifest) {
+    int64 size = 48+KrtDriverStringLength(manifest.project)+KrtDriverStringLength(manifest.output); uint64 count = 0; KrtProjectRecord record = manifest.objects;
+    while (record != null) { size += 24+KrtDriverStringLength(record.output)+KrtDriverStringLength(record.cached); count++; record = record.next; }
+    int64 data = KrtDriverAlloc(size); KrtProjectStore64(data,0,3620692004850487883); KrtProjectStore64(data,8,manifest.key); KrtProjectStore64(data,16,manifest.artifact_hash);
+    int64 offset = KrtProjectStoreString(data,24,manifest.project); offset = KrtProjectStoreString(data,offset,manifest.output); KrtProjectStore64(data,offset,count); offset += 8;
+    record = manifest.objects; while (record != null) { offset = KrtProjectStoreString(data,offset,record.output); offset = KrtProjectStoreString(data,offset,record.cached);
+        KrtProjectStore64(data,offset,record.hash); offset += 8; record = record.next;
+    }
+    int64 temporary = KrtDriverJoinPath(cache,(int64)"manifest.pending");
+    return KrtDriverWriteFile(temporary,data,size) && KrtProjectPublish(temporary,KrtDriverJoinPath(cache,(int64)"manifest.krtcache"),false);
+}
+bool KrtProjectBelow(int64 directory, int64 path) {
+    int64 length = KrtDriverStringLength(directory); int64 count = KrtDriverStringLength(path); if (count <= length) { return false; }
+    unsafe(using krt.mem;) { byte* a = (byte*)directory; byte* b = (byte*)path; int64 i = 0;
+        while (i < length) { if (a[i] != b[i]) { return false; } i++; } return b[length] == 47;
+    }
+}
+bool KrtProjectOutputSafe(KrtProject project, KrtDriverOptions options, KrtSourceBundle bundle, int64 output, int64 cache) {
+    if (KrtDriverStringEqual(output,project.path) || KrtDriverStringEqual(output,options.compiler) || KrtDriverStringEqual(output,options.linker)) { KrtDriverError("E_OUTPUT","output would overwrite an input file or tool"); return false; }
+    KrtDriverPath object = project.objects; while (object != null) { if (KrtDriverStringEqual(output,object.value)) { KrtDriverError("E_OUTPUT","output would overwrite an input file"); return false; } object = object.next; }
+    KrtSourceFile file = bundle.files; while (file != null) { if (KrtDriverStringEqual(output,file.path)) { KrtDriverError("E_OUTPUT","output would overwrite an input file"); return false; } file = file.order_next; }
+    if (KrtDriverStringEqual(cache,output) || KrtProjectBelow(cache,output)) { KrtDriverError("E_OUTPUT","output must be outside the project cache"); return false; } return true;
+}
+uint64 KrtProjectBuildKey(KrtProject project, KrtDriverOptions options, KrtSourceBundle bundle) {
+    uint64 hash = KrtProjectHashString(14695981039346656037,(int64)"native-project-cache-v2"); hash = KrtProjectHashString(hash,project.configuration);
+    hash = KrtProjectHashString(hash,options.output); hash = KrtProjectHashString(hash,project.kind); hash = KrtProjectHashString(hash,options.library_root);
+    hash = KrtProjectHashString(hash,KrtProjectDecimal(options.optimization)); hash = KrtProjectHashString(hash,KrtProjectDecimal(options.target));
+    int64 target_kind = (int64)"native-target"; if (options.eo_executable) { target_kind = (int64)"eo-executable"; }
+    hash = KrtProjectHashString(hash,target_kind);
+    if (options.keep_temp) { hash = KrtProjectHashString(hash,(int64)"keep-temp"); hash = KrtProjectHashString(hash,KrtDriverRetainedObject(options,bundle)); }
+    KrtDriverBuffer configuration = new KrtDriverBuffer(); KrtDriverReadFile(project.path,configuration); hash = KrtProjectHashBytes(hash,configuration.data,configuration.length);
+    KrtDriverPath directory = options.includes; while (directory != null) { hash = KrtProjectHashString(hash,directory.value); directory = directory.next; }
+    KrtSourceFile file = bundle.files; while (file != null) { hash = KrtProjectHashString(hash,file.path); hash = KrtProjectHashBytes(hash,file.original,file.length); file = file.order_next; }
+    KrtDriverPath objects = project.objects; while (objects != null) { hash = KrtProjectHashString(hash,objects.value); hash = (hash ^ KrtProjectFileHash(objects.value))*1099511628211; objects = objects.next; }
+    hash = KrtProjectHashString(hash,options.compiler); hash = (hash ^ KrtProjectFileHash(options.compiler))*1099511628211;
+    if (!options.object_mode) { hash = KrtProjectHashString(hash,options.linker); hash = (hash ^ KrtProjectFileHash(options.linker))*1099511628211; }
+    return hash;
+}
+KrtDriverOptions KrtProjectOptions(KrtDriverOptions original) {
+    KrtDriverOptions result = new KrtDriverOptions(); result.compiler = original.compiler; result.linker = original.linker;
+    result.library_root = original.library_root; result.configuration = original.configuration; result.includes = original.includes;
+    result.object_mode = original.object_mode; result.check = original.check; result.rebuild = original.rebuild;
+    result.optimization = original.optimization; result.optimization_set = original.optimization_set;
+    result.target = original.target; result.target_set = original.target_set; result.eo_executable = original.eo_executable;
+    result.keep_temp = original.keep_temp; result.show_ir = original.show_ir;
+    result.retained_output = original.retained_output; result.jobs = original.jobs;
+    return result;
+}
+bool KrtProjectRestore(KrtProjectManifest manifest, int64 cache, int64 output, bool executable) {
+    if (!manifest.valid) { return false; } int64 artifact = KrtDriverJoinPath(cache,(int64)"artifact");
+    if (!KrtDriverFileExists(artifact) || KrtProjectFileHash(artifact) != manifest.artifact_hash) { return false; }
+    KrtProjectRecord object = manifest.objects;
+    while (object != null) { int64 cached = KrtDriverJoinPath(cache,object.cached);
+        if (!KrtDriverFileExists(cached) || KrtProjectFileHash(cached) != object.hash) { return false; } object = object.next;
+    }
+    if (!KrtDriverFileExists(output) || KrtProjectFileHash(output) != manifest.artifact_hash) { if (!KrtProjectPublish(artifact,output,executable)) { return false; } }
+    object = manifest.objects; while (object != null) {
+        if (!KrtDriverFileExists(object.output) || KrtProjectFileHash(object.output) != object.hash) {
+            if (!KrtProjectPublish(KrtDriverJoinPath(cache,object.cached),object.output,false)) { return false; }
+        } object = object.next;
+    } return true;
+}
+int64 KrtProjectObjectOutput(KrtProject project, int64 source) {
+    int64 relative = 0;
+    if (KrtProjectBelow(project.directory,source)) { relative = source+KrtDriverStringLength(project.directory)+1; }
+    else { relative = KrtProjectCat(KrtProjectCat((int64)"_external/",KrtProjectHex(KrtProjectHashString(14695981039346656037,source))),KrtProjectCat((int64)"-",KrtProjectName(source))); }
+    int64 length = KrtDriverStringLength(relative); int64 dot = length;
+    unsafe(using krt.mem;) { byte* bytes = (byte*)relative; while (dot > 0 && bytes[dot-1] != 46 && bytes[dot-1] != 47) { dot--; }
+        if (dot == 0 || bytes[dot-1] == 47) { dot = length+1; }
+    }
+    relative = KrtProjectCat(KrtDriverCopyString(relative,dot-1),(int64)".kro");
+    return KrtDriverAbsolutePath(KrtDriverJoinPath(KrtDriverJoinPath(project.directory,(int64)"obj"),relative));
+}
+int32 KrtProjectBuild(KrtProject project, KrtDriverOptions original) {
+    KrtDriverOptions options = KrtProjectOptions(original); options.sources = project.sources; options.objects = project.objects;
+    options.object_mode = KrtProjectIsLibrary(project) || original.object_mode; options.check = KrtProjectEqual(original.command,"check");
+    if (!original.optimization_set && project.optimization_set) { options.optimization = KrtProjectOptimization(project.optimization); }
+    if (!original.target_set && project.target_set) { options.target = KrtProjectTarget(project.target); options.eo_executable = options.target == 1; }
+    if (options.eo_executable) { options.keep_temp = true; }
+    options.output = project.output; if (original.output != 0) { options.output = KrtDriverAbsolutePath(original.output); }
+    options.includes = null; KrtDriverPath include = project.includes;
+    while (include != null) { options.includes = KrtProjectAppend(options.includes,include.value,true); include = include.next; }
+    include = original.includes; while (include != null) { options.includes = KrtProjectAppend(options.includes,KrtDriverAbsolutePath(include.value),true); include = include.next; }
+    KrtSourceBundle bundle = new KrtSourceBundle(); if (!KrtSourcesCollect(options.sources,options.includes,options.library_root,bundle)) { return 1; }
+    int64 cache = KrtProjectCache(project); if (!KrtProjectOutputSafe(project,options,bundle,options.output,cache)) { return 1; }
+    int64 retained = KrtDriverRetainedObject(options,bundle);
+    int64 vm_sidecar = 0; if (options.target == 4) { vm_sidecar = KrtProjectCat(options.output,(int64)".ebc"); }
+    if ((retained != 0 && !KrtProjectOutputSafe(project,options,bundle,retained,cache)) ||
+        (vm_sidecar != 0 && !KrtProjectOutputSafe(project,options,bundle,vm_sidecar,cache))) { return 1; }
+    if (options.check) { int32 status = KrtDriverCompileBundle(options,bundle); if (status == 0) { KrtDriverPrint((string)KrtProjectCat((int64)"checked: ",KrtProjectCat(project.path,(int64)"\n"))); } return status; }
+    uint64 key = KrtProjectBuildKey(project,options,bundle); KrtProjectManifest previous = KrtProjectReadManifest(cache,project.path);
+    if (!options.rebuild && !options.show_ir && previous.valid && previous.key == key && KrtProjectRestore(previous,cache,options.output,KrtProjectExecutable(options))) {
+        KrtDriverPrint((string)KrtProjectCat((int64)"up-to-date: ",KrtProjectCat(options.output,(int64)"\n"))); return 0;
+    }
+    if (!KrtDriverMakeDirectories(cache)) { KrtDriverError("E_OUTPUT","unable to create project cache"); return 1; }
+    int64 output = options.output; int64 temporary = KrtDriverJoinPath(cache,KrtProjectCat((int64)".build-",KrtProjectDecimal(syscall(39,0,0,0,0,0,0))));
+    if (!KrtDriverMakeDirectories(temporary)) { KrtDriverError("E_OUTPUT","unable to create project build directory"); return 1; }
+    int64 candidate = KrtDriverJoinPath(temporary,(int64)"artifact"); options.output = candidate;
+    if (retained != 0) { options.retained_output = KrtDriverJoinPath(temporary,(int64)"retained.kro"); }
+    int32 status = KrtDriverCompileBundle(options,bundle);
+    if (status != 0) { KrtDriverRemoveTree(temporary); return status; }
+    KrtProjectManifest manifest = new KrtProjectManifest(); manifest.key = key; manifest.project = project.path; manifest.output = output; manifest.valid = true;
+    KrtDriverPath source = project.sources; int64 index = 0; KrtProjectRecord tail = null;
+    KrtDriverCompileTask tasks = null; KrtDriverCompileTask task_tail = null;
+    while (source != null) {
+        int64 object_output = KrtProjectObjectOutput(project,source.value);
+        if (!KrtProjectOutputSafe(project,options,bundle,object_output,cache) || KrtDriverStringEqual(object_output,output)) { KrtDriverRemoveTree(temporary); return 1; }
+        int64 cache_name = KrtProjectCat(KrtProjectCat((int64)"unit-",KrtProjectDecimal(index)),(int64)".kro");
+        KrtDriverOptions unit = KrtProjectOptions(options); unit.sources = KrtProjectAppend(null,source.value,false); unit.object_mode = true; unit.target = 1; unit.eo_executable = false; unit.show_ir = false; unit.keep_temp = false; unit.check = false; unit.quiet = true;
+        unit.output = KrtDriverJoinPath(temporary,cache_name);
+        KrtDriverCompileTask task = new KrtDriverCompileTask(); task.options = unit; task.source = source.value; task.output = object_output; task.cached = cache_name;
+        task.log_path = KrtDriverJoinPath(temporary,KrtProjectCat(KrtProjectCat((int64)"worker-",KrtProjectDecimal(index)),(int64)".log"));
+        if (task_tail == null) { tasks = task; } else { task_tail.next = task; } task_tail = task;
+        source = source.next; index++;
+    }
+    if (!KrtDriverParallelCompile(tasks,options.jobs)) { KrtDriverRemoveTree(temporary); return 1; }
+    KrtDriverCompileTask task = tasks;
+    while (task != null) {
+        if (task.status == 0) {
+            if (!KrtProjectPublish(task.options.output,task.output,false) || !KrtProjectPublish(task.options.output,KrtDriverJoinPath(cache,task.cached),false)) { KrtDriverRemoveTree(temporary); return 1; }
+            KrtProjectRecord record = new KrtProjectRecord(); record.output = task.output; record.cached = task.cached; record.hash = KrtProjectFileHash(task.options.output);
+            if (tail == null) { manifest.objects = record; } else { tail.next = record; } tail = record;
+        }
+        else { KrtDriverPrint((string)KrtProjectCat((int64)"object deferred: ",KrtProjectCat(task.source,(int64)" requires the combined project context\n"))); }
+        task = task.next;
+    }
+    if (retained != 0) {
+        if (!KrtDriverFileExists(options.retained_output) || !KrtProjectPublish(options.retained_output,retained,false) || !KrtProjectPublish(options.retained_output,KrtDriverJoinPath(cache,(int64)"retained.kro"),false)) { KrtDriverRemoveTree(temporary); return 1; }
+        KrtProjectRecord record = new KrtProjectRecord(); record.output = retained; record.cached = (int64)"retained.kro"; record.hash = KrtProjectFileHash(options.retained_output);
+        if (tail == null) { manifest.objects = record; } else { tail.next = record; } tail = record;
+    }
+    if (vm_sidecar != 0) {
+        if (!KrtProjectPublish(candidate,vm_sidecar,false)) { KrtDriverRemoveTree(temporary); return 1; }
+        KrtProjectRecord record = new KrtProjectRecord(); record.output = vm_sidecar; record.cached = (int64)"artifact"; record.hash = KrtProjectFileHash(candidate);
+        if (tail == null) { manifest.objects = record; } else { tail.next = record; } tail = record;
+    }
+    KrtProjectRecord old = previous.objects;
+    while (previous.valid && old != null) { bool retained = false; KrtProjectRecord current = manifest.objects;
+        while (current != null) { if (KrtDriverStringEqual(current.output,old.output)) { retained = true; } current = current.next; }
+        if (!retained && KrtDriverFileExists(old.output) && KrtProjectFileHash(old.output) == old.hash) { KrtDriverRemoveFile(old.output); } old = old.next;
+    }
+    if (!KrtProjectPublish(candidate,output,KrtProjectExecutable(options)) || !KrtProjectPublish(candidate,KrtDriverJoinPath(cache,(int64)"artifact"),KrtProjectExecutable(options))) { KrtDriverRemoveTree(temporary); return 1; }
+    manifest.artifact_hash = KrtProjectFileHash(candidate);
+    if (!KrtProjectWriteManifest(cache,manifest)) { KrtDriverError("E_OUTPUT","unable to publish project manifest"); KrtDriverRemoveTree(temporary); return 1; }
+    KrtDriverRemoveTree(temporary); KrtDriverPrint((string)KrtProjectCat((int64)"built: ",KrtProjectCat(output,(int64)"\n"))); return 0;
+}
+int32 KrtProjectClean(KrtProject project) {
+    int64 cache = KrtProjectCache(project); KrtProjectManifest manifest = KrtProjectReadManifest(cache,project.path);
+    if (manifest.valid) {
+        if (KrtDriverFileExists(manifest.output) && KrtProjectFileHash(manifest.output) == manifest.artifact_hash) {
+            KrtDriverRemoveFile(manifest.output); KrtDriverPrint((string)KrtProjectCat((int64)"removed: ",KrtProjectCat(manifest.output,(int64)"\n")));
+        }
+        KrtProjectRecord record = manifest.objects; while (record != null) {
+            if (KrtDriverFileExists(record.output) && KrtProjectFileHash(record.output) == record.hash) { KrtDriverRemoveFile(record.output); } record = record.next;
+        }
+    }
+    if (KrtDriverIsDirectory(cache)) { if (!KrtDriverRemoveTree(cache)) { KrtDriverError("E_OUTPUT","unable to remove project cache"); return 1; }
+        KrtDriverPrint((string)KrtProjectCat((int64)"cleaned: ",KrtProjectCat(cache,(int64)"\n")));
+    } return 0;
+}
+int64 KrtProjectJsonQuote(int64 value) {
+    int64 length = KrtDriverStringLength(value); int64 result = KrtDriverAlloc(length*6+3); int64 count = 0;
+    unsafe(using krt.mem;) { byte* source = (byte*)value; byte* output = (byte*)result; byte* digits = (byte*)(int64)"0123456789abcdef"; output[count++] = 34; int64 i = 0;
+        while (i < length) { int64 b = source[i++]; if (b == 34 || b == 92) { output[count++] = 92; output[count++] = (byte)b; }
+            else if (b < 32) { output[count++] = 92; output[count++] = 117; output[count++] = 48; output[count++] = 48; output[count++] = digits[b/16]; output[count++] = digits[b%16]; }
+            else { output[count++] = (byte)b; }
+        } output[count++] = 34; output[count] = 0;
+    } return result;
+}
+int32 KrtProjectNew(KrtDriverOptions options) {
+    KrtDriverPath positional = options.sources;
+    if (positional == null || positional.next == null || positional.next.next != null) { KrtDriverError("E_OPTION","new requires a project type and directory"); return 1; }
+    int64 kind = positional.value; int64 directory = KrtDriverAbsolutePath(positional.next.value);
+    if (!KrtProjectKind(kind)) { KrtDriverError("E_PROJECT","unsupported project type; choose console, system, or library"); return 1; }
+    if (KrtDriverFileExists(directory) || (KrtDriverIsDirectory(directory) && KrtDriverListEntries(directory) != null)) { KrtDriverError("E_PROJECT","destination is not empty"); return 1; }
+    int64 name = KrtProjectName(directory); if (options.name != 0) { name = options.name; }
+    bool invalid = KrtDriverStringLength(name) == 0 || KrtProjectEqual(name,".") || KrtProjectEqual(name,"..");
+    unsafe(using krt.mem;) { byte* bytes = (byte*)name; int64 i = 0; while (bytes[i] != 0) { if (bytes[i] == 47 || bytes[i] == 92 || bytes[i] == 10 || bytes[i] == 13) { invalid = true; } i++; } }
+    if (invalid) { KrtDriverError("E_PROJECT","project name must not contain a path separator or newline"); return 1; }
+    int64 source_dir = KrtDriverJoinPath(directory,(int64)"src"); if (!KrtDriverMakeDirectories(source_dir)) { KrtDriverError("E_OUTPUT","unable to create project directory"); return 1; }
+    bool library = KrtProjectEqual(kind,"library") || KrtProjectEqual(kind,"lib") || KrtProjectEqual(kind,"dll");
+    int64 source = (int64)"using System.Console;\n\nint32 main() {\n    Console.WriteLine(\"Hello, Kairote!\");\n    return 0;\n}\n";
+    int64 source_name = (int64)"main.krt";
+    if (library) { source = (int64)"int64 Add(int64 left, int64 right) { return left + right; }\n"; source_name = (int64)"library.krt"; }
+    int64 companion_name = 0; int64 companion_source = 0;
+    if (library) { companion_name = (int64)"exports.krt"; companion_source = (int64)"void export_symbols() { }\n"; }
+    else if (KrtProjectEqual(kind,"web")) {
+        source_name = (int64)"app.krt";
+        source = (int64)"using System.Console;\n\nvoid handle_request() {\n    Console.Write(\"HTTP/1.1 200 OK\\r\\nContent-Type: text/html\\r\\n\\r\\n<h1>Hello from Kairote Lang Web!</h1>\");\n}\n\nint32 main() {\n    configure_routes();\n    handle_request();\n    return 0;\n}\n";
+        companion_name = (int64)"routes.krt"; companion_source = (int64)"void configure_routes() { }\n";
+    } else if (KrtProjectEqual(kind,"system")) {
+        source_name = (int64)"kernel.krt";
+        source = (int64)"int32 main() {\n    init_drivers();\n    syscall(1, 1, (int64)\"System.Everything is ready\\n\", 27, 0, 0, 0);\n    return 0;\n}\n";
+        companion_name = (int64)"drivers.krt"; companion_source = (int64)"void init_drivers() { }\n";
+    }
+    int64 filename = KrtDriverJoinPath(source_dir,source_name);
+    int64 configuration = KrtProjectCat((int64)"// Native Kairote project\nfunction Configure(Project p) {\n    p.Name(",KrtProjectJsonQuote(name));
+    configuration = KrtProjectCat(configuration,KrtProjectCat((int64)");\n    p.Type(",KrtProjectJsonQuote(kind)));
+    configuration = KrtProjectCat(configuration,(int64)");\n    p.Sources(\"src/**/*.krt\");\n    p.Output(");
+    configuration = KrtProjectCat(configuration,KrtProjectJsonQuote(KrtProjectCat((int64)"bin/${config}/",name))); configuration = KrtProjectCat(configuration,(int64)");\n}\n");
+    int64 project_path = KrtDriverJoinPath(directory,(int64)"project.krt"); int64 ignore = (int64)"bin/\nobj/\n.krtcache/\n";
+    if (!KrtDriverWriteFile(filename,source,KrtDriverStringLength(source)) || !KrtDriverWriteFile(project_path,configuration,KrtDriverStringLength(configuration)) || !KrtDriverWriteFile(KrtDriverJoinPath(directory,(int64)".gitignore"),ignore,KrtDriverStringLength(ignore))) { KrtDriverError("E_OUTPUT","unable to write new project"); return 1; }
+    if (companion_name != 0 && !KrtDriverWriteFile(KrtDriverJoinPath(source_dir,companion_name),companion_source,KrtDriverStringLength(companion_source))) { KrtDriverError("E_OUTPUT","unable to write new project source"); return 1; }
+    KrtDriverPrint((string)KrtProjectCat((int64)"created: ",KrtProjectCat(project_path,(int64)"\n"))); return 0;
+}
+int64 KrtProjectInfoPaths(KrtDriverPath paths) {
+    int64 result = (int64)"["; bool first = true;
+    while (paths != null) { if (!first) { result = KrtProjectCat(result,(int64)","); }
+        result = KrtProjectCat(result,KrtProjectJsonQuote(paths.value)); first = false; paths = paths.next;
+    } return KrtProjectCat(result,(int64)"]");
+}
+int32 KrtProjectInfo(KrtProject project) {
+    int64 result = KrtProjectCat((int64)"{\"path\":",KrtProjectJsonQuote(project.path));
+    result = KrtProjectCat(result,KrtProjectCat((int64)",\"name\":",KrtProjectJsonQuote(project.name)));
+    result = KrtProjectCat(result,KrtProjectCat((int64)",\"type\":",KrtProjectJsonQuote(project.kind)));
+    result = KrtProjectCat(result,KrtProjectCat((int64)",\"output\":",KrtProjectJsonQuote(project.output)));
+    result = KrtProjectCat(result,KrtProjectCat((int64)",\"configuration\":",KrtProjectJsonQuote(project.configuration)));
+    result = KrtProjectCat(result,KrtProjectCat((int64)",\"sources\":",KrtProjectInfoPaths(project.sources)));
+    result = KrtProjectCat(result,KrtProjectCat((int64)",\"includes\":",KrtProjectInfoPaths(project.includes)));
+    result = KrtProjectCat(result,KrtProjectCat((int64)",\"objects\":",KrtProjectInfoPaths(project.objects)));
+    KrtDriverPrint((string)KrtProjectCat(result,(int64)"}\n")); return 0;
+}
+int32 KrtDriverProject(KrtDriverOptions options) {
+    if (KrtProjectEqual(options.command,"new")) { return KrtProjectNew(options); }
+    if (options.sources != null && options.sources.next != null) { KrtDriverError("E_OPTION","project command accepts one project path"); return 1; }
+    int64 path = (int64)"."; if (options.sources != null) { path = options.sources.value; }
+    KrtProject project = KrtProjectLoad(path,options.configuration,options.library_root,KrtProjectEqual(options.command,"clean"));
+    if (project == null) { return 1; } if (KrtProjectEqual(options.command,"clean")) { return KrtProjectClean(project); }
+    if (KrtProjectEqual(options.command,"project-info")) { return KrtProjectInfo(project); }
+    return KrtProjectBuild(project,options);
+}

@@ -62,6 +62,9 @@ static KrtTokenType irgen_array_expression_element_type(KrtIRBuilder* builder, A
     if (expr->type == AST_NEW_ARRAY_EXPRESSION) {
         return expr->data.new_array_expr.type_token;
     }
+    if (expr->type == AST_MEMBER_ACCESS && expr->data.member_access.resolved_is_array) {
+        return expr->resolved_type.token;
+    }
     if (expr->type == AST_IDENTIFIER && builder) {
         int token = 0, is_array = 0;
         if (KrtIrVarTypeFind(builder, expr->data.identifier_name, &token, &is_array)) {
@@ -101,7 +104,11 @@ static KrtTokenType irgen_array_element_type(KrtIRBuilder* builder, ASTNode* exp
         element.pointer_depth--;
         return KrtSourceStorage(element);
     }
-    return irgen_array_expression_element_type(builder, expr);
+    KrtTokenType element = irgen_array_expression_element_type(builder, expr);
+    if (element == TOKEN_EOF && expr->resolved_type.token == TOKEN_TYPE_STRING) {
+        return TOKEN_CHAR;
+    }
+    return element;
 }
 
 static int irgen_array_element_size(KrtIRBuilder* builder, ASTNode* array_expr) {
@@ -325,7 +332,7 @@ static void irgen_store_field(KrtIRBuilder* builder, KrtIRValue base, const char
                               KrtIRValue value) {
     KrtTokenType type = KrtIrLayoutGetType(builder, class_name, member);
     int offset = KrtIrLayoutGetOffset(builder, class_name, member);
-    if (KrtTokenIntegerBits(type)) {
+    if (KrtTokenIntegerBits(type) || type == TOKEN_FLOAT32 || type == TOKEN_FLOAT64) {
         value = KrtIrCast(builder, value, type);
     }
     KrtIrStorePtrSized(builder, base, offset < 0 ? 0 : offset, value, KrtTokenIntegerBits(type) > 64 ? 16 : 8);
@@ -428,8 +435,12 @@ static int irgen_expr_is_float(KrtIRBuilder* builder, ASTNode* node) {
     if (!builder || !node) {
         return 0;
     }
-    if (KrtSourceIsPointer(node->resolved_type)) {
+    if (KrtSourceIsPointer(node->resolved_type) ||
+        irgen_array_expression_element_type(builder, node) != TOKEN_EOF) {
         return 0;
+    }
+    if (node->type == AST_ARRAY_ACCESS) {
+        return irgen_is_float_token(irgen_array_element_type(builder, node->data.array_access.array));
     }
     if (irgen_is_float_token(node->resolved_type.token)) {
         return 1;
@@ -504,6 +515,14 @@ static KrtTokenType krt_ir_infer_mangle_type(KrtIRBuilder* builder, ASTNode* arg
         return arg->integer_value <= KrtIntegerMask(127) ? TOKEN_INT128 : TOKEN_UINT128;
     case AST_CAST_EXPRESSION:
         return arg->data.cast_expr.target_type;
+    case AST_MEMBER_ACCESS:
+    case AST_NEW_EXPRESSION:
+    case AST_THIS:
+    case AST_NULL:
+        /* Semantic member binding preserves its declared carrier. In
+         * particular, named references must not fall back to int32; named
+         * scalar/enum carriers retain their own storage token as well. */
+        return arg->resolved_type.token ? KrtSourceStorage(arg->resolved_type) : TOKEN_INT32;
     case AST_UNARY_OPERATION:
         return krt_ir_infer_mangle_type(builder, arg->data.unary_op.operand);
     case AST_ARRAY_ACCESS:
@@ -528,9 +547,15 @@ static KrtTokenType krt_ir_infer_mangle_type(KrtIRBuilder* builder, ASTNode* arg
             return KrtTokenIntegerCommon(left, right);
         }
     }
-    case AST_TERNARY_OPERATION:
-        return KrtTokenIntegerCommon(krt_ir_infer_mangle_type(builder, arg->data.ternary_op.true_value),
-                                     krt_ir_infer_mangle_type(builder, arg->data.ternary_op.false_value));
+    case AST_TERNARY_OPERATION: {
+        KrtTokenType left = krt_ir_infer_mangle_type(builder, arg->data.ternary_op.true_value);
+        KrtTokenType right = krt_ir_infer_mangle_type(builder, arg->data.ternary_op.false_value);
+        if (left == right || right == TOKEN_NULL) { return left; }
+        if (left == TOKEN_NULL) { return right; }
+        if (left == TOKEN_FLOAT64 || right == TOKEN_FLOAT64) { return TOKEN_FLOAT64; }
+        if (left == TOKEN_FLOAT32 || right == TOKEN_FLOAT32) { return TOKEN_FLOAT32; }
+        return KrtTokenIntegerCommon(left, right);
+    }
     case AST_IDENTIFIER:
         if (builder && builder->current_function) {
             for (int i = 0; i < builder->current_function->param_count; i++) {
@@ -544,6 +569,10 @@ static KrtTokenType krt_ir_infer_mangle_type(KrtIRBuilder* builder, ASTNode* arg
             if (KrtIrVarTypeFind(builder, arg->data.identifier_name, &vtok, &vis_arr) && !vis_arr &&
                 vtok != TOKEN_EOF) {
                 return (KrtTokenType)vtok;
+            }
+            const char* current_class = krt_ir_current_class_context(builder);
+            if (current_class && KrtIrLayoutGetOffset(builder, current_class, arg->data.identifier_name) >= 0) {
+                return KrtIrLayoutGetType(builder, current_class, arg->data.identifier_name);
             }
             if (builder->semantic_analyzer) {
                 KrtTokenType vt = 0;
@@ -1723,16 +1752,17 @@ static KrtIRValue irgen_expr_ternary_operation(KrtIRBuilder* builder, ASTNode* e
     KrtIrAlloc(builder, res_name);
     bool is_address =
         KrtSourceIsPointer(expr->resolved_type) || irgen_array_expression_element_type(builder, expr) != TOKEN_EOF;
-    KrtIrVarTypePush(builder, res_name, is_address ? TOKEN_UINT64 : krt_ir_infer_mangle_type(builder, expr), 0);
+    KrtTokenType result_type = is_address ? TOKEN_UINT64 : krt_ir_infer_mangle_type(builder, expr);
+    KrtIrVarTypePush(builder, res_name, result_type, 0);
 
     KrtIrBlockSetCurrent(builder, true_block);
     KrtIRValue true_value = krt_ir_generate_expression(builder, expr->data.ternary_op.true_value);
-    KrtIrStore(builder, res_name, true_value);
+    KrtIrStore(builder, res_name, KrtIrCast(builder, true_value, result_type));
     KrtIrJump(builder, end_block);
 
     KrtIrBlockSetCurrent(builder, false_block);
     KrtIRValue false_value = krt_ir_generate_expression(builder, expr->data.ternary_op.false_value);
-    KrtIrStore(builder, res_name, false_value);
+    KrtIrStore(builder, res_name, KrtIrCast(builder, false_value, result_type));
     KrtIrJump(builder, end_block);
 
     KrtIrBlockSetCurrent(builder, end_block);
@@ -1766,8 +1796,13 @@ static KrtIRValue irgen_expr_array_access(KrtIRBuilder* builder, ASTNode* expr) 
     base.value_type = TOKEN_UINT64;
     offset = KrtIrCast(builder, offset, TOKEN_UINT64);
     KrtIRValue address = KrtIrAdd(builder, base, offset);
-    return KrtIrTyped(builder, KrtIrLoadPtrSized(builder, address, 0, element_size),
-                      irgen_array_element_type(builder, expr->data.array_access.array));
+    KrtTokenType element_type = irgen_array_element_type(builder, expr->data.array_access.array);
+    if (!KrtTokenIntegerBits(element_type) && !irgen_is_float_token(element_type) &&
+        element_type != TOKEN_BOOL && element_type != TOKEN_CHAR) {
+        /* Class and string array elements are full-width references. */
+        element_type = TOKEN_UINT64;
+    }
+    return KrtIrTyped(builder, KrtIrLoadPtrSized(builder, address, 0, element_size), element_type);
 }
 static KrtIRValue irgen_expr_lambda_expression(KrtIRBuilder* builder, ASTNode* expr) {
     static _Thread_local int lambda_counter = 0;
@@ -2016,6 +2051,8 @@ static KrtIRValue krt_ir_generate_expression(KrtIRBuilder* builder, ASTNode* exp
     case AST_IDENTIFIER:
         return irgen_expr_identifier(builder, expr);
         break;
+    case AST_THIS:
+        return KrtIrArg(builder, 0);
     case AST_NUMBER:
         return irgen_expr_number(builder, expr);
         break;
@@ -2235,6 +2272,8 @@ static void irgen_stmt_array_assignment(KrtIRBuilder* builder, ASTNode* stmt) {
     KrtTokenType element_type = irgen_array_element_type(builder, stmt->data.array_assignment.array);
     if (KrtTokenIntegerBits(element_type) || irgen_is_float_token(element_type)) {
         value = KrtIrCast(builder, value, element_type);
+    } else if (element_type != TOKEN_BOOL && element_type != TOKEN_CHAR) {
+        value = KrtIrCast(builder, value, TOKEN_UINT64);
     }
     KrtIrArrayStoreSized(builder, base, index, value, element_size);
     return;

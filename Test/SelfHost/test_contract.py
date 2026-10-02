@@ -1,26 +1,49 @@
 import os
 import json
 import hashlib
+import re
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
 
+from Test.SelfHost.Bootstrap import ARKLINK, KRTC
+
 ROOT = Path(__file__).resolve().parents[2]
-KRTC = Path(os.environ.get("KRTC", ROOT / "Re.KrtC/build/KrtC")).resolve()
-ARKLINK = Path(os.environ.get("ARKLINK", ROOT / "ArkLink/build/ArkLink")).resolve()
 
 
 def compiler_prelude(parts):
+    sources = {path: path.read_text() for path in (ROOT / 'SelfHost').rglob('*.krt')
+               if path.name != 'Main.krt'}
+    # Fixture modules use the actual component definitions, including AST field
+    # types and their transitive helper calls. Ignore identifiers in comments
+    # and literals so fixture strings do not introduce compiler dependencies.
+    code = {path: re.sub(r'//[^\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'',
+                         ' ', text) for path, text in sources.items()}
+    providers = {}
+    for path, text in code.items():
+        declarations = re.findall(r'\b(?:class|struct|enum)\s+([A-Za-z_]\w*)', text)
+        declarations += re.findall(
+            r'(?m)^(?:static\s+)?[A-Za-z_]\w*(?:\s*(?:\*|\?|\[\]))*\s+([A-Za-z_]\w*)\s*(?:\(|=|;)', text)
+        for name in declarations:
+            providers.setdefault(name, set()).add(path)
     selected = {ROOT / 'SelfHost' / part for part in parts}
     if any('Frontend/Parser/' in part for part in parts):
         selected.update((ROOT / 'SelfHost/Frontend/Parser').glob('*.krt'))
-    if any('NativeBinding.krt' in part for part in parts):
-        selected.update((ROOT / 'SelfHost/Frontend/Semantic').glob('*.krt'))
-        selected.update((ROOT / 'SelfHost/Middle/Ir').glob('*.krt'))
+    if any('NativeBinding.krt' in part or part == 'Frontend/Semantic/Semantic.krt' for part in parts):
+        selected.update(path for path in (ROOT / 'SelfHost').rglob('*.krt') if path.name != 'Main.krt')
     if any('Driver/Compiler.krt' in part for part in parts):
         selected.add(ROOT / 'SelfHost/Backend/Kro/Library.krt')
-    return '\n'.join(path.read_text() for path in sorted(selected))
+        selected.update((ROOT / 'SelfHost/Driver').glob('*.krt'))
+    pending = list(selected)
+    while pending:
+        path = pending.pop()
+        for name in set(re.findall(r'\b[A-Za-z_]\w*\b', code[path])):
+            for dependency in providers.get(name, ()):
+                if dependency not in selected:
+                    selected.add(dependency)
+                    pending.append(dependency)
+    return '\n'.join(sources[path] for path in sorted(selected))
 
 class ContractTests(unittest.TestCase):
     def test_stage1_bootstrap_probe(self):

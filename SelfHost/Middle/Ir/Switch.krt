@@ -1,0 +1,32 @@
+// A switch is a break target, while continue searches its enclosing loop.
+// The selector travels through one reserved local, including string, IEEE and
+// wide integer values. Labels use the same equality machinery as expressions.
+bool KrtNativeLowerSwitch(KrtAstNode statement, KrtAstNode module_ast, KrtAstNode unit, KrtNativeModule module, int64 source, int32[] breaks, int32[] continues, ref int32 depth) {
+    if (depth >= 64 || statement.native_target == null || statement.local_slot < 0 ||
+        !KrtNativeLowerExpression(statement.left, module_ast, module, source) ||
+        KrtNativeEmit(module, (int32)KrtNativeOp.StoreLocal, statement.local_slot, 0) < 0) { return false; }
+    KrtAstNode default_clause = null; KrtAstNode clause = statement.right;
+    while (clause != null) {
+        if (clause.kind == KrtAstKind.Default) { default_clause = clause; }
+        else {
+            if (!KrtNativeLowerExpression(clause.native_target, module_ast, module, source)) { return false; }
+            int32 branch = KrtNativeEmit(module, (int32)KrtNativeOp.Branch, -1, -1);
+            if (branch < 0) { return false; }
+            clause.native_offset = branch; module.extra[branch] = module.count;
+        }
+        clause = clause.next;
+    }
+    int32 unmatched = KrtNativeEmit(module, (int32)KrtNativeOp.Jump, -1, 0);
+    if (unmatched < 0) { return false; }
+    breaks[depth] = -1; continues[depth] = -2; depth = depth + 1;
+    clause = statement.right;
+    while (clause != null) {
+        if (clause == default_clause) { module.args[unmatched] = module.count; }
+        else { module.args[clause.native_offset] = module.count; }
+        if (!KrtNativeLowerBlock(clause.right, module_ast, unit, module, source, breaks, continues, ref depth)) { return false; }
+        clause = clause.next;
+    }
+    if (default_clause == null) { module.args[unmatched] = module.count; }
+    depth = depth - 1;
+    return KrtNativePatchLoop(module, breaks[depth], module.count);
+}

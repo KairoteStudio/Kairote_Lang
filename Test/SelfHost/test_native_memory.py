@@ -6,7 +6,7 @@ import subprocess
 import tempfile
 import unittest
 
-from Test.SelfHost.bootstrap import ARKLINK, KRTC, ROOT, Bootstrap
+from Test.SelfHost.Bootstrap import ARKLINK, KRTC, ROOT, Bootstrap
 
 
 class NativeMemoryTest(unittest.TestCase):
@@ -190,7 +190,7 @@ int32 main() {
         work.mkdir()
         data = b"abc\0abc\0def\0abcdef\0"
         parts = [p.read_text() for p in sorted((ROOT / "SelfHost").rglob("*.krt"))
-                 if p.name not in {"Main.krt", "Compiler.krt"}]
+                 if p.name != "Main.krt"]
         body = ["int32 main() {", "KrtNativeModule m=new KrtNativeModule(); KrtKroObject o=new KrtKroObject();"]
         for name, (ops, _) in cases.items():
             body += ["if (!KrtNativeInit(m)) { return 1; }",

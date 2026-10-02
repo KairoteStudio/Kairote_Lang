@@ -1195,7 +1195,16 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
 
         KrtTokenType type_token = expr->data.new_array_expr.type_token;
 
-        if (type_token >= TOKEN_INT2 && type_token <= TOKEN_VOID) {
+        bool known_type = (type_token >= TOKEN_INT2 && type_token < TOKEN_VOID) || type_token == TOKEN_TYPE_STRING;
+        if (type_token == TOKEN_IDENTIFIER) {
+            const char* name = expr->data.new_array_expr.element_type;
+            known_type = semantic_analyzer_lookup_class(analyzer, name) != NULL;
+            if (!known_type) {
+                semantic_try_lazy_import_class(analyzer, name);
+                known_type = semantic_analyzer_lookup_class(analyzer, name) != NULL;
+            }
+        }
+        if (known_type) {
 
             if (!semantic_analyzer_analyze_expression(analyzer, expr->data.new_array_expr.size)) {
                 return false;
@@ -1203,7 +1212,8 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
             return true;
         }
 
-        semantic_analyzer_add_error(analyzer, "Array creation only supported for built-in types");
+        semantic_analyzer_add_error(analyzer, "Unknown or invalid array element type: %s",
+                                    expr->data.new_array_expr.element_type);
         return false;
     }
 
@@ -1331,6 +1341,7 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
             if (field && field->type == SYMBOL_FIELD) {
                 KRT_FREE(expr->data.member_access.resolved_class_name);
                 expr->data.member_access.resolved_class_name = KRT_STRDUP(instance_name);
+                expr->data.member_access.resolved_is_array = field->is_array;
                 expr->resolved_type = field->source_type;
                 if (!expr->resolved_type.token) {
                     expr->resolved_type.token = field->value_type;
@@ -1350,6 +1361,11 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
                         KRT_FREE(expr->data.member_access.resolved_class_name);
                     }
                     expr->data.member_access.resolved_class_name = KRT_STRDUP(current_class);
+                    expr->data.member_access.resolved_is_array = member->is_array;
+                    expr->resolved_type = member->source_type;
+                    if (!expr->resolved_type.token) {
+                        expr->resolved_type.token = member->value_type;
+                    }
                     return true;
                 }
                 semantic_analyzer_add_error(analyzer, "Undefined member '%s' in class '%s'", member_name,
@@ -1379,6 +1395,11 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
                     }
                     expr->data.member_access.resolved_class_name = KRT_STRDUP(class_name);
                     expr->data.member_access.resolved_mangled_name = mangled_name;
+                    expr->data.member_access.resolved_is_array = member->is_array;
+                    expr->resolved_type = member->source_type;
+                    if (!expr->resolved_type.token) {
+                        expr->resolved_type.token = member->value_type;
+                    }
                     return true;
                 }
                 if (mangled_name) {

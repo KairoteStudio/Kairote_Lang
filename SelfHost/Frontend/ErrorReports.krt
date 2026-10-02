@@ -1,0 +1,64 @@
+enum KrtDiagnosticStage { Lexer = 0, Parser = 1, Names = 2, Types = 3, Generics = 4, Lowering = 5, Optimization = 6, Backend = 7 }
+
+class KrtDiagnosticRecord {
+    public string code;
+    public int32 code_length;
+    public int64 position;
+    public string message;
+    public KrtDiagnosticStage stage;
+    public KrtDiagnosticRecord next;
+}
+
+class KrtCompilerDiagnostics {
+    public KrtDiagnosticRecord head;
+    public KrtDiagnosticRecord tail;
+    public int32 count;
+    public int32 limit;
+    public KrtDiagnosticStage stage;
+}
+
+static KrtCompilerDiagnostics KrtCurrentDiagnostics = null;
+
+void KrtErrorReportAdd(KrtCompilerDiagnostics report, string code, int32 code_length, int64 position, string message) {
+    if (report == null || report.count >= report.limit) { return; }
+    if (position < 0) { position = 0; }
+    KrtDiagnosticRecord existing = report.head;
+    while (existing != null) {
+        if (existing.position == position && KrtDriverStringEqual((int64)existing.code,(int64)code)) { return; }
+        existing = existing.next;
+    }
+    KrtDiagnosticRecord record = new KrtDiagnosticRecord(); record.code = code; record.code_length = code_length;
+    record.position = position; record.message = message; record.stage = report.stage;
+    if (report.head == null) { report.head = record; } else { report.tail.next = record; }
+    report.tail = record; report.count = report.count + 1;
+}
+
+void KrtDiagnosticMessage(string code, int32 code_length, int64 position, string message) {
+    KrtDriverLastErrorCode = (int64)code;
+    if (KrtCurrentDiagnostics != null) { KrtErrorReportAdd(KrtCurrentDiagnostics,code,code_length,position,message); }
+    else { KrtDiagnosticWrite(code,code_length,position,message); }
+}
+
+void KrtErrorReportFlush(KrtCompilerDiagnostics report) {
+    KrtDiagnosticRecord record = report.head;
+    while (record != null) { KrtDiagnosticWrite(record.code,record.code_length,record.position,record.message); record = record.next; }
+}
+
+bool KrtErrorReportHasErrors() { return KrtCurrentDiagnostics != null && KrtCurrentDiagnostics.count > 0; }
+
+void KrtNativeBindingDiagnostic(KrtAstNode module, int64 position) {
+    if (module.native_error == 1) { KrtDiagnostic("E_CONDITIONAL_ARRAY",19,position); }
+    else if (module.native_error == 2) { KrtDiagnostic("E_ARGUMENT_COUNT",16,position); }
+    else if (module.native_error == 3) { KrtDiagnostic("E_WRITABLE_REF",14,position); }
+    else if (module.native_error == 4) { KrtDiagnostic("E_UNDEFINED_METHOD",18,position); }
+    else if (module.native_error == 5) { KrtDiagnostic("E_NOT_NULLABLE",14,position); }
+    else if (module.native_error == 6) { KrtDiagnostic("E_GENERIC_CONSTRAINT",20,position); }
+    else if (module.native_error == 7) { KrtDiagnostic("E_SWITCH",8,position); }
+    else if (module.native_error == 8) { KrtInheritanceDiagnostic(module,position); }
+    else if (module.native_error == 9) { KrtDiagnostic("E_ARGUMENT_NAME",15,position); }
+    else if (module.native_error == 10) { KrtDiagnostic("E_ACCESS",8,position); }
+    else if (module.native_error == 11) { KrtDiagnostic("E_MODIFIER",10,position); }
+    else if (module.native_error == 12) { KrtDiagnostic("E_LAYOUT",8,position); }
+    else if (module.native_error == 13) { KrtDiagnostic("E_ABI_UNSUPPORTED",17,position); }
+    else { KrtDiagnostic("E_LOWER",7,position); }
+}

@@ -1,0 +1,180 @@
+using System.Sys;
+using System.Console;
+
+// Linux x86-64 sockaddr_in: native fields followed by eight inline bytes.
+struct SockAddrIn {
+    public uint16 family;
+    public uint16 port;
+    public uint32 address;
+    public byte zero[8];
+}
+
+struct SocketTimeout {
+    public int64 seconds;
+    public int64 microseconds;
+}
+
+public static class HttpServer {
+    private const int64 SYS_socket = 41;
+    private const int64 SYS_accept = 43;
+    private const int64 SYS_sendto = 44;
+    private const int64 SYS_recvfrom = 45;
+    private const int64 SYS_bind = 49;
+    private const int64 SYS_listen = 50;
+    private const int64 SYS_getsockname = 51;
+    private const int64 SYS_setsockopt = 54;
+    private const int64 MSG_NOSIGNAL = 0x4000;
+
+    private static bool SendAll(int64 client, string response) {
+        int64 data = Sys.InternalStringPtr(response);
+        int64 length = Sys.InternalStringLength(response);
+        int64 written = 0;
+        while (written < length) {
+            int64 count = Sys.Syscall(SYS_sendto, client, data + written,
+                                     length - written, MSG_NOSIGNAL, 0, 0);
+            if (count == -4) { continue; }
+            if (count <= 0) { return false; }
+            written += count;
+        }
+        return true;
+    }
+
+    private static bool Respond(int64 client, int32 status) {
+        if (status == 200) {
+            return SendAll(client, "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 16\r\nConnection: close\r\n\r\nHello, Kairote!\n");
+        }
+        if (status == 404) {
+            return SendAll(client, "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 10\r\nConnection: close\r\n\r\nNot Found\n");
+        }
+        if (status == 405) {
+            return SendAll(client, "HTTP/1.1 405 Method Not Allowed\r\nAllow: GET\r\nContent-Length: 19\r\nConnection: close\r\n\r\nMethod Not Allowed\n");
+        }
+        if (status == 431) {
+            return SendAll(client, "HTTP/1.1 431 Request Header Fields Too Large\r\nContent-Length: 25\r\nConnection: close\r\n\r\nRequest Header Too Large\n");
+        }
+        return SendAll(client, "HTTP/1.1 400 Bad Request\r\nContent-Length: 12\r\nConnection: close\r\n\r\nBad Request\n");
+    }
+
+    private static bool HandleClient(int64 client) {
+        unsafe(using krt.mem;) {
+            byte* request = stackalloc byte[4096];
+            int64 length = 0;
+            bool complete = false;
+            while (!complete && length < 4096) {
+                int64 count = Sys.Syscall(SYS_recvfrom, client, (int64)(request + length),
+                                         4096 - length, 0, 0, 0);
+                if (count == -4) { continue; }
+                if (count <= 0) { return false; }
+                int64 scan = length > 3 ? length - 3 : 0;
+                length += count;
+                while (scan + 3 < length) {
+                    if (request[scan] == 13 && request[scan + 1] == 10 &&
+                        request[scan + 2] == 13 && request[scan + 3] == 10) {
+                        complete = true;
+                        break;
+                    }
+                    scan++;
+                }
+            }
+            if (!complete) { return Respond(client, 431); }
+
+            int64 line_end = 0;
+            while (line_end + 1 < length &&
+                   !(request[line_end] == 13 && request[line_end + 1] == 10)) {
+                line_end++;
+            }
+            if (line_end < 14) { return Respond(client, 400); }
+            if (request[0] != 71 || request[1] != 69 || request[2] != 84 || request[3] != 32) {
+                return Respond(client, 405);
+            }
+            int64 path_end = 4;
+            while (path_end < line_end && request[path_end] != 32) { path_end++; }
+            if (path_end == 4 || line_end - path_end - 1 != 8) { return Respond(client, 400); }
+            int64 version = path_end + 1;
+            if (request[version] != 72 || request[version + 1] != 84 ||
+                request[version + 2] != 84 || request[version + 3] != 80 ||
+                request[version + 4] != 47 || request[version + 5] != 49 ||
+                request[version + 6] != 46 ||
+                (request[version + 7] != 48 && request[version + 7] != 49)) {
+                return Respond(client, 400);
+            }
+            bool root = path_end == 5 && request[4] == 47;
+            return Respond(client, root ? 200 : 404);
+        }
+    }
+
+    // A zero port asks the kernel for an available port. A zero connection limit
+    // keeps listening; a positive limit exits normally after that many accepts.
+    public static int32 Run(int32 port, int32 connection_limit) {
+        if (port < 0 || port > 65535 || connection_limit < 0) { return 1; }
+        unsafe(using krt.mem;) {
+            SockAddrIn address;
+            SocketTimeout timeout;
+            if (sizeof(SockAddrIn) != 16 || sizeof(SocketTimeout) != 16 ||
+                (int64)&address.family - (int64)&address != 0 ||
+                (int64)&address.port - (int64)&address != 2 ||
+                (int64)&address.address - (int64)&address != 4 ||
+                (int64)&address.zero[0] - (int64)&address != 8 ||
+                (int64)&timeout.seconds - (int64)&timeout != 0 ||
+                (int64)&timeout.microseconds - (int64)&timeout != 8) {
+                Console.WriteLine("Invalid native socket structure layout");
+                return 2;
+            }
+            address.family = 2;
+            address.port = (uint16)(((port & 255) << 8) | ((port >> 8) & 255));
+            address.address = (uint32)0x0100007f;
+            address.zero[0] = 91;
+            address.zero[7] = 37;
+            byte* bytes = (byte*)&address;
+            if (bytes[0] != 2 || bytes[1] != 0 || bytes[4] != 127 ||
+                bytes[5] != 0 || bytes[6] != 0 || bytes[7] != 1 ||
+                bytes[8] != 91 || bytes[15] != 37) {
+                Console.WriteLine("Invalid native socket structure bytes");
+                return 3;
+            }
+            int32 padding_index = 0;
+            while (padding_index < 8) { address.zero[padding_index] = 0; padding_index++; }
+
+            int64 listener = Sys.Syscall(SYS_socket, 2, 1, 0, 0, 0, 0);
+            if (listener < 0) { return 4; }
+            int32 reuse = 1;
+            if (Sys.Syscall(SYS_setsockopt, listener, 1, 2, (int64)&reuse, 4, 0) != 0 ||
+                Sys.Syscall(SYS_bind, listener, (int64)&address, sizeof(SockAddrIn), 0, 0, 0) != 0 ||
+                Sys.Syscall(SYS_listen, listener, 16, 0, 0, 0, 0) != 0) {
+                Sys.Syscall(3, listener, 0, 0, 0, 0, 0);
+                return 5;
+            }
+            int32 address_length = sizeof(SockAddrIn);
+            if (Sys.Syscall(SYS_getsockname, listener, (int64)&address,
+                            (int64)&address_length, 0, 0, 0) != 0 || address_length != 16) {
+                Sys.Syscall(3, listener, 0, 0, 0, 0, 0);
+                return 6;
+            }
+            int32 bound_port = ((int32)address.port >> 8) | (((int32)address.port & 255) << 8);
+            Console.Write("PORT=");
+            Console.WriteLine(bound_port);
+
+            timeout.seconds = 5;
+            timeout.microseconds = 0;
+            int32 handled = 0;
+            while (connection_limit == 0 || handled < connection_limit) {
+                int64 client = Sys.Syscall(SYS_accept, listener, 0, 0, 0, 0, 0);
+                if (client == -4) { continue; }
+                if (client < 0) {
+                    Sys.Syscall(3, listener, 0, 0, 0, 0, 0);
+                    return 7;
+                }
+                bool configured = Sys.Syscall(SYS_setsockopt, client, 1, 20, (int64)&timeout, sizeof(SocketTimeout), 0) == 0 &&
+                                  Sys.Syscall(SYS_setsockopt, client, 1, 21, (int64)&timeout, sizeof(SocketTimeout), 0) == 0;
+                if (configured) { HandleClient(client); }
+                int64 closed = Sys.Syscall(3, client, 0, 0, 0, 0, 0);
+                handled++;
+                if (!configured || closed != 0) {
+                    Sys.Syscall(3, listener, 0, 0, 0, 0, 0);
+                    return 8;
+                }
+            }
+            return Sys.Syscall(3, listener, 0, 0, 0, 0, 0) == 0 ? 0 : 9;
+        }
+    }
+}

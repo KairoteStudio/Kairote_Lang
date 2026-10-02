@@ -1,0 +1,474 @@
+class KrtSsaEscapeInfo { public bool[] values; }
+
+// All values use a 64-bit machine word. Semantic annotations distinguish
+// integer precision, floating bit patterns, pointers and boxed wide integers.
+// Cast and floating operators retain their explicit conversion formats.
+int32 KrtSsaInputs(KrtNativeModule module, int32 index) {
+    int32 op = module.ops[index]; int32 arity = (int32)module.extra[index];
+    if (op == 3 || op == 14 || op == 15 || op == 18 || op == 22 || op == 24 || op == 27 || op == 28 || op == 30 || op == 31 || op == 33 || op == 34 ||
+        op == 37 || op == 38 || op == 41 || op == 42 || op == 43 || op == 60 || op == 63 || op == 67 || op == 68 || op == 69 || op == 72) { return 1; }
+    if ((op >= 4 && op <= 13) || op == 16 || op == 23 || op == 35 || op == 36 || op == 39 || op == 40 || op == 52 || op == 61 || op == 62 || op == 71) { return 2; }
+    if (op == 19 || op == 26 || op == 20) { return arity; }
+    if (op == 46) { return arity+1; }
+    if (op == 21) { return module.args[index] == 0 ? 1 : 2; }
+    if (op == 32) { return 1; }
+    return 0;
+}
+
+bool KrtSsaHasResult(int32 op) {
+    return op != 0 && op != 3 && op != 17 && op != 18 && op != 20 && op != 23 && op != 27 && op != 34 && op != 50 && op != 51 && op != 52 && op != 71 && op != 72;
+}
+
+KrtSsaEscapeInfo KrtSsaEscapes(KrtNativeModule module, int32 function_index, int32 first, int32 last, bool handler) {
+    int32 locals = module.local_counts[function_index]; bool[] escaped = new bool[locals];
+    if (handler) { int32 slot = 0; while (slot < locals) { escaped[slot] = true; slot = slot+1; } }
+    if (module.aggregate_return_sizes != null && module.aggregate_return_sizes[function_index] > 0) {
+        if (module.hidden_result_slots == null) { return null; }
+        int32 hidden = module.hidden_result_slots[function_index];
+        if (hidden < module.parameter_counts[function_index] || hidden >= locals) { return null; }
+        escaped[hidden] = true;
+    }
+    int32 index = first;
+    while (index < last) {
+        if (module.ops[index] == 29) {
+            int64 slot = module.args[index]; if (slot < 0 || slot >= locals) { return null; }
+            escaped[(int32)slot] = true;
+        }
+        index = index+1;
+    }
+    KrtSsaEscapeInfo info = new KrtSsaEscapeInfo(); info.values = escaped; return info;
+}
+
+void KrtSsaResultType(KrtSsaModule ssa, int32 value) {
+    int32 op = ssa.ops[value]; int32 width = 8; int32 kind = 1;
+    int32 inputs = ssa.operand_counts[value]; int32 input = -1;
+    if (inputs > 0) { input = ssa.operands[ssa.operand_starts[value]]; width = ssa.widths[input]; kind = ssa.types[input]; }
+    if (op == 1 || op == 2 || op == 19 || op == 26 || op == 46 || op == 53 || op == 54) { width = 8; kind = 1; }
+    if (op == 16 || op == 31 || op == 35 || op == 40 || op == 42 || op == 62) { width = 1; kind = 1; }
+    if (op == 28 && (ssa.args[value] != 8 && ssa.args[value] != -8)) { width = (int32)ssa.args[value]; kind = 1; }
+    if (op == 22) { width = (int32)ssa.extra[value]; kind = (width == 16 || width == -16) ? 4 : 1; }
+    if (op == 21 || op == 24 || op == 25 || op == 29 || op == 30 || op == 36 || op == 44 || op == 45 || op == 69) { width = 8; kind = 3; }
+    if (op == 70) { width = (int32)ssa.extra[value]; kind = 5; }
+    if (op == 37) { width = 4; kind = 1; }
+    if (op == 39 || op == 41 || op == 43) { width = (int32)ssa.extra[value]; kind = 2; }
+    if (op == 60) { width = ssa.args[value] == 2 ? 8 : 16; kind = ssa.args[value] == 2 ? 1 : 4; }
+    if (op == 61 || op == 63 || op == 66 || op == 67) { width = 16; kind = 4; }
+    if (op == 38 || op == 68) { width = (int32)ssa.extra[value]; kind = width == 4 || width == 8 ? 2 : 1; }
+    if (!ssa.results[value]) { width = 0; kind = 0; }
+    ssa.widths[value] = width; ssa.types[value] = kind;
+}
+
+KrtSsaModule KrtSsaBuild(KrtNativeModule module, KrtAstNode unit, int64 source) {
+    if (module == null || module.count <= 0 || module.count > 16777216 || module.function_count <= 0 || module.function_count > 16384) { return null; }
+    KrtSsaModule ssa = new KrtSsaModule(); ssa.source = module; ssa.function_count = module.function_count;
+    ssa.starts = new int32[module.function_count]; ssa.ends = new int32[module.function_count];
+    ssa.function_blocks = new int32[module.function_count]; ssa.function_block_counts = new int32[module.function_count]; ssa.handlers = new bool[module.function_count];
+    int32 block_capacity = module.count+module.function_count+1;
+    ssa.block_starts = new int32[block_capacity]; ssa.block_ends = new int32[block_capacity];
+    ssa.block_phis = new int32[block_capacity]; ssa.block_phi_counts = new int32[block_capacity];
+    ssa.block_functions = new int32[block_capacity]; ssa.block_left = new int32[block_capacity]; ssa.block_right = new int32[block_capacity];
+    int32[] native_starts = new int32[block_capacity]; int32[] native_ends = new int32[block_capacity];
+    int32[] owners = new int32[module.count]; int32[] native_values = new int32[module.count];
+    int32[] depths = new int32[module.count]; int32[] queue = new int32[module.count]; bool[] leaders = new bool[module.count];
+    int32 function_index = 0;
+    while (function_index < module.function_count) {
+        int32 first = module.starts[function_index]; int32 last = module.count;
+        if (function_index+1 < module.function_count) { last = module.starts[function_index+1]; }
+        if (first < 0 || first >= last || last > module.count || module.parameter_counts[function_index] < 0 || module.parameter_counts[function_index] > 128 ||
+            module.local_counts[function_index] < module.parameter_counts[function_index] || module.local_counts[function_index] > 16777216 ||
+            !KrtKroNativeStackDepths(module,first,last,depths,queue)) { return null; }
+        leaders[first] = true; int32 index = first;
+        while (index < last) {
+            int32 op = module.ops[index];
+            if (op == 50 || op == 51 || op == 53 || op == 54) { ssa.handlers[function_index] = true; }
+            if (op == 17 || op == 18 || op == 50) {
+                int32 target = (int32)module.args[index]; if (target < first || target >= last) { return null; }
+                leaders[target] = true;
+                if (op == 18) { target = (int32)module.extra[index]; if (target < first || target >= last) { return null; } leaders[target] = true; }
+            }
+            if ((op == 17 || op == 18 || op == 20 || op == 50 || op == 52) && index+1 < last) { leaders[index+1] = true; }
+            index = index+1;
+        }
+        KrtSsaEscapeInfo escape_info = KrtSsaEscapes(module,function_index,first,last,ssa.handlers[function_index]); if (escape_info == null) { return null; }
+        bool[] escaped = escape_info.values;
+        int32 locals = module.local_counts[function_index]; int32 ordinary = 0; int32 slot = 0;
+        while (slot < locals) { if (!escaped[slot]) { ordinary = ordinary+1; } slot = slot+1; }
+        ssa.starts[function_index] = ssa.count; ssa.function_blocks[function_index] = ssa.block_count;
+        int32 entry_block = ssa.block_count; ssa.block_count = ssa.block_count+1;
+        ssa.block_starts[entry_block] = ssa.count; ssa.block_functions[entry_block] = function_index;
+        if (ssa.count > 16777216-module.parameter_counts[function_index]-1) { return null; }
+        ssa.count = ssa.count+module.parameter_counts[function_index]+1; ssa.block_ends[entry_block] = ssa.count;
+        native_starts[entry_block] = -1; native_ends[entry_block] = -1;
+        ssa.block_left[entry_block] = entry_block+1; ssa.block_right[entry_block] = -1;
+        index = first; int32 block = -1;
+        while (index < last) {
+            if (leaders[index]) {
+                if (block >= 0) { native_ends[block] = index; ssa.block_ends[block] = ssa.count; }
+                block = ssa.block_count; ssa.block_count = ssa.block_count+1;
+                native_starts[block] = index; ssa.block_starts[block] = ssa.count; ssa.block_functions[block] = function_index;
+                ssa.block_left[block] = -1; ssa.block_right[block] = -1;
+                ssa.block_phis[block] = ssa.count;
+                if (depths[index] >= 0) {
+                    if ((int64)ssa.count+ordinary+depths[index] > 16777216) { return null; }
+                    ssa.block_phi_counts[block] = ordinary+depths[index]; ssa.count = ssa.count+ordinary+depths[index];
+                }
+            }
+            if (ssa.count >= 16777216) { return null; }
+            owners[index] = block; native_values[index] = ssa.count; ssa.count = ssa.count+1; index = index+1;
+        }
+        native_ends[block] = last; ssa.block_ends[block] = ssa.count;
+        ssa.function_block_counts[function_index] = ssa.block_count-ssa.function_blocks[function_index]; ssa.ends[function_index] = ssa.count;
+        delete escaped; delete escape_info; function_index = function_index+1;
+    }
+    if (ssa.count > 16777216) { return null; }
+    ssa.ops = new int32[ssa.count]; ssa.args = new int64[ssa.count]; ssa.extra = new int64[ssa.count];
+    ssa.types = new int32[ssa.count]; ssa.widths = new int32[ssa.count]; ssa.results = new bool[ssa.count];
+    ssa.semantic_types = new int32[ssa.count]; ssa.semantic_widths = new int32[ssa.count];
+    ssa.operand_starts = new int32[ssa.count]; ssa.operand_counts = new int32[ssa.count];
+    ssa.uses = new int32[ssa.count]; ssa.value_blocks = new int32[ssa.count];
+    ssa.operand_capacity = ssa.count*4+module.count*2+1024;
+    ssa.operands = new int32[ssa.operand_capacity]; ssa.phi_predecessors = new int32[ssa.operand_capacity];
+    int32 block = 0;
+    while (block < ssa.block_count) {
+        int32 index = ssa.block_starts[block]; while (index < ssa.block_ends[block]) { ssa.value_blocks[index] = block; index = index+1; }
+        if (native_starts[block] < 0) { block = block+1; continue; }
+        if (depths[native_starts[block]] < 0) { block = block+1; continue; }
+        int32 stop = native_ends[block]-1; int32 op = module.ops[stop];
+        if (op == 17 || op == 18 || op == 50) {
+            ssa.block_left[block] = owners[(int32)module.args[stop]];
+            if (op == 18) { ssa.block_right[block] = owners[(int32)module.extra[stop]]; }
+            else if (op == 50) { ssa.block_right[block] = block+1; }
+        } else if (op != 20 && op != 52 && block+1 < ssa.block_count && ssa.block_functions[block+1] == ssa.block_functions[block]) { ssa.block_left[block] = block+1; }
+        block = block+1;
+    }
+    function_index = 0;
+    while (function_index < module.function_count) {
+        int32 first = module.starts[function_index]; int32 last = module.count;
+        if (function_index+1 < module.function_count) { last = module.starts[function_index+1]; }
+        int32 locals = module.local_counts[function_index]; int32 parameters = module.parameter_counts[function_index];
+        int32 first_block = ssa.function_blocks[function_index]; int32 blocks = ssa.function_block_counts[function_index];
+        KrtSsaEscapeInfo escape_info = KrtSsaEscapes(module,function_index,first,last,ssa.handlers[function_index]);
+        bool[] escaped = escape_info.values;
+        int32 maximum = 0; int32 index = first;
+        while (index < last) { if (depths[index] > maximum) { maximum = depths[index]; } index = index+1; }
+        maximum = maximum+130;
+        if ((int64)blocks*locals > 16777216 || (int64)blocks*maximum > 16777216) { return null; }
+        int32[] final_locals = new int32[blocks*locals]; int32[] final_stack = new int32[blocks*maximum]; int32[] final_depths = new int32[blocks];
+        int32[] names = new int32[locals]; int32[] stack = new int32[maximum];
+        int32 entry = ssa.starts[function_index]; int32 parameter = 0;
+        KrtAstNode function_ast = module.function_ast; int32 ast_index = 0;
+        while (function_ast != null && ast_index < function_index) { function_ast = function_ast.next; ast_index = ast_index+1; }
+        while (parameter < parameters) {
+            int32 value = entry+parameter; ssa.ops[value] = 100; ssa.args[value] = parameter; ssa.results[value] = true; ssa.types[value] = 1; ssa.widths[value] = 8;
+            if (function_ast != null && source != 0 && function_ast.parameter_type_starts != null) {
+                KrtAstNode annotated = KrtAstMake(KrtAstKind.Type,0,0);
+                if (KrtNativeAnnotateType(annotated,unit,source,function_ast.parameter_type_starts[parameter],function_ast.parameter_type_lengths[parameter])) {
+                    ssa.widths[value] = KrtNativeValueWidth(annotated);
+                    if (function_ast.parameter_refs[parameter] || annotated.native_stride > 0 || annotated.native_type != null || annotated.native_function_pointer != null) { ssa.types[value] = 3; ssa.widths[value] = 8; }
+                    else if (annotated.native_float != 0) { ssa.types[value] = 2; ssa.widths[value] = annotated.native_float; }
+                    else if (annotated.native_wide) { ssa.types[value] = 4; }
+                }
+            }
+            parameter = parameter+1;
+        }
+        int32 zero = entry+parameters; ssa.ops[zero] = 1; ssa.results[zero] = true; ssa.types[zero] = 1; ssa.widths[zero] = 8;
+        block = first_block;
+        while (block < first_block+blocks) {
+            int32 cursor = ssa.block_phis[block]; int32 slot = 0;
+            int32 depth = native_starts[block] < 0 ? 0 : depths[native_starts[block]]; if (depth < 0) { depth = 0; }
+            while (slot < locals) {
+                names[slot] = slot < parameters ? entry+slot : zero;
+                if (block != first_block && !escaped[slot] && ssa.block_phi_counts[block] > 0) {
+                    names[slot] = cursor; ssa.ops[cursor] = 101; ssa.args[cursor] = slot; ssa.results[cursor] = true; cursor = cursor+1;
+                }
+                slot = slot+1;
+            }
+            int32 position = 0;
+            while (position < depth) { stack[position] = cursor; ssa.ops[cursor] = 101; ssa.args[cursor] = -1-position; ssa.results[cursor] = true; cursor = cursor+1; position = position+1; }
+            index = native_starts[block];
+            while (index < native_ends[block]) {
+                int32 value = native_values[index]; int32 op = module.ops[index];
+                if (depths[index] < 0) { index = index+1; continue; }
+                int32 need = KrtSsaInputs(module,index); if (depth < need || need > 130) { return null; }
+                ssa.ops[value] = op; ssa.args[value] = module.args[index]; ssa.extra[value] = module.extra[index];
+                ssa.operand_starts[value] = ssa.operand_count; ssa.operand_counts[value] = need;
+                if (ssa.operand_count+need > ssa.operand_capacity) { return null; }
+                position = 0;
+                while (position < need) { ssa.operands[ssa.operand_count] = stack[depth-need+position]; ssa.operand_count = ssa.operand_count+1; position = position+1; }
+                depth = depth-need;
+                if ((op == 2 || op == 3) && (module.args[index] < 0 || module.args[index] >= locals)) { return null; }
+                if (op == 2 && !escaped[(int32)module.args[index]]) {
+                    stack[depth] = names[(int32)module.args[index]]; depth = depth+1; ssa.ops[value] = 0; ssa.operand_counts[value] = 0;
+                } else if (op == 3 && !escaped[(int32)module.args[index]]) {
+                    names[(int32)module.args[index]] = ssa.operands[ssa.operand_starts[value]]; ssa.ops[value] = 0; ssa.operand_counts[value] = 0;
+                } else if (op == 27) { ssa.ops[value] = 0; ssa.operand_counts[value] = 0; }
+                else if (op == 32) {
+                    int32 operand = ssa.operands[ssa.operand_starts[value]]; stack[depth] = operand; stack[depth+1] = operand; depth = depth+2;
+                    ssa.ops[value] = 0; ssa.operand_counts[value] = 0;
+                } else {
+                    ssa.results[value] = KrtSsaHasResult(op);
+                    if (ssa.results[value]) { stack[depth] = value; depth = depth+1; }
+                    if (op == 17 || op == 18 || op == 50) { ssa.args[value] = owners[(int32)module.args[index]]; if (op == 18) { ssa.extra[value] = owners[(int32)module.extra[index]]; } }
+                    KrtSsaResultType(ssa,value);
+                }
+                if (depth >= maximum) { return null; }
+                index = index+1;
+            }
+            slot = 0; while (slot < locals) { final_locals[(block-first_block)*locals+slot] = names[slot]; slot = slot+1; }
+            position = 0; while (position < depth) { final_stack[(block-first_block)*maximum+position] = stack[position]; position = position+1; }
+            final_depths[block-first_block] = depth; block = block+1;
+        }
+        block = first_block+1;
+        while (block < first_block+blocks) {
+            int32 phi = ssa.block_phis[block]; int32 phi_end = phi+ssa.block_phi_counts[block];
+            while (phi < phi_end) {
+                ssa.operand_starts[phi] = ssa.operand_count; int32 predecessor = first_block;
+                while (predecessor < first_block+blocks) {
+                    if (ssa.block_left[predecessor] == block || ssa.block_right[predecessor] == block) {
+                        int32 slot = (int32)ssa.args[phi]; int32 incoming = 0;
+                        if (slot >= 0) { incoming = final_locals[(predecessor-first_block)*locals+slot]; }
+                        else {
+                            int32 position = -1-slot;
+                            if (position >= final_depths[predecessor-first_block]) { return null; }
+                            incoming = final_stack[(predecessor-first_block)*maximum+position];
+                        }
+                        if (ssa.operand_count >= ssa.operand_capacity) { return null; }
+                        ssa.operands[ssa.operand_count] = incoming; ssa.phi_predecessors[ssa.operand_count] = predecessor;
+                        ssa.operand_count = ssa.operand_count+1; ssa.operand_counts[phi] = ssa.operand_counts[phi]+1;
+                    }
+                    predecessor = predecessor+1;
+                }
+                phi = phi+1;
+            }
+            block = block+1;
+        }
+        delete final_locals; delete final_stack; delete final_depths; delete names; delete stack; delete escaped; delete escape_info;
+        function_index = function_index+1;
+    }
+    bool changed = true; int32 rounds = 0;
+    while (changed && rounds < ssa.block_count+1) {
+        changed = false; int32 value = 0;
+        while (value < ssa.count) {
+            if (ssa.ops[value] == 101 && ssa.widths[value] == 0) {
+                int32 operand = 0;
+                while (operand < ssa.operand_counts[value]) {
+                    int32 incoming = ssa.operands[ssa.operand_starts[value]+operand];
+                    if (ssa.widths[incoming] != 0) { ssa.widths[value] = ssa.widths[incoming]; ssa.types[value] = ssa.types[incoming]; changed = true; break; }
+                    operand = operand+1;
+                }
+            }
+            value = value+1;
+        }
+        rounds = rounds+1;
+    }
+    int32 value = 0;
+    while (value < ssa.count) {
+        if (ssa.results[value] && ssa.widths[value] == 0) { ssa.widths[value] = 8; ssa.types[value] = 1; }
+        ssa.semantic_types[value] = ssa.types[value]; ssa.semantic_widths[value] = ssa.widths[value];
+        if (ssa.results[value]) { ssa.types[value] = 1; ssa.widths[value] = 64; }
+        int32 operand = 0;
+        while (operand < ssa.operand_counts[value]) { int32 incoming = ssa.operands[ssa.operand_starts[value]+operand]; if (incoming < 0 || incoming >= ssa.count) { return null; } ssa.uses[incoming] = ssa.uses[incoming]+1; operand = operand+1; }
+        value = value+1;
+    }
+    delete native_starts; delete native_ends; delete owners; delete native_values; delete depths; delete queue; delete leaders;
+    if (!KrtSsaValidate(ssa)) { return null; } return ssa;
+}
+
+bool KrtSsaValidate(KrtSsaModule ssa) {
+    if (ssa == null || ssa.source == null || ssa.count <= 0 || ssa.block_count <= 0 || ssa.function_count != ssa.source.function_count ||
+        ssa.operand_count < 0 || ssa.operand_count > ssa.operand_capacity) { return false; }
+    int32 block = 0;
+    while (block < ssa.block_count) {
+        int32 first = ssa.block_starts[block]; int32 last = ssa.block_ends[block]; int32 function_index = ssa.block_functions[block];
+        if (first < 0 || first >= last || last > ssa.count || function_index < 0 || function_index >= ssa.function_count ||
+            first < ssa.starts[function_index] || last > ssa.ends[function_index]) { return false; }
+        int32 successor = ssa.block_left[block];
+        if (successor >= 0 && (successor >= ssa.block_count || ssa.block_functions[successor] != function_index)) { return false; }
+        successor = ssa.block_right[block];
+        if (successor >= 0 && (successor >= ssa.block_count || ssa.block_functions[successor] != function_index)) { return false; }
+        int32 phi_inputs = -1; int32 value = first;
+        while (value < last) {
+            if (ssa.value_blocks[value] != block || ssa.operand_starts[value] < 0 || ssa.operand_counts[value] < 0 ||
+                ssa.operand_starts[value]+ssa.operand_counts[value] > ssa.operand_count) { return false; }
+            if (ssa.results[value] && (ssa.types[value] <= 0 || ssa.widths[value] == 0)) { return false; }
+            int32 op = ssa.ops[value];
+            if (op == 70) {
+                if (ssa.source.function_frame_bytes == null || ssa.operand_counts[value] != 0 || !ssa.results[value]) { return false; }
+                int32 arena = ssa.source.function_frame_bytes[function_index];
+                if (arena < 0 || ssa.args[value] < 0 || ssa.extra[value] <= 0 || ssa.args[value] > arena || ssa.extra[value] > arena-ssa.args[value]) { return false; }
+            } else if (op == 71 || op == 72) {
+                int64 alignment = ssa.extra[value];
+                if (ssa.results[value] || ssa.operand_counts[value] != (op == 71 ? 2 : 1) || ssa.args[value] < 0 || ssa.args[value] > 16777216 ||
+                    alignment <= 0 || alignment > 16 || (alignment & (alignment-1)) != 0) { return false; }
+            } else if (op == 19 || op == 46) {
+                if (ssa.extra[value] < 0 || ssa.extra[value] > 129 || ssa.operand_counts[value] != ssa.extra[value]+(op == 46 ? 1 : 0)) { return false; }
+            } else if (op == 101) {
+                if (phi_inputs < 0) {
+                    int32 first_block = ssa.function_blocks[function_index]; int32 blocks = ssa.function_block_counts[function_index];
+                    if (first_block < 0 || first_block > block || blocks <= 0 || blocks > ssa.block_count-first_block || block >= first_block+blocks) { return false; }
+                    phi_inputs = 0; int32 predecessor = first_block;
+                    while (predecessor < first_block+blocks) {
+                        // Both branch sides can name the same target. A phi
+                        // receives one value from each distinct source block.
+                        if (ssa.block_left[predecessor] == block || ssa.block_right[predecessor] == block) { phi_inputs = phi_inputs+1; }
+                        predecessor = predecessor+1;
+                    }
+                }
+                if (!ssa.results[value] || phi_inputs == 0 || ssa.operand_counts[value] != phi_inputs) { return false; }
+            }
+            int32 operand = 0;
+            while (operand < ssa.operand_counts[value]) {
+                int32 position = ssa.operand_starts[value]+operand; int32 incoming = ssa.operands[position];
+                if (incoming < ssa.starts[function_index] || incoming >= ssa.ends[function_index] || !ssa.results[incoming]) { return false; }
+                if (ssa.ops[value] == 101) {
+                    int32 predecessor = ssa.phi_predecessors[position];
+                    if (predecessor < 0 || predecessor >= ssa.block_count || (ssa.block_left[predecessor] != block && ssa.block_right[predecessor] != block)) { return false; }
+                    int32 previous = 0;
+                    while (previous < operand) {
+                        if (ssa.phi_predecessors[ssa.operand_starts[value]+previous] == predecessor) { return false; }
+                        previous = previous+1;
+                    }
+                } else if (ssa.value_blocks[incoming] == block && incoming >= value) { return false; }
+                operand = operand+1;
+            }
+            value = value+1;
+        }
+        block = block+1;
+    }
+    return KrtSsaValidateDominance(ssa);
+}
+
+bool KrtSsaValidateDominance(KrtSsaModule ssa) {
+    int32 function_index = 0;
+    while (function_index < ssa.function_count) {
+        int32 first = ssa.function_blocks[function_index]; int32 blocks = ssa.function_block_counts[function_index];
+        int32 words = (blocks+63)/64;
+        if (blocks <= 0 || (int64)blocks*words > 16777216) { return false; }
+        int32[] heads = new int32[blocks]; int32[] next = new int32[blocks*2]; int32[] predecessors = new int32[blocks*2];
+        int32[] queue = new int32[blocks]; bool[] reachable = new bool[blocks]; uint64[] dominators = new uint64[blocks*words];
+        int32 relative = 0; while (relative < blocks) { heads[relative] = -1; relative = relative+1; }
+        int32 edge = 0; int32 block = first;
+        while (block < first+blocks) {
+            int32 side = 0;
+            while (side < 2) {
+                int32 target = side == 0 ? ssa.block_left[block] : ssa.block_right[block];
+                if (target >= 0) { predecessors[edge] = block; next[edge] = heads[target-first]; heads[target-first] = edge; edge = edge+1; }
+                side = side+1;
+            }
+            block = block+1;
+        }
+        int32 head = 0; int32 tail = 1; queue[0] = first; reachable[0] = true;
+        while (head < tail) {
+            block = queue[head]; head = head+1; int32 side = 0;
+            while (side < 2) {
+                int32 target = side == 0 ? ssa.block_left[block] : ssa.block_right[block];
+                if (target >= 0 && !reachable[target-first]) { reachable[target-first] = true; queue[tail] = target; tail = tail+1; }
+                side = side+1;
+            }
+        }
+        relative = 0;
+        while (relative < blocks) {
+            int32 word = 0;
+            while (word < words) { dominators[relative*words+word] = relative == 0 || !reachable[relative] ? 0 : (uint64)-1; word = word+1; }
+            dominators[relative*words+relative/64] = dominators[relative*words+relative/64] | ((uint64)1 << (relative%64));
+            relative = relative+1;
+        }
+        bool changed = true;
+        while (changed) {
+            changed = false; relative = 1;
+            while (relative < blocks) {
+                if (reachable[relative]) {
+                    int32 word = 0;
+                    while (word < words) {
+                        uint64 bits = (uint64)-1; int32 item = heads[relative]; bool found = false;
+                        while (item >= 0) {
+                            int32 predecessor = predecessors[item]-first;
+                            if (reachable[predecessor]) { bits = bits & dominators[predecessor*words+word]; found = true; }
+                            item = next[item];
+                        }
+                        if (!found) { return false; }
+                        if (word == relative/64) { bits = bits | ((uint64)1 << (relative%64)); }
+                        int32 cell = relative*words+word;
+                        if (dominators[cell] != bits) { dominators[cell] = bits; changed = true; }
+                        word = word+1;
+                    }
+                }
+                relative = relative+1;
+            }
+        }
+        block = first;
+        while (block < first+blocks) {
+            int32 value = ssa.block_starts[block];
+            while (value < ssa.block_ends[block]) {
+                int32 operand = 0;
+                while (operand < ssa.operand_counts[value]) {
+                    int32 position = ssa.operand_starts[value]+operand; int32 incoming = ssa.operands[position];
+                    int32 use_block = ssa.ops[value] == 101 ? ssa.phi_predecessors[position] : block;
+                    int32 definition = ssa.value_blocks[incoming]-first;
+                    if (reachable[use_block-first] && (dominators[(use_block-first)*words+definition/64] & ((uint64)1 << (definition%64))) == 0) { return false; }
+                    if (ssa.ops[value] == 101 && (ssa.types[incoming] != ssa.types[value] || ssa.widths[incoming] != ssa.widths[value])) { return false; }
+                    operand = operand+1;
+                }
+                value = value+1;
+            }
+            block = block+1;
+        }
+        delete heads; delete next; delete predecessors; delete queue; delete reachable; delete dominators;
+        function_index = function_index+1;
+    }
+    return true;
+}
+
+bool KrtSsaWriteIr(KrtSsaModule ssa, int64 descriptor) {
+    if (!KrtSsaValidate(ssa) || !KrtArtifactText(descriptor,"; Kairote typed SSA IR\n")) { return false; }
+    int32 function_index = 0;
+    while (function_index < ssa.function_count) {
+        int64 header = KrtDriverConcat((int64)"function ",KrtDriverNumber(function_index));
+        if (!KrtArtifactText(descriptor,(string)header) || !KrtArtifactText(descriptor," {\n")) { return false; }
+        int32 block = ssa.function_blocks[function_index]; int32 last = block+ssa.function_block_counts[function_index];
+        while (block < last) {
+            int64 label = KrtDriverConcat((int64)"bb",KrtDriverNumber(block));
+            if (!KrtArtifactText(descriptor,(string)label) || !KrtArtifactText(descriptor,":\n")) { return false; }
+            int32 value = ssa.block_starts[block];
+            while (value < ssa.block_ends[block]) {
+                int32 op = ssa.ops[value];
+                if (op != 0) {
+                    int64 line = (int64)"  ";
+                    if (ssa.results[value]) {
+                        line = KrtDriverConcat(line,KrtDriverConcat((int64)"%",KrtDriverNumber(value)));
+                        string kind = "i";
+                        line = KrtDriverConcat(line,KrtDriverConcat((int64)":",(int64)kind));
+                        line = KrtDriverConcat(line,KrtDriverConcat(KrtDriverNumber(ssa.widths[value]),(int64)" = "));
+                    }
+                    string name = op == 100 ? "parameter" : op == 101 ? "phi" : KrtArtifactOp(op);
+                    line = KrtDriverConcat(line,(int64)name);
+                    if (op == 1 || op == 100 || op == 17 || op == 18 || op == 19 || op == 28 || op == 29 || op == 2 || op == 3 || op == 50 || op == 70 || op == 71 || op == 72) {
+                        line = KrtDriverConcat(line,KrtDriverConcat((int64)" ",KrtDriverNumber(ssa.args[value])));
+                        if (op == 18 || op == 70 || op == 71 || op == 72) { line = KrtDriverConcat(line,KrtDriverConcat((int64)" ",KrtDriverNumber(ssa.extra[value]))); }
+                    }
+                    int32 operand = 0;
+                    while (operand < ssa.operand_counts[value]) {
+                        int32 position = ssa.operand_starts[value]+operand;
+                        if (op == 101) { line = KrtDriverConcat(line,KrtDriverConcat((int64)" [bb",KrtDriverNumber(ssa.phi_predecessors[position]))); line = KrtDriverConcat(line,(int64)":"); }
+                        else { line = KrtDriverConcat(line,(int64)" "); }
+                        line = KrtDriverConcat(line,KrtDriverConcat((int64)"%",KrtDriverNumber(ssa.operands[position])));
+                        if (op == 101) { line = KrtDriverConcat(line,(int64)"]"); }
+                        operand = operand+1;
+                    }
+                    if (ssa.results[value] && ssa.semantic_types[value] != 1 && ssa.semantic_types[value] != 0) {
+                        string semantic = ssa.semantic_types[value] == 2 ? "float" : ssa.semantic_types[value] == 3 ? "pointer" : ssa.semantic_types[value] == 5 ? "aggregate-address" : "boxed-wide";
+                        line = KrtDriverConcat(line,KrtDriverConcat((int64)" ; ",(int64)semantic));
+                        int32 semantic_width = ssa.semantic_widths[value]; if (semantic_width < 0) { semantic_width = -semantic_width; }
+                        line = KrtDriverConcat(line,KrtDriverNumber(semantic_width*8));
+                    }
+                    if (!KrtArtifactText(descriptor,(string)line) || !KrtArtifactText(descriptor,"\n")) { return false; }
+                }
+                value = value+1;
+            }
+            block = block+1;
+        }
+        if (!KrtArtifactText(descriptor,"}\n")) { return false; }
+        function_index = function_index+1;
+    }
+    return true;
+}

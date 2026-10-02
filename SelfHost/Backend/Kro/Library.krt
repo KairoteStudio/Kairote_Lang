@@ -107,7 +107,7 @@ bool KrtKroEmitLibraryData(KrtAstNode module, int64 source, KrtKroObject output)
     while (declaration != null) {
         KrtAstNode previous = module.body;
         while (previous != declaration) {
-            if (KrtScopeEqual(previous.native_scope, declaration.native_scope, source) && KrtSemanticSameName(source, previous.name_start, previous.name_length, declaration.name_start, declaration.name_length)) { return false; }
+            if (!KrtNativeAccessSeparateFiles(previous,declaration) && KrtScopeEqual(previous.native_scope, declaration.native_scope, source) && KrtSemanticSameName(source, previous.name_start, previous.name_length, declaration.name_start, declaration.name_length)) { return false; }
             previous = previous.next;
         }
         if (!KrtNativeAnnotateType(declaration, module, source, declaration.type_start, declaration.type_length) ||
@@ -115,7 +115,7 @@ bool KrtKroEmitLibraryData(KrtAstNode module, int64 source, KrtKroObject output)
             declaration.native_string || declaration.native_float != 0 || declaration.native_function_pointer != null) { return false; }
         int32 width = KrtNativeWideKind(declaration) ? 16 : declaration.native_width;
         if (width <= 0 || width > 16 || count >= 65536) { return false; }
-        declaration.native_offset = size; size = size + width; names = names + (int32)declaration.name_length + 1; count = count + 1;
+        declaration.native_offset = size; size = size + width; names = names + (int32)declaration.name_length + 25; count = count + 1;
         declaration = declaration.next;
     }
     output.magic = 5198411; output.version = 2; output.architecture = 34404;
@@ -136,28 +136,46 @@ bool KrtKroEmitLibraryData(KrtAstNode module, int64 source, KrtKroObject output)
         }
         KrtKroLibrarySymbol(output, index, name, declaration.native_offset, width, 3);
         byte[] symbols = output.symbol_bytes;
-        KrtKroLibraryWord(symbols, index * 32 + 16, declaration.native_static ? 0 : 1);
+        bool local = declaration.native_static || !KrtNativeAccessExported(declaration);
+        KrtKroLibraryWord(symbols, index * 32 + 16, local ? 0 : 1);
         KrtKroLibraryName(output, source, declaration.name_start, (int32)declaration.name_length, ref name);
+        // Static storage has local binding while retaining its declared name.
+        // Access-hidden names need disambiguation inside a combined module.
+        if (!KrtNativeAccessExported(declaration)) {
+            name = name - 1; KrtLinkName suffix = KrtLinkNameNew(); KrtLinkText(suffix,"$local"); KrtLinkNumber(suffix,index);
+            byte[] suffix_bytes = suffix.bytes; byte[] names_bytes = output.string_bytes; int32 character = 0;
+            while (character < suffix.length) { names_bytes[name] = suffix_bytes[character]; name = name + 1; character = character + 1; }
+            names_bytes[name] = 0; name = name + 1;
+        }
         index = index + 1; declaration = declaration.next;
     }
+    output.strtab_size = name;
     return KrtKroObjectIsValid(output);
 }
 
 bool KrtKroLibraryPublicSignature(KrtAstNode function_node, KrtAstNode ast, int64 source) {
-    KrtAstNode signature = KrtAstMake(KrtAstKind.Function, function_node.start, function_node.length);
-    signature.native_scope = function_node.native_scope; signature.native_context = function_node.native_context;
-    signature.type_start = function_node.type_start; signature.type_length = function_node.type_length;
-    signature.parameter_count = function_node.parameter_count;
-    signature.parameter_type_starts = function_node.parameter_type_starts;
-    signature.parameter_type_lengths = function_node.parameter_type_lengths;
-    signature.parameter_refs = function_node.parameter_refs;
-    if (!KrtNativePrepareFunctionShape(signature, ast, source) || !KrtNativeLinkTypeSupported(signature.native_type, 0)) { return false; }
-    KrtAstNode parameter = signature.declarations;
-    while (parameter != null) {
-        if (!KrtNativeLinkTypeSupported(parameter, 0)) { return false; }
-        parameter = parameter.next;
+    return KrtNativeAbiSignatureSupported(function_node,ast,source);
+}
+
+bool KrtKroLibraryPublicDefinition(KrtAstNode declaration,KrtAbiSignature signature) {
+    return KrtNativeAccessExported(declaration)&&declaration.op!=220&&declaration.op!=230&&declaration.op!=241&&declaration.native_generic_origin==null&&
+        signature.supported&&signature.contract.ok&&
+        (declaration.native_owner==null||(declaration.native_owner.native_generic_parameters==null&&
+            (declaration.native_owner.native_generic_origin==null||declaration.native_owner.value==2)));
+}
+
+bool KrtKroLibraryNeedsAbi(KrtNativeModule module,KrtAstNode ast,int64 source) {
+    // Scalar-only objects retain the existing compact symbol-table contract.
+    KrtAstNode type=ast.declarations;bool has_struct=false;
+    while(type!=null){if(type.value==2){has_struct=true;break;}type=type.next;}
+    if(!has_struct){return false;}
+    KrtAstNode declaration=module.function_ast;
+    while(declaration!=null){
+        KrtAbiSignature signature=KrtAbiFunction(declaration,ast,source,true);
+        if(signature.uses_struct&&KrtKroLibraryPublicDefinition(declaration,signature)){return true;}
+        declaration=declaration.next;
     }
-    return true;
+    return false;
 }
 
 bool KrtKroLibraryFunctions(KrtNativeModule module, KrtAstNode ast, int64 source, KrtKroObject output) {
@@ -166,19 +184,19 @@ bool KrtKroLibraryFunctions(KrtNativeModule module, KrtAstNode ast, int64 source
     bool[] used = module.external_used;
     int32 count = module.function_count; int32 index = 0;
     while (index < module.external_count) { if (used[index]) { count = count + 1; } index = index + 1; }
-    output.symbol_count = count; output.symbol_bytes = new byte[count * 32 + 1]; output.string_bytes = new byte[count * 8192 + 1];
+    output.symbol_count = count; output.symbol_bytes = new byte[(count + 1) * 32 + 1]; output.string_bytes = new byte[count * 8192 + 64];
     byte[] string_bytes = output.string_bytes; byte[] symbols = output.symbol_bytes;
     int32 name = 1; index = 0; int32 symbol_index = 0;
+    KrtAbiBytes manifest=KrtAbiNew();KrtAbiWord(manifest,0x32494241);KrtAbiWord(manifest,2);KrtAbiWord(manifest,0);KrtAbiWord(manifest,0);
+    int32 abi_records=0;
     while (index < module.function_count) {
-        KrtLinkName link_name = KrtNativeFunctionLinkName(function_node, ast, source, true);
-        if (!link_name.valid) { return false; }
-        if (index == module.entry) { link_name.length = 0; KrtLinkText(link_name, "main"); }
-        // Named object types have module-local layout and runtime identities.
-        // Keep those definitions internal until extern supports their ABI too.
-        bool local = function_node.op == 230 || function_node.native_generic_origin != null ||
-            !KrtKroLibraryPublicSignature(function_node, ast, source) ||
-            (function_node.native_owner != null && (function_node.native_owner.native_generic_origin != null || function_node.native_owner.native_generic_parameters != null));
-        if (local) { KrtLinkText(link_name, "$local"); KrtLinkNumber(link_name, index); }
+        KrtAbiSignature signature=KrtAbiFunction(function_node,ast,source,true);
+        bool local=!KrtKroLibraryPublicDefinition(function_node,signature);
+        KrtLinkName link_name=KrtNativeFunctionLinkNameLegacy(function_node,ast,source,true);
+        if(!local&&signature.uses_struct){link_name=KrtAbiLinkName(signature);}
+        if(index==module.entry){link_name.length=0;KrtLinkText(link_name,"main");}
+        else if(!local&&signature.uses_struct){if(!KrtKroAbiRecord(manifest,symbol_index,true,signature)){return false;}abi_records=abi_records+1;}
+        if(local){KrtLinkText(link_name,"$local");KrtLinkNumber(link_name,index);}
         if (!link_name.valid) { return false; }
         KrtKroLibrarySymbol(output, symbol_index, name, offsets[index], sizes[index], 1);
         KrtKroLibraryWord(symbols, symbol_index * 32 + 16, local ? 0 : 1);
@@ -191,7 +209,12 @@ bool KrtKroLibraryFunctions(KrtNativeModule module, KrtAstNode ast, int64 source
     KrtAstNode external_node = module.external_head;
     while (index < module.external_count) {
         if (used[index]) {
-            KrtLinkName link_name = KrtNativeFunctionLinkName(external_node, ast, source, true);
+            KrtAbiSignature signature=KrtAbiFunction(external_node,ast,source,true);
+            KrtLinkName link_name=KrtNativeFunctionLinkNameLegacy(external_node,ast,source,true);
+            if(signature.uses_struct){
+                link_name=KrtAbiLinkName(signature);
+                if(!KrtKroAbiRecord(manifest,symbol_index,false,signature)){return false;}abi_records=abi_records+1;
+            }
             if (!link_name.valid) { return false; }
             external_symbols[index] = symbol_index;
             KrtKroLibrarySymbol(output, symbol_index, name, 0, 0, 0);
@@ -202,6 +225,7 @@ bool KrtKroLibraryFunctions(KrtNativeModule module, KrtAstNode ast, int64 source
         }
         index = index + 1; external_node = external_node.native_external_next;
     }
+    if(!KrtKroAbiFinish(output,manifest,abi_records,ref name)){return false;}
     output.strtab_size = name;
     output.text_reloc_count = module.external_reloc_count; output.total_reloc_count = module.external_reloc_count; output.relocation_count = module.external_reloc_count;
     output.text_relocation_bytes = new byte[module.external_reloc_count * 16 + 1];

@@ -2,16 +2,8 @@ bool KrtNativeLowerBaseConstructor(KrtAstNode expression, KrtAstNode module_ast,
     KrtAstNode target = expression.native_target;
     if (target == null) { return KrtNativeEmit(module, (int32)KrtNativeOp.Const, 0, 0) >= 0; }
     if (KrtNativeEmit(module, (int32)KrtNativeOp.LoadLocal, 0, 0) < 0) { return false; }
-    KrtAstNode argument = expression.right; int32 index = 1;
-    while (argument != null) {
-        KrtAstNode expected = KrtAstMake(KrtAstKind.Type, argument.start, argument.length);
-        expected.native_scope = target.native_scope; expected.native_context = target.native_context;
-        if (!KrtNativeAnnotateType(expected, module_ast, source, target.parameter_type_starts[index], target.parameter_type_lengths[index]) ||
-            !KrtNativeLowerExpression(argument, module_ast, module, source)) { return false; }
-        if (!target.parameter_refs[index] && !KrtNativeConvertValue(module, argument, expected)) { return false; }
-        argument = argument.next; index = index + 1;
-    }
-    return KrtNativeEmit(module, (int32)KrtNativeOp.Call, target.value, index) >= 0;
+    return KrtNativeLowerArguments(expression.right, target, 1, module_ast, module, source) &&
+        KrtNativeEmit(module, (int32)KrtNativeOp.Call, target.value, target.parameter_count) >= 0;
 }
 
 // Emit a typed catch predicate. Class catches accept every known descendant,

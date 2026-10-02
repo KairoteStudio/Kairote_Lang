@@ -3,7 +3,7 @@ KrtAstNode KrtParserConstraints(KrtParser parser, KrtAstNode parameters) {
     KrtAstNode first = null; KrtAstNode tail = null;
     while (KrtParserIsWord(parser, "where")) {
         KrtLexerNext(parser.lexer, parser.token);
-        if (parser.token.kind != KrtTokenKind.Identifier) { KrtParserRecordError(parser); return first; }
+        if (parser.token.category != KrtTokenCategory.Identifier) { KrtParserRecordError(parser); return first; }
         int64 start = parser.token.start; int64 length = parser.token.length;
         KrtAstNode parameter = parameters;
         while (parameter != null && !KrtParserSameSourceName(parser, start, length, parameter.name_start, parameter.name_length)) { parameter = parameter.next; }
@@ -37,7 +37,10 @@ KrtAstNode KrtParserConstraints(KrtParser parser, KrtAstNode parameters) {
                     if (!KrtParserTokenText(parser, 41)) { KrtParserRecordError(parser); return first; }
                     KrtLexerNext(parser.lexer, parser.token);
                 }
-            } else if (!KrtParserSkipNativeType(parser)) { return first; }
+            } else {
+                if (!KrtParserSkipNativeType(parser)) { return first; }
+                constraint.syntax_type=parser.last_type;constraint.child_count=1;
+            }
             constraint.type_length = KrtParserTypeSpanLength(parser, constraint.type_start, parser.token.start - constraint.type_start);
             constraint.length = constraint.type_length;
             if (first == null) { first = constraint; } else { tail.next = constraint; } tail = constraint;

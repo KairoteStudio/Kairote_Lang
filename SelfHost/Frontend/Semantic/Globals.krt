@@ -1,21 +1,5 @@
-// Mutable program storage is separate from activation-record local slots.
-class KrtNativeGlobalEntry {
-    public KrtAstNode declaration;
-    public KrtAstNode owner;
-    public KrtNativeGlobalEntry next;
-    public KrtAstNode assignment;
-    public bool bound;
-}
-
-// The program registry stays live while binding discovers concrete generic classes.
-class KrtNativeGlobalState {
-    public KrtNativeModule output;
-    public KrtNativeGlobalEntry first;
-    public KrtAstNode initializer;
-    public bool changed;
-}
-
 bool KrtNativeBindGlobal(KrtAstNode node, KrtAstNode declaration, KrtNativeBinding binding) {
+    if (!KrtNativeAccessAllowed(declaration,binding,null,false)) { return KrtNativeAccessError(binding,node); }
     if (declaration.native_readonly) {
         // A constant's type and names belong to its concrete declaring class.
         KrtAstNode context = KrtAstMake(KrtAstKind.Function, declaration.start, 0);
@@ -25,11 +9,12 @@ bool KrtNativeBindGlobal(KrtAstNode node, KrtAstNode declaration, KrtNativeBindi
         constant_binding.module = binding.module; constant_binding.unit = context; constant_binding.source = binding.source;
         constant_binding.slots = binding.slots; constant_binding.constant_depth = binding.constant_depth;
         constant_binding.error_start = -1;
+        constant_binding.using_scope = declaration.native_using_scope;
         node.native_scope = declaration.native_scope; node.native_context = declaration.native_context;
         bool valid = KrtNativeBindConstant(node, declaration, constant_binding);
         binding.slots = constant_binding.slots;
         if (!valid) { return KrtNativeBindingError(binding, node); }
-        return true;
+        return KrtNativeCheckValueAccess(node,binding);
     }
     if (declaration.native_global <= 0 &&
         !KrtNativeRegisterGlobal(declaration, declaration.native_context, binding.module, binding.source)) {
@@ -37,38 +22,53 @@ bool KrtNativeBindGlobal(KrtAstNode node, KrtAstNode declaration, KrtNativeBindi
     }
     if (declaration.native_global <= 0) { return KrtNativeBindingError(binding, node); }
     KrtNativeCopyType(node, declaration);
+    if (!KrtNativeCheckValueAccess(node,binding)) { return false; }
     node.native_global = declaration.native_global; node.native_readonly = false;
     node.native_static = true; node.element_width = declaration.native_width;
     return true;
 }
 
 KrtAstNode KrtNativeFindGlobal(KrtNativeBinding binding, int64 start, int64 length) {
-    KrtAstNode scope = binding.unit.native_scope;
+    KrtAstNode scope = binding.unit.native_scope; KrtAstNode hidden = null;
     while (true) {
-        KrtAstNode declaration = binding.module.body;
+        KrtAstNode declaration = binding.module.body; KrtAstNode chosen = null; int32 best = 0;
         while (declaration != null) {
-            if (KrtDeclarationMatches(declaration, scope, binding.source, start, length)) { return declaration; }
+            if (KrtDeclarationMatches(declaration, scope, binding.source, start, length)) {
+                int32 priority = KrtNativeNameFilePriority(declaration,binding.unit.start);
+                if (priority > best) { chosen = declaration; best = priority; }
+                if (priority == 0 && hidden == null) { hidden = declaration; }
+            }
             declaration = declaration.next;
         }
+        if (chosen != null) { return chosen; }
         if (scope == null) { break; }
         scope = scope.left;
     }
     scope = binding.unit.native_scope;
-    KrtAstNode found = null; KrtAstNode declaration = binding.module.body;
+    KrtAstNode found = null; KrtAstNode declaration = binding.module.body; int32 best = 0;
     while (declaration != null) {
-        if (KrtNativeVisibleQualifiedName(declaration, scope, binding.source, start, length)) { return declaration; }
-        KrtAstNode imported = null; if (scope != null) { imported = scope.body; }
-        while (imported != null) {
-            if (imported.type_length == 0 && KrtDeclarationMatches(declaration, imported, binding.source, start, length)) {
-                if (found != null && found != declaration) { return null; }
-                found = declaration;
+        bool visible = KrtNativeVisibleUsingName(declaration, scope, binding.using_scope, binding.source, start, length);
+        KrtUsingScope frame = binding.using_scope;
+        while (frame != null) {
+            KrtAstNode imported = frame.imports;
+            while (imported != null) {
+                if (KrtNativeUsingMatches(declaration, imported, binding.source, start, length)) {
+                    visible = true;
+                }
+                imported = imported.next;
             }
-            imported = imported.next;
+            frame = frame.parent;
+        }
+        if (visible) {
+            int32 priority = KrtNativeNameFilePriority(declaration,binding.unit.start);
+            if (priority == 0) { if (hidden == null) { hidden = declaration; } }
+            else if (priority > best) { found = declaration; best = priority; }
+            else if (priority == best && found != null && found != declaration) { return null; }
         }
         declaration = declaration.next;
     }
     if (found != null) { return found; }
-    return null;
+    return hidden;
 }
 
 KrtAstNode KrtNativeFindGlobalExpression(KrtAstNode node, KrtNativeBinding binding) {
@@ -87,7 +87,8 @@ bool KrtNativeRegisterGlobal(KrtAstNode declaration, KrtAstNode owner, KrtAstNod
     while (previous != null) {
         if (previous.declaration == declaration) { return true; }
         if (previous.owner == owner && KrtScopeEqual(previous.declaration.native_scope, declaration.native_scope, source) &&
-            KrtSemanticSameName(source, previous.declaration.name_start, previous.declaration.name_length, declaration.name_start, declaration.name_length)) {
+            KrtSemanticSameName(source, previous.declaration.name_start, previous.declaration.name_length, declaration.name_start, declaration.name_length) &&
+            !KrtNativeAccessSeparateFiles(previous.declaration,declaration)) {
             state.output.error_start = declaration.start; return false;
         }
         previous = previous.next;
@@ -105,7 +106,12 @@ bool KrtNativeRegisterGlobal(KrtAstNode declaration, KrtAstNode owner, KrtAstNod
             state.output.error_start = declaration.type_start; return false;
         }
         declaration.native_global = state.output.global_count + 1;
-        state.output.global_count = state.output.global_count + (KrtNativeWideKind(declaration) ? 2 : 1);
+        if (KrtNativeInlineValue(declaration)) {
+            int32 offset = KrtNativeAlignStorage(state.output.global_count * 8,declaration.native_alignment);
+            if (offset < 0 || declaration.native_storage_size > 16777216 - offset) { state.output.error_start = declaration.start; return false; }
+            declaration.native_global = offset / 8 + 1;
+            state.output.global_count = (offset + declaration.native_storage_size + 7) / 8;
+        } else { state.output.global_count = state.output.global_count + (KrtNativeWideKind(declaration) ? 2 : 1); }
         if (state.output.global_count > 65536) { state.output.error_start = declaration.start; return false; }
     }
     return true;
@@ -149,7 +155,9 @@ bool KrtNativeBindGlobalInitializers(KrtAstNode module, int64 source) {
                 context.native_context = entry.owner; context.native_static = true;
                 KrtNativeBinding binding = new KrtNativeBinding();
                 binding.module = module; binding.unit = context; binding.source = source;
+                binding.using_scope = declaration.native_using_scope;
                 binding.slots = initializer.native_locals; binding.error_start = -1;
+                context.native_frame_bytes = initializer.native_frame_bytes;
                 bool valid = false;
                 if (declaration.left.kind == KrtAstKind.ArrayLiteral && declaration.native_array) {
                     valid = KrtNativeBindArrayLiteral(declaration.left, declaration, binding);
@@ -158,6 +166,7 @@ bool KrtNativeBindGlobalInitializers(KrtAstNode module, int64 source) {
                     state.output.error_start = binding.error_start >= 0 ? binding.error_start : declaration.start; return false;
                 }
                 initializer.native_locals = binding.slots;
+                initializer.native_frame_bytes = context.native_frame_bytes;
                 KrtAstNode target = KrtAstMake(KrtAstKind.Identifier, declaration.name_start, declaration.name_length);
                 if (!KrtNativeBindGlobal(target, declaration, binding)) { state.output.error_start = declaration.start; return false; }
                 KrtAstNode assignment = KrtAstMake(KrtAstKind.Assign, declaration.start, declaration.length);

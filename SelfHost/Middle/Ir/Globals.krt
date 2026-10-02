@@ -3,8 +3,9 @@ bool KrtNativeLowerGlobalAddress(KrtAstNode node, KrtNativeModule module) {
 }
 
 bool KrtNativeLowerGlobalValue(KrtAstNode node, KrtNativeModule module) {
+    if (KrtNativeInlineValue(node)) { return KrtNativeLowerGlobalAddress(node,module); }
     return KrtNativeLowerGlobalAddress(node, module) &&
-        KrtNativeEmit(module, (int32)KrtNativeOp.Load, 0, KrtNativeValueWidth(node)) >= 0;
+        KrtNativeEmit(module, (int32)KrtNativeOp.Load, 0, KrtNativeValueWidth(node)) >= 0 && KrtNativeNormalizeWide(module,node);
 }
 
 bool KrtNativeLowerFunctionAddress(KrtAstNode node, KrtNativeModule module) {
@@ -14,16 +15,10 @@ bool KrtNativeLowerFunctionAddress(KrtAstNode node, KrtNativeModule module) {
 bool KrtNativeLowerIndirectCall(KrtAstNode node, KrtAstNode ast, KrtNativeModule module, int64 source) {
     KrtAstNode signature = node.left.native_function_pointer;
     if (signature == null || !KrtNativeLowerExpression(node.left, ast, module, source)) { return false; }
-    KrtAstNode argument = node.right; int32 index = 0;
-    while (argument != null) {
-        if (!KrtNativeLowerExpression(argument, ast, module, source)) { return false; }
-        if (!signature.parameter_refs[index]) {
-            KrtAstNode expected = KrtAstMake(KrtAstKind.Type, argument.start, 0);
-            expected.native_scope = signature.native_scope; expected.native_context = signature.native_context;
-            if (!KrtNativeAnnotateType(expected, ast, source, signature.parameter_type_starts[index], signature.parameter_type_lengths[index]) ||
-                !KrtNativeConvertValue(module, argument, expected)) { return false; }
-        }
-        argument = argument.next; index = index + 1;
+    if (KrtNativeInlineValue(node)) {
+        return KrtNativeLowerAggregateFrame(node,module) && KrtNativeLowerArguments(node.right,signature,0,ast,module,source) &&
+            KrtNativeEmit(module,(int32)KrtNativeOp.IndirectCall,0,signature.parameter_count + 1) >= 0;
     }
-    return KrtNativeEmit(module, 46, 0, index) >= 0;
+    return KrtNativeLowerArguments(node.right, signature, 0, ast, module, source) &&
+        KrtNativeEmit(module,46,0,signature.parameter_count) >= 0 && KrtNativeNormalizeWide(module,node);
 }

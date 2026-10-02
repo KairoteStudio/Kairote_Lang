@@ -1,6 +1,5 @@
 """Native object boundaries preserve strong definitions and exact type identity."""
 import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,7 +15,7 @@ class NativeLinkageBoundaries(unittest.TestCase):
         self.work = Path(directory.name)
 
     def invoke(self, *args):
-        return subprocess.run([sys.executable, str(ROOT / 'SelfHost/Compile.py'), *map(str, args),
+        return subprocess.run([str(ROOT / 'SelfHost/krtc'), *map(str, args),
                                '--compiler', str(COMPILER), '--linker', str(LINKER)],
                               cwd=self.work, capture_output=True, text=True, timeout=60)
 
@@ -35,14 +34,14 @@ class NativeLinkageBoundaries(unittest.TestCase):
         run = subprocess.run([output], capture_output=True, timeout=10)
         self.assertEqual(run.returncode, expected, run.stdout + run.stderr)
 
-    def rejected(self, source):
+    def rejected(self, source, code="E_LOWER"):
         path = self.work / 'rejected.krt'
         path.write_text(source)
         output = self.work / 'rejected.kro'
         output.write_bytes(b'previous object')
         result = self.invoke(path, '-c', '-o', output)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn('E_LOWER', result.stderr)
+        self.assertIn(code, result.stderr)
         self.assertEqual(output.read_bytes(), b'previous object')
 
     def test_duplicate_native_strong_definitions_reject_both_orders(self):
@@ -115,7 +114,7 @@ class NativeLinkageBoundaries(unittest.TestCase):
         )
         for declaration in declarations:
             with self.subTest(declaration=declaration):
-                self.rejected('class Box{} class Generic<T>{} enum Value{First=0} ' + declaration + ' int32 main(){return 0;}')
+                self.rejected('class Box{} class Generic<T>{} enum Value{First=0} ' + declaration + ' int32 main(){return 0;}', 'E_ABI_UNSUPPORTED')
 
     def test_named_exception_guards_apply_after_generic_specialization(self):
         for source in (
@@ -137,7 +136,7 @@ class NativeLinkageBoundaries(unittest.TestCase):
             'extern void consume(Base value);',
         ):
             with self.subTest(declaration=declaration):
-                self.rejected(prefix + declaration + 'int32 main(){return 0;}')
+                self.rejected(prefix + declaration + 'int32 main(){return 0;}', 'E_ABI_UNSUPPORTED')
 
     def test_interface_exception_guards_remain_active_in_libraries(self):
         for source in (

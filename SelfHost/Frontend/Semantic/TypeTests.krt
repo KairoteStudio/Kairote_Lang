@@ -1,0 +1,33 @@
+bool KrtNativeBindTypeTest(KrtAstNode node, KrtNativeBinding binding) {
+    if (!KrtNativeBindExpression(node.left,binding)) { return false; }
+    KrtAstNode target = KrtAstMake(KrtAstKind.Type,node.type_start,node.type_length);
+    target.native_scope = binding.unit.native_scope; target.native_context = binding.unit.native_context;
+    target.native_using_scope = binding.using_scope;
+    if (!KrtNativeAnnotateType(target,binding.module,binding.source,node.type_start,node.type_length)) { return KrtNativeBindingError(binding,node); }
+    if (!KrtNativeCheckValueAccess(target,binding)) { return false; }
+    if (KrtNativePointerValue(node.left) || KrtNativePointerValue(target)) {
+        if (target.native_nullable) { binding.module.native_error = 5; return KrtNativeBindingError(binding,target); }
+        if (!KrtNativePointerValue(target) || !KrtNativePointerEqualIgnoringOuter(node.left,target)) {
+            return KrtNativeBindingError(binding,target);
+        }
+    }
+    node.native_target = target; node.local_slot = binding.slots; binding.slots = binding.slots + 1;
+    if (node.name_length > 0) {
+        KrtAstNode variable = KrtAstMake(KrtAstKind.Variable,node.start,node.length);
+        KrtNativeCopyType(variable,target); variable.name_start = node.name_start; variable.name_length = node.name_length;
+        variable.local_slot = binding.slots; binding.slots = binding.slots + 1; node.right = variable;
+    }
+    node.native_width = 1; node.native_bits = 8; node.native_boolean = true; node.native_unsigned = true;
+    return true;
+}
+
+bool KrtNativeBindTruePatterns(KrtAstNode expression, KrtNativeBinding binding) {
+    if (expression == null) { return true; }
+    if (expression.kind == KrtAstKind.TypeTest && expression.right != null) {
+        return KrtNativeAddName(binding,expression.right,expression.right.local_slot,false);
+    }
+    if (expression.kind == KrtAstKind.Binary && expression.op == 104) {
+        return KrtNativeBindTruePatterns(expression.left,binding) && KrtNativeBindTruePatterns(expression.right,binding);
+    }
+    return true;
+}

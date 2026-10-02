@@ -29,7 +29,7 @@ bool KrtKroNativeGlobalsStart(KrtKroObject output, ref int32 pc, int32 slots) {
 }
 
 bool KrtKroNativeIndirectCall(KrtKroObject output, ref int32 pc, int32 arity, int32 scratch) {
-    if (arity < 0 || arity > 32) { return false; }
+    if (arity < 0 || arity > 129) { return false; }
     int32 argument = arity - 1;
     while (argument >= 6) {
         if (!KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeFrameStore(output, ref pc, scratch + argument - 6)) { return false; }
@@ -39,8 +39,8 @@ bool KrtKroNativeIndirectCall(KrtKroObject output, ref int32 pc, int32 arity, in
         if (!KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeMoveArg(output, ref pc, argument)) { return false; }
         argument = argument - 1;
     }
-    if (!KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeFrameStore(output, ref pc, scratch + 27) ||
-        !KrtKroNativeCode(output, ref pc, 0xe08948, 3) || !KrtKroNativeFrameStore(output, ref pc, scratch + 26) ||
+    if (!KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeFrameStore(output, ref pc, scratch + 124) ||
+        !KrtKroNativeCode(output, ref pc, 0xe08948, 3) || !KrtKroNativeFrameStore(output, ref pc, scratch + 123) ||
         !KrtKroNativeCode(output, ref pc, 0xf0e48348, 4)) { return false; }
     int32 stacked = arity > 6 ? arity - 6 : 0;
     if ((stacked & 1) != 0 && !KrtKroNativeCode(output, ref pc, 0x08ec8348, 4)) { return false; }
@@ -50,8 +50,8 @@ bool KrtKroNativeIndirectCall(KrtKroObject output, ref int32 pc, int32 arity, in
         argument = argument - 1;
     }
     // Load the saved pointer without changing the already aligned argument stack.
-    if (!KrtKroNativeCode(output, ref pc, 0x858b48, 3) || !KrtKroNativeU32(output, ref pc, -8 * (scratch + 28)) ||
+    if (!KrtKroNativeCode(output, ref pc, 0x858b48, 3) || !KrtKroNativeU32(output, ref pc, -8 * (scratch + 125)) ||
         !KrtKroNativeCode(output, ref pc, 0xd0ff, 2) ||
-        !KrtKroNativeCode(output, ref pc, 0xa58b48, 3) || !KrtKroNativeU32(output, ref pc, -8 * (scratch + 27))) { return false; }
+        !KrtKroNativeCode(output, ref pc, 0xa58b48, 3) || !KrtKroNativeU32(output, ref pc, -8 * (scratch + 124))) { return false; }
     return KrtKroNativeByte(output, ref pc, 80);
 }

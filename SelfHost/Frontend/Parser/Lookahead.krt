@@ -1,0 +1,166 @@
+// A probe owns its lexer and token. Failed probes never change the input parser.
+KrtParser KrtParserFork(KrtParser parser) {
+    KrtParser probe = new KrtParser(); probe.lexer = new KrtLexer(); probe.token = new KrtToken();
+    probe.lexer.source = parser.lexer.source; probe.lexer.length = parser.lexer.length;
+    probe.native_scope = parser.native_scope; probe.current_using_scope = parser.current_using_scope;
+    KrtParserCommit(probe, parser); return probe;
+}
+
+void KrtParserCommit(KrtParser parser, KrtParser probe) {
+    parser.lexer.position = probe.lexer.position; parser.lexer.line = probe.lexer.line; parser.lexer.column = probe.lexer.column;
+    parser.lexer.token_kind = probe.lexer.token_kind; parser.lexer.token_start = probe.lexer.token_start; parser.lexer.token_length = probe.lexer.token_length;
+    parser.token.kind = probe.token.kind; parser.token.category = probe.token.category;
+    parser.token.start = probe.token.start; parser.token.length = probe.token.length;
+    parser.token.line = probe.token.line; parser.token.column = probe.token.column; parser.token.error = probe.token.error;
+}
+
+// Generic closers are consumed as individual > characters in the type grammar.
+void KrtParserTypeCloser(KrtParser parser) {
+    if (parser.token.kind != KrtTokenKind.Rshift) { return; }
+    parser.token.kind = KrtTokenKind.Greater; parser.token.category = KrtTokenCategory.Punctuation;
+    parser.token.length = 1; parser.lexer.position = parser.token.start + 1;
+    parser.lexer.line = parser.token.line; parser.lexer.column = parser.token.column + 1;
+}
+
+bool KrtParserTypeWord(KrtParser parser) {
+    return parser.token.kind == KrtTokenKind.Identifier || parser.token.kind == KrtTokenKind.Underscore ||
+        KrtParserIsBuiltinType(parser) || KrtParserIsWord(parser, "var") || KrtParserIsWord(parser, "let") || KrtParserIsWord(parser, "fn");
+}
+
+KrtAstNode KrtParserParseTypeArguments(KrtParser parser) {
+    if (!KrtParserTokenText(parser, 60)) { return null; }
+    int64 start = parser.token.start; KrtLexerNext(parser.lexer, parser.token);
+    KrtAstNode arguments = KrtAstMake(KrtAstKind.Type, start, 0); KrtAstNode tail = null;
+    while (parser.token.kind != KrtTokenKind.Eof) {
+        KrtAstNode argument = KrtParserParseType(parser);
+        if (argument == null) { return null; }
+        if (arguments.left == null) { arguments.left = argument; } else { tail.next = argument; }
+        tail = argument; arguments.child_count = arguments.child_count + 1;
+        if (!KrtParserTokenText(parser, 44)) { break; }
+        KrtLexerNext(parser.lexer, parser.token);
+    }
+    KrtParserTypeCloser(parser);
+    if (!KrtParserExpect(parser, KrtTokenKind.Greater)) { return null; }
+    arguments.length = parser.token.start - start; arguments.type_start = start; arguments.type_length = arguments.length;
+    return arguments;
+}
+
+KrtAstNode KrtParserAppendTypeSuffix(KrtAstNode type, KrtAstNode tail, int32 operation, int64 start, int64 length) {
+    KrtAstNode suffix = KrtAstMake(KrtAstKind.Type, start, length); suffix.op = operation;
+    if (tail == null) { type.syntax_suffixes = suffix; } else { tail.next = suffix; }
+    return suffix;
+}
+
+KrtAstNode KrtParserParseType(KrtParser parser) {
+    if (parser.type_depth >= 64 || !KrtParserTypeWord(parser)) { KrtParserRecordExpected(parser, KrtTokenKind.Identifier, "expected type"); return null; }
+    parser.type_depth = parser.type_depth + 1;
+    int64 start = parser.token.start;
+    KrtAstNode type = KrtAstMake(KrtAstKind.Type, start, parser.token.length);
+    type.name_start = start; type.name_length = parser.token.length; type.type_start = start;
+    if (KrtParserIsWord(parser, "fn")) {
+        type.left = KrtParserParseFunctionType(parser);
+        if (type.left == null) { parser.type_depth = parser.type_depth - 1; return null; }
+        type.op = 1;
+    } else {
+        KrtLexerNext(parser.lexer, parser.token);
+        KrtAstNode component = type;
+        if (KrtParserTokenText(parser, 60)) { component.left = KrtParserParseTypeArguments(parser); if (component.left == null) { parser.type_depth = parser.type_depth - 1; return null; } }
+        KrtAstNode tail = null;
+        while (KrtParserTokenText(parser, 46) || parser.token.kind == KrtTokenKind.DoubleColon) {
+            KrtLexerNext(parser.lexer, parser.token);
+            if (!KrtParserTypeWord(parser)) { KrtParserRecordExpected(parser, KrtTokenKind.Identifier, "expected qualified type component"); parser.type_depth = parser.type_depth - 1; return null; }
+            component = KrtAstMake(KrtAstKind.Type, parser.token.start, parser.token.length);
+            component.name_start = parser.token.start; component.name_length = parser.token.length;
+            if (type.right == null) { type.right = component; } else { tail.next = component; } tail = component;
+            KrtLexerNext(parser.lexer, parser.token);
+            if (KrtParserTokenText(parser, 60)) { component.left = KrtParserParseTypeArguments(parser); if (component.left == null) { parser.type_depth = parser.type_depth - 1; return null; } }
+        }
+    }
+    KrtAstNode suffix_tail = null;
+    while (true) {
+        if (KrtParserTokenText(parser, 42)) {
+            if(type.syntax_pointer_depth>=64){KrtParserRecordError(parser);parser.type_depth=parser.type_depth-1;return null;}
+            int64 suffix_start = parser.token.start; int64 suffix_length = parser.token.length;
+            type.syntax_pointee_nullable=(type.syntax_pointee_nullable<<1)|(type.syntax_nullable?1:0);type.syntax_nullable=false;
+            type.syntax_pointer_depth = type.syntax_pointer_depth + 1; KrtLexerNext(parser.lexer, parser.token);
+            suffix_tail = KrtParserAppendTypeSuffix(type, suffix_tail, 42, suffix_start, suffix_length);
+        } else if(KrtParserTokenText(parser,63)&&!type.syntax_nullable){
+            int64 suffix_start = parser.token.start; int64 suffix_length = parser.token.length;
+            type.syntax_nullable=true;KrtLexerNext(parser.lexer,parser.token);
+            suffix_tail = KrtParserAppendTypeSuffix(type, suffix_tail, 63, suffix_start, suffix_length);
+        }
+        else if (KrtParserTokenText(parser, 91)) {
+            KrtParser suffix_probe = KrtParserFork(parser); KrtLexerNext(suffix_probe.lexer, suffix_probe.token);
+            if (!KrtParserTokenText(suffix_probe, 93)) { break; }
+            int64 suffix_start = parser.token.start;
+            int64 suffix_length = suffix_probe.token.start + suffix_probe.token.length - suffix_start;
+            KrtLexerNext(parser.lexer, parser.token);
+            if (!KrtParserExpect(parser, KrtTokenKind.RightBracket)) { parser.type_depth = parser.type_depth - 1; return null; }
+            type.syntax_array_rank = type.syntax_array_rank + 1; type.syntax_nullable = false;
+            suffix_tail = KrtParserAppendTypeSuffix(type, suffix_tail, 91, suffix_start, suffix_length);
+        } else { break; }
+    }
+    type.length = KrtParserTypeSpanLength(parser, start, parser.token.start - start); type.type_length = type.length;
+    parser.type_depth = parser.type_depth - 1; parser.last_type = type; return type;
+}
+
+KrtAstNode KrtParserLocalTypeAhead(KrtParser parser) {
+    KrtParser probe = KrtParserFork(parser);
+    KrtAstNode type = KrtParserParseType(probe);
+    if (type == null || probe.errors != 0 || probe.token.kind != KrtTokenKind.Identifier) { return null; }
+    KrtLexerNext(probe.lexer, probe.token);
+    if (probe.token.kind != KrtTokenKind.Assign && probe.token.kind != KrtTokenKind.Semicolon && probe.token.kind != KrtTokenKind.Comma && probe.token.kind != KrtTokenKind.LeftBracket) { return null; }
+    return type;
+}
+
+KrtAstNode KrtParserCastTypeAhead(KrtParser parser) {
+    if (!KrtParserTokenText(parser, 40)) { return null; }
+    KrtParser probe = KrtParserFork(parser); KrtLexerNext(probe.lexer, probe.token);
+    bool builtin = KrtParserIsBuiltinType(probe);
+    KrtAstNode type = KrtParserParseType(probe);
+    if (type == null || probe.errors != 0 || !KrtParserTokenText(probe, 41)) { return null; }
+    KrtLexerNext(probe.lexer, probe.token);
+    // Plain names before +/-/*/& remain grouped expressions; structural type
+    // suffixes and builtin type tokens resolve the cast ambiguity in syntax.
+    bool structural = type.left != null || type.right != null || type.syntax_pointer_depth != 0 || type.syntax_array_rank != 0;
+    if (!builtin && !structural && (KrtParserTokenText(probe, 43) || KrtParserTokenText(probe, 45) || KrtParserTokenText(probe, 42) || KrtParserTokenText(probe, 38))) { return null; }
+    bool operand_start = probe.token.category == KrtTokenCategory.Integer || probe.token.category == KrtTokenCategory.Floating ||
+        probe.token.category == KrtTokenCategory.Character || probe.token.category == KrtTokenCategory.String ||
+        probe.token.kind == KrtTokenKind.Identifier || probe.token.kind==KrtTokenKind.This || probe.token.kind==KrtTokenKind.Base || probe.token.kind==KrtTokenKind.Console ||
+        probe.token.kind==KrtTokenKind.Stackalloc || probe.token.kind==KrtTokenKind.Await || probe.token.kind==KrtTokenKind.Increment || probe.token.kind==KrtTokenKind.Decrement || KrtParserIsWord(probe, "true") || KrtParserIsWord(probe, "false") || KrtParserIsWord(probe, "null") ||
+        KrtParserIsWord(probe, "new") || KrtParserIsWord(probe, "default") || KrtParserIsWord(probe, "sizeof") ||
+        KrtParserTokenText(probe, 40) || KrtParserTokenText(probe, 43) || KrtParserTokenText(probe, 45) || KrtParserTokenText(probe, 33) ||
+        KrtParserTokenText(probe, 126) || KrtParserTokenText(probe, 42) || KrtParserTokenText(probe, 38);
+    if (!operand_start || (!builtin && !structural && KrtParserTokenText(probe, 40))) { return null; }
+    KrtParserCommit(parser, probe); return type;
+}
+
+bool KrtParserTypeDeclarationAhead(KrtParser parser) {
+    KrtParser probe = KrtParserFork(parser);
+    while (KrtParserIsWord(probe, "public") || KrtParserIsWord(probe, "private") || KrtParserIsWord(probe, "protected") || KrtParserIsWord(probe, "internal") || KrtParserIsWord(probe, "static") || KrtParserIsWord(probe, "abstract") || KrtParserIsWord(probe, "partial")) { KrtLexerNext(probe.lexer, probe.token); }
+    return KrtParserIsWord(probe, "class") || KrtParserIsWord(probe, "struct") || KrtParserIsWord(probe, "interface") || KrtParserIsWord(probe, "enum");
+}
+
+void KrtParserAppendParameterType(KrtAstNode signature, KrtAstNode type) {
+    if (signature.syntax_parameter_types == null) { signature.syntax_parameter_types = type; }
+    else { KrtAstNode tail = signature.syntax_parameter_types; while (tail.next != null) { tail = tail.next; } tail.next = type; }
+}
+
+bool KrtParserFunctionDeclarationAhead(KrtParser parser){
+    KrtParser probe=KrtParserFork(parser);
+    while(KrtParserModifierFlag(probe)!=0){KrtLexerNext(probe.lexer,probe.token);}
+    if(KrtParserFunctionKeyword(probe)){
+        KrtLexerNext(probe.lexer,probe.token);
+    }else{if(KrtParserParseType(probe)==null){return false;}}
+    if(probe.errors!=0||probe.token.kind!=KrtTokenKind.Identifier){return false;}
+    KrtLexerNext(probe.lexer,probe.token);KrtParserTypeParameters(probe);
+    return probe.errors==0&&KrtParserTokenText(probe,40);
+}
+
+// fn followed by a name declares a function; fn(...) begins a function type.
+bool KrtParserFunctionKeyword(KrtParser parser){
+    if(KrtParserIsWord(parser,"function")||KrtParserIsWord(parser,"func")){return true;}
+    if(!KrtParserIsWord(parser,"fn")){return false;}
+    KrtParser probe=KrtParserFork(parser);KrtLexerNext(probe.lexer,probe.token);
+    return probe.token.kind==KrtTokenKind.Identifier;
+}

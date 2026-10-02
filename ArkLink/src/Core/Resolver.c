@@ -46,7 +46,7 @@ static int symbol_table_add(SymbolTable* table, const ArkResolverSymbol* sym) {
                 /* Native ABI definitions are strong: silently selecting one
                  * makes independently compiled calls depend on link order.
                  * Keep the legacy Re standard-library duplicate policy below. */
-                if (strncmp(sym->name, "_KRT1$", 6) == 0 && table->symbols[i].binding == ARK_BIND_GLOBAL &&
+                if ((strncmp(sym->name, "_KRT1$", 6) == 0 || strncmp(sym->name, "_KRT2$", 6) == 0) && table->symbols[i].binding == ARK_BIND_GLOBAL &&
                     sym->binding == ARK_BIND_GLOBAL) {
                     return 0;
                 }

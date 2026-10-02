@@ -1,0 +1,77 @@
+// Keep the argument sibling chain in source evaluation order. Candidate
+// matching only changes the formal index attached to each actual expression.
+bool KrtNativeHasNamedArguments(KrtAstNode arguments) {
+    while (arguments != null) {
+        if (arguments.syntax_argument_name_length > 0) { return true; }
+        arguments = arguments.next;
+    }
+    return false;
+}
+
+KrtAstNode KrtNativeMapArguments(KrtAstNode arguments, KrtAstNode target, int32 extra, int64 source) {
+    int32 position = extra; KrtAstNode argument = arguments;
+    while (argument != null) {
+        int32 index = position;
+        if (argument.syntax_argument_name_length > 0) {
+            index = -1;
+            if (target.parameter_starts != null && target.parameter_lengths != null) {
+                int32 formal = extra;
+                while (formal < target.parameter_count) {
+                    if (KrtSemanticSameName(source, argument.syntax_argument_name_start, argument.syntax_argument_name_length,
+                        target.parameter_starts[formal], target.parameter_lengths[formal])) { index = formal; break; }
+                    formal = formal + 1;
+                }
+            }
+        }
+        if (index < extra || index >= target.parameter_count) { return argument; }
+        KrtAstNode previous = arguments;
+        while (previous != argument) {
+            if (previous.native_argument_index == index) { return argument; }
+            previous = previous.next;
+        }
+        argument.native_argument_index = index;
+        position = position + 1; argument = argument.next;
+    }
+    return null;
+}
+
+bool KrtNativeArgumentNameError(KrtNativeBinding binding, KrtAstNode argument) {
+    binding.module.native_error = 9;
+    if (binding.error_start < 0) {
+        binding.error_start = argument.start;
+        if (argument.syntax_argument_name_length > 0) { binding.error_start = argument.syntax_argument_name_start; }
+    }
+    return false;
+}
+
+bool KrtNativeRejectNamedArguments(KrtAstNode arguments, KrtNativeBinding binding) {
+    while (arguments != null) {
+        if (arguments.syntax_argument_name_length > 0) { return KrtNativeArgumentNameError(binding, arguments); }
+        arguments = arguments.next;
+    }
+    return true;
+}
+
+bool KrtNativeCommitArguments(KrtAstNode arguments, KrtAstNode target, int32 extra, KrtNativeBinding binding) {
+    KrtAstNode invalid = KrtNativeMapArguments(arguments, target, extra, binding.source);
+    if (invalid != null) { return KrtNativeArgumentNameError(binding, invalid); }
+    KrtAstNode argument = arguments;
+    while (argument != null) {
+        int32 index = argument.native_argument_index;
+        KrtAstNode expected = KrtAstMake(KrtAstKind.Type,argument.start,0);
+        expected.native_scope = target.native_scope; expected.native_context = target.native_context; expected.native_using_scope = target.native_using_scope;
+        if (!KrtNativeAnnotateType(expected,binding.module,binding.source,target.parameter_type_starts[index],target.parameter_type_lengths[index])) { return KrtNativeBindingError(binding,argument); }
+        if (KrtNativeInlineValue(expected) && !target.parameter_refs[index]) {
+            argument.native_argument_frame_offset = KrtNativeReserveFrame(binding,expected);
+            if (argument.native_argument_frame_offset < 0) { return KrtNativeBindingError(binding,argument); }
+        }
+        argument = argument.next;
+    }
+    if (KrtNativeHasNamedArguments(arguments)) {
+        while (arguments != null) {
+            arguments.native_argument_slot = binding.slots; binding.slots = binding.slots + 1;
+            arguments = arguments.next;
+        }
+    }
+    return true;
+}

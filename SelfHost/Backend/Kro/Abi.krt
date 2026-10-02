@@ -1,0 +1,20 @@
+// ABI2 metadata is a normal local read-only KRO object symbol.
+bool KrtKroAbiRecord(KrtAbiBytes manifest,int32 symbol,bool defined,KrtAbiSignature signature){
+    if(!signature.supported||!signature.contract.ok||!signature.nominal.ok){return false;}
+    KrtAbiWord(manifest,symbol);KrtAbiWord(manifest,defined?1:0);
+    KrtAbiWord(manifest,signature.nominal.count);KrtAbiWord(manifest,signature.contract.count);
+    KrtAbiAppend(manifest,signature.nominal);KrtAbiAppend(manifest,signature.contract);return manifest.ok;
+}
+bool KrtKroAbiFinish(KrtKroObject output,KrtAbiBytes manifest,int32 count,ref int32 name){
+    if(count==0){return true;}if(!manifest.ok||output.rodata_size>16777216-manifest.count){return false;}
+    KrtKroLibraryWord(manifest.data,8,count);KrtKroLibraryWord(manifest.data,12,manifest.count);
+    int32 offset=output.rodata_size;byte[] rodata=new byte[offset+manifest.count];int32 index=0;
+    while(index<offset){rodata[index]=output.rodata_bytes[index];index=index+1;}
+    index=0;while(index<manifest.count){rodata[offset+index]=manifest.data[index];index=index+1;}
+    output.rodata_bytes=rodata;output.rodata_size=offset+manifest.count;
+    int32 symbol=output.symbol_count;KrtKroLibrarySymbol(output,symbol,name,offset,manifest.count,2);
+    KrtKroLibraryWord(output.symbol_bytes,symbol*32+16,0);
+    string marker="_KRT_ABI2_MANIFEST";
+    unsafe(using krt.mem;){byte* text=(byte*)(int64)marker;index=0;while(text[index]!=0){output.string_bytes[name]=text[index];name=name+1;index=index+1;}}
+    output.string_bytes[name]=0;name=name+1;output.symbol_count=symbol+1;return true;
+}

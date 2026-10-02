@@ -279,8 +279,19 @@ bool semantic_analyzer_analyze_expression(SemanticAnalyzer* analyzer, ASTNode* e
         expr->resolved_type = (KrtSourceType){.token = semantic_analyzer_infer_expression_type(analyzer, expr)};
     }
     switch (expr->type) {
+    case AST_THIS: {
+        const char* owner = semantic_analyzer_get_current_class_context(analyzer);
+        if (owner) {
+            expr->resolved_type = (KrtSourceType){.token = TOKEN_IDENTIFIER, .type_name = (char*)owner};
+        }
+        break;
+    }
     case AST_NEW_EXPRESSION:
         expr->resolved_type = (KrtSourceType){.token = TOKEN_IDENTIFIER, .type_name = expr->data.new_expr.class_name};
+        break;
+    case AST_NEW_ARRAY_EXPRESSION:
+        expr->resolved_type = (KrtSourceType){.token = expr->data.new_array_expr.type_token,
+                                             .type_name = expr->data.new_array_expr.element_type};
         break;
     case AST_NUMBER:
         if (expr->declared_type.token) {
@@ -391,8 +402,22 @@ bool semantic_analyzer_analyze_expression(SemanticAnalyzer* analyzer, ASTNode* e
             SymbolEntry* array = symbol_table_lookup_scope_chain(analyzer->symbol_table,
                                                                  expr->data.array_access.array->data.identifier_name);
             if (array && array->is_array) {
-                expr->resolved_type = (KrtSourceType){.token = array->value_type};
+                expr->resolved_type = array->source_type;
+                expr->resolved_type.token = array->value_type;
             }
+        }
+        if (expr->data.array_access.array->type == AST_MEMBER_ACCESS &&
+            expr->data.array_access.array->data.member_access.resolved_is_array) {
+            expr->resolved_type = expr->data.array_access.array->resolved_type;
+        }
+        if (expr->data.array_access.array->type == AST_NEW_ARRAY_EXPRESSION) {
+            expr->resolved_type = expr->data.array_access.array->resolved_type;
+        }
+        if (expr->data.array_access.array->resolved_type.token == TOKEN_TYPE_STRING &&
+            semantic_array_element_type(analyzer, expr->data.array_access.array) == TOKEN_EOF &&
+            !(expr->data.array_access.array->type == AST_MEMBER_ACCESS &&
+              expr->data.array_access.array->data.member_access.resolved_is_array)) {
+            expr->resolved_type = (KrtSourceType){.token = TOKEN_CHAR};
         }
         if (KrtSourceIsPointer(expr->data.array_access.array->resolved_type)) {
             return analyze_pointer_index(analyzer, expr, expr->data.array_access.array, expr->data.array_access.index,

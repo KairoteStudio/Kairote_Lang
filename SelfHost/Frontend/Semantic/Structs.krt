@@ -1,0 +1,140 @@
+// Layout discovery walks an explicit work stack. Only fields stored by value
+// create layout dependencies; pointers and reference values break cycles.
+static bool KrtNativeLayoutProbe = false;
+
+bool KrtNativeAggregateKind(KrtAstNode node) {
+    return node != null && node.native_type != null && node.native_type.value == 2 &&
+        node.native_pointer_depth == 0 && !node.native_array && !node.native_string;
+}
+
+bool KrtNativeInlineValue(KrtAstNode node) {
+    return node != null && (KrtNativeAggregateKind(node) || node.native_fixed_length > 0);
+}
+
+int32 KrtNativeAlignStorage(int32 size, int32 alignment) {
+    if (size < 0 || size > 16777216 || alignment <= 0 || alignment > 16 || (alignment & (alignment - 1)) != 0) { return -1; }
+    int32 result = (size + alignment - 1) & ~(alignment - 1);
+    return result <= 16777216 ? result : -1;
+}
+
+bool KrtNativeLayoutError(KrtAstNode module, KrtAstNode type, KrtAstNode field) {
+    type.native_layout_state = 3; module.native_error = 12;
+    int64 position = type.start; if (field != null) { position = field.type_start; }
+    KrtDiagnostic("E_LAYOUT",8,position); return false;
+}
+
+int32 KrtNativeValueStorage(KrtAstNode node) {
+    if (node.native_fixed_length > 0) { return node.native_storage_size; }
+    if (KrtNativeAggregateKind(node)) { return node.native_type.native_storage_size; }
+    if (node.native_array || node.native_pointer_depth > 0 || node.native_type != null || node.native_string || node.native_function_pointer != null) { return 8; }
+    return node.kind == KrtAstKind.Member && node.element_width > 0 ? node.element_width : node.native_width;
+}
+
+int32 KrtNativeValueAlignment(KrtAstNode node) {
+    if (node.native_fixed_length > 0) { return node.native_alignment; }
+    if (KrtNativeAggregateKind(node)) { return node.native_type.native_alignment; }
+    int32 size = KrtNativeValueStorage(node); return size > 16 ? 16 : size;
+}
+
+void KrtNativeDescribeAggregate(KrtAstNode node) {
+    if (!KrtNativeAggregateKind(node)) { return; }
+    node.native_aggregate = true; node.native_storage_size = node.native_type.native_storage_size;
+    node.native_alignment = node.native_type.native_alignment; node.native_size = node.native_storage_size;
+    node.native_base_width = node.native_storage_size; node.native_width = 8;
+}
+
+bool KrtNativeResolveLayout(KrtAstNode root, KrtAstNode module, int64 source) {
+    if (root.native_layout_state == 2) { return true; }
+    if (root.native_layout_state != 0 || root.native_generic_parameters != null) { return false; }
+    int32 capacity = 32;
+    KrtAstNode[] types = new KrtAstNode[capacity]; KrtAstNode[] fields = new KrtAstNode[capacity];
+    int32[] offsets = new int32[capacity]; int32[] alignments = new int32[capacity];
+    int32 depth = 0; types[0] = root;
+    while (depth >= 0) {
+        KrtAstNode type = types[depth];
+        if (type.native_layout_state == 0) {
+            type.native_layout_state = 1; fields[depth] = type.body;
+            offsets[depth] = type.value == 1 ? (type.native_base == null ? 8 : type.native_base.native_size) : 0;
+            alignments[depth] = type.value == 1 ? 8 : 1;
+        }
+        KrtAstNode field = fields[depth];
+        if (field == null) {
+            int32 size = KrtNativeAlignStorage(offsets[depth],alignments[depth]);
+            if (size < 0) { return KrtNativeLayoutError(module,type,null); }
+            if (size == 0) { size = 1; }
+            type.native_storage_size = size; type.native_alignment = alignments[depth]; type.native_size = size;
+            type.native_layout_state = 2; depth = depth - 1; continue;
+        }
+        field.native_owner = type; field.native_context = type;
+        if (field.native_static) { fields[depth] = field.next; continue; }
+        bool previous_probe = KrtNativeLayoutProbe; KrtNativeLayoutProbe = true;
+        bool valid = KrtNativeAnnotateType(field,module,source,field.type_start,field.type_length);
+        KrtNativeLayoutProbe = previous_probe;
+        if (!valid) { return KrtNativeLayoutError(module,type,field); }
+        KrtAstNode dependency = field.native_type;
+        bool inline_struct = KrtNativeAggregateKind(field);
+        if (field.syntax_array_size != null && field.native_type != null && field.native_type.value == 2 && field.native_pointer_depth == 0) { inline_struct = true; }
+        if (inline_struct && dependency.native_layout_state != 2) {
+            if (dependency.native_layout_state != 0 || dependency.native_generic_parameters != null) { return KrtNativeLayoutError(module,type,field); }
+            if (depth + 1 >= capacity) {
+                int32 expanded = capacity * 2; if (expanded > 16384) { return KrtNativeLayoutError(module,type,field); }
+                KrtAstNode[] next_types = new KrtAstNode[expanded]; KrtAstNode[] next_fields = new KrtAstNode[expanded];
+                int32[] next_offsets = new int32[expanded]; int32[] next_alignments = new int32[expanded]; int32 index = 0;
+                while (index < capacity) {
+                    next_types[index] = types[index]; next_fields[index] = fields[index];
+                    next_offsets[index] = offsets[index]; next_alignments[index] = alignments[index]; index = index + 1;
+                }
+                delete types; delete fields; delete offsets; delete alignments;
+                types = next_types; fields = next_fields; offsets = next_offsets; alignments = next_alignments; capacity = expanded;
+            }
+            depth = depth + 1; types[depth] = dependency; continue;
+        }
+        KrtNativeDescribeAggregate(field);
+        int32 size = KrtNativeValueStorage(field); int32 alignment = KrtNativeValueAlignment(field);
+        if (type.value == 1 && !KrtNativeInlineValue(field)) { size = 8; alignment = 8; }
+        if (field.syntax_array_size != null) {
+            KrtAstNode element = KrtAstMake(KrtAstKind.Type,field.start,0); KrtNativeCopyType(element,field);
+            int64 count = 0;
+            KrtNativeBinding constants = new KrtNativeBinding(); constants.module = module; constants.source = source; constants.error_start = -1;
+            constants.unit = KrtAstMake(KrtAstKind.Function,field.start,0); constants.unit.native_owner = type;
+            constants.unit.native_static = true; constants.unit.native_scope = field.native_scope; constants.unit.native_context = type;
+            constants.using_scope = field.native_using_scope;
+            if (!KrtNativeBindExpression(field.syntax_array_size,constants)) { return KrtNativeLayoutError(module,type,field); }
+            if (!KrtIrTryEvaluateConstant(field.syntax_array_size,ref count) || count <= 0 || count > 16777216) { return KrtNativeLayoutError(module,type,field); }
+            // The declarator is an inline array of the preceding value type.
+            size = KrtNativeValueStorage(field); alignment = KrtNativeValueAlignment(field);
+            if (size <= 0 || count > 16777216 / size) { return KrtNativeLayoutError(module,type,field); }
+            field.native_fixed_length = (int32)count; field.native_stride = size;
+            field.native_element_type = element;
+            field.native_storage_size = size * (int32)count; field.native_alignment = alignment;
+            field.native_array = true; field.native_width = 8; field.native_aggregate = false;
+            // Nullability belongs to the element copied above. Inline array
+            // storage has no nullable reference or pointer slots of its own.
+            field.native_nullable = false; field.native_pointee_nullable = 0;
+            field.native_element_unsigned = field.native_unsigned; field.native_unsigned = false;
+            field.native_element_boolean = field.native_boolean; field.native_boolean = false;
+            field.native_element_character = field.native_character; field.native_character = false;
+            field.native_element_string = field.native_string; field.native_string = false;
+            size = field.native_storage_size;
+        } else { field.native_storage_size = size; field.native_alignment = alignment; }
+        int32 offset = KrtNativeAlignStorage(offsets[depth],alignment);
+        if (offset < 0 || size <= 0 || offset > 16777216 - size) { return KrtNativeLayoutError(module,type,field); }
+        field.native_offset = offset; offsets[depth] = offset + size;
+        if (alignment > alignments[depth]) { alignments[depth] = alignment; }
+        fields[depth] = field.next;
+    }
+    delete types; delete fields; delete offsets; delete alignments; return true;
+}
+
+int32 KrtNativeReserveFrame(KrtNativeBinding binding, KrtAstNode type) {
+    int32 offset = KrtNativeAlignStorage(binding.unit.native_frame_bytes,type.native_alignment);
+    if (offset < 0 || type.native_storage_size <= 0 || offset > 16777216 - type.native_storage_size) { return -1; }
+    binding.unit.native_frame_bytes = offset + type.native_storage_size; return offset;
+}
+
+bool KrtNativeBindAggregateFrame(KrtAstNode node, KrtNativeBinding binding) {
+    if (!KrtNativeInlineValue(node)) { return true; }
+    KrtNativeDescribeAggregate(node);
+    if (node.native_frame_offset < 0) { node.native_frame_offset = KrtNativeReserveFrame(binding,node); }
+    return node.native_frame_offset >= 0 || KrtNativeBindingError(binding,node);
+}

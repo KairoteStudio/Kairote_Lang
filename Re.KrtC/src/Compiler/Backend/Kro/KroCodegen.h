@@ -6,8 +6,7 @@
 #include <stdio.h>
 
 #define KRT_KRO_MAX_LOCAL_VARS 1024
-#define KRT_KRO_MAX_TEMP_REGS 4096
-#define KRT_KRO_TEMP_INDEX_SIZE (KRT_KRO_MAX_TEMP_REGS * 2)
+#define KRT_KRO_MAX_TEMP_STORAGE 16777216
 #define KRT_KRO_MAX_ARGS 128
 #define KRT_KRO_PACKED_REG_COUNT 5
 
@@ -60,9 +59,11 @@ typedef struct {
     int func_index;
     KROLocalVar local_vars[KRT_KRO_MAX_LOCAL_VARS];
     int current_stack_offset;
-    KROTempSlot temp_slots[KRT_KRO_MAX_TEMP_REGS];
+    KROTempSlot* temp_slots;
+    int temp_slot_capacity;
     int temp_slot_count;
-    int temp_index[KRT_KRO_TEMP_INDEX_SIZE];
+    int* temp_index;
+    int temp_index_size;
     int arg_stack_offsets[KRT_KRO_MAX_ARGS];
     bool arg_address_taken[KRT_KRO_MAX_ARGS];
     KROPackedField arg_packed[KRT_KRO_MAX_ARGS];

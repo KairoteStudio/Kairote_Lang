@@ -53,18 +53,30 @@ bool KrtNativePrepareDispatch(KrtAstNode type, KrtAstNode module, int64 source) 
             method.native_dispatch_slot = method;
         }
         if (method.native_override) {
-            KrtAstNode base_type = type.native_base; KrtAstNode overridden = null;
+            KrtAstNode base_type = type.native_base; KrtAstNode overridden = null; bool inaccessible = false;
+            KrtNativeBinding access_binding = new KrtNativeBinding(); access_binding.module = module;
+            access_binding.unit = method; access_binding.source = source; access_binding.error_start = -1;
             while (base_type != null && overridden == null) {
                 KrtAstNode candidate = base_type.declarations;
                 while (candidate != null && candidate.native_owner == base_type) {
-                    if (KrtNativeMethodSignatureEqual(method, candidate, module, source, false)) { overridden = candidate; break; }
+                    if (KrtNativeMethodSignatureEqual(method, candidate, module, source, false)) {
+                        if (KrtNativeAccessAllowed(candidate,access_binding,null,true)) { overridden = candidate; break; }
+                        inaccessible = true;
+                    }
                     candidate = candidate.next;
                 }
                 base_type = base_type.native_base;
             }
             if (overridden == null) {
-                if (!KrtNativeMethodImplementsInterface(method, module, source)) { type.native_dispatch_state = 3; return false; }
+                if (!KrtNativeMethodImplementsInterface(method, module, source)) {
+                    type.native_dispatch_state = 3;
+                    if (inaccessible) { module.native_error = 10; KrtDiagnostic("E_ACCESS",8,method.start); }
+                    return false;
+                }
             } else {
+                if (!KrtNativeAccessOverrideAllowed(method,overridden)) {
+                    module.native_error = 11; KrtDiagnostic("E_MODIFIER",10,method.start); type.native_dispatch_state = 3; return false;
+                }
                 if (!overridden.native_virtual || !KrtNativeMethodSignatureEqual(method, overridden, module, source, true)) { type.native_dispatch_state = 3; return false; }
                 method.native_dispatch_slot = overridden.native_dispatch_slot;
             }
@@ -92,6 +104,11 @@ bool KrtNativePrepareDispatch(KrtAstNode type, KrtAstNode module, int64 source) 
 bool KrtNativeBindDispatchCall(KrtAstNode node, KrtNativeBinding binding) {
     KrtAstNode method = node.native_target;
     if (method == null || !method.native_virtual) { return true; }
+    // A rejected global declaration can still be reached while collecting
+    // errors from another function. Dispatch always requires an instance.
+    if (method.native_owner == null || node.left == null || node.left.kind != KrtAstKind.Member || node.left.left == null) {
+        return KrtNativeBindingError(binding, node);
+    }
     KrtAstNode receiver = node.left.left;
     bool base_call = receiver.kind == KrtAstKind.Identifier && receiver.op == 212;
     if (base_call) { return !method.native_abstract || KrtNativeBindingError(binding, node); }

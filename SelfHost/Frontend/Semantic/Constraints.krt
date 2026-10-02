@@ -1,22 +1,65 @@
 bool KrtNativeConstraintValueType(KrtAstNode type) {
+    if (type.native_fixed_length > 0) { return true; }
     if (type.native_array || type.native_string || type.native_stride > 0 || type.native_function_pointer != null) { return false; }
-    return type.native_type == null || type.native_type.value == 4;
+    return type.native_type == null || type.native_type.value == 4 || KrtNativeAggregateKind(type);
 }
 
 bool KrtNativeConstraintDefaultConstructor(KrtAstNode type, KrtAstNode module) {
-    if (KrtNativeConstraintValueType(type)) { return true; }
+    if (KrtNativeConstraintValueType(type) && !KrtNativeAggregateKind(type)) { return true; }
     if (type.native_type == null || type.native_array || type.native_string || type.native_stride > 0 ||
-        type.native_type.value != 1 || type.native_type.native_abstract) { return false; }
+        (type.native_type.value != 1 && type.native_type.value != 2) || type.native_type.native_abstract) { return false; }
     KrtAstNode method = module.left;
-    bool declared = false;
+    bool declared = false; bool default_declared = false;
     while (method != null) {
         if (method.native_owner == type.native_type && method.op == 220) {
             declared = true;
-            if (method.parameter_count == 1) { return true; }
+            if (method.parameter_count == 1 && KrtNativeAccessMode(method) == 1) { return true; }
+            if (method.parameter_count == 1) { default_declared = true; }
         }
         method = method.next;
     }
-    return !declared;
+    return !declared || (KrtNativeAggregateKind(type) && !default_declared);
+}
+
+bool KrtNativeConstraintUnmanaged(KrtAstNode argument) {
+    while (argument.native_fixed_length > 0) { argument = KrtNativeArrayElement(argument); }
+    if (argument.native_array || argument.native_string) { return false; }
+    if (argument.native_pointer_depth > 0 || argument.native_function_pointer != null) { return true; }
+    if (!KrtNativeAggregateKind(argument)) { return KrtNativeConstraintValueType(argument); }
+    int32 capacity = 32; int32 count = 1; int32 index = 0;
+    KrtAstNode[] types = new KrtAstNode[capacity]; types[0] = argument.native_type;
+    bool valid = true;
+    while (index < count && valid) {
+        KrtAstNode field = types[index].body; index = index + 1;
+        while (field != null && valid) {
+            if (!field.native_static) {
+                KrtAstNode element = field;
+                while (element.native_fixed_length > 0) { element = KrtNativeArrayElement(element); }
+                if (element.native_string || element.native_array) { valid = false; }
+                else if (element.native_pointer_depth == 0 && element.native_function_pointer == null && element.native_type != null && element.native_type.value != 4) {
+                    if (element.native_type.value != 2) { valid = false; }
+                    else {
+                        int32 seen = 0;
+                        while (seen < count && types[seen] != element.native_type) { seen = seen + 1; }
+                        if (seen == count) {
+                            if (count >= capacity) {
+                                int32 expanded = capacity * 2;
+                                if (expanded > 16384) { valid = false; }
+                                else {
+                                    KrtAstNode[] grown = new KrtAstNode[expanded]; int32 copy = 0;
+                                    while (copy < count) { grown[copy] = types[copy]; copy = copy + 1; }
+                                    delete types; types = grown; capacity = expanded;
+                                }
+                            }
+                            if (valid) { types[count] = element.native_type; count = count + 1; }
+                        }
+                    }
+                }
+            }
+            field = field.next;
+        }
+    }
+    delete types; return valid;
 }
 
 bool KrtNativeCheckConstraints(KrtAstNode declaration, KrtAstNode arguments, KrtAstNode module, int64 source) {
@@ -43,8 +86,7 @@ bool KrtNativeEvaluateConstraints(KrtAstNode declaration, KrtAstNode arguments, 
         } else if (constraint.op == 2) { valid = KrtNativeConstraintValueType(argument); }
         else if (constraint.op == 3) { valid = KrtNativeConstraintDefaultConstructor(argument, module); }
         else if (constraint.op == 4) {
-            valid = KrtNativeConstraintValueType(argument) ||
-                (argument.native_stride > 0 && !argument.native_array && !argument.native_string);
+            valid = KrtNativeConstraintUnmanaged(argument);
         } else {
             KrtAstNode expected = KrtAstMake(KrtAstKind.Type, constraint.start, constraint.length);
             expected.native_scope = declaration.native_scope; expected.native_context = context;

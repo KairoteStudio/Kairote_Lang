@@ -1,0 +1,43 @@
+// IEEE payloads remain raw bits in scalar VM slots.
+float64 KrtVmFloatValue(int64 bits, int32 width) {
+    unsafe(using krt.mem;) {
+        if (width == 4) { int32 narrow = (int32)bits; return (float64)*(float32*)&narrow; }
+        return *(float64*)&bits;
+    }
+}
+int64 KrtVmFloatBits(float64 value, int32 width) {
+    unsafe(using krt.mem;) {
+        if (width == 4) { float32 narrow = (float32)value; return (int64)*(uint32*)&narrow; }
+        return *(int64*)&value;
+    }
+}
+int64 KrtVmFloatConvert(int64 bits, int32 origin, int32 target) {
+    if (origin == target) { return bits; }
+    float64 number = 0.0;
+    if (origin == 4 || origin == 8) { number = KrtVmFloatValue(bits,origin); }
+    else if (origin == -8) { number = (float64)(uint64)bits; }
+    else { number = (float64)bits; }
+    if (target == 4 || target == 8) { return KrtVmFloatBits(number,target); }
+    if (target == -8) { return (int64)(uint64)number; }
+    return (int64)number;
+}
+int64 KrtVmFloatBinary(int64 left, int64 right, int32 operation, int32 width) {
+    float64 a = KrtVmFloatValue(left,width); float64 b = KrtVmFloatValue(right,width);
+    if (width == 4) {
+        float32 x = (float32)a; float32 y = (float32)b; float32 result = 0.0;
+        if (operation == 43) { result = x + y; } else if (operation == 45) { result = x - y; }
+        else if (operation == 42) { result = x * y; } else if (operation == 47) { result = x / y; } else { result = x % y; }
+        return KrtVmFloatBits((float64)result,width);
+    }
+    float64 result = 0.0;
+    if (operation == 43) { result = a + b; } else if (operation == 45) { result = a - b; }
+    else if (operation == 42) { result = a * b; } else if (operation == 47) { result = a / b; } else { result = a % b; }
+    return KrtVmFloatBits(result,width);
+}
+int64 KrtVmFloatCompare(int64 left, int64 right, int32 operation, int32 width) {
+    float64 a = KrtVmFloatValue(left,width); float64 b = KrtVmFloatValue(right,width); bool result = false;
+    if (operation == 61) { result = a == b; } else if (operation == 101) { result = a != b; }
+    else if (operation == 60) { result = a < b; } else if (operation == 62) { result = a > b; }
+    else if (operation == 102) { result = a <= b; } else if (operation == 103) { result = a >= b; }
+    return result ? 1 : 0;
+}

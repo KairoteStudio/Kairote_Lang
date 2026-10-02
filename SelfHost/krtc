@@ -1,6 +1,21 @@
-#!/usr/bin/env python3
-"""Executable entry point for the self-hosted compiler and project driver."""
-import sys
-from Compile import main
-
-sys.exit(main())
+#!/bin/sh
+# Resolve the verified native compiler; all options are parsed by Kairote.
+KAIROTE_ROOT=$(CDPATH= cd -- "${0%/*}/.." && pwd) || exit 1
+export KAIROTE_ROOT
+krt_compiler=${SELFHOST_COMPILER:-"$KAIROTE_ROOT/build/selfhost/stage2/program"}
+krt_expect_compiler=false
+for krt_argument in "$@"; do
+    if "$krt_expect_compiler"; then
+        krt_compiler=$krt_argument
+        krt_expect_compiler=false
+    elif [ "$krt_argument" = -- ]; then
+        break
+    elif [ "$krt_argument" = --compiler ]; then
+        krt_expect_compiler=true
+    fi
+done
+if [ ! -x "$krt_compiler" ]; then
+    printf '%s\n' "E_COMPILER: native compiler missing or not executable: $krt_compiler" >&2
+    exit 1
+fi
+exec "$krt_compiler" "$@"

@@ -1,6 +1,15 @@
 /* White-box CFG cases that well-formed source programs cannot construct. */
 #include <assert.h>
 #include <stdlib.h>
+#include "../../Re.KrtC/src/Core/Utils/KrtCommon.h"
+/* The isolated allocator harness uses ASan directly rather than the compiler
+ * process memory tracker, whose global configuration is not initialized. */
+#undef KRT_MALLOC
+#undef KRT_CALLOC
+#undef KRT_FREE
+#define KRT_MALLOC malloc
+#define KRT_CALLOC calloc
+#define KRT_FREE free
 #include "../../Re.KrtC/src/Compiler/Backend/Kro/KroCodegen.c"
 
 typedef struct {
@@ -89,8 +98,9 @@ static void test_diamond(RegisterFixture* fixture, bool entry_definition, bool s
 }
 
 static bool test_eligible(RegisterFixture* fixture) {
+    assert(prepare_temporary_storage(fixture->context, &fixture->function));
     record_function_temporaries(fixture->context, &fixture->function);
-    bool eligible[KRT_KRO_MAX_TEMP_REGS];
+    bool eligible[fixture->context->temp_slot_count ? fixture->context->temp_slot_count : 1];
     if (!plan_cross_block_temporaries(fixture->context, &fixture->function, eligible)) {
         return false;
     }
@@ -104,35 +114,42 @@ int main(void) {
     assert(test_eligible(&fixture));
     allocate_temporary_registers(fixture.context, &fixture.function);
     assert(find_temp_location(fixture.context, 1)->reg_low >= 0);
+    release_temporary_storage(fixture.context);
     free(fixture.context);
 
     test_diamond(&fixture, false, false, false);
     assert(!test_eligible(&fixture)); /* The right predecessor bypasses the definition. */
     allocate_temporary_registers(fixture.context, &fixture.function);
     assert(find_temp_location(fixture.context, 1)->reg_low < 0);
+    release_temporary_storage(fixture.context);
     free(fixture.context);
 
     test_diamond(&fixture, false, true, false);
     assert(!test_eligible(&fixture)); /* Multiple definitions are not SSA. */
+    release_temporary_storage(fixture.context);
     free(fixture.context);
 
     test_diamond(&fixture, true, false, true);
     assert(!test_eligible(&fixture)); /* A use precedes the sole definition. */
+    release_temporary_storage(fixture.context);
     free(fixture.context);
 
     test_diamond(&fixture, true, false, false);
     fixture.blocks[0].first_inst->opcode = KRT_IR_PHI;
     assert(!test_eligible(&fixture));
+    release_temporary_storage(fixture.context);
     free(fixture.context);
 
     test_diamond(&fixture, true, false, false);
     fixture.successors[1][0] = &fixture.blocks[0];
     assert(!test_eligible(&fixture)); /* Explicit backwards edges require loop liveness. */
+    release_temporary_storage(fixture.context);
     free(fixture.context);
 
     test_diamond(&fixture, true, false, false);
     fixture.context->tail_site_count = 1;
     assert(!test_eligible(&fixture)); /* Rotation may bypass entry definitions. */
+    release_temporary_storage(fixture.context);
     free(fixture.context);
 
     test_diamond(&fixture, false, false, false);
@@ -140,6 +157,7 @@ int main(void) {
     fixture.blocks[2].succ_count = 0;
     fixture.context->tail_site_count = 1;
     assert(test_eligible(&fixture)); /* Every tail iteration re-executes the body definition. */
+    release_temporary_storage(fixture.context);
     free(fixture.context);
 
     test_diamond(&fixture, true, false, false);
@@ -150,6 +168,7 @@ int main(void) {
     allocate_temporary_registers(fixture.context, &fixture.function);
     assert(find_temp_location(fixture.context, 1)->reg_low >= 0);
     assert(find_temp_location(fixture.context, 1)->reg_high >= 0);
+    release_temporary_storage(fixture.context);
     free(fixture.context);
 
     test_diamond(&fixture, true, false, false);
@@ -159,6 +178,7 @@ int main(void) {
     }
     allocate_temporary_registers(fixture.context, &fixture.function);
     assert(find_temp_location(fixture.context, 1)->reg_low < 0);
+    release_temporary_storage(fixture.context);
     free(fixture.context);
     return 0;
 }

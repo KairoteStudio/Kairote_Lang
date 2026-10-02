@@ -1,137 +1,177 @@
-KrtAstNode KrtNativeFindScopedType(KrtAstNode module, int64 source, int64 start, int64 length, KrtAstNode scope) {
-    KrtAstNode context = scope;
-    while (true) {
-        KrtAstNode declaration = module.declarations;
-        while (declaration != null) {
-            if (declaration.native_generic_origin == null && KrtDeclarationMatches(declaration, context, source, start, length)) { return declaration; }
-            declaration = declaration.next;
-        }
-        if (context == null) { break; }
-        context = context.left;
-    }
-    // In Kairote, using loads a source module, whose public declarations can
-    // have a namespace different from the module's directory name.
-    KrtAstNode imported = null; if (scope != null) { imported = scope.body; }
-    while (imported != null) {
-        if (imported.type_length > 0 && KrtSemanticSameName(source, start, length, imported.type_start, imported.type_length)) {
-            return KrtNativeFindScopedType(module, source, imported.name_start, imported.name_length, null);
-        }
-        imported = imported.next;
-    }
-    if (scope != null && scope.body != null) {
-        KrtAstNode qualified = module.declarations;
-        while (qualified != null) {
-            if (qualified.native_generic_origin == null && KrtNativeVisibleQualifiedName(qualified, scope, source, start, length)) { return qualified; }
-            qualified = qualified.next;
-        }
-        KrtAstNode explicit_match = null; KrtAstNode candidate = module.declarations;
-        while (candidate != null) {
-            imported = scope.body;
-            while (imported != null) {
-                if (candidate.native_generic_origin == null && imported.type_length == 0 && KrtDeclarationMatches(candidate, imported, source, start, length)) {
-                    if (explicit_match != null && explicit_match != candidate) { return null; }
-                    explicit_match = candidate;
-                }
-                imported = imported.next;
-            }
-            candidate = candidate.next;
-        }
-        if (explicit_match != null) { return explicit_match; }
-        KrtAstNode found = null; KrtAstNode declaration = module.declarations;
-        while (declaration != null) {
-            if (declaration.native_generic_origin == null && KrtSemanticSameName(source, start, length, declaration.name_start, declaration.name_length)) {
-                if (found != null) { return null; } found = declaration;
-            }
-            declaration = declaration.next;
-        }
-        return found;
-    }
-    return null;
-}
-KrtAstNode KrtNativeExpressionTypeName(KrtAstNode node, KrtNativeBinding binding) {
-    if (node == null) { return null; }
-    if (node.native_type_arguments != null) {
-        KrtAstNode first = node;
-        while (first.kind == KrtAstKind.Member) { first = first.left; }
-        if (first.kind != KrtAstKind.Identifier || KrtNativeFindName(binding, first.start, first.length) != null) { return null; }
-        KrtAstNode descriptor = KrtAstMake(KrtAstKind.Type, first.start, 0);
-        descriptor.native_scope = binding.unit.native_scope; descriptor.native_context = binding.unit.native_context;
-        int64 type_length = node.native_type_arguments.type_start + node.native_type_arguments.type_length - first.start;
-        if (!KrtNativeAnnotateType(descriptor, binding.module, binding.source, first.start, type_length)) { return null; }
-        return descriptor.native_type;
-    }
-    if (node.kind == KrtAstKind.Identifier) {
-        if (KrtNativeFindName(binding, node.start, node.length) != null) { return null; }
-        return KrtNativeFindScopedType(binding.module, binding.source, node.start, node.length, binding.unit.native_scope);
-    }
-    if (node.kind != KrtAstKind.Member) { return null; }
-    KrtAstNode first = node;
-    while (first.kind == KrtAstKind.Member) { first = first.left; }
-    if (first.kind != KrtAstKind.Identifier || KrtNativeFindName(binding, first.start, first.length) != null) { return null; }
-    return KrtNativeFindScopedType(binding.module, binding.source, first.start, node.name_start + node.name_length - first.start, binding.unit.native_scope);
+// Using visibility follows lexical frames and the files each directive loaded.
+int32 KrtNativeNameFilePriority(KrtAstNode declaration, int64 position) {
+    if (KrtNativeAccessMode(declaration) != 2 || KrtNativeAccessOwner(declaration) != null) { return 1; }
+    KrtAstNode caller = KrtAstMake(KrtAstKind.Function,position,0);
+    return KrtNativeAccessSameFile(declaration,caller) ? 2 : 0;
 }
 
-bool KrtNativeVisibleQualifiedName(KrtAstNode declaration, KrtAstNode scope, int64 source, int64 start, int64 length) {
-    KrtAstNode context = scope;
-    while (context != null) {
-        if (KrtDeclarationMatches(declaration, context, source, start, length)) { return true; }
-        context = context.left;
-    }
-    if (KrtDeclarationMatches(declaration, null, source, start, length)) { return true; }
-    if (scope == null) { return false; }
-    int64 first_length = 0;
-    unsafe(using krt.mem;) { byte* text = (byte*)source;
-        while (first_length < length && (lexer_letter(text[start + first_length]) || lexer_digit(text[start + first_length]))) { first_length = first_length + 1; }
-    }
-    KrtAstNode imported = scope.body;
-    while (imported != null) {
-        if (imported.type_length > 0 && KrtSemanticSameName(source, start, first_length, imported.type_start, imported.type_length)) {
-            int64 suffix = first_length;
-            unsafe(using krt.mem;) { byte* text = (byte*)source;
-                while (suffix < length && KrtNameSpace(text[start + suffix])) { suffix = suffix + 1; }
-                if (suffix >= length || text[start + suffix] != 46) { imported = imported.next; continue; }
-                suffix = suffix + 1;
+bool KrtNativeImportedFile(KrtAstNode declaration, KrtAstNode imported) {
+    KrtSourceBundle bundle = KrtDriverActiveBundle;
+    if (bundle == null) { return false; }
+    KrtSourceFile file = bundle.files;
+    while (file != null) {
+        if (imported.name_start >= file.start && imported.name_start < file.start + file.length) {
+            KrtSourceDirective directive = file.directives;
+            while (directive != null) {
+                if (imported.name_start >= file.start + directive.position && imported.name_start < file.start + directive.end) {
+                    KrtDriverPath path = directive.files;
+                    while (path != null) {
+                        KrtSourceFile target = KrtSourcesFindFile(bundle, KrtDriverAbsolutePath(path.value));
+                        if (target != null && declaration.start >= target.start && declaration.start < target.start + target.length) { return true; }
+                        path = path.next;
+                    }
+                    return false;
+                }
+                directive = directive.next;
             }
-            if (KrtDeclarationMatches(declaration, imported, source, start + suffix, length - suffix)) { return true; }
+            return false;
         }
-        imported = imported.next;
+        file = file.order_next;
     }
     return false;
 }
 
+bool KrtNativeUsingMatches(KrtAstNode declaration, KrtAstNode imported, int64 source, int64 start, int64 length) {
+    if (imported.type_length > 0) { return false; }
+    if (KrtDeclarationMatches(declaration, imported, source, start, length)) { return true; }
+    return KrtSemanticSameName(source, start, length, declaration.name_start, declaration.name_length) && KrtNativeImportedFile(declaration, imported);
+}
+
+bool KrtNativeVisibleUsingName(KrtAstNode declaration, KrtAstNode scope, KrtUsingScope frame, int64 source, int64 start, int64 length) {
+    KrtAstNode context = scope;
+    while (true) {
+        if (KrtDeclarationMatches(declaration, context, source, start, length)) { return true; }
+        if (context == null) { break; } context = context.left;
+    }
+    int64 first_length = 0;
+    unsafe(using krt.mem;) { byte* text = (byte*)source;
+        while (first_length < length && (lexer_letter(text[start + first_length]) || lexer_digit(text[start + first_length]))) { first_length = first_length + 1; }
+    }
+    while (frame != null) {
+        KrtAstNode imported = frame.imports;
+        while (imported != null) {
+            if (imported.type_length > 0 && KrtSemanticSameName(source, start, first_length, imported.type_start, imported.type_length)) {
+                int64 suffix = KrtNameSkipTrivia(source, start, length, first_length);
+                unsafe(using krt.mem;) { byte* text = (byte*)source;
+                    if (suffix < length && text[start + suffix] == 46 && KrtDeclarationMatches(declaration, imported, source, start + suffix + 1, length - suffix - 1)) { return true; }
+                    if (suffix < length && text[start + suffix] == 46 && KrtSemanticSameName(source,start + suffix + 1,length - suffix - 1,declaration.name_start,declaration.name_length) && KrtNativeImportedFile(declaration,imported)) { return true; }
+                }
+            }
+            imported = imported.next;
+        }
+        frame = frame.parent;
+    }
+    return false;
+}
+
+bool KrtNativeVisibleQualifiedName(KrtAstNode declaration, KrtAstNode scope, int64 source, int64 start, int64 length) {
+    KrtUsingScope frame = null; if (scope != null) { frame = scope.native_using_scope; }
+    return KrtNativeVisibleUsingName(declaration, scope, frame, source, start, length);
+}
+
+KrtAstNode KrtNativeFindUsingType(KrtAstNode module, int64 source, int64 start, int64 length, KrtAstNode scope, KrtUsingScope frame) {
+    KrtAstNode context = scope; KrtAstNode hidden = null;
+    while (true) {
+        KrtAstNode declaration = module.declarations; KrtAstNode chosen = null; int32 best = 0;
+        while (declaration != null) {
+            if (declaration.native_generic_origin == null && KrtDeclarationMatches(declaration, context, source, start, length)) {
+                int32 priority = KrtNativeNameFilePriority(declaration,start);
+                if (priority > best) { chosen = declaration; best = priority; }
+                if (priority == 0 && hidden == null) { hidden = declaration; }
+            }
+            declaration = declaration.next;
+        }
+        if (chosen != null) { return chosen; }
+        if (context == null) { break; } context = context.left;
+    }
+    KrtUsingScope active = frame;
+    while (active != null) {
+        KrtAstNode imported = active.imports;
+        while (imported != null) {
+            if (imported.type_length > 0 && KrtSemanticSameName(source, start, length, imported.type_start, imported.type_length)) {
+                return KrtNativeFindUsingType(module, source, imported.name_start, imported.name_length, null, null);
+            }
+            imported = imported.next;
+        }
+        KrtAstNode found = null; KrtAstNode candidate = module.declarations; int32 best = 0;
+        while (candidate != null) {
+            if (candidate.native_generic_origin == null) {
+                bool visible = KrtNativeVisibleUsingName(candidate, null, active, source, start, length);
+                imported = active.imports;
+                while (!visible && imported != null) {
+                    visible = KrtNativeUsingMatches(candidate, imported, source, start, length); imported = imported.next;
+                }
+                if (visible) {
+                    int32 priority = KrtNativeNameFilePriority(candidate,start);
+                    if (priority == 0) { if (hidden == null) { hidden = candidate; } }
+                    else if (priority > best) { found = candidate; best = priority; }
+                    else if (priority == best && found != null && found != candidate) { return null; }
+                }
+            }
+            candidate = candidate.next;
+        }
+        if (found != null) { return found; } active = active.parent;
+    }
+    return hidden;
+}
+
+KrtAstNode KrtNativeFindScopedType(KrtAstNode module, int64 source, int64 start, int64 length, KrtAstNode scope) {
+    KrtUsingScope frame = null; if (scope != null) { frame = scope.native_using_scope; }
+    return KrtNativeFindUsingType(module, source, start, length, scope, frame);
+}
+
+KrtAstNode KrtNativeExpressionTypeName(KrtAstNode node, KrtNativeBinding binding) {
+    if (node == null) { return null; }
+    KrtAstNode first = node; while (first.kind == KrtAstKind.Member) { first = first.left; }
+    if (first.kind != KrtAstKind.Identifier || KrtNativeFindName(binding, first.start, first.length) != null) { return null; }
+    if (node.native_type_arguments != null) {
+        KrtAstNode descriptor = KrtAstMake(KrtAstKind.Type, first.start, 0);
+        descriptor.native_scope = binding.unit.native_scope; descriptor.native_context = binding.unit.native_context;
+        descriptor.native_using_scope = binding.using_scope;
+        int64 type_length = node.native_type_arguments.type_start + node.native_type_arguments.type_length - first.start;
+        if (!KrtNativeAnnotateType(descriptor, binding.module, binding.source, first.start, type_length)) { return null; }
+        if (!KrtNativeCheckValueAccess(descriptor,binding)) { return null; }
+        return descriptor.native_type;
+    }
+    int64 length = node.length; if (node.kind == KrtAstKind.Member) { length = node.name_start + node.name_length - first.start; }
+    KrtAstNode type = KrtNativeFindUsingType(binding.module, binding.source, first.start, length, binding.unit.native_scope, binding.using_scope);
+    if (type != null && !KrtNativeAccessAllowed(type,binding,null,false)) { KrtNativeAccessError(binding,node); return null; }
+    return type;
+}
+
 bool KrtNativeNamespaceCallable(KrtAstNode callee, KrtNativeBinding binding) {
     if (callee.kind != KrtAstKind.Member) { return false; }
-    KrtAstNode first = callee;
-    while (first.kind == KrtAstKind.Member) { first = first.left; }
+    KrtAstNode first = callee; while (first.kind == KrtAstKind.Member) { first = first.left; }
     if (first.kind != KrtAstKind.Identifier || KrtNativeFindName(binding, first.start, first.length) != null) { return false; }
     int64 length = callee.name_start + callee.name_length - first.start;
     KrtAstNode function_node = binding.module.left;
     while (function_node != null) {
-        if (function_node.native_owner == null && KrtNativeVisibleQualifiedName(function_node, binding.unit.native_scope, binding.source, first.start, length)) { return true; }
+        if (function_node.native_owner == null && KrtNativeVisibleUsingName(function_node, binding.unit.native_scope, binding.using_scope, binding.source, first.start, length)) { return true; }
         function_node = function_node.next;
     }
     return false;
 }
 
-int32 KrtNativeFunctionScopeScore(KrtAstNode function_node, KrtAstNode callee, KrtNativeBinding binding) {
-    if (function_node.native_owner != null) { return 1000; }
+int64 KrtNativeFunctionScopeScore(KrtAstNode function_node, KrtAstNode callee, KrtNativeBinding binding) {
+    if (function_node.native_owner != null) { return 4 * KrtNativeRankingUnit; }
     if (callee.kind == KrtAstKind.Member && callee.native_static) {
         KrtAstNode first = callee; while (first.kind == KrtAstKind.Member) { first = first.left; }
-        return KrtNativeVisibleQualifiedName(function_node, binding.unit.native_scope, binding.source, first.start, callee.name_start + callee.name_length - first.start) ? 200 : -1;
+        return KrtNativeVisibleUsingName(function_node, binding.unit.native_scope, binding.using_scope, binding.source, first.start, callee.name_start + callee.name_length - first.start) ? 3 * KrtNativeRankingUnit : -1;
     }
-    KrtAstNode scope = binding.unit.native_scope; int32 priority = 200;
+    KrtAstNode scope = binding.unit.native_scope; int64 priority = 3 * KrtNativeRankingUnit;
     while (scope != null) {
         if (KrtScopeEqual(function_node.native_scope, scope, binding.source)) { return priority; }
         scope = scope.left; priority = priority - 1;
     }
-    if (KrtScopeLength(function_node.native_scope, binding.source) == 0) { return 100; }
-    if (binding.unit.native_scope != null && binding.unit.native_scope.body != null) {
-        KrtAstNode imported = binding.unit.native_scope.body;
+    if (KrtScopeLength(function_node.native_scope, binding.source) == 0) { return 2 * KrtNativeRankingUnit; }
+    KrtUsingScope frame = binding.using_scope; priority = KrtNativeRankingUnit;
+    while (frame != null) {
+        KrtAstNode imported = frame.imports;
         while (imported != null) {
-            if (imported.type_length == 0 && KrtDeclarationMatches(function_node, imported, binding.source, callee.start, callee.length)) { return 50; }
+            if (KrtNativeUsingMatches(function_node, imported, binding.source, callee.start, callee.length)) { return priority; }
             imported = imported.next;
         }
-        return 0;
+        frame = frame.parent; priority = priority - 1;
     }
     return -1;
 }

@@ -1,0 +1,502 @@
+// Native source loading uses the compiler lexer. Source spans always refer to
+// the original bytes; imports are blanked in place and file boundaries reset
+// namespace scope without changing offsets inside an individual source file.
+class KrtSourceDirective {
+    public int64 name;
+    public bool quoted;
+    public bool wildcard;
+    public int64 position;
+    public int64 end;
+    public KrtDriverPath files;
+    public KrtSourceDirective next;
+}
+
+class KrtSourceFile {
+    public int64 path;
+    public int64 original;
+    public int64 transformed;
+    public int64 length;
+    public int64 start;
+    public int64 lexical_error;
+    public int32 state;
+    public KrtSourceDirective directives;
+    public KrtSourceFile next;
+    public KrtSourceFile order_next;
+}
+
+class KrtSourceName {
+    public int64 value;
+    public KrtSourceName next;
+}
+
+class KrtSourceScope {
+    public int64 name;
+    public bool declarations;
+    public KrtSourceScope parent;
+}
+
+class KrtSourceBundle {
+    public int64 data;
+    public int64 length;
+    public int64 total_bytes;
+    public int32 count;
+    public KrtSourceFile files;
+    public KrtSourceFile order_tail;
+    public KrtSourceFile loaded;
+    public KrtSourceName names;
+    public KrtDriverPath search;
+}
+
+static KrtSourceBundle KrtDriverActiveBundle = null;
+
+void KrtSourcesWrite(string value) {
+    syscall(1, 2, (int64)value, KrtDriverStringLength((int64)value), 0, 0, 0);
+}
+
+void KrtSourcesWriteNumber(int64 value) {
+    unsafe(using krt.mem;) {
+        byte* digits = stackalloc byte[24];
+        int32 index = 24;
+        if (value < 0) { value = 0; }
+        while (true) {
+            index = index - 1;
+            digits[index] = (byte)(48 + value % 10);
+            value = value / 10;
+            if (value == 0) { break; }
+        }
+        syscall(1, 2, (int64)(digits + index), 24 - index, 0, 0, 0);
+    }
+}
+
+void KrtSourcesLocation(KrtSourceFile file, int64 position) {
+    if (position < 0) { position = 0; }
+    if (position > file.length) { position = file.length; }
+    int64 line = 1; int64 column = 1; int64 index = 0;
+    unsafe(using krt.mem;) {
+        byte* text = (byte*)file.original;
+        while (index < position) {
+            int64 value = text[index];
+            if (value == 10) { line = line + 1; column = 1; }
+            else if (value < 128 || value >= 192) { column = column + 1; }
+            index = index + 1;
+        }
+    }
+    syscall(1, 2, file.path, KrtDriverStringLength(file.path), 0, 0, 0);
+    KrtSourcesWrite(":"); KrtSourcesWriteNumber(line);
+    KrtSourcesWrite(":"); KrtSourcesWriteNumber(column);
+}
+
+bool KrtSourcesFail(KrtSourceFile file, int64 position, string code, string detail) {
+    if (KrtDriverQuiet) { return false; }
+    KrtSourcesLocation(file, position);
+    KrtSourcesWrite(": "); KrtSourcesWrite(code);
+    KrtSourcesWrite(": "); KrtSourcesWrite(detail); KrtSourcesWrite("\n");
+    return false;
+}
+
+void KrtSourcesDiagnostic(KrtSourceBundle bundle, string code, int32 code_length, int64 position) {
+    KrtSourcesDiagnosticDetails(bundle,code,code_length,position,null);
+}
+
+void KrtSourcesDiagnosticDetails(KrtSourceBundle bundle, string code, int32 code_length, int64 position, string message) {
+    KrtSourceFile selected = bundle.files;
+    if (selected == null) {
+        syscall(1, 2, (int64)code, code_length, 0, 0, 0);
+        KrtSourcesWrite(" at byte "); KrtSourcesWriteNumber(position); KrtSourcesWrite("\n");
+        return;
+    }
+    KrtSourceFile file = selected.order_next;
+    while (file != null && file.start <= position) { selected = file; file = file.order_next; }
+    KrtSourcesLocation(selected, position - selected.start);
+    KrtSourcesWrite(": "); syscall(1, 2, (int64)code, code_length, 0, 0, 0);
+    KrtSourcesWrite(": ");
+    if (message != null) { KrtSourcesWrite(message); }
+    else if (KrtDriverStringEqual((int64)code, (int64)"E_PARSE")) { KrtSourcesWrite("invalid syntax"); }
+    else if (KrtDriverStringEqual((int64)code, (int64)"E_MODULE")) { KrtSourcesWrite("invalid module or entry point"); }
+    else if (KrtDriverStringEqual((int64)code, (int64)"E_CONDITIONAL_ARRAY")) { KrtSourcesWrite("Conditional array operands must have the same element type and storage"); }
+    else if (KrtDriverStringEqual((int64)code, (int64)"E_ARGUMENT_COUNT")) { KrtSourcesWrite("argument count does not match any callable declaration"); }
+    else if (KrtDriverStringEqual((int64)code, (int64)"E_WRITABLE_REF")) { KrtSourcesWrite("reference arguments require writable storage and the ref marker"); }
+    else if (KrtDriverStringEqual((int64)code, (int64)"E_UNDEFINED_METHOD")) { KrtSourcesWrite("Undefined method for the supplied receiver and argument types"); }
+    else if (KrtDriverStringEqual((int64)code, (int64)"E_NOT_NULLABLE")) { KrtSourcesWrite("null requires an explicitly nullable '?' type; indirect calls require a nonnullable function pointer"); }
+    else if (KrtDriverStringEqual((int64)code, (int64)"E_GENERIC_CONSTRAINT")) { KrtSourcesWrite("generic type arguments do not satisfy the declared constraints"); }
+    else if (KrtDriverStringEqual((int64)code, (int64)"E_SWITCH")) { KrtSourcesWrite("invalid switch label or duplicate case/default"); }
+    else if (KrtDriverStringEqual((int64)code, (int64)"E_INHERITANCE")) { KrtSourcesWrite("cyclic class or interface inheritance"); }
+    else if (KrtDriverStringEqual((int64)code, (int64)"E_LOWER")) { KrtSourcesWrite("invalid or unsupported expression, type, name, or control flow"); }
+    else if (KrtDriverStringEqual((int64)code, (int64)"E_EMIT")) { KrtSourcesWrite("machine code generation failed"); }
+    else if (KrtDriverStringEqual((int64)code, (int64)"E_LIBRARY_DATA")) { KrtSourcesWrite("object data requires a supported scalar constant initializer"); }
+    else if (KrtDriverStringEqual((int64)code, (int64)"E_LIBRARY_SYMBOL")) { KrtSourcesWrite("unable to emit library symbols"); }
+    else if (KrtDriverStringEqual((int64)code, (int64)"E_LINKAGE")) { KrtSourcesWrite("conflicting or unsupported native function prototype"); }
+    else if (KrtDriverStringEqual((int64)code, (int64)"E_SIZE")) { KrtSourcesWrite("combined source must contain 1 to 16777216 bytes"); }
+    else { KrtSourcesWrite("compilation failed"); }
+    KrtSourcesWrite(" (combined byte "); KrtSourcesWriteNumber(position); KrtSourcesWrite(")\n");
+}
+
+bool KrtSourcesWord(KrtSourceFile file, KrtToken token, string value) {
+    if (token.category != KrtTokenCategory.Identifier || token.length != KrtDriverStringLength((int64)value)) { return false; }
+    unsafe(using krt.mem;) {
+        byte* text = (byte*)file.original; byte* expected = (byte*)(int64)value;
+        int64 index = 0;
+        while (index < token.length) { if (text[token.start + index] != expected[index]) { return false; } index = index + 1; }
+    }
+    return true;
+}
+
+bool KrtSourcesPunctuation(KrtSourceFile file, KrtToken token, int64 value) {
+    if (token.category != KrtTokenCategory.Punctuation || token.length != 1) { return false; }
+    unsafe(using krt.mem;) { return ((byte*)file.original)[token.start] == value; }
+}
+
+int64 KrtSourcesUtf8Error(int64 data, int64 length) {
+    unsafe(using krt.mem;) {
+        byte* text = (byte*)data; int64 index = 0;
+        while (index < length) {
+            int64 start = index; int64 lead = text[index]; int32 count = 0;
+            int64 low = 128; int64 high = 191;
+            if (lead < 128) { index = index + 1; continue; }
+            if (lead >= 194 && lead <= 223) { count = 1; }
+            else if (lead >= 224 && lead <= 239) {
+                count = 2;
+                if (lead == 224) { low = 160; }
+                if (lead == 237) { high = 159; }
+            } else if (lead >= 240 && lead <= 244) {
+                count = 3;
+                if (lead == 240) { low = 144; }
+                if (lead == 244) { high = 143; }
+            } else { return start; }
+            if (index + count >= length || text[index + 1] < low || text[index + 1] > high) { return start; }
+            int32 part = 2;
+            while (part <= count) { if (text[index + part] < 128 || text[index + part] > 191) { return start; } part = part + 1; }
+            index = index + count + 1;
+        }
+    }
+    return -1;
+}
+
+int64 KrtSourcesQualifiedName(int64 scope, int64 name) {
+    int64 scope_length = KrtDriverStringLength(scope);
+    if (scope_length == 0) { return name; }
+    int64 name_length = KrtDriverStringLength(name);
+    int64 result = KrtDriverAlloc(scope_length + name_length + 2);
+    if (result <= 0) { return 0; }
+    unsafe(using krt.mem;) {
+        byte* output = (byte*)result; byte* parent = (byte*)scope; byte* child = (byte*)name; int64 index = 0;
+        while (index < scope_length) { output[index] = parent[index]; index = index + 1; }
+        output[index] = 46; index = 0;
+        while (index < name_length) { output[scope_length + 1 + index] = child[index]; index = index + 1; }
+        output[scope_length + name_length + 1] = 0;
+    }
+    return result;
+}
+
+bool KrtSourcesHasName(KrtSourceBundle bundle, int64 value) {
+    KrtSourceName name = bundle.names;
+    while (name != null) { if (KrtDriverStringEqual(name.value, value)) { return true; } name = name.next; }
+    return false;
+}
+
+void KrtSourcesAddName(KrtSourceBundle bundle, int64 value) {
+    if (value == 0 || KrtSourcesHasName(bundle, value)) { return; }
+    KrtSourceName name = new KrtSourceName(); name.value = value; name.next = bundle.names; bundle.names = name;
+}
+
+void KrtSourcesAddNamespace(KrtSourceBundle bundle, int64 value) {
+    int64 length = KrtDriverStringLength(value); int64 index = 0;
+    unsafe(using krt.mem;) {
+        byte* text = (byte*)value;
+        while (index < length) {
+            if (text[index] == 46) { KrtSourcesAddName(bundle, KrtDriverCopyString(value, index)); }
+            index = index + 1;
+        }
+    }
+    KrtSourcesAddName(bundle, value);
+}
+
+// Leaves the first token following the name in token. A name is reconstructed
+// from lexer spans, so comments between its components are harmless.
+bool KrtSourcesParseName(KrtSourceFile file, KrtLexer lexer, KrtToken token, KrtSourceDirective result) {
+    if (token.category != KrtTokenCategory.Identifier) { return false; }
+    unsafe(using krt.mem;) {
+        byte* output = stackalloc byte[4096]; byte* input = (byte*)file.original; int64 length = 0;
+        while (true) {
+            if (length + token.length >= 4096) { return false; }
+            int64 index = 0;
+            while (index < token.length) { output[length] = input[token.start + index]; length = length + 1; index = index + 1; }
+            KrtLexerNext(lexer, token);
+            if (!KrtSourcesPunctuation(file, token, 46)) { break; }
+            KrtLexerNext(lexer, token);
+            if (KrtSourcesPunctuation(file, token, 42)) { result.wildcard = true; KrtLexerNext(lexer, token); break; }
+            if (token.category != KrtTokenCategory.Identifier || length + 1 >= 4096) { return false; }
+            output[length] = 46; length = length + 1;
+        }
+        result.name = KrtDriverCopyString((int64)output, length);
+    }
+    return result.name > 0;
+}
+
+bool KrtSourcesParseDirective(KrtSourceFile file, KrtLexer lexer, KrtToken token) {
+    bool is_import = KrtSourcesWord(file, token, "import"); int64 start = token.start;
+    KrtSourceDirective directive = new KrtSourceDirective(); directive.position = start;
+    KrtLexerNext(lexer, token);
+    if (is_import && token.category == KrtTokenCategory.String) {
+        directive.quoted = true;
+        if (token.length < 3 || token.length > 4097) { return KrtSourcesFail(file, start, "E_IMPORT", "invalid import path"); }
+        unsafe(using krt.mem;) {
+            byte* input = (byte*)file.original; int64 index = token.start + 1; int64 end = token.start + token.length - 1;
+            while (index < end) { if (input[index] == 92 || input[index] == 0) { return KrtSourcesFail(file, start, "E_IMPORT", "invalid import path"); } index = index + 1; }
+        }
+        directive.name = KrtDriverCopyString(file.original + token.start + 1, token.length - 2);
+        KrtLexerNext(lexer, token);
+    } else {
+        if (!KrtSourcesParseName(file, lexer, token, directive)) { return KrtSourcesFail(file, start, "E_IMPORT", "expected a module name or quoted import path"); }
+        if (!is_import && KrtSourcesPunctuation(file, token, 61)) {
+            // The left hand side of a using alias is one identifier.
+            unsafe(using krt.mem;) {
+                byte* alias = (byte*)directive.name; int64 index = 0;
+                while (alias[index] != 0) { if (alias[index] == 46) { return KrtSourcesFail(file, start, "E_IMPORT", "invalid using alias"); } index = index + 1; }
+            }
+            if (directive.wildcard) { return KrtSourcesFail(file, start, "E_IMPORT", "invalid using alias"); }
+            KrtLexerNext(lexer, token);
+            if (!KrtSourcesParseName(file, lexer, token, directive) || directive.wildcard) { return KrtSourcesFail(file, start, "E_IMPORT", "invalid using alias"); }
+        }
+    }
+    if (!KrtSourcesPunctuation(file, token, 59)) { return KrtSourcesFail(file, start, "E_IMPORT", "expected ';' after source directive"); }
+    directive.end = token.start + token.length;
+    if (file.directives == null) { file.directives = directive; }
+    else { KrtSourceDirective tail = file.directives; while (tail.next != null) { tail = tail.next; } tail.next = directive; }
+    if (is_import) {
+        unsafe(using krt.mem;) {
+            byte* transformed = (byte*)file.transformed; int64 index = start; int64 end = token.start + token.length;
+            while (index < end) { if (transformed[index] != 10 && transformed[index] != 13) { transformed[index] = 32; } index = index + 1; }
+        }
+    }
+    KrtLexerNext(lexer, token); return true;
+}
+
+bool KrtSourcesScan(KrtSourceBundle bundle, KrtSourceFile file) {
+    KrtLexer lexer = new KrtLexer(); KrtToken token = new KrtToken();
+    unsafe(using krt.mem;) { if (!KrtLexerInit(lexer, (byte*)file.original, file.length)) { return false; } }
+    KrtLexerNext(lexer, token); file.lexical_error = -1;
+    int64 current = (int64)""; bool declarations = true; int32 parentheses = 0; KrtSourceScope scopes = null;
+    while (token.kind != KrtTokenKind.Eof) {
+        // Keep source inspection possible for malformed files. Compilation
+        // validates each unit before bundling can join unfinished literals.
+        if (token.kind == KrtTokenKind.Invalid) {
+            if (file.lexical_error < 0) { file.lexical_error = token.start; }
+            KrtLexerNext(lexer, token); continue;
+        }
+        if (parentheses == 0 && (KrtSourcesWord(file, token, "using") || KrtSourcesWord(file, token, "import"))) {
+            if (!KrtSourcesParseDirective(file, lexer, token)) { return false; }
+            continue;
+        }
+        if (declarations && parentheses == 0 && KrtSourcesWord(file, token, "namespace")) {
+            KrtLexerNext(lexer, token);
+            if (KrtSourcesPunctuation(file, token, 59)) { current = (int64)""; KrtLexerNext(lexer, token); continue; }
+            KrtSourceDirective name = new KrtSourceDirective();
+            if (!KrtSourcesParseName(file, lexer, token, name) || name.wildcard) { continue; }
+            int64 previous = current; current = KrtSourcesQualifiedName(current, name.name); KrtSourcesAddNamespace(bundle, current);
+            if (KrtSourcesPunctuation(file, token, 123)) {
+                KrtSourceScope scope = new KrtSourceScope(); scope.name = previous; scope.declarations = declarations; scope.parent = scopes; scopes = scope;
+                KrtLexerNext(lexer, token);
+            } else if (KrtSourcesPunctuation(file, token, 59)) { KrtLexerNext(lexer, token); }
+            continue;
+        }
+        if (declarations && parentheses == 0 && (KrtSourcesWord(file, token, "class") || KrtSourcesWord(file, token, "struct") ||
+            KrtSourcesWord(file, token, "enum") || KrtSourcesWord(file, token, "interface"))) {
+            KrtLexerNext(lexer, token);
+            if (token.category == KrtTokenCategory.Identifier) {
+                int64 name = KrtDriverCopyString(file.original + token.start, token.length);
+                KrtSourcesAddName(bundle, KrtSourcesQualifiedName(current, name));
+            }
+            continue;
+        }
+        if (KrtSourcesPunctuation(file, token, 123)) {
+            KrtSourceScope scope = new KrtSourceScope(); scope.name = current; scope.declarations = declarations; scope.parent = scopes; scopes = scope; declarations = false;
+        } else if (KrtSourcesPunctuation(file, token, 125) && scopes != null) {
+            current = scopes.name; declarations = scopes.declarations; scopes = scopes.parent;
+        } else if (KrtSourcesPunctuation(file, token, 40)) { parentheses = parentheses + 1; }
+        else if (KrtSourcesPunctuation(file, token, 41) && parentheses > 0) { parentheses = parentheses - 1; }
+        KrtLexerNext(lexer, token);
+    }
+    return true;
+}
+
+bool KrtSourcesValidate(KrtSourceBundle bundle) {
+    KrtSourceFile file = bundle.files;
+    while (file != null) {
+        if (file.lexical_error >= 0) { return KrtSourcesFail(file, file.lexical_error, "E_PARSE", "invalid syntax"); }
+        file = file.order_next;
+    }
+    return true;
+}
+
+KrtSourceFile KrtSourcesFindFile(KrtSourceBundle bundle, int64 path) {
+    KrtSourceFile file = bundle.loaded;
+    while (file != null) { if (KrtDriverStringEqual(file.path, path)) { return file; } file = file.next; }
+    return null;
+}
+
+KrtSourceFile KrtSourcesLoad(KrtSourceBundle bundle, int64 path) {
+    path = KrtDriverAbsolutePath(path);
+    if (path <= 0) { return null; }
+    KrtSourceFile file = KrtSourcesFindFile(bundle, path);
+    if (file != null) { return file; }
+    file = new KrtSourceFile(); file.path = path;
+    KrtDriverBuffer input = new KrtDriverBuffer();
+    KrtDriverReadFile(path, input);
+    if (!input.ok) { KrtSourcesFail(file, 0, "E_INPUT", "unable to read source file"); return null; }
+    file.original = input.data; file.length = input.length;
+    bundle.total_bytes = bundle.total_bytes + file.length;
+    if (bundle.count > 0) { bundle.total_bytes = bundle.total_bytes + 12; }
+    bundle.count = bundle.count + 1;
+    if (bundle.total_bytes > 16777216) { KrtSourcesFail(file, 0, "E_SIZE", "combined source exceeds 16777216 bytes"); return null; }
+    int64 invalid_utf8 = KrtSourcesUtf8Error(input.data, input.length);
+    if (invalid_utf8 >= 0) {
+        KrtSourcesLocation(file, invalid_utf8); KrtSourcesWrite(": E_ENCODING: invalid UTF-8 at byte "); KrtSourcesWriteNumber(invalid_utf8); KrtSourcesWrite("\n"); return null;
+    }
+    file.transformed = KrtDriverCopyString(input.data, input.length);
+    if (file.transformed <= 0) { KrtSourcesFail(file, 0, "E_MEMORY", "source allocation failed"); return null; }
+    file.next = bundle.loaded; bundle.loaded = file;
+    if (!KrtSourcesScan(bundle, file)) { return null; }
+    return file;
+}
+
+void KrtSourcesAddSearch(KrtSourceBundle bundle, int64 value) {
+    if (value <= 0) { return; }
+    value = KrtDriverAbsolutePath(value);
+    KrtDriverPath path = bundle.search; KrtDriverPath tail = null;
+    while (path != null) { if (KrtDriverStringEqual(path.value, value)) { return; } tail = path; path = path.next; }
+    KrtDriverPath added = new KrtDriverPath(); added.value = value;
+    if (tail == null) { bundle.search = added; } else { tail.next = added; }
+}
+
+int64 KrtSourcesRelativePath(KrtSourceDirective directive) {
+    if (directive.quoted) { return directive.name; }
+    int64 length = KrtDriverStringLength(directive.name);
+    int64 result = KrtDriverCopyString(directive.name, length);
+    unsafe(using krt.mem;) {
+        byte* text = (byte*)result; int64 index = 0;
+        while (index < length) { if (text[index] == 46) { text[index] = 47; } index = index + 1; }
+    }
+    return result;
+}
+
+bool KrtSourcesHasSuffix(int64 value) {
+    unsafe(using krt.mem;) {
+        byte* text = (byte*)value; int64 index = 0; int64 slash = -1; int64 dot = -1;
+        while (text[index] != 0) { if (text[index] == 47) { slash = index; dot = -1; } else if (text[index] == 46) { dot = index; } index = index + 1; }
+        return dot > slash + 1 && dot < index - 1;
+    }
+}
+
+int64 KrtSourcesAppendExtension(int64 value) {
+    int64 length = KrtDriverStringLength(value); int64 result = KrtDriverAlloc(length + 5);
+    if (result <= 0) { return 0; }
+    unsafe(using krt.mem;) {
+        byte* output = (byte*)result; byte* input = (byte*)value; int64 index = 0;
+        while (index < length) { output[index] = input[index]; index = index + 1; }
+        output[length] = 46; output[length + 1] = 107; output[length + 2] = 114; output[length + 3] = 116; output[length + 4] = 0;
+    }
+    return result;
+}
+
+KrtDriverPath KrtSourcesAtDirectory(int64 directory, int64 relative, KrtSourceDirective directive) {
+    int64 candidate = KrtDriverJoinPath(directory, relative);
+    if (candidate <= 0) { return null; }
+    if (!directive.quoted && KrtDriverIsDirectory(candidate)) {
+        KrtDriverPath matches = KrtDriverListKrtFiles(candidate);
+        if (matches != null) { return matches; }
+    }
+    if (directive.wildcard) { return null; }
+    if (!directive.quoted || !KrtSourcesHasSuffix(candidate)) { candidate = KrtSourcesAppendExtension(candidate); }
+    if (candidate <= 0 || !KrtDriverFileExists(candidate) || KrtDriverIsDirectory(candidate)) { return null; }
+    KrtDriverPath found = new KrtDriverPath(); found.value = candidate; return found;
+}
+
+bool KrtSourcesVisit(KrtSourceBundle bundle, KrtSourceFile file) {
+    // A visiting node is a dependency cycle. Its declaration is emitted by the
+    // first visit, exactly once, after its remaining dependencies are visited.
+    if (file.state != 0) { return true; }
+    file.state = 1;
+    KrtSourceDirective directive = file.directives;
+    while (directive != null) {
+        int64 relative = KrtSourcesRelativePath(directive);
+        int64 local = KrtDriverDirectory(file.path);
+        KrtDriverPath matches = KrtSourcesAtDirectory(local, relative, directive);
+        KrtDriverPath search = bundle.search;
+        while (matches == null && search != null) {
+            if (!KrtDriverStringEqual(search.value, local)) { matches = KrtSourcesAtDirectory(search.value, relative, directive); }
+            search = search.next;
+        }
+        if (matches == null && (directive.quoted || !KrtSourcesHasName(bundle, directive.name))) {
+            KrtSourcesLocation(file, directive.position); KrtSourcesWrite(": E_IMPORT: cannot find module '");
+            syscall(1, 2, directive.name, KrtDriverStringLength(directive.name), 0, 0, 0);
+            if (directive.wildcard) { KrtSourcesWrite(".*"); }
+            KrtSourcesWrite("' ("); syscall(1, 2, relative, KrtDriverStringLength(relative), 0, 0, 0); KrtSourcesWrite(")\n");
+            return false;
+        }
+        // Index every unit in a directory before traversing its edges, so
+        // sibling namespaces and type aliases need no corresponding filename.
+        KrtDriverPath dependency = matches;
+        while (dependency != null) {
+            if (KrtSourcesLoad(bundle, dependency.value) == null) { return false; }
+            dependency = dependency.next;
+        }
+        dependency = matches;
+        directive.files = matches;
+        while (dependency != null) {
+            int64 normalized = KrtDriverAbsolutePath(dependency.value);
+            KrtSourceFile unit = KrtSourcesFindFile(bundle, normalized);
+            if (unit == null || !KrtSourcesVisit(bundle, unit)) { return false; }
+            dependency = dependency.next;
+        }
+        directive = directive.next;
+    }
+    file.state = 2;
+    if (bundle.files == null) { bundle.files = file; } else { bundle.order_tail.order_next = file; }
+    bundle.order_tail = file;
+    return true;
+}
+
+bool KrtSourcesCollect(KrtDriverPath roots, KrtDriverPath include_dirs, int64 library_root, KrtSourceBundle bundle) {
+    if (roots == null) { return false; }
+    KrtDriverPath path = include_dirs;
+    while (path != null) { KrtSourcesAddSearch(bundle, path.value); path = path.next; }
+    path = roots;
+    while (path != null) {
+        int64 absolute = KrtDriverAbsolutePath(path.value); int64 directory = KrtDriverDirectory(absolute);
+        KrtSourcesAddSearch(bundle, directory); path = path.next;
+    }
+    path = roots;
+    while (path != null) {
+        int64 absolute = KrtDriverAbsolutePath(path.value); int64 directory = KrtDriverDirectory(absolute);
+        KrtSourcesAddSearch(bundle, KrtDriverJoinPath(directory, (int64)"libs")); path = path.next;
+    }
+    if (library_root > 0) { KrtSourcesAddSearch(bundle, library_root); }
+    // Explicit source declarations are visible before the first dependency is
+    // resolved. Their order never determines whether a namespace alias binds.
+    path = roots;
+    while (path != null) { if (KrtSourcesLoad(bundle, path.value) == null) { return false; } path = path.next; }
+    path = roots;
+    while (path != null) {
+        KrtSourceFile file = KrtSourcesFindFile(bundle, KrtDriverAbsolutePath(path.value));
+        if (file == null || !KrtSourcesVisit(bundle, file)) { return false; }
+        path = path.next;
+    }
+    bundle.length = bundle.total_bytes;
+    if (bundle.length < 0 || bundle.length > 16777216) { return KrtSourcesFail(bundle.files, 0, "E_SIZE", "combined source must contain 0 to 16777216 bytes"); }
+    bundle.data = KrtDriverAlloc(bundle.length + 1);
+    if (bundle.data <= 0) { return KrtSourcesFail(bundle.files, 0, "E_MEMORY", "combined source allocation failed"); }
+    unsafe(using krt.mem;) {
+        byte* output = (byte*)bundle.data; byte* separator = (byte*)(int64)"\nnamespace;\n";
+        int64 offset = 0; bool first = true; KrtSourceFile file = bundle.files;
+        while (file != null) {
+            if (!first) { int64 part = 0; while (part < 12) { output[offset] = separator[part]; offset = offset + 1; part = part + 1; } }
+            first = false;
+            file.start = offset; byte* input = (byte*)file.transformed; int64 index = 0;
+            while (index < file.length) { output[offset] = input[index]; offset = offset + 1; index = index + 1; }
+            file = file.order_next;
+        }
+        output[offset] = 0; bundle.length = offset;
+    }
+    return true;
+}

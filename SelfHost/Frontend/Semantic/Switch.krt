@@ -1,0 +1,136 @@
+bool KrtNativeSwitchError(KrtAstNode node, KrtNativeBinding binding) {
+    binding.module.native_error = 7;
+    return KrtNativeBindingError(binding, node);
+}
+
+int64 KrtNativeSwitchStringByte(int64 source, KrtAstNode literal, ref int64 index) {
+    if (index >= literal.length - 1) { return -1; }
+    unsafe(using krt.mem;) {
+        byte* text = (byte*)source; int64 value = text[literal.start + index]; index = index + 1;
+        if (value == 92 && index < literal.length - 1) {
+            value = text[literal.start + index]; index = index + 1;
+            if (value == 110) { value = 10; }
+            else if (value == 114) { value = 13; }
+            else if (value == 116) { value = 9; }
+            else if (value == 48) { value = 0; }
+        }
+        return value;
+    }
+}
+
+bool KrtNativeSwitchSameConstant(KrtAstNode first, KrtAstNode second, int64 source) {
+    if (first.kind == KrtAstKind.String && second.kind == KrtAstKind.String) {
+        int64 left = 1; int64 right = 1;
+        while (true) {
+            int64 a = KrtNativeSwitchStringByte(source, first, ref left);
+            int64 b = KrtNativeSwitchStringByte(source, second, ref right);
+            if (a != b) { return false; }
+            if (a <= 0) { return true; }
+        }
+    }
+    if (KrtNativeFloatKind(first) != 0 || KrtNativeFloatKind(second) != 0) {
+        if (first.kind != KrtAstKind.Floating || second.kind != KrtAstKind.Floating ||
+            KrtNativeFloatKind(first) != KrtNativeFloatKind(second)) { return false; }
+        int64 left_bits = 0; int64 right_bits = 0;
+        return KrtNativeFloatingBits(first, source, ref left_bits) && KrtNativeFloatingBits(second, source, ref right_bits) && left_bits == right_bits;
+    }
+    if (KrtNativeWideKind(first) || KrtNativeWideKind(second)) {
+        if (first.kind != KrtAstKind.Integer || second.kind != KrtAstKind.Integer) { return false; }
+        int64 left_high = KrtNativeWideKind(first) ? first.native_high : first.value < 0 ? -1 : 0;
+        int64 right_high = KrtNativeWideKind(second) ? second.native_high : second.value < 0 ? -1 : 0;
+        return first.value == second.value && left_high == right_high;
+    }
+    int64 left_value = 0; int64 right_value = 0;
+    return KrtIrTryEvaluateConstant(first, ref left_value) && KrtIrTryEvaluateConstant(second, ref right_value) && left_value == right_value;
+}
+
+bool KrtNativeBindSwitch(KrtAstNode statement, KrtNativeBinding binding) {
+    if (!KrtNativeBindExpression(statement.left, binding)) { return false; }
+    statement.local_slot = binding.slots; binding.slots = binding.slots + 1;
+    KrtAstNode saved = KrtAstMake(KrtAstKind.Identifier, statement.left.start, statement.left.length);
+    KrtNativeCopyType(saved, statement.left); saved.local_slot = statement.local_slot;
+    statement.native_target = saved;
+    bool has_default = false; KrtAstNode clause = statement.right;
+    while (clause != null) {
+        clause.native_offset = -1;
+        if (clause.kind == KrtAstKind.Default) {
+            if (has_default) { return KrtNativeSwitchError(clause, binding); }
+            has_default = true;
+        } else {
+            if (clause.kind != KrtAstKind.Case || !KrtNativeBindExpression(clause.left, binding)) { return false; }
+            if (!KrtNativeCompatibleValue(saved, clause.left) && !KrtNativeCompatibleValue(clause.left, saved)) { return KrtNativeSwitchError(clause.left, binding); }
+            KrtAstNode previous = statement.right;
+            while (previous != clause) {
+                if (previous.kind == KrtAstKind.Case && KrtNativeSwitchSameConstant(previous.left, clause.left, binding.source)) { return KrtNativeSwitchError(clause.left, binding); }
+                previous = previous.next;
+            }
+            KrtAstNode comparison = KrtAstMakeBinary(61, saved, clause.left);
+            comparison.native_bits = 8; comparison.native_boolean = true; comparison.native_unsigned = true; comparison.native_width = 1;
+            clause.native_target = comparison;
+        }
+        if (!KrtNativeBindBlock(clause.right, binding)) { return false; }
+        clause = clause.next;
+    }
+    return true;
+}
+
+// Outcomes are normal completion (1), return/throw (2), break (4), and
+// continue (8). Follow normal paths into the next source-order case body.
+// Loops may complete normally; their break/continue belong to that loop.
+int32 KrtNativeSwitchStatementFlow(KrtAstNode statement) {
+    if (statement == null) { return 1; }
+    if (statement.kind == KrtAstKind.Return || statement.kind == KrtAstKind.Throw) { return 2; }
+    if (statement.kind == KrtAstKind.Break) { return 4; }
+    if (statement.kind == KrtAstKind.Continue) { return 8; }
+    if (statement.kind == KrtAstKind.Unsafe || statement.kind == KrtAstKind.Point) { return KrtNativeSwitchStatementFlow(statement.left); }
+    if (statement.kind == KrtAstKind.If) {
+        return KrtNativeSwitchStatementFlow(statement.right) | KrtNativeSwitchStatementFlow(statement.alternate);
+    }
+    if (statement.kind == KrtAstKind.Block) {
+        int32 outcomes = 1; KrtAstNode child = statement.left;
+        while (child != null && (outcomes & 1) != 0) {
+            outcomes = (outcomes & 14) | KrtNativeSwitchStatementFlow(child);
+            child = child.next;
+        }
+        return outcomes;
+    }
+    if (statement.kind == KrtAstKind.Try) {
+        int32 outcomes = KrtNativeSwitchStatementFlow(statement.left);
+        KrtAstNode clause = statement.right;
+        while (clause != null) {
+            outcomes = outcomes | KrtNativeSwitchStatementFlow(clause.right); clause = clause.next;
+        }
+        if (statement.alternate != null) {
+            int32 cleanup = KrtNativeSwitchStatementFlow(statement.alternate);
+            outcomes = (cleanup & 14) | ((cleanup & 1) != 0 ? outcomes : 0);
+        }
+        return outcomes;
+    }
+    if (statement.kind == KrtAstKind.Switch) {
+        int32 outcomes = KrtNativeSwitchOutcomes(statement);
+        return (outcomes & 11) | ((outcomes & 4) != 0 ? 1 : 0);
+    }
+    return 1;
+}
+
+int32 KrtNativeSwitchClauseFlow(KrtAstNode clause) {
+    if (clause == null) { return 1; }
+    int32 outcomes = KrtNativeSwitchStatementFlow(clause.right);
+    if ((outcomes & 1) != 0) {
+        outcomes = (outcomes & 14) | KrtNativeSwitchClauseFlow(clause.next);
+    }
+    return outcomes;
+}
+
+int32 KrtNativeSwitchOutcomes(KrtAstNode statement) {
+    bool has_default = false; int32 outcomes = 0; KrtAstNode clause = statement.right;
+    while (clause != null) {
+        if (clause.kind == KrtAstKind.Default) { has_default = true; }
+        outcomes = outcomes | KrtNativeSwitchClauseFlow(clause); clause = clause.next;
+    }
+    return outcomes | (has_default ? 0 : 1);
+}
+
+bool KrtNativeSwitchAlwaysReturns(KrtAstNode statement) {
+    return KrtNativeSwitchOutcomes(statement) == 2;
+}

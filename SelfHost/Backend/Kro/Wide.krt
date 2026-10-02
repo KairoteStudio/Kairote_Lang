@@ -213,27 +213,7 @@ bool KrtKroNativeWidePost(KrtKroObject output, ref int32 pc, int32 increment, bo
 }
 
 bool KrtKroNativeWideFloat(KrtKroObject output, ref int32 pc, int32 mode, int32 width) {
-    if (mode == 1 || mode == 2) {
-    if (!(KrtKroNativeCode(output, ref pc, 20276595373983832, 7) &&
-        KrtKroNativeCode(output, ref pc, 66147217735962763, 7) &&
-        KrtKroNativeCode(output, ref pc, 13869042938949892, 7) &&
-        KrtKroNativeCode(output, ref pc, 192, 1))) { return false; }
-        if (mode == 1) {
-    if (!(KrtKroNativeCode(output, ref pc, 51871748006774088, 7) &&
-        KrtKroNativeCode(output, ref pc, 0, 7) &&
-        KrtKroNativeCode(output, ref pc, 59254094010206336, 7) &&
-        KrtKroNativeCode(output, ref pc, 3673638912, 4))) { return false; }
-        }
-    if (!(KrtKroNativeCode(output, ref pc, 1380995137, 4))) { return false; }
-        if (!KrtKroNativeFloatConvert(output, ref pc, -8, 8)) { return false; }
-    if (!(KrtKroNativeCode(output, ref pc, 47176, 7) &&
-        KrtKroNativeCode(output, ref pc, 1346629632, 4))) { return false; }
-        if (!KrtKroNativeFloatBinary(output, ref pc, 42, 8)) { return false; }
-    if (!(KrtKroNativeCode(output, ref pc, 1347508313, 4))) { return false; }
-        if (!KrtKroNativeFloatConvert(output, ref pc, -8, 8) || !KrtKroNativeFloatBinary(output, ref pc, 43, 8)) { return false; }
-    if (!(KrtKroNativeCode(output, ref pc, 88820750506328, 6))) { return false; }
-        return width == 8 || KrtKroNativeFloatConvert(output, ref pc, 8, width);
-    }
+    if (mode == 1 || mode == 2) { return KrtKroNativeWideFloatToBits(output,ref pc,mode,width); }
     if (mode != 3 && mode != 4) { return false; }
     if (width == 4 && !KrtKroNativeFloatConvert(output, ref pc, 4, 8)) { return false; }
     if (!(KrtKroNativeCode(output, ref pc, 65514717103868248, 7) &&

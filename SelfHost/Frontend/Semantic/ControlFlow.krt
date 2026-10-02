@@ -1,0 +1,53 @@
+// Validate all source statements, including those following an abrupt exit.
+// Switches introduce break targets; only loops introduce continue targets.
+bool KrtNativeValidateControlFlow(KrtAstNode statement, KrtNativeBinding binding, int32 loops, int32 targets) {
+    if (statement == null) { return true; }
+    if (statement.kind == KrtAstKind.Break) {
+        return targets > 0 || KrtNativeBindingError(binding,statement);
+    }
+    if (statement.kind == KrtAstKind.Continue) {
+        return loops > 0 || KrtNativeBindingError(binding,statement);
+    }
+    if (statement.kind == KrtAstKind.Block) {
+        KrtAstNode child = statement.left;
+        while (child != null) {
+            if (!KrtNativeValidateControlFlow(child,binding,loops,targets)) { return false; }
+            child = child.next;
+        }
+        return true;
+    }
+    if (statement.kind == KrtAstKind.Unsafe || statement.kind == KrtAstKind.Point) {
+        return KrtNativeValidateControlFlow(statement.left,binding,loops,targets);
+    }
+    if (statement.kind == KrtAstKind.If) {
+        return KrtNativeValidateControlFlow(statement.right,binding,loops,targets) &&
+            KrtNativeValidateControlFlow(statement.alternate,binding,loops,targets);
+    }
+    if (statement.kind == KrtAstKind.Try) {
+        if (!KrtNativeValidateControlFlow(statement.left,binding,loops,targets)) { return false; }
+        KrtAstNode clause = statement.right;
+        while (clause != null) {
+            if (!KrtNativeValidateControlFlow(clause.right,binding,loops,targets)) { return false; }
+            clause = clause.next;
+        }
+        return KrtNativeValidateControlFlow(statement.alternate,binding,loops,targets);
+    }
+    if (statement.kind == KrtAstKind.Switch) {
+        if (targets >= 64) { return KrtNativeBindingError(binding,statement); }
+        KrtAstNode clause = statement.right;
+        while (clause != null) {
+            if (!KrtNativeValidateControlFlow(clause.right,binding,loops,targets + 1)) { return false; }
+            clause = clause.next;
+        }
+        return true;
+    }
+    if (statement.kind == KrtAstKind.While || statement.kind == KrtAstKind.DoWhile ||
+        statement.kind == KrtAstKind.For || statement.kind == KrtAstKind.Foreach) {
+        if (targets >= 64) { return KrtNativeBindingError(binding,statement); }
+        KrtAstNode body = statement.body;
+        if (statement.kind == KrtAstKind.While) { body = statement.right; }
+        else if (statement.kind == KrtAstKind.DoWhile) { body = statement.left; }
+        return KrtNativeValidateControlFlow(body,binding,loops + 1,targets + 1);
+    }
+    return true;
+}

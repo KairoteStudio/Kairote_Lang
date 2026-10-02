@@ -1,0 +1,528 @@
+// Linux x86-64 services used by the native compiler driver.
+class KrtDriverPath {
+    public int64 value;
+    public KrtDriverPath next;
+}
+
+class KrtDriverBuffer {
+    public int64 data;
+    public int64 length;
+    public bool ok;
+}
+
+static int64 KrtDriverPool = 0;
+static int64 KrtDriverPoolEnd = 0;
+static int64 KrtDriverEnvironment = 0;
+static int64 KrtDriverTemporaryIndex = 0;
+static bool KrtDriverQuiet = false;
+
+int64 KrtDriverAlloc(int64 size) {
+    if (size <= 0 || size > 67108864) { return 0; }
+    size = (size + 7) & -8;
+    if (KrtDriverPool == 0 || KrtDriverPool + size > KrtDriverPoolEnd) {
+        int64 capacity = size > 1048576 ? size : 1048576;
+        capacity = (capacity + 4095) & -4096;
+        int64 memory = syscall(9, 0, capacity, 3, 34, -1, 0);
+        if (memory < 0) { return 0; }
+        KrtDriverPool = memory; KrtDriverPoolEnd = memory + capacity;
+    }
+    int64 result = KrtDriverPool;
+    KrtDriverPool = KrtDriverPool + size;
+    return result;
+}
+
+int64 KrtDriverStringLength(int64 text) {
+    if (text == 0) { return 0; }
+    unsafe(using krt.mem;) {
+        byte* data = (byte*)text; int64 length = 0;
+        while (data[length] != 0) { length = length + 1; }
+        return length;
+    }
+}
+
+bool KrtDriverStringEqual(int64 first, int64 second) {
+    if (first == second) { return true; }
+    if (first == 0 || second == 0) { return false; }
+    unsafe(using krt.mem;) {
+        byte* left = (byte*)first; byte* right = (byte*)second; int64 index = 0;
+        while (left[index] == right[index]) {
+            if (left[index] == 0) { return true; }
+            index = index + 1;
+        }
+    }
+    return false;
+}
+
+int32 KrtDriverStringCompare(int64 first, int64 second) {
+    unsafe(using krt.mem;) {
+        byte* left = (byte*)first; byte* right = (byte*)second; int64 index = 0;
+        while (left[index] != 0 && left[index] == right[index]) { index = index + 1; }
+        return (int32)left[index] - (int32)right[index];
+    }
+}
+
+int64 KrtDriverCopyString(int64 text, int64 length) {
+    if (length < 0) { return 0; }
+    int64 copy = KrtDriverAlloc(length + 1);
+    if (copy == 0) { return 0; }
+    unsafe(using krt.mem;) {
+        byte* target = (byte*)copy; byte* source = (byte*)text; int64 index = 0;
+        while (index < length) { target[index] = source[index]; index = index + 1; }
+        target[length] = 0;
+    }
+    return copy;
+}
+
+int64 KrtDriverConcat(int64 first, int64 second) {
+    int64 left_length = KrtDriverStringLength(first); int64 right_length = KrtDriverStringLength(second);
+    int64 copy = KrtDriverAlloc(left_length + right_length + 1);
+    if (copy == 0) { return 0; }
+    unsafe(using krt.mem;) {
+        byte* target = (byte*)copy; byte* left = (byte*)first; byte* right = (byte*)second;
+        int64 index = 0;
+        while (index < left_length) { target[index] = left[index]; index = index + 1; }
+        index = 0;
+        while (index < right_length) { target[left_length + index] = right[index]; index = index + 1; }
+        target[left_length + right_length] = 0;
+    }
+    return copy;
+}
+
+bool KrtDriverStartsWith(int64 text, string prefix) {
+    int64 length = KrtDriverStringLength((int64)prefix);
+    if (KrtDriverStringLength(text) < length) { return false; }
+    unsafe(using krt.mem;) {
+        byte* source = (byte*)text; byte* expected = (byte*)(int64)prefix; int64 index = 0;
+        while (index < length) { if (source[index] != expected[index]) { return false; } index = index + 1; }
+    }
+    return true;
+}
+
+bool KrtDriverEndsWith(int64 text, string suffix) {
+    int64 length = KrtDriverStringLength(text); int64 count = KrtDriverStringLength((int64)suffix);
+    if (length < count) { return false; }
+    return KrtDriverStringEqual(text + length - count, (int64)suffix);
+}
+
+KrtDriverPath KrtDriverAppend(KrtDriverPath list, int64 value) {
+    KrtDriverPath item = new KrtDriverPath(); item.value = value;
+    if (list == null) { return item; }
+    KrtDriverPath tail = list; while (tail.next != null) { tail = tail.next; }
+    tail.next = item; return list;
+}
+
+bool KrtDriverContains(KrtDriverPath list, int64 value) {
+    while (list != null) {
+        if (KrtDriverStringEqual(list.value, value)) { return true; }
+        list = list.next;
+    }
+    return false;
+}
+
+bool KrtDriverWriteAll(int64 descriptor, int64 data, int64 length) {
+    int64 written = 0;
+    while (written < length) {
+        int64 count = syscall(1, descriptor, data + written, length - written, 0, 0, 0);
+        if (count == -4) { continue; }
+        if (count <= 0) { return false; }
+        written = written + count;
+    }
+    return true;
+}
+
+void KrtDriverPrint(string text) { KrtDriverWriteAll(1, (int64)text, KrtDriverStringLength((int64)text)); }
+void KrtDriverError(string code, string detail) {
+    KrtDriverLastErrorCode = (int64)code;
+    if (KrtDriverQuiet) { return; }
+    KrtDriverWriteAll(2, (int64)code, KrtDriverStringLength((int64)code));
+    KrtDriverWriteAll(2, (int64)": ", 2);
+    KrtDriverWriteAll(2, (int64)detail, KrtDriverStringLength((int64)detail));
+    KrtDriverWriteAll(2, (int64)"\n", 1);
+}
+
+bool KrtDriverReadFile(int64 path, KrtDriverBuffer buffer) {
+    buffer.ok = false; buffer.data = 0; buffer.length = 0;
+    int64 descriptor = syscall(2, path, 0, 0, 0, 0, 0);
+    if (descriptor < 0) { return false; }
+    int64 capacity = 8192; int64 data = KrtDriverAlloc(capacity + 1); int64 length = 0;
+    if (data == 0) { syscall(3, descriptor, 0, 0, 0, 0, 0); return false; }
+    while (true) {
+        if (length == capacity) {
+            if (capacity >= 33554432) { syscall(3, descriptor, 0, 0, 0, 0, 0); return false; }
+            int64 next = KrtDriverAlloc(capacity * 2 + 1);
+            if (next == 0) { syscall(3, descriptor, 0, 0, 0, 0, 0); return false; }
+            unsafe(using krt.mem;) {
+                byte* old = (byte*)data; byte* target = (byte*)next; int64 index = 0;
+                while (index < length) { target[index] = old[index]; index = index + 1; }
+            }
+            data = next; capacity = capacity * 2;
+        }
+        int64 count = syscall(0, descriptor, data + length, capacity - length, 0, 0, 0);
+        if (count == -4) { continue; }
+        if (count < 0) { syscall(3, descriptor, 0, 0, 0, 0, 0); return false; }
+        if (count == 0) { break; }
+        length = length + count;
+    }
+    syscall(3, descriptor, 0, 0, 0, 0, 0);
+    unsafe(using krt.mem;) { ((byte*)data)[length] = 0; }
+    buffer.data = data; buffer.length = length; buffer.ok = true; return true;
+}
+
+bool KrtDriverWriteFile(int64 path, int64 data, int64 length) {
+    int64 descriptor = syscall(2, path, 577, 420, 0, 0, 0);
+    if (descriptor < 0) { return false; }
+    bool ok = KrtDriverWriteAll(descriptor, data, length);
+    if (syscall(3, descriptor, 0, 0, 0, 0, 0) != 0) { ok = false; }
+    return ok;
+}
+
+int32 KrtDriverFileMode(int64 path, bool follow) {
+    unsafe(using krt.mem;) {
+        byte* information = stackalloc byte[144];
+        int64 result = follow ? syscall(4, path, (int64)information, 0, 0, 0, 0) : syscall(6, path, (int64)information, 0, 0, 0, 0);
+        if (result != 0) { return 0; }
+        return (int32)((uint32*)(information + 24))[0];
+    }
+}
+
+bool KrtDriverFileExists(int64 path) { return (KrtDriverFileMode(path, true) & 61440) == 32768; }
+bool KrtDriverIsDirectory(int64 path) { return (KrtDriverFileMode(path, true) & 61440) == 16384; }
+int64 KrtDriverPlatform() { return (int64)"linux"; }
+
+int64 KrtDriverCurrentDirectory() {
+    int64 buffer = KrtDriverAlloc(16384);
+    if (buffer == 0 || syscall(79, buffer, 16384, 0, 0, 0, 0) < 0) { return 0; }
+    return buffer;
+}
+
+int64 KrtDriverJoinPath(int64 directory, int64 relative) {
+    if (relative == 0) { return directory; }
+    unsafe(using krt.mem;) { if (((byte*)relative)[0] == 47) { return relative; } }
+    int64 length = KrtDriverStringLength(directory);
+    if (length == 0) { return relative; }
+    unsafe(using krt.mem;) {
+        if (((byte*)directory)[length - 1] == 47) { return KrtDriverConcat(directory, relative); }
+    }
+    return KrtDriverConcat(KrtDriverConcat(directory, (int64)"/"), relative);
+}
+
+int64 KrtDriverNormalizePath(int64 path) {
+    int64 length = KrtDriverStringLength(path);
+    if (length == 0 || length > 16383) { return 0; }
+    int64 absolute = path;
+    unsafe(using krt.mem;) { if (((byte*)path)[0] != 47) { absolute = KrtDriverJoinPath(KrtDriverCurrentDirectory(), path); } }
+    length = KrtDriverStringLength(absolute);
+    int64 result = KrtDriverAlloc(length + 2);
+    if (result == 0) { return 0; }
+    unsafe(using krt.mem;) {
+        byte* source = (byte*)absolute; byte* target = (byte*)result;
+        int64 write = 1; int64 position = 0; target[0] = 47;
+        while (position < length) {
+            while (position < length && source[position] == 47) { position = position + 1; }
+            int64 start = position;
+            while (position < length && source[position] != 47) { position = position + 1; }
+            int64 count = position - start;
+            if (count == 0 || (count == 1 && source[start] == 46)) { continue; }
+            if (count == 2 && source[start] == 46 && source[start + 1] == 46) {
+                if (write > 1) { write = write - 1; while (write > 1 && target[write - 1] != 47) { write = write - 1; } }
+                continue;
+            }
+            if (write > 1 && target[write - 1] != 47) { target[write] = 47; write = write + 1; }
+            int64 index = 0;
+            while (index < count) { target[write] = source[start + index]; write = write + 1; index = index + 1; }
+        }
+        if (write > 1 && target[write - 1] == 47) { write = write - 1; }
+        target[write] = 0;
+    }
+    return result;
+}
+
+int64 KrtDriverAbsolutePath(int64 path) {
+    int64 current = KrtDriverNormalizePath(path);
+    if (current == 0) { return 0; }
+    int32 links = 0;
+    while (links < 40) {
+        int64 length = KrtDriverStringLength(current); bool changed = false;
+        int64 position = 1;
+        unsafe(using krt.mem;) {
+            byte* text = (byte*)current;
+            while (position <= length) {
+                if (position == length || text[position] == 47) {
+                    int64 prefix = KrtDriverCopyString(current, position);
+                    if ((KrtDriverFileMode(prefix, false) & 61440) == 40960) {
+                        int64 target = KrtDriverAlloc(16384);
+                        int64 count = syscall(89, prefix, target, 16383, 0, 0, 0);
+                        if (count < 0) { return 0; }
+                        ((byte*)target)[count] = 0;
+                        int64 resolved = KrtDriverJoinPath(KrtDriverDirectory(prefix), target);
+                        current = KrtDriverNormalizePath(KrtDriverConcat(resolved, current + position));
+                        if (current == 0) { return 0; }
+                        changed = true; links = links + 1; break;
+                    }
+                }
+                position = position + 1;
+            }
+        }
+        if (!changed) { return current; }
+    }
+    return 0;
+}
+
+int64 KrtDriverDirectory(int64 path) {
+    int64 length = KrtDriverStringLength(path);
+    unsafe(using krt.mem;) {
+        byte* source = (byte*)path; int64 position = length;
+        while (position > 0 && source[position - 1] != 47) { position = position - 1; }
+        if (position == 0) { return (int64)"."; }
+        if (position == 1) { return (int64)"/"; }
+        return KrtDriverCopyString(path, position - 1);
+    }
+}
+
+int64 KrtDriverBaseName(int64 path) {
+    int64 position = KrtDriverStringLength(path);
+    unsafe(using krt.mem;) { while (position > 0 && ((byte*)path)[position - 1] != 47) { position = position - 1; } }
+    return path + position;
+}
+
+int64 KrtDriverStem(int64 path) {
+    int64 name = KrtDriverBaseName(path); int64 length = KrtDriverStringLength(name); int64 end = length;
+    unsafe(using krt.mem;) {
+        int64 index = length - 1;
+        while (index > 0) { if (((byte*)name)[index] == 46) { end = index; break; } index = index - 1; }
+    }
+    return KrtDriverCopyString(name, end);
+}
+
+KrtDriverPath KrtDriverListEntries(int64 directory) {
+    int64 descriptor = syscall(2, directory, 65536, 0, 0, 0, 0);
+    if (descriptor < 0) { return null; }
+    KrtDriverPath list = null;
+    unsafe(using krt.mem;) {
+        byte* buffer = stackalloc byte[8192];
+        while (true) {
+            int64 count = syscall(217, descriptor, (int64)buffer, 8192, 0, 0, 0);
+            if (count == -4) { continue; }
+            if (count <= 0) { break; }
+            int64 offset = 0;
+            while (offset + 19 < count) {
+                int32 size = (int32)buffer[offset + 16] | ((int32)buffer[offset + 17] << 8);
+                if (size < 20 || offset + size > count) { break; }
+                int64 name = (int64)(buffer + offset + 19);
+                if (!KrtDriverStringEqual(name, (int64)".") && !KrtDriverStringEqual(name, (int64)"..")) {
+                    KrtDriverPath item = new KrtDriverPath();
+                    item.value = KrtDriverJoinPath(directory, KrtDriverCopyString(name, KrtDriverStringLength(name)));
+                    if (list == null || KrtDriverStringCompare(item.value, list.value) < 0) { item.next = list; list = item; }
+                    else {
+                        KrtDriverPath previous = list;
+                        while (previous.next != null && KrtDriverStringCompare(previous.next.value, item.value) < 0) { previous = previous.next; }
+                        item.next = previous.next; previous.next = item;
+                    }
+                }
+                offset = offset + size;
+            }
+        }
+    }
+    syscall(3, descriptor, 0, 0, 0, 0, 0);
+    return list;
+}
+
+KrtDriverPath KrtDriverListFiles(int64 directory) {
+    KrtDriverPath entries = KrtDriverListEntries(directory); KrtDriverPath files = null;
+    while (entries != null) { if (KrtDriverFileExists(entries.value)) { files = KrtDriverAppend(files, entries.value); } entries = entries.next; }
+    return files;
+}
+
+KrtDriverPath KrtDriverListDirectories(int64 directory) {
+    KrtDriverPath entries = KrtDriverListEntries(directory); KrtDriverPath directories = null;
+    while (entries != null) { if (KrtDriverIsDirectory(entries.value)) { directories = KrtDriverAppend(directories, entries.value); } entries = entries.next; }
+    return directories;
+}
+
+KrtDriverPath KrtDriverListKrtFiles(int64 directory) {
+    KrtDriverPath entries = KrtDriverListFiles(directory); KrtDriverPath files = null;
+    while (entries != null) { if (KrtDriverEndsWith(entries.value, ".krt")) { files = KrtDriverAppend(files, entries.value); } entries = entries.next; }
+    return files;
+}
+
+bool KrtDriverMakeDirectories(int64 path) {
+    int64 absolute = KrtDriverAbsolutePath(path);
+    if (absolute == 0) { return false; }
+    int64 length = KrtDriverStringLength(absolute); int64 position = 1;
+    unsafe(using krt.mem;) {
+        byte* text = (byte*)absolute;
+        while (position <= length) {
+            if (position == length || text[position] == 47) {
+                int64 prefix = KrtDriverCopyString(absolute, position);
+                int64 result = syscall(83, prefix, 493, 0, 0, 0, 0);
+                if (result != 0 && !KrtDriverIsDirectory(prefix)) { return false; }
+            }
+            position = position + 1;
+        }
+    }
+    return true;
+}
+
+bool KrtDriverRemoveFile(int64 path) { int64 result = syscall(87, path, 0, 0, 0, 0, 0); return result == 0 || result == -2; }
+
+bool KrtDriverRemoveTree(int64 path) {
+    if ((KrtDriverFileMode(path, false) & 61440) != 16384) { return KrtDriverRemoveFile(path); }
+    KrtDriverPath entries = KrtDriverListEntries(path);
+    while (entries != null) { if (!KrtDriverRemoveTree(entries.value)) { return false; } entries = entries.next; }
+    int64 result = syscall(84, path, 0, 0, 0, 0, 0); return result == 0 || result == -2;
+}
+
+int64 KrtDriverNumber(int64 number) {
+    unsafe(using krt.mem;) {
+        byte* digits = stackalloc byte[24]; int64 position = 23; digits[position] = 0;
+        bool negative = number < 0;
+        uint64 magnitude = (uint64)number;
+        if (negative) { magnitude = (uint64)(-(number + 1)) + 1; }
+        while (true) { position = position - 1; digits[position] = (byte)(48 + magnitude % 10); magnitude = magnitude / 10; if (magnitude == 0) { break; } }
+        if (negative) { position = position - 1; digits[position] = 45; }
+        return KrtDriverCopyString((int64)(digits + position), 23 - position);
+    }
+}
+
+int64 KrtDriverTemporaryPath(int64 directory, int64 prefix) {
+    KrtDriverTemporaryIndex = KrtDriverTemporaryIndex + 1;
+    int64 name = KrtDriverConcat(prefix, KrtDriverNumber(syscall(39, 0, 0, 0, 0, 0, 0)));
+    name = KrtDriverConcat(KrtDriverConcat(name, (int64)"-"), KrtDriverNumber(KrtDriverTemporaryIndex));
+    return KrtDriverJoinPath(directory, name);
+}
+
+// Binary artifacts are streamed independently of the source-reader limit.
+bool KrtDriverCopyToDescriptor(int64 source, int64 target) {
+    int64 descriptor = syscall(2, source, 0, 0, 0, 0, 0);
+    if (descriptor < 0) { return false; }
+    int64 data = KrtDriverAlloc(65536);
+    if (data == 0) { syscall(3, descriptor, 0, 0, 0, 0, 0); return false; }
+    bool ok = true;
+    while (ok) {
+        int64 count = syscall(0, descriptor, data, 65536, 0, 0, 0);
+        if (count == -4) { continue; }
+        if (count < 0) { ok = false; break; }
+        if (count == 0) { break; }
+        ok = KrtDriverWriteAll(target, data, count);
+    }
+    if (syscall(3, descriptor, 0, 0, 0, 0, 0) != 0) { ok = false; }
+    return ok;
+}
+
+bool KrtDriverCopyFile(int64 source, int64 target, bool executable) {
+    return KrtDriverPublish(source, target, executable);
+}
+
+bool KrtDriverPublish(int64 source, int64 target, bool executable) {
+    int64 temporary = KrtDriverTemporaryPath(KrtDriverDirectory(target), (int64)".krt-output-");
+    int64 descriptor = syscall(2, temporary, 193, 384, 0, 0, 0);
+    int32 attempts = 0;
+    while (descriptor == -17 && attempts < 128) {
+        temporary = KrtDriverTemporaryPath(KrtDriverDirectory(target), (int64)".krt-output-");
+        descriptor = syscall(2, temporary, 193, 384, 0, 0, 0);
+        attempts = attempts + 1;
+    }
+    if (descriptor < 0) { return false; }
+    bool ok = KrtDriverCopyToDescriptor(source, descriptor);
+    if (syscall(3, descriptor, 0, 0, 0, 0, 0) != 0) { ok = false; }
+    int64 mode = executable ? 493 : 420;
+    if (ok) { ok = syscall(90, temporary, mode, 0, 0, 0, 0) == 0; }
+    if (ok) { ok = syscall(82, temporary, target, 0, 0, 0, 0) == 0; }
+    if (!ok) { KrtDriverRemoveFile(temporary); }
+    return ok;
+}
+
+KrtDriverPath KrtDriverArguments() {
+    KrtDriverBuffer buffer = new KrtDriverBuffer();
+    if (!KrtDriverReadFile((int64)"/proc/self/cmdline", buffer)) { return null; }
+    KrtDriverPath arguments = null; int64 position = 0;
+    unsafe(using krt.mem;) {
+        byte* text = (byte*)buffer.data;
+        while (position < buffer.length) {
+            int64 start = position;
+            while (position < buffer.length && text[position] != 0) { position = position + 1; }
+            arguments = KrtDriverAppend(arguments, KrtDriverCopyString(buffer.data + start, position - start));
+            position = position + 1;
+        }
+    }
+    return arguments;
+}
+
+int64 KrtDriverGetEnv(string name) {
+    if (KrtDriverEnvironment == 0) {
+        KrtDriverBuffer buffer = new KrtDriverBuffer();
+        if (!KrtDriverReadFile((int64)"/proc/self/environ", buffer)) { return (int64)""; }
+        KrtDriverEnvironment = buffer.data;
+        // Two terminators make the environment traversal independent of size.
+        int64 copy = KrtDriverAlloc(buffer.length + 2);
+        unsafe(using krt.mem;) {
+            byte* source = (byte*)buffer.data; byte* target = (byte*)copy; int64 index = 0;
+            while (index < buffer.length) { target[index] = source[index]; index = index + 1; }
+            target[buffer.length] = 0; target[buffer.length + 1] = 0;
+        }
+        KrtDriverEnvironment = copy;
+    }
+    int64 length = KrtDriverStringLength((int64)name); int64 position = 0;
+    unsafe(using krt.mem;) {
+        byte* data = (byte*)KrtDriverEnvironment;
+        while (data[position] != 0) {
+            int64 start = position;
+            while (data[position] != 0) { position = position + 1; }
+            if (position - start > length && data[start + length] == 61 && KrtDriverStartsWith(KrtDriverEnvironment + start, name)) {
+                return KrtDriverEnvironment + start + length + 1;
+            }
+            position = position + 1;
+        }
+    }
+    return (int64)"";
+}
+
+int64 KrtDriverExecutablePath() {
+    int64 buffer = KrtDriverAlloc(16384);
+    int64 length = syscall(89, (int64)"/proc/self/exe", buffer, 16383, 0, 0, 0);
+    if (length < 0) { return 0; }
+    unsafe(using krt.mem;) { ((byte*)buffer)[length] = 0; }
+    return buffer;
+}
+
+int64 KrtDriverRepository() {
+    int64 configured = KrtDriverGetEnv("KAIROTE_ROOT");
+    if (KrtDriverStringLength(configured) > 0) { return KrtDriverAbsolutePath(configured); }
+    int64 directory = KrtDriverDirectory(KrtDriverExecutablePath()); int32 depth = 0;
+    while (depth < 12) {
+        if (KrtDriverIsDirectory(KrtDriverJoinPath(directory, (int64)"SelfHost")) && KrtDriverIsDirectory(KrtDriverJoinPath(directory, (int64)"libs"))) { return directory; }
+        int64 parent = KrtDriverDirectory(directory);
+        if (KrtDriverStringEqual(parent, directory)) { break; }
+        directory = parent; depth = depth + 1;
+    }
+    return KrtDriverCurrentDirectory();
+}
+
+int32 KrtDriverRun(int64 executable, KrtDriverPath arguments) {
+    int64 count = 1; KrtDriverPath item = arguments;
+    while (item != null) { count = count + 1; item = item.next; }
+    int64 vector = KrtDriverAlloc((count + 1) * 8);
+    if (vector == 0) { return 127; }
+    unsafe(using krt.mem;) {
+        int64* values = (int64*)vector; values[0] = executable; int64 index = 1; item = arguments;
+        while (item != null) { values[index] = item.value; index = index + 1; item = item.next; }
+        values[index] = 0;
+    }
+    int64 process = syscall(57, 0, 0, 0, 0, 0, 0);
+    if (process < 0) { return 127; }
+    if (process == 0) {
+        unsafe(using krt.mem;) {
+            int64* environment = stackalloc int64[1]; environment[0] = 0;
+            syscall(59, executable, vector, (int64)environment, 0, 0, 0);
+        }
+        syscall(60, 127, 0, 0, 0, 0, 0); return 127;
+    }
+    unsafe(using krt.mem;) {
+        int32* status = stackalloc int32[1]; status[0] = 0;
+        int64 result = syscall(61, process, (int64)status, 0, 0, 0, 0);
+        while (result == -4) { result = syscall(61, process, (int64)status, 0, 0, 0, 0); }
+        if (result < 0) { return 127; }
+        if ((status[0] & 127) != 0) { return 128 + (status[0] & 127); }
+        return (status[0] >> 8) & 255;
+    }
+}

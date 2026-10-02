@@ -5,7 +5,7 @@ import subprocess
 import tempfile
 import unittest
 
-from Test.SelfHost.bootstrap import Bootstrap
+from Test.SelfHost.Bootstrap import Bootstrap
 
 
 class NativeCollectionsTests(unittest.TestCase):
@@ -27,10 +27,10 @@ class NativeCollectionsTests(unittest.TestCase):
     def test_constructor_fields_methods_overloads_and_initializers(self):
         self.check('constructors', '''
 class Box {
-    public int32 base = 7;
-    public int32 value = base + 2;
+    public int32 initial = 7;
+    public int32 value = initial + 2;
     public Box(int32 value) { this.value += value; }
-    public Box(int32 x, int32 y) { value = x + y + base; }
+    public Box(int32 x, int32 y) { value = x + y + initial; }
     public int32 Get() { return value; }
 }
 class Default { public int32 x = 19; }

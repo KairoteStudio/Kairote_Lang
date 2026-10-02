@@ -466,14 +466,45 @@ static void emit_call_local(KROCodegenContext* ctx, const char* func_name) {
     kro_add_reloc(ctx->writer, KRO_SEC_TEXT, call_offset + 1, sym_idx, KRO_RELOC_PC32, 0);
 }
 
+static void release_temporary_storage(KROCodegenContext* ctx) {
+    KRT_FREE(ctx->temp_slots);
+    KRT_FREE(ctx->temp_index);
+    ctx->temp_slots = NULL;
+    ctx->temp_index = NULL;
+    ctx->temp_slot_count = ctx->temp_slot_capacity = ctx->temp_index_size = 0;
+}
+
+static bool prepare_temporary_storage(KROCodegenContext* ctx, KrtIRFunction* func) {
+    size_t references = 0;
+    for (KrtIRBasicBlock* block = func->entry_block; block; block = block->next) {
+        for (KrtIRInst* inst = block->first_inst; inst; inst = inst->next) {
+            references += inst->result.type == KRT_IR_VALUE_TEMP;
+            for (int operand = 0; operand < inst->operand_count; operand++) {
+                references += inst->operands[operand].type == KRT_IR_VALUE_TEMP;
+            }
+            if (references > KRT_KRO_MAX_TEMP_STORAGE) { return false; }
+        }
+    }
+    if (!references) { references = 1; }
+    release_temporary_storage(ctx);
+    int index_size = 2;
+    while ((size_t)index_size < references * 2) { index_size *= 2; }
+    ctx->temp_slots = KRT_CALLOC(references, sizeof(*ctx->temp_slots));
+    ctx->temp_index = KRT_CALLOC(index_size, sizeof(*ctx->temp_index));
+    if (!ctx->temp_slots || !ctx->temp_index) { release_temporary_storage(ctx); return false; }
+    ctx->temp_slot_capacity = (int)references;
+    ctx->temp_index_size = index_size;
+    return true;
+}
+
 static KROTempSlot* find_temp_location(KROCodegenContext* ctx, int temp_index) {
-    unsigned bucket = (unsigned)temp_index * 2654435761u & (KRT_KRO_TEMP_INDEX_SIZE - 1);
+    unsigned bucket = (unsigned)temp_index * 2654435761u & (ctx->temp_index_size - 1);
     while (ctx->temp_index[bucket]) {
         KROTempSlot* slot = &ctx->temp_slots[ctx->temp_index[bucket] - 1];
         if (slot->temp_index == temp_index) {
             return slot;
         }
-        bucket = (bucket + 1) & (KRT_KRO_TEMP_INDEX_SIZE - 1);
+        bucket = (bucket + 1) & (ctx->temp_index_size - 1);
     }
     return NULL;
 }
@@ -483,7 +514,7 @@ static KROTempSlot* create_temp_location(KROCodegenContext* ctx, int temp_index)
     if (slot) {
         return slot;
     }
-    if (ctx->temp_slot_count >= KRT_KRO_MAX_TEMP_REGS) {
+    if (ctx->temp_slot_count >= ctx->temp_slot_capacity) {
         return NULL;
     }
     int index = ctx->temp_slot_count++;
@@ -494,9 +525,9 @@ static KROTempSlot* create_temp_location(KROCodegenContext* ctx, int temp_index)
     slot->reg_low = slot->reg_high = -1;
     slot->first_position = -1;
     slot->last_position = -1;
-    unsigned bucket = (unsigned)temp_index * 2654435761u & (KRT_KRO_TEMP_INDEX_SIZE - 1);
+    unsigned bucket = (unsigned)temp_index * 2654435761u & (ctx->temp_index_size - 1);
     while (ctx->temp_index[bucket]) {
-        bucket = (bucket + 1) & (KRT_KRO_TEMP_INDEX_SIZE - 1);
+        bucket = (bucket + 1) & (ctx->temp_index_size - 1);
     }
     ctx->temp_index[bucket] = index + 1;
     return slot;
@@ -1173,9 +1204,10 @@ static int calculate_function_stack_size(KROCodegenContext* ctx) {
     return stack_size;
 }
 
-static void generate_function(KROCodegenContext* ctx, KrtIRFunction* func, KrtIRModule* module) {
-    if (!func) {
-        return;
+static bool generate_function(KROCodegenContext* ctx, KrtIRFunction* func, KrtIRModule* module) {
+    if (!func || !prepare_temporary_storage(ctx, func)) {
+        KrtError("KRO temporary storage allocation failed");
+        return false;
     }
 
     // KrtIrSsaOptimize(func);  //禁用SSA优化,除了Airs_td以外的人不要打开它,SSA不稳定
@@ -1188,7 +1220,6 @@ static void generate_function(KROCodegenContext* ctx, KrtIRFunction* func, KrtIR
     ctx->local_var_count = 0;
     ctx->current_stack_offset = 0;
     /* Slots are initialized when allocated; unused capacity needs no clearing. */
-    memset(ctx->temp_index, 0, sizeof(ctx->temp_index));
     ctx->temp_slot_count = 0;
     ctx->func_index++;
     ctx->current_function_id = ctx->func_index;
@@ -1292,6 +1323,7 @@ static void generate_function(KROCodegenContext* ctx, KrtIRFunction* func, KrtIR
     }
     kro_update_symbol_value(ctx->writer, ctx->epilogue_symbol, kro_get_code_offset(ctx->writer));
     emit_function_epilogue(ctx);
+    return true;
 }
 
 static void generate_data_section(KROCodegenContext* ctx, KrtIRModule* module) {
@@ -1313,47 +1345,11 @@ static void generate_data_section(KROCodegenContext* ctx, KrtIRModule* module) {
             }
             uint32_t rodata_offset = kro_get_rodata_offset(ctx->writer);
 
-            char escaped[4096];
-            uint32_t escaped_len = 0;
-            if (str) {
-                size_t len = strlen(str);
-                for (size_t s = 0; s < len && escaped_len < sizeof(escaped) - 1; s++) {
-                    if (str[s] == '\\' && s + 1 < len) {
-                        s++;
-                        switch (str[s]) {
-                        case 'n':
-                            escaped[escaped_len++] = '\n';
-                            break;
-                        case 'r':
-                            escaped[escaped_len++] = '\r';
-                            break;
-                        case 't':
-                            escaped[escaped_len++] = '\t';
-                            break;
-                        case '\\':
-                            escaped[escaped_len++] = '\\';
-                            break;
-                        case '"':
-                            escaped[escaped_len++] = '"';
-                            break;
-                        case '0':
-                            escaped[escaped_len++] = '\0';
-                            break;
-                        default:
-                            escaped[escaped_len++] = '\\';
-                            if (escaped_len < sizeof(escaped) - 1) {
-                                escaped[escaped_len++] = str[s];
-                            }
-                            break;
-                        }
-                    } else {
-                        escaped[escaped_len++] = str[s];
-                    }
-                }
-            }
-            escaped[escaped_len] = '\0';
-            escaped_len++;
-            kro_write_rodata(ctx->writer, escaped, escaped_len);
+            /* The lexer already decoded escapes. Reinterpreting them here
+             * corrupts literal backslashes (including embedded source text). */
+            size_t len = strlen(str);
+            if (len >= UINT32_MAX) { KrtError("KRO string constant exceeds object storage limit"); return; }
+            kro_write_rodata(ctx->writer, str, (uint32_t)len + 1);
 
             char sym_name[64];
             snprintf(sym_name, sizeof(sym_name), "str_const_%d", i);
@@ -1477,12 +1473,19 @@ void KrtKrtGenerate(FILE* output_file, const char* output_filename, KrtIRModule*
             kro_set_entry_point(ctx.writer, actual_offset);
         }
 
-        generate_function(&ctx, func, module);
+        if (!generate_function(&ctx, func, module)) {
+            release_temporary_storage(&ctx);
+            KRT_FREE(sym_indices);
+            KRT_FREE(ctx.string_const_sym_indices);
+            kro_writer_destroy(ctx.writer);
+            return;
+        }
         func = func->next;
         func_idx++;
     }
 
     KRT_FREE(sym_indices);
+    release_temporary_storage(&ctx);
 
     {
         const char* main_name = "_KrtMainEntry";

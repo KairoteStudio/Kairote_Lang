@@ -1,0 +1,142 @@
+// Text artifacts are emitted directly by the native compiler.
+static int32 KrtDriverArtifactTarget = 0;
+static KrtDriverBuffer KrtDriverLastVm = null;
+
+bool KrtArtifactText(int64 descriptor, string text) {
+    return KrtDriverWriteAll(descriptor,(int64)text,KrtDriverStringLength((int64)text));
+}
+
+string KrtArtifactOp(int32 op) {
+    if (op == 0) { return "nop"; } if (op == 1) { return "const"; }
+    if (op == 2) { return "load.local"; } if (op == 3) { return "store.local"; }
+    if (op == 4) { return "add"; } if (op == 5) { return "sub"; } if (op == 6) { return "mul"; }
+    if (op == 7) { return "div"; } if (op == 8) { return "mod"; }
+    if (op == 9) { return "and"; } if (op == 10) { return "or"; } if (op == 11) { return "xor"; }
+    if (op == 12) { return "shl"; } if (op == 13) { return "shr"; }
+    if (op == 14) { return "neg"; } if (op == 15) { return "not"; } if (op == 16) { return "compare"; }
+    if (op == 17) { return "jump"; } if (op == 18) { return "branch"; }
+    if (op == 19) { return "call"; } if (op == 20) { return "return"; }
+    if (op == 21) { return "address"; } if (op == 22) { return "load"; } if (op == 23) { return "store"; }
+    if (op == 24) { return "allocate"; } if (op == 25) { return "data"; }
+    if (op == 26) { return "syscall"; } if (op == 27) { return "drop"; } if (op == 28) { return "cast"; }
+    if (op == 29) { return "ref"; } if (op == 30) { return "stack.allocate"; }
+    if (op == 31) { return "bool.not"; } if (op == 32) { return "dup"; }
+    if (op == 33) { return "post.increment"; } if (op == 34) { return "free"; }
+    if (op == 35) { return "string.equal"; } if (op == 36) { return "string.concat"; } if (op == 37) { return "string.length"; }
+    if (op == 38) { return "float.convert"; } if (op == 39) { return "float.binary"; } if (op == 40) { return "float.compare"; }
+    if (op == 41) { return "float.neg"; } if (op == 42) { return "float.bool"; } if (op == 43) { return "float.post.increment"; }
+    if (op == 44) { return "global.address"; } if (op == 45) { return "function.address"; } if (op == 46) { return "call.indirect"; }
+    if (op == 50) { return "try.enter"; } if (op == 51) { return "try.leave"; } if (op == 52) { return "throw"; }
+    if (op == 53) { return "catch.value"; } if (op == 54) { return "catch.type"; }
+    if (op == 60) { return "wide.convert"; } if (op == 61) { return "wide.binary"; } if (op == 62) { return "wide.compare"; }
+    if (op == 63) { return "wide.unary"; } if (op == 66) { return "wide.literal"; } if (op == 67) { return "wide.post.increment"; }
+    if (op == 68) { return "wide.float"; } if (op == 69) { return "wide.ref"; }
+    if (op == 70) { return "aggregate.address"; } if (op == 71) { return "aggregate.copy"; } if (op == 72) { return "aggregate.zero"; }
+    return "unknown";
+}
+
+bool KrtArtifactWriteIr(KrtNativeModule module, int64 descriptor) {
+    if (module == null) { return KrtArtifactText(descriptor,"; data-only module\n"); }
+    if (module.ssa != null) { return KrtSsaWriteIr(module.ssa,descriptor); }
+    if (!KrtArtifactText(descriptor,"; Kairote native stack IR\n")) { return false; }
+    int32 function_index = 0;
+    while (function_index < module.function_count) {
+        int64 header = KrtDriverConcat((int64)"function ",KrtDriverNumber(function_index));
+        header = KrtDriverConcat(header,KrtDriverConcat((int64)" params=",KrtDriverNumber(module.parameter_counts[function_index])));
+        header = KrtDriverConcat(header,KrtDriverConcat((int64)" locals=",KrtDriverNumber(module.local_counts[function_index])));
+        if (function_index == module.entry) { header = KrtDriverConcat(header,(int64)" entry"); }
+        if (!KrtArtifactText(descriptor,(string)header) || !KrtArtifactText(descriptor," {\n")) { return false; }
+        int32 index = module.starts[function_index]; int32 last = module.count;
+        if (function_index + 1 < module.function_count) { last = module.starts[function_index + 1]; }
+        while (index < last) {
+            int64 line = KrtDriverConcat((int64)"  ",KrtDriverNumber(index));
+            line = KrtDriverConcat(line,KrtDriverConcat((int64)": ",(int64)KrtArtifactOp(module.ops[index])));
+            line = KrtDriverConcat(line,KrtDriverConcat((int64)" ",KrtDriverNumber(module.args[index])));
+            line = KrtDriverConcat(line,KrtDriverConcat((int64)" ",KrtDriverNumber(module.extra[index])));
+            if (!KrtArtifactText(descriptor,(string)line) || !KrtArtifactText(descriptor,"\n")) { return false; }
+            index = index + 1;
+        }
+        if (!KrtArtifactText(descriptor,"}\n")) { return false; }
+        function_index = function_index + 1;
+    }
+    return true;
+}
+
+bool KrtArtifactIr(KrtNativeModule module, int64 path) {
+    int64 descriptor = syscall(2,path,577,420,0,0,0); if (descriptor < 0) { return false; }
+    bool result = KrtArtifactWriteIr(module,descriptor);
+    if (syscall(3,descriptor,0,0,0,0,0) != 0) { result = false; }
+    return result;
+}
+
+int32 KrtArtifactWord(byte[] bytes, int32 offset) {
+    return (int32)bytes[offset] | ((int32)bytes[offset+1] << 8) | ((int32)bytes[offset+2] << 16) | ((int32)bytes[offset+3] << 24);
+}
+
+int64 KrtArtifactSymbol(KrtKroObject object, int32 symbol_index) {
+    if (object.symbol_bytes == null || object.string_bytes == null || symbol_index < 0 || symbol_index >= object.symbol_count) { return 0; }
+    int32 offset = KrtArtifactWord(object.symbol_bytes,symbol_index*32);
+    if (offset < 0 || offset >= object.strtab_size) { return 0; }
+    int32 length = 0; while (offset+length < object.strtab_size && object.string_bytes[offset+length] != 0) { length = length + 1; }
+    int64 name = KrtDriverAlloc(length+1);
+    unsafe(using krt.mem;) {
+        byte* target = (byte*)name; int32 index = 0;
+        while (index < length) { target[index] = object.string_bytes[offset+index]; index = index+1; }
+        target[length] = 0;
+    }
+    return name;
+}
+
+bool KrtArtifactAssembly(KrtKroObject object, KrtNativeModule module, int64 path) {
+    if (object == null || module == null || object.text_words == null) { return false; }
+    int64 descriptor = syscall(2,path,577,420,0,0,0); if (descriptor < 0) { return false; }
+    bool ok = KrtArtifactText(descriptor,"# Kairote x86-64 native code; assemble with GNU as.\n.section .text\n");
+    int32[] labels = new int32[object.text_size+1]; int32 function_index = 0;
+    while (function_index < module.function_count) {
+        int32 offset = module.function_offsets[function_index];
+        if (offset < 0 || offset >= object.text_size) { ok = false; break; }
+        labels[offset] = function_index+1; function_index = function_index+1;
+    }
+    int32 position = 0; int32 relocation = 0; int32 next_relocation = -1;
+    if (object.text_reloc_count > 0) { next_relocation = KrtArtifactWord(object.text_relocation_bytes,0); }
+    unsafe(using krt.mem;) {
+        byte* line = stackalloc byte[128]; byte* digits = (byte*)(int64)"0123456789abcdef";
+        while (position < object.text_size && ok) {
+            if (labels[position] > 0) {
+                function_index = labels[position]-1;
+                int64 label = KrtDriverConcat((int64)".Lkrt_function_",KrtDriverNumber(function_index));
+                ok = KrtArtifactText(descriptor,(string)label) && KrtArtifactText(descriptor,":\n");
+                if (function_index == module.entry) { ok = ok && KrtArtifactText(descriptor,".global _start\n.global main\n_start:\nmain:\n"); }
+                if (object.symbol_bytes != null) {
+                    int64 name = KrtArtifactSymbol(object,function_index);
+                    if (name != 0 && !KrtDriverWord(name,"main") && KrtArtifactWord(object.symbol_bytes,function_index*32+16) != 0) {
+                        ok = ok && KrtArtifactText(descriptor,".global \"") && KrtArtifactText(descriptor,(string)name) && KrtArtifactText(descriptor,"\"\n\"") && KrtArtifactText(descriptor,(string)name) && KrtArtifactText(descriptor,"\":\n");
+                    }
+                }
+                if (!ok) { break; }
+            }
+            if (position == next_relocation) {
+                int32 symbol_index = KrtArtifactWord(object.text_relocation_bytes,relocation*16+4);
+                int64 name = KrtArtifactSymbol(object,symbol_index);
+                if (name == 0 || KrtArtifactWord(object.text_relocation_bytes,relocation*16+8) != 3) { ok = false; break; }
+                ok = KrtArtifactText(descriptor,".long \"") && KrtArtifactText(descriptor,(string)name) && KrtArtifactText(descriptor,"\" - . - 4\n");
+                position = position+4; relocation = relocation+1; next_relocation = -1;
+                if (relocation < object.text_reloc_count) { next_relocation = KrtArtifactWord(object.text_relocation_bytes,relocation*16); }
+                continue;
+            }
+            line[0]=46; line[1]=98; line[2]=121; line[3]=116; line[4]=101; line[5]=32;
+            int32 length = 6; int32 count = 0;
+            while (position < object.text_size && count < 16 && position != next_relocation) {
+                if (count > 0 && labels[position] > 0) { break; }
+                if (count > 0) { line[length]=44; length=length+1; }
+                int32 value = (object.text_words[position/4] >> ((position%4)*8)) & 255;
+                line[length]=48; line[length+1]=120; line[length+2]=digits[value/16]; line[length+3]=digits[value%16]; length=length+4;
+                position=position+1; count=count+1;
+            }
+            line[length]=10; length=length+1;
+            ok = KrtDriverWriteAll(descriptor,(int64)line,length);
+        }
+    }
+    delete labels; if (syscall(3,descriptor,0,0,0,0,0) != 0) { ok=false; }
+    return ok;
+}

@@ -4,8 +4,9 @@ import subprocess
 import tempfile
 import unittest
 
+from Test.SelfHost.Bootstrap import KRTC
+
 ROOT = Path(__file__).resolve().parents[2]
-KRTC = Path(os.environ.get("KRTC", ROOT / "Re.KrtC/build/KrtC")).resolve()
 
 class LexerTests(unittest.TestCase):
     def run_parts(self, parts):

@@ -3,7 +3,6 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
-import sys
 import tempfile
 import unittest
 
@@ -19,7 +18,7 @@ class LanguageProjectTest(unittest.TestCase):
             shutil.copytree(ROOT / 'Test/SelfHost/examples/dispatch-project', project,
                             ignore=shutil.ignore_patterns('bin', 'obj', '.krtcache'))
             compiled = subprocess.run([
-                sys.executable, str(ROOT / 'SelfHost/Compile.py'), 'build', str(project),
+                str(ROOT / 'SelfHost/krtc'), 'build', str(project),
                 '--compiler', str(COMPILER)], capture_output=True, text=True, timeout=60)
             self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
             executed = subprocess.run([str(project / 'bin/release/DispatchDemo')],
@@ -33,7 +32,7 @@ class LanguageProjectTest(unittest.TestCase):
             shutil.copytree(ROOT / 'Test/SelfHost/examples/language-project', project,
                             ignore=shutil.ignore_patterns('bin', 'obj', '.krtcache'))
             compiled = subprocess.run([
-                sys.executable, str(ROOT / 'SelfHost/Compile.py'), 'build', str(project),
+                str(ROOT / 'SelfHost/krtc'), 'build', str(project),
                 '--compiler', str(COMPILER)], capture_output=True, text=True, timeout=60)
             self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
             executed = subprocess.run([str(project / 'bin/release/LanguageDemo')],

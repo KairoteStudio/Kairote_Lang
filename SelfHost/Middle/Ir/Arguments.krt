@@ -1,0 +1,36 @@
+// The receiver/function pointer is already on the operand stack. Named actuals
+// are evaluated once in source order, then loaded in formal parameter order.
+bool KrtNativeLowerArguments(KrtAstNode arguments, KrtAstNode target, int32 extra, KrtAstNode ast, KrtNativeModule module, int64 source) {
+    bool named = KrtNativeHasNamedArguments(arguments);
+    KrtAstNode argument = arguments; int32 position = extra;
+    while (argument != null) {
+        int32 index = position;
+        if (named) { index = argument.native_argument_index; }
+        if (index < 0 || target == null || index >= target.parameter_count) { return false; }
+        KrtAstNode expected = KrtAstMake(KrtAstKind.Type, argument.start, argument.length);
+        expected.native_scope = target.native_scope; expected.native_context = target.native_context;
+        expected.native_using_scope = target.native_using_scope;
+        if (!KrtNativeAnnotateType(expected, ast, source, target.parameter_type_starts[index], target.parameter_type_lengths[index])) { return false; }
+        if (!target.parameter_refs[index] && KrtNativeInlineValue(expected)) {
+            // Snapshot immediately after evaluating this actual. A later
+            // actual can mutate its original through a ref or method call.
+            if (!KrtNativeLowerAggregateArgument(argument,expected,ast,module,source)) { return false; }
+        } else {
+            if (!KrtNativeLowerExpression(argument,ast,module,source)) { return false; }
+            if (!target.parameter_refs[index] && !KrtNativeConvertValue(module,argument,expected)) { return false; }
+        }
+        if (named && (argument.native_argument_slot < 0 ||
+            KrtNativeEmit(module, (int32)KrtNativeOp.StoreLocal, argument.native_argument_slot, 0) < 0)) { return false; }
+        position = position + 1; argument = argument.next;
+    }
+    if (named) {
+        int32 index = extra;
+        while (index < target.parameter_count) {
+            argument = arguments;
+            while (argument != null && argument.native_argument_index != index) { argument = argument.next; }
+            if (argument == null || KrtNativeEmit(module, (int32)KrtNativeOp.LoadLocal, argument.native_argument_slot, 0) < 0) { return false; }
+            index = index + 1;
+        }
+    }
+    return position == target.parameter_count;
+}

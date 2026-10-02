@@ -1,0 +1,419 @@
+// Project configuration is interpreted by the native compiler driver. It is a
+// deliberately bounded data language, using the same lexer as source modules.
+class KrtProjectValue {
+    public int32 kind;
+    public int64 text;
+    public int64 number;
+    public KrtProjectValue next;
+}
+class KrtProjectVariable {
+    public int64 name;
+    public KrtProjectValue value;
+    public KrtProjectVariable next;
+}
+class KrtProject {
+    public int64 path;
+    public int64 directory;
+    public int64 name;
+    public int64 kind;
+    public int64 output;
+    public int64 optimization;
+    public bool optimization_set;
+    public int64 target;
+    public bool target_set;
+    public int64 version;
+    public int64 description;
+    public int64 configuration;
+    public KrtDriverPath patterns;
+    public KrtDriverPath libraries;
+    public KrtDriverPath includes;
+    public KrtDriverPath sources;
+    public KrtDriverPath objects;
+}
+class KrtProjectParser {
+    public KrtLexer lexer;
+    public KrtToken token;
+    public KrtProject project;
+    public KrtProjectVariable variables;
+    public int64 receiver;
+    public int32 errors;
+    public int32 depth;
+}
+
+int64 KrtProjectCat(int64 first, int64 second) {
+    int64 a = KrtDriverStringLength(first); int64 b = KrtDriverStringLength(second);
+    int64 result = KrtDriverAlloc(a + b + 1);
+    unsafe(using krt.mem;) {
+        byte* target = (byte*)result; byte* left = (byte*)first; byte* right = (byte*)second;
+        int64 i = 0; while (i < a) { target[i] = left[i]; i++; }
+        i = 0; while (i < b) { target[a+i] = right[i]; i++; } target[a+b] = 0;
+    }
+    return result;
+}
+int64 KrtProjectDecimal(int64 number) {
+    unsafe(using krt.mem;) {
+        byte* buffer = stackalloc byte[32]; int64 index = 31; buffer[index] = 0;
+        bool negative = number < 0; uint64 magnitude = (uint64)number;
+        if (negative) { magnitude = (uint64)(-(number+1))+1; }
+        do { index--; buffer[index] = (byte)(48 + magnitude % 10); magnitude = magnitude / 10; } while (magnitude != 0);
+        if (negative) { index--; buffer[index] = 45; }
+        return KrtDriverCopyString((int64)(buffer+index), 31-index);
+    }
+}
+int64 KrtProjectLower(int64 text) {
+    int64 result = KrtDriverCopyString(text, KrtDriverStringLength(text));
+    unsafe(using krt.mem;) { byte* bytes = (byte*)result; int64 i = 0;
+        while (bytes[i] != 0) { if (bytes[i] >= 65 && bytes[i] <= 90) { bytes[i] = bytes[i]+32; } i++; }
+    } return result;
+}
+bool KrtProjectEqual(int64 text, string expected) { return KrtDriverStringEqual(text, (int64)expected); }
+bool KrtProjectEnds(int64 text, string suffix) {
+    int64 length = KrtDriverStringLength(text); int64 count = KrtDriverStringLength((int64)suffix);
+    return length >= count && KrtDriverStringEqual(text+length-count, (int64)suffix);
+}
+KrtDriverPath KrtProjectAppend(KrtDriverPath head, int64 value, bool unique) {
+    KrtDriverPath tail = head;
+    while (tail != null) {
+        if (unique && KrtDriverStringEqual(tail.value, value)) { return head; }
+        if (tail.next == null) { break; } tail = tail.next;
+    }
+    KrtDriverPath item = new KrtDriverPath(); item.value = value;
+    if (tail == null) { return item; } tail.next = item; return head;
+}
+void KrtProjectFail(KrtProjectParser parser, string message) {
+    if (parser.errors != 0) { return; } parser.errors = parser.errors+1;
+    int64 detail = KrtProjectCat(parser.project.path, (int64)":");
+    detail = KrtProjectCat(detail, KrtProjectDecimal(parser.token.line));
+    detail = KrtProjectCat(detail, (int64)":");
+    detail = KrtProjectCat(detail, KrtProjectDecimal(parser.token.column));
+    detail = KrtProjectCat(detail, (int64)": "); detail = KrtProjectCat(detail, (int64)message);
+    KrtDriverError("E_PROJECT", (string)detail);
+}
+int64 KrtProjectToken(KrtProjectParser parser) {
+    return KrtDriverCopyString(parser.lexer.source+parser.token.start, parser.token.length);
+}
+bool KrtProjectIs(KrtProjectParser parser, string word) {
+    int64 count = KrtDriverStringLength((int64)word);
+    if (parser.token.length != count) { return false; }
+    unsafe(using krt.mem;) { byte* source = (byte*)parser.lexer.source; byte* expected = (byte*)(int64)word;
+        int64 i = 0; while (i < count) { if (source[parser.token.start+i] != expected[i]) { return false; } i++; }
+    } return true;
+}
+void KrtProjectNext(KrtProjectParser parser) {
+    if (parser.errors != 0) { return; }
+    KrtLexerNext(parser.lexer, parser.token);
+    if (parser.token.kind == KrtTokenKind.Invalid) { KrtProjectFail(parser, "unrecognized configuration token"); }
+}
+bool KrtProjectTake(KrtProjectParser parser, string word) {
+    if (!KrtProjectIs(parser, word)) {
+        int64 message = KrtProjectCat((int64)"expected '", (int64)word);
+        message = KrtProjectCat(message, (int64)"'"); KrtProjectFail(parser, (string)message); return false;
+    } KrtProjectNext(parser); return true;
+}
+KrtProjectValue KrtProjectString(int64 text) {
+    KrtProjectValue value = new KrtProjectValue(); value.kind = 1; value.text = text; return value;
+}
+KrtProjectValue KrtProjectBoolean(bool flag) {
+    KrtProjectValue value = new KrtProjectValue(); value.kind = 3; value.number = flag ? 1 : 0;
+    value.text = (int64)"False"; if (flag) { value.text = (int64)"True"; } return value;
+}
+bool KrtProjectTruth(KrtProjectValue value) {
+    if (value == null) { return false; } return value.kind == 1 ? KrtDriverStringLength(value.text) != 0 : value.number != 0;
+}
+KrtProjectValue KrtProjectLookup(KrtProjectParser parser, int64 name) {
+    KrtProjectVariable variable = parser.variables;
+    while (variable != null) { if (KrtDriverStringEqual(variable.name, name)) { return variable.value; } variable = variable.next; }
+    return null;
+}
+void KrtProjectAssign(KrtProjectParser parser, int64 name, KrtProjectValue value) {
+    KrtProjectVariable variable = parser.variables;
+    while (variable != null) {
+        if (KrtDriverStringEqual(variable.name, name)) { variable.value = value; return; } variable = variable.next;
+    }
+    variable = new KrtProjectVariable(); variable.name = name; variable.value = value;
+    variable.next = parser.variables; parser.variables = variable;
+}
+KrtProjectVariable KrtProjectSnapshot(KrtProjectVariable variables) {
+    KrtProjectVariable head = null; KrtProjectVariable tail = null;
+    while (variables != null) { KrtProjectVariable copy = new KrtProjectVariable(); copy.name = variables.name; copy.value = variables.value;
+        if (tail == null) { head = copy; } else { tail.next = copy; } tail = copy; variables = variables.next;
+    } return head;
+}
+int64 KrtProjectExpand(KrtProjectParser parser, int64 text) {
+    int64 result = (int64)""; int64 start = 0; int64 index = 0; int64 length = KrtDriverStringLength(text);
+    unsafe(using krt.mem;) { byte* bytes = (byte*)text;
+        while (index < length) {
+            if (bytes[index] == 36 && index+1 < length && bytes[index+1] == 123) {
+                int64 end = index+2; while (end < length && bytes[end] != 125) { end++; }
+                if (end == length) { index++; continue; }
+                result = KrtProjectCat(result, KrtDriverCopyString(text+start, index-start));
+                int64 name = KrtDriverCopyString(text+index+2, end-index-2); int64 replacement = 0;
+                if (end-index-2 >= 4 && bytes[index+2] == 101 && bytes[index+3] == 110 && bytes[index+4] == 118 && bytes[index+5] == 58) {
+                    replacement = KrtDriverGetEnv((string)(name+4)); if (replacement == 0) { replacement = (int64)""; }
+                } else { KrtProjectValue variable = KrtProjectLookup(parser, name);
+                    if (variable == null) { KrtProjectFail(parser,(string)KrtProjectCat((int64)"unknown variable in string expansion: ",name)); return 0; } replacement = variable.text;
+                }
+                result = KrtProjectCat(result, replacement); index = end+1; start = index;
+            } else { index++; }
+        }
+    }
+    return KrtProjectCat(result, KrtDriverCopyString(text+start, length-start));
+}
+int64 KrtProjectQuoted(KrtProjectParser parser, bool expand) {
+    if (parser.token.category != KrtTokenCategory.String) { KrtProjectFail(parser, "expected string"); return 0; }
+    int64 result = KrtDriverAlloc(parser.token.length+1); int64 count = 0;
+    unsafe(using krt.mem;) { byte* source = (byte*)parser.lexer.source; byte* output = (byte*)result;
+        int64 index = parser.token.start+1; int64 end = parser.token.start+parser.token.length-1;
+        while (index < end) {
+            int64 value = source[index++];
+            if (value == 92) {
+                if (index >= end) { KrtProjectFail(parser, "invalid string escape"); return 0; }
+                value = source[index++];
+                if (value == 110) { value = 10; } else if (value == 114) { value = 13; } else if (value == 116) { value = 9; }
+                else if (value == 98) { value = 8; } else if (value == 102) { value = 12; }
+                else if (value == 117) {
+                    int64 scalar = 0; int64 n = 0;
+                    while (n < 4) { if (index >= end || lexer_hex_digit(source[index]) < 0) { KrtProjectFail(parser, "invalid Unicode escape"); return 0; }
+                        scalar = scalar*16+lexer_hex_digit(source[index++]); n++; }
+                    if (scalar >= 55296 && scalar <= 56319) {
+                        if (index+6 > end || source[index] != 92 || source[index+1] != 117) { KrtProjectFail(parser, "unpaired Unicode surrogate"); return 0; }
+                        index += 2; int64 low = 0; n = 0; while (n < 4) { if (lexer_hex_digit(source[index]) < 0) { KrtProjectFail(parser, "invalid Unicode escape"); return 0; }
+                            low = low*16+lexer_hex_digit(source[index++]); n++; }
+                        if (low < 56320 || low > 57343) { KrtProjectFail(parser, "unpaired Unicode surrogate"); return 0; }
+                        scalar = 65536+(scalar-55296)*1024+low-56320;
+                    } else if (scalar >= 56320 && scalar <= 57343) { KrtProjectFail(parser, "unpaired Unicode surrogate"); return 0; }
+                    if (scalar == 0) { KrtProjectFail(parser, "NUL is not allowed in project strings"); return 0; }
+                    if (scalar < 128) { output[count++] = (byte)scalar; }
+                    else if (scalar < 2048) { output[count++] = (byte)(192+scalar/64); output[count++] = (byte)(128+scalar%64); }
+                    else if (scalar < 65536) { output[count++] = (byte)(224+scalar/4096); output[count++] = (byte)(128+scalar/64%64); output[count++] = (byte)(128+scalar%64); }
+                    else { output[count++] = (byte)(240+scalar/262144); output[count++] = (byte)(128+scalar/4096%64); output[count++] = (byte)(128+scalar/64%64); output[count++] = (byte)(128+scalar%64); }
+                    continue;
+                } else if (value != 34 && value != 92 && value != 47) { KrtProjectFail(parser, "invalid string escape"); return 0; }
+            } else if (value < 32) { KrtProjectFail(parser, "control character in string"); return 0; }
+            output[count++] = (byte)value;
+        } output[count] = 0;
+    }
+    KrtProjectNext(parser); if (expand) { return KrtProjectExpand(parser,result); } return result;
+}
+KrtProjectValue KrtProjectPrimary(KrtProjectParser parser) {
+    if (parser.errors != 0) { return null; }
+    if (KrtProjectIs(parser, "(")) { KrtProjectNext(parser); KrtProjectValue value = KrtProjectExpression(parser, 0); KrtProjectTake(parser, ")"); return value; }
+    if (KrtProjectIs(parser, "!")) { KrtProjectNext(parser); return KrtProjectBoolean(!KrtProjectTruth(KrtProjectPrimary(parser))); }
+    if (parser.token.category == KrtTokenCategory.String) { return KrtProjectString(KrtProjectQuoted(parser, true)); }
+    if (parser.token.category == KrtTokenCategory.Integer) {
+        int64 text = KrtProjectToken(parser); int64 start = 0; int64 length = parser.token.length;
+        unsafe(using krt.mem;) { byte* bytes = (byte*)text; int64 i = 0;
+            while (i < length) { if (!lexer_digit(bytes[i])) { KrtProjectFail(parser, "expected decimal configuration integer"); return null; } i++; }
+            while (start < length-1 && bytes[start] == 48) { start++; }
+        }
+        KrtProjectValue value = new KrtProjectValue(); value.kind = 2; value.text = KrtDriverCopyString(text+start,length-start);
+        value.number = KrtProjectEqual(value.text,"0") ? 0 : 1; KrtProjectNext(parser); return value;
+    }
+    int64 name = KrtProjectToken(parser); KrtProjectValue value = KrtProjectLookup(parser, name);
+    if (value == null) { KrtProjectFail(parser,(string)KrtProjectCat((int64)"unknown variable: ",name)); return null; } KrtProjectNext(parser); return value;
+}
+int32 KrtProjectPrecedence(KrtProjectParser parser) {
+    if (KrtProjectIs(parser,"||")) { return 1; } if (KrtProjectIs(parser,"&&")) { return 2; }
+    if (KrtProjectIs(parser,"==") || KrtProjectIs(parser,"!=")) { return 3; } if (KrtProjectIs(parser,"+")) { return 4; } return -1;
+}
+KrtProjectValue KrtProjectExpression(KrtProjectParser parser, int32 minimum) {
+    parser.depth = parser.depth+1; if (parser.depth > 128) { KrtProjectFail(parser, "configuration nesting limit exceeded"); parser.depth = parser.depth-1; return null; }
+    KrtProjectValue value = KrtProjectPrimary(parser);
+    while (parser.errors == 0 && KrtProjectPrecedence(parser) >= minimum) {
+        int32 precedence = KrtProjectPrecedence(parser); int64 operation = KrtProjectToken(parser); KrtProjectNext(parser);
+        KrtProjectValue right = KrtProjectExpression(parser, precedence+1);
+        if (value == null || right == null) { break; }
+        if (KrtProjectEqual(operation,"+")) { if (value.kind != 1 || right.kind != 1) { KrtProjectFail(parser,"configuration + accepts strings only"); break; }
+            value = KrtProjectString(KrtProjectCat(value.text,right.text));
+        } else if (KrtProjectEqual(operation,"==") || KrtProjectEqual(operation,"!=")) {
+            bool same = value.kind == right.kind && (value.kind == 3 ? value.number == right.number : KrtDriverStringEqual(value.text,right.text));
+            // Python's configuration contract compares bools and integers by value.
+            if (value.kind == 2 && right.kind == 3) { string expected_number = "0"; if (right.number != 0) { expected_number = "1"; } same = KrtProjectEqual(value.text,expected_number); }
+            if (value.kind == 3 && right.kind == 2) { string expected_number = "0"; if (value.number != 0) { expected_number = "1"; } same = KrtProjectEqual(right.text,expected_number); }
+            if (KrtProjectEqual(operation,"!=")) { same = !same; }
+            value = KrtProjectBoolean(same);
+        } else if (KrtProjectEqual(operation,"&&")) { value = KrtProjectBoolean(KrtProjectTruth(value) && KrtProjectTruth(right)); }
+        else { value = KrtProjectBoolean(KrtProjectTruth(value) || KrtProjectTruth(right)); }
+    } parser.depth = parser.depth-1; return value;
+}
+int32 KrtProjectOption(int64 name) {
+    name = KrtProjectLower(name);
+    if (KrtProjectEqual(name,"project") || KrtProjectEqual(name,"name")) { return 1; }
+    if (KrtProjectEqual(name,"type")) { return 2; } if (KrtProjectEqual(name,"output")) { return 3; }
+    if (KrtProjectEqual(name,"sources") || KrtProjectEqual(name,"source")) { return 4; }
+    if (KrtProjectEqual(name,"libraries") || KrtProjectEqual(name,"using")) { return 5; }
+    if (KrtProjectEqual(name,"includes") || KrtProjectEqual(name,"include") || KrtProjectEqual(name,"includepaths")) { return 6; }
+    if (KrtProjectEqual(name,"optimization") || KrtProjectEqual(name,"optimize")) { return 7; }
+    if (KrtProjectEqual(name,"target")) { return 8; } if (KrtProjectEqual(name,"version")) { return 9; }
+    if (KrtProjectEqual(name,"description")) { return 10; } return 0;
+}
+bool KrtProjectSet(KrtProjectParser parser, int64 name, KrtProjectValue values, bool active) {
+    int32 option = KrtProjectOption(name);
+    if (option == 0) { KrtProjectFail(parser,(string)KrtProjectCat((int64)"unknown project option: ",name)); return false; }
+    if (option >= 4 && option <= 6) {
+        while (values != null) { if (values.kind != 1) { KrtProjectFail(parser,"project path options require string paths"); return false; }
+            if (active) { if (option == 4) { parser.project.patterns = KrtProjectAppend(parser.project.patterns,values.text,false); }
+                else if (option == 5) { parser.project.libraries = KrtProjectAppend(parser.project.libraries,values.text,false); }
+                else { parser.project.includes = KrtProjectAppend(parser.project.includes,values.text,false); }
+            } values = values.next;
+        } return true;
+    }
+    if (values == null || values.next != null || (values.kind != 1 && values.kind != 2)) { KrtProjectFail(parser,"project option requires one string or integer"); return false; }
+    if (!active) { return true; }
+    if (option == 1) { parser.project.name = values.text; } else if (option == 2) { parser.project.kind = values.text; }
+    else if (option == 3) { parser.project.output = values.text; } else if (option == 7) { parser.project.optimization = values.text; parser.project.optimization_set = true; }
+    else if (option == 8) { parser.project.target = values.text; parser.project.target_set = true; } else if (option == 9) { parser.project.version = values.text; }
+    else if (option == 10) { parser.project.description = values.text; } return true;
+}
+KrtProjectValue KrtProjectValueCopy(KrtProjectValue original) {
+    if (original == null) { return null; } KrtProjectValue result = new KrtProjectValue(); result.kind = original.kind;
+    result.text = original.text; result.number = original.number; return result;
+}
+void KrtProjectStatement(KrtProjectParser parser, bool active) {
+    if (parser.errors != 0) { return; }
+    parser.depth = parser.depth+1; if (parser.depth > 128) { KrtProjectFail(parser,"configuration nesting limit exceeded"); parser.depth = parser.depth-1; return; }
+    if (KrtProjectIs(parser,"{")) {
+        KrtProjectNext(parser); while (parser.errors == 0 && !KrtProjectIs(parser,"}")) {
+            if (parser.token.kind == KrtTokenKind.Eof) { KrtProjectFail(parser,"unexpected end of configuration"); break; }
+            KrtProjectStatement(parser,active);
+        } KrtProjectTake(parser,"}");
+    } else if (KrtProjectIs(parser,"if")) {
+        KrtProjectNext(parser); KrtProjectTake(parser,"("); bool condition = KrtProjectTruth(KrtProjectExpression(parser,0)); KrtProjectTake(parser,")");
+        KrtProjectVariable previous = KrtProjectSnapshot(parser.variables); KrtProjectStatement(parser,active && condition);
+        if (!active || !condition) { parser.variables = previous; }
+        if (KrtProjectIs(parser,"else")) { KrtProjectNext(parser); previous = KrtProjectSnapshot(parser.variables);
+            KrtProjectStatement(parser,active && !condition); if (!active || condition) { parser.variables = previous; }
+        }
+    } else if (KrtProjectIs(parser,"string") || KrtProjectIs(parser,"var") || KrtProjectIs(parser,"let")) {
+        KrtProjectNext(parser); if (parser.token.category != KrtTokenCategory.Identifier) { KrtProjectFail(parser,"expected variable name"); }
+        int64 name = KrtProjectToken(parser); KrtProjectNext(parser); KrtProjectTake(parser,"=");
+        KrtProjectValue value = KrtProjectExpression(parser,0); KrtProjectTake(parser,";"); KrtProjectAssign(parser,name,value);
+    } else {
+        int64 name = KrtProjectToken(parser); KrtProjectNext(parser); bool receiver_method = false;
+        if (KrtDriverStringEqual(name,parser.receiver) && KrtProjectIs(parser,".")) { receiver_method = true; KrtProjectNext(parser); name = KrtProjectToken(parser); KrtProjectNext(parser); }
+        else if (KrtProjectIs(parser,"=") && KrtProjectLookup(parser,name) != null) {
+            KrtProjectNext(parser); KrtProjectValue value = KrtProjectExpression(parser,0); KrtProjectTake(parser,";"); KrtProjectAssign(parser,name,value); parser.depth = parser.depth-1; return;
+        }
+        if (!KrtProjectIs(parser,"(") || (!receiver_method && KrtProjectOption(name) == 0)) { KrtProjectFail(parser,"unsupported configuration statement"); parser.depth = parser.depth-1; return; }
+        KrtProjectNext(parser); KrtProjectValue values = null; KrtProjectValue tail = null;
+        if (!KrtProjectIs(parser,")")) { while (parser.errors == 0) {
+            KrtProjectValue value = KrtProjectValueCopy(KrtProjectExpression(parser,0));
+            if (tail == null) { values = value; } else { tail.next = value; } tail = value;
+            if (!KrtProjectIs(parser,",")) { break; } KrtProjectNext(parser);
+        } }
+        KrtProjectTake(parser,")"); KrtProjectTake(parser,";"); if (parser.errors == 0) { KrtProjectSet(parser,name,values,active); }
+    } parser.depth = parser.depth-1;
+}
+bool KrtProjectConfigure(KrtProjectParser parser) {
+    bool found = false;
+    while (parser.errors == 0 && parser.token.kind != KrtTokenKind.Eof) {
+        if (KrtProjectIs(parser,"function")) {
+            if (found) { KrtProjectFail(parser,"only one Configure function is allowed"); break; } found = true;
+            KrtProjectNext(parser); KrtProjectTake(parser,"Configure"); KrtProjectTake(parser,"(");
+            if (!KrtProjectIs(parser,")")) { KrtProjectTake(parser,"Project");
+                if (parser.token.category != KrtTokenCategory.Identifier) { KrtProjectFail(parser,"expected Configure receiver"); break; }
+                parser.receiver = KrtProjectToken(parser); KrtProjectNext(parser);
+            } KrtProjectTake(parser,")"); if (!KrtProjectIs(parser,"{")) { KrtProjectFail(parser,"Configure requires a body"); break; }
+            KrtProjectStatement(parser,true);
+        } else { KrtProjectStatement(parser,true); }
+    }
+    if (!found && parser.errors == 0) { KrtProjectFail(parser,"expected function Configure(Project p)"); }
+    return parser.errors == 0;
+}
+KrtProjectValue KrtProjectJsonValue(KrtProjectParser parser) {
+    if (parser.token.category == KrtTokenCategory.String) { return KrtProjectString(KrtProjectQuoted(parser,false)); }
+    if (parser.token.category == KrtTokenCategory.Integer) {
+        unsafe(using krt.mem;) { if (parser.token.length > 1 && ((byte*)parser.lexer.source)[parser.token.start] == 48) { KrtProjectFail(parser,"JSON integers must not have leading zeroes"); return null; } }
+        return KrtProjectPrimary(parser);
+    }
+    if (KrtProjectIs(parser,"-")) { KrtProjectNext(parser);
+        if (parser.token.category != KrtTokenCategory.Integer) { KrtProjectFail(parser,"expected JSON integer"); return null; }
+        unsafe(using krt.mem;) { if (parser.token.length > 1 && ((byte*)parser.lexer.source)[parser.token.start] == 48) { KrtProjectFail(parser,"JSON integers must not have leading zeroes"); return null; } }
+        KrtProjectValue value = KrtProjectPrimary(parser);
+        if (value == null || value.kind != 2) { KrtProjectFail(parser,"expected JSON integer"); return null; }
+        if (!KrtProjectEqual(value.text,"0")) { value.text = KrtProjectCat((int64)"-",value.text); } return value;
+    }
+    if (KrtProjectIs(parser,"true") || KrtProjectIs(parser,"false")) { bool flag = KrtProjectIs(parser,"true"); KrtProjectNext(parser); return KrtProjectBoolean(flag); }
+    KrtProjectFail(parser,"project JSON values must be strings or integers"); return null;
+}
+bool KrtProjectJson(KrtProjectParser parser) {
+    // JSON never inherits the source language's comment extension.
+    unsafe(using krt.mem;) { byte* bytes = (byte*)parser.lexer.source; int64 i = 0; bool quoted = false;
+        while (i < parser.lexer.length) { int64 value = bytes[i++];
+            if (quoted && value == 92) { i++; }
+            else if (value == 34) { quoted = !quoted; }
+            else if (!quoted && value == 47) { KrtProjectFail(parser,"comments are not allowed in JSON configuration"); return false; }
+        }
+    }
+    KrtProjectTake(parser,"{");
+    if (!KrtProjectIs(parser,"}")) { while (parser.errors == 0) {
+        int64 name = KrtProjectQuoted(parser,false); KrtProjectTake(parser,":"); KrtProjectValue values = null; KrtProjectValue tail = null;
+        if (KrtProjectIs(parser,"[")) { KrtProjectNext(parser);
+            if (!KrtProjectIs(parser,"]")) { while (parser.errors == 0) { KrtProjectValue value = KrtProjectJsonValue(parser);
+                if (tail == null) { values = value; } else { tail.next = value; } tail = value;
+                if (!KrtProjectIs(parser,",")) { break; } KrtProjectNext(parser);
+            } } KrtProjectTake(parser,"]");
+        } else { values = KrtProjectJsonValue(parser); }
+        if (parser.errors == 0) { KrtProjectSet(parser,name,values,true); }
+        if (!KrtProjectIs(parser,",")) { break; } KrtProjectNext(parser);
+    } } KrtProjectTake(parser,"}");
+    if (parser.errors == 0 && parser.token.kind != KrtTokenKind.Eof) { KrtProjectFail(parser,"unexpected text after JSON object"); }
+    return parser.errors == 0;
+}
+bool KrtProjectLegacy(KrtProjectParser parser) {
+    unsafe(using krt.mem;) { byte* bytes = (byte*)parser.lexer.source; int64 index = 0; int64 line = 1;
+        while (index < parser.lexer.length && parser.errors == 0) {
+            int64 end = index; while (end < parser.lexer.length && bytes[end] != 10 && bytes[end] != 13) { end++; }
+            int64 start = index; while (start < end && (bytes[start] == 32 || bytes[start] == 9)) { start++; }
+            parser.token.line = line; parser.token.column = start-index+1;
+            if (start < end && bytes[start] != 35 && !(bytes[start] == 47 && start+1 < end && bytes[start+1] == 47)) {
+                int64 colon = start; while (colon < end && bytes[colon] != 58) { colon++; }
+                if (colon == end) { KrtProjectFail(parser,"expected key: value"); return false; }
+                int64 name_end = colon; while (name_end > start && (bytes[name_end-1] == 32 || bytes[name_end-1] == 9)) { name_end--; }
+                int64 name = KrtDriverCopyString(parser.lexer.source+start,name_end-start); int64 cursor = colon+1;
+                KrtProjectValue values = null; KrtProjectValue tail = null;
+                while (cursor < end) {
+                    while (cursor < end && (bytes[cursor] == 32 || bytes[cursor] == 9)) { cursor++; }
+                    if (cursor >= end || bytes[cursor] == 35) { break; }
+                    int64 text = KrtDriverAlloc(end-cursor+1); byte* target = (byte*)text; int64 count = 0; int64 quote = 0;
+                    while (cursor < end) { int64 value = bytes[cursor];
+                        if (quote == 0 && (value == 32 || value == 9 || value == 35)) { break; }
+                        cursor++; if (value == 34 || value == 39) { if (quote == 0) { quote = value; continue; } if (quote == value) { quote = 0; continue; } }
+                        if (value == 92 && quote != 39 && cursor < end) { value = bytes[cursor++]; }
+                        target[count++] = (byte)value;
+                    } target[count] = 0; if (quote != 0) { KrtProjectFail(parser,"unterminated legacy project quote"); return false; }
+                    KrtProjectValue value = KrtProjectString(text); if (tail == null) { values = value; } else { tail.next = value; } tail = value;
+                    if (cursor < end && bytes[cursor] == 35) { break; }
+                } KrtProjectSet(parser,name,values,true);
+            }
+            index = end; if (index < parser.lexer.length && bytes[index] == 13) { index++; } if (index < parser.lexer.length && bytes[index] == 10) { index++; } line++;
+        }
+    } return parser.errors == 0;
+}
+bool KrtProjectLegacyFormat(KrtDriverBuffer source) {
+    unsafe(using krt.mem;) { byte* bytes = (byte*)source.data; int64 index = 0;
+        while (index < source.length) {
+            int64 end = index; while (end < source.length && bytes[end] != 10 && bytes[end] != 13) { end++; }
+            int64 start = index; while (start < end && (bytes[start] == 32 || bytes[start] == 9)) { start++; }
+            int64 name_end = start; while (name_end < end && lexer_letter(bytes[name_end])) { name_end++; }
+            int64 colon = name_end; while (colon < end && (bytes[colon] == 32 || bytes[colon] == 9)) { colon++; }
+            if (colon < end && bytes[colon] == 58) {
+                int64 name = KrtDriverCopyString(source.data+start,name_end-start);
+                if (KrtProjectEqual(name,"project") || KrtProjectEqual(name,"name") || KrtProjectEqual(name,"type") || KrtProjectEqual(name,"output") || KrtProjectEqual(name,"sources")) { return true; }
+            }
+            index = end; if (index < source.length && bytes[index] == 13) { index++; } if (index < source.length && bytes[index] == 10) { index++; }
+        }
+    } return false;
+}
+bool KrtProjectParse(KrtProject project, KrtDriverBuffer source) {
+    KrtProjectParser parser = new KrtProjectParser(); parser.project = project; parser.lexer = new KrtLexer(); parser.token = new KrtToken(); parser.receiver = (int64)"p";
+    unsafe(using krt.mem;) { KrtLexerInit(parser.lexer,(byte*)source.data,source.length); }
+    KrtProjectAssign(parser,(int64)"os",KrtProjectString(KrtDriverPlatform())); KrtProjectAssign(parser,(int64)"platform",KrtProjectString(KrtDriverPlatform()));
+    KrtProjectAssign(parser,(int64)"config",KrtProjectString(project.configuration));
+    KrtProjectAssign(parser,(int64)"true",KrtProjectBoolean(true)); KrtProjectAssign(parser,(int64)"false",KrtProjectBoolean(false));
+    bool json_path = KrtProjectEnds(KrtProjectLower(project.path),".json");
+    if (!json_path && KrtProjectLegacyFormat(source)) { return KrtProjectLegacy(parser); }
+    KrtProjectNext(parser);
+    if (json_path || KrtProjectIs(parser,"{")) { return KrtProjectJson(parser); }
+    return KrtProjectConfigure(parser);
+}

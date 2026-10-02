@@ -9,7 +9,7 @@ bool KrtNativeLowerDispatchTrap(KrtNativeModule module) {
 
 bool KrtNativeLowerDispatch(KrtAstNode expression, KrtAstNode ast, KrtNativeModule module, int64 source) {
     KrtAstNode selected = expression.native_target;
-    if (!KrtNativeLowerExpression(expression.left.left, ast, module, source) ||
+    if (!KrtNativeLowerCallReceiver(expression,expression.left.left,ast,module,source) ||
         KrtNativeEmit(module, (int32)KrtNativeOp.StoreLocal, expression.local_slot, 0) < 0 ||
         KrtNativeEmit(module, (int32)KrtNativeOp.LoadLocal, expression.local_slot, 0) < 0) { return false; }
     int32 present = KrtNativeEmit(module, (int32)KrtNativeOp.Branch, -1, -1);
@@ -36,18 +36,10 @@ bool KrtNativeLowerDispatch(KrtAstNode expression, KrtAstNode ast, KrtNativeModu
     while (patches >= 0) {
         int32 previous = (int32)module.extra[patches]; module.args[patches] = module.count; module.extra[patches] = 0; patches = previous;
     }
+    if (KrtNativeInlineValue(expression) && !KrtNativeLowerAggregateFrame(expression,module)) { return false; }
     if (KrtNativeEmit(module, (int32)KrtNativeOp.LoadLocal, expression.local_slot, 0) < 0) { return false; }
-    KrtAstNode argument = expression.right; int32 index = 1;
-    while (argument != null) {
-        if (!KrtNativeLowerExpression(argument, ast, module, source)) { return false; }
-        if (!selected.parameter_refs[index]) {
-            KrtAstNode expected = KrtAstMake(KrtAstKind.Type, argument.start, 0);
-            expected.native_scope = selected.native_scope; expected.native_context = selected.native_context;
-            if (!KrtNativeAnnotateType(expected, ast, source, selected.parameter_type_starts[index], selected.parameter_type_lengths[index]) ||
-                !KrtNativeConvertValue(module, argument, expected)) { return false; }
-        }
-        argument = argument.next; index = index + 1;
-    }
-    return KrtNativeEmit(module, (int32)KrtNativeOp.IndirectCall, 0, index) >= 0 &&
-        (KrtNativeWideKind(expression) || KrtNativeEmit(module, (int32)KrtNativeOp.Cast, KrtNativeValueWidth(expression), 0) >= 0);
+    if (!KrtNativeLowerArguments(expression.right, selected, 1, ast, module, source)) { return false; }
+    if (KrtNativeInlineValue(expression)) { return KrtNativeEmit(module,(int32)KrtNativeOp.IndirectCall,0,selected.parameter_count + 1) >= 0; }
+    return KrtNativeEmit(module, (int32)KrtNativeOp.IndirectCall, 0, selected.parameter_count) >= 0 &&
+        (KrtNativeWideKind(expression) ? KrtNativeNormalizeWide(module,expression) : KrtNativeEmit(module,(int32)KrtNativeOp.Cast,KrtNativeValueWidth(expression),0) >= 0);
 }

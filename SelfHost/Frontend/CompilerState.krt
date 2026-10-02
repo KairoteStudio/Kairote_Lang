@@ -1,0 +1,116 @@
+// Shared compiler records retain one layout across AST, binding and IR.
+// Algorithms live in their component files; these records carry only state.
+
+// Mutable program storage is separate from activation-record local slots.
+class KrtNativeGlobalEntry {
+    public KrtAstNode declaration;
+    public KrtAstNode owner;
+    public KrtNativeGlobalEntry next;
+    public KrtAstNode assignment;
+    public bool bound;
+}
+
+// The program registry stays live while binding discovers concrete generic classes.
+class KrtNativeGlobalState {
+    public KrtNativeModule output;
+    public KrtNativeGlobalEntry first;
+    public KrtAstNode initializer;
+    public bool changed;
+}
+
+// A compilation owns one canonical instance registry. The declaration and the
+// complete semantic argument list form the key; source spelling is immaterial.
+class KrtGenericRegistry {
+    public int32 capacity;
+    public int32 count;
+    public KrtAstNode[] declarations;
+    public KrtAstNode[] arguments;
+    public KrtAstNode[] instances;
+    public int32[] states;
+}
+
+// Keep the active type-resolution path separate from cached layout states.
+class KrtInheritanceStack {
+    public KrtAstNode[] types;
+    public int32 depth;
+    public int32 capacity;
+    public KrtAstNode[] cycle_types;
+    public int32 cycle_depth;
+    public int64 error_start;
+    public int64 source;
+}
+
+// args and extra have one entry per instruction.  The instruction stream is
+// deliberately flat: starts[f] is the first instruction of function f and
+// the next start (or count) is its end.
+class KrtNativeModule {
+    public KrtSsaModule ssa;
+    public int32 capacity;
+    public int32 count;
+    public int32[] ops;
+    public int64[] args;
+    public int64[] extra;
+    public int32 function_count;
+    public int32 lower_function_index;
+    public int32[] starts;
+    public int32[] local_counts;
+    public int32[] parameter_counts;
+    // Source parameters retain their existing indices. Aggregate returns add
+    // one physical ABI parameter without becoming a source-level parameter.
+    public int32[] aggregate_return_sizes;
+    public int32[] aggregate_return_alignments;
+    public int32[] hidden_result_slots;
+    public int32[] function_frame_bytes;
+    public int32 global_count;
+    public int32 initializer_index;
+    public bool library_mode;
+    public int32[] function_offsets;
+    public int32[] function_sizes;
+    public KrtAstNode function_ast;
+    public KrtAstNode external_head;
+    public int32 external_count;
+    public bool[] external_used;
+    public int32 external_reloc_count;
+    public int32[] external_reloc_offsets;
+    public int32[] external_reloc_targets;
+    public int32 entry;
+    public KrtNativeExceptionFrame exception_frame;
+    // Data storage is byte[] so the self-host language does not require an
+    // unsafe pointer field on this metadata class.
+    public int64 data;
+    public int32 data_length;
+    public int32 errors;
+    public int64 error_start;
+    public int32[] function_name_starts;
+    public int32[] function_name_lengths;
+    // Keeping ownership here makes Data instructions safe after the source
+    // buffer is released.  Backends may use this field instead of data.
+    public byte[] data_storage;
+}
+
+// Value ids are unique within the module. Phi operands carry their predecessor
+// block ids in phi_predecessors; ordinary operands name dominating definitions.
+class KrtSsaModule {
+    public KrtNativeModule source;
+    public int32 count; public int32 operand_count; public int32 operand_capacity;
+    public int32[] ops; public int64[] args; public int64[] extra;
+    public int32[] types; public int32[] widths; public bool[] results;
+    public int32[] semantic_types; public int32[] semantic_widths;
+    public int32[] operand_starts; public int32[] operand_counts; public int32[] operands;
+    public int32[] phi_predecessors; public int32[] uses; public int32[] value_blocks;
+    public int32 function_count; public int32[] starts; public int32[] ends;
+    public int32[] function_blocks; public int32[] function_block_counts;
+    public int32 block_count; public int32[] block_starts; public int32[] block_ends;
+    public int32[] block_phis; public int32[] block_phi_counts;
+    public int32[] block_functions; public int32[] block_left; public int32[] block_right;
+    public bool[] handlers;
+}
+
+// Handler contexts are compile-time state. Native TryEnter records unwind state.
+class KrtNativeExceptionFrame {
+    public KrtNativeExceptionFrame previous;
+    public KrtAstNode finally_body;
+    public int32 record_slot;
+    public int32 loop_depth;
+    public bool active_handler;
+}

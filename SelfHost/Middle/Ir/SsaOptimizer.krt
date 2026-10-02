@@ -1,0 +1,87 @@
+// SSA optimization uses explicit operands and keeps value ids stable.
+bool KrtSsaFoldConstants(KrtSsaModule ssa) {
+    bool changed = true; int32 rounds = 0;
+    while (changed && rounds < 16) {
+        changed = false; int32 value = 0;
+        while (value < ssa.count) {
+            int32 op = ssa.ops[value]; int32 count = ssa.operand_counts[value]; int32 start = ssa.operand_starts[value];
+            bool folded = false; int64 result = 0;
+            if (op == 101 && count > 0) {
+                int32 operand = 0; bool known = true; bool found = false;
+                while (operand < count) {
+                    int32 incoming = ssa.operands[start + operand];
+                    if (incoming != value) {
+                        if (ssa.ops[incoming] != 1) { known = false; break; }
+                        if (found && result != ssa.args[incoming]) { known = false; break; }
+                        result = ssa.args[incoming]; found = true;
+                    }
+                    operand = operand + 1;
+                }
+                folded = known && found;
+            } else if (count == 1) {
+                int32 incoming = ssa.operands[start];
+                if (ssa.ops[incoming] == 1) {
+                    result = ssa.args[incoming]; folded = true;
+                    if (op == 14) { result = -result; }
+                    else if (op == 15) { result = ~result; }
+                    else if (op == 31) { result = result == 0 ? 1 : 0; }
+                    else if (op == 28) { result = KrtNativeFoldCast(result,ssa.args[value]); }
+                    else { folded = false; }
+                }
+            } else if (count == 2 && ((op >= 4 && op <= 13) || op == 16)) {
+                int32 left = ssa.operands[start]; int32 right = ssa.operands[start + 1];
+                if (ssa.ops[left] == 1 && ssa.ops[right] == 1) {
+                    folded = KrtNativeFoldBinary(op,ssa.args[left],ssa.args[right],ssa.extra[value] != 0,ssa.args[value],ref result);
+                }
+            }
+            if (folded) { ssa.ops[value] = 1; ssa.args[value] = result; ssa.extra[value] = 0; ssa.operand_counts[value] = 0; changed = true; }
+            value = value + 1;
+        }
+        rounds = rounds + 1;
+    }
+    return true;
+}
+
+bool KrtSsaRemovable(int32 op) {
+    // Preserve memory reads and trapping division even when their value is unused.
+    return op == 1 || op == 2 || (op >= 4 && op <= 6) || (op >= 9 && op <= 16) || op == 25 || op == 28 || op == 29 || op == 31 || op == 44 || op == 45 || op == 70 || op == 101;
+}
+
+bool KrtSsaRemoveDeadValues(KrtSsaModule ssa) {
+    // Mark from observable operations, then follow dependencies. This removes
+    // mutually dependent dead loop phis as well as unused acyclic expressions.
+    bool[] live = new bool[ssa.count];
+    int32[] queue = new int32[ssa.count]; int32 head = 0; int32 tail = 0; int32 value = 0;
+    while (value < ssa.count) {
+        if (ssa.ops[value] != 0 && !KrtSsaRemovable(ssa.ops[value])) { live[value] = true; queue[tail] = value; tail = tail + 1; }
+        value = value + 1;
+    }
+    while (head < tail) {
+        value = queue[head]; head = head + 1;
+        int32 operand = 0; int32 start = ssa.operand_starts[value];
+        while (operand < ssa.operand_counts[value]) {
+            int32 incoming = ssa.operands[start + operand];
+            if (!live[incoming]) { live[incoming] = true; queue[tail] = incoming; tail = tail + 1; }
+            operand = operand + 1;
+        }
+    }
+    value = 0;
+    while (value < ssa.count) {
+        if (!live[value] && KrtSsaRemovable(ssa.ops[value])) { ssa.ops[value] = 0; ssa.results[value] = false; ssa.operand_counts[value] = 0; ssa.types[value] = 0; ssa.widths[value] = 0; }
+        ssa.uses[value] = 0; value = value + 1;
+    }
+    value = 0;
+    while (value < ssa.count) {
+        int32 operand = 0; int32 start = ssa.operand_starts[value];
+        while (operand < ssa.operand_counts[value]) { int32 incoming = ssa.operands[start + operand]; ssa.uses[incoming] = ssa.uses[incoming] + 1; operand = operand + 1; }
+        value = value + 1;
+    }
+    delete live; delete queue; return true;
+}
+
+bool KrtSsaOptimize(KrtSsaModule ssa, int32 level) {
+    if (level < 0 || level > 3 || !KrtSsaValidate(ssa)) { return false; }
+    if (level >= 1 && !KrtSsaFoldConstants(ssa)) { return false; }
+    if (level >= 2 && !KrtSsaRemoveDeadValues(ssa)) { return false; }
+    return KrtSsaValidate(ssa);
+}

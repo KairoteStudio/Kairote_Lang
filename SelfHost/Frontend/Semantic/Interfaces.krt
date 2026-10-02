@@ -22,6 +22,11 @@ bool KrtNativeResolveTypeBases(KrtAstNode type, KrtAstNode module, int64 source)
             reference.native_type == null || reference.native_stride != 0 || reference.native_array ||
             (reference.native_type.value != 1 && reference.native_type.value != 3)) { return false; }
         KrtAstNode parent = reference.native_type;
+        KrtNativeBinding access_binding = new KrtNativeBinding(); access_binding.module = module;
+        access_binding.unit = type; access_binding.source = source; access_binding.error_start = -1;
+        if (!KrtNativeAccessAllowed(parent,access_binding,null,false)) {
+            module.native_error = 10; KrtDiagnostic("E_ACCESS",8,reference.start); return false;
+        }
         KrtAstNode previous = type.left;
         while (previous != reference) {
             if (previous.native_type == parent) { return false; }
@@ -73,14 +78,13 @@ bool KrtNativeInterfaceMethodMatches(KrtAstNode implementation, KrtAstNode requi
 }
 
 KrtAstNode KrtNativeFindMatchingInterfaceMethod(KrtAstNode actual, KrtAstNode requirement, KrtAstNode module, int64 source) {
-    int32 depth = 0;
-    while (actual != null && depth < 1024) {
+    while (actual != null) {
         KrtAstNode method = actual.declarations;
         while (method != null && method.native_owner == actual) {
-            if (KrtNativeInterfaceMethodMatches(method, requirement, module, source)) { return method; }
+            if (KrtNativeInterfaceMethodMatches(method, requirement, module, source) && KrtNativeAccessMode(method) == 1) { return method; }
             method = method.next;
         }
-        actual = actual.native_base; depth = depth + 1;
+        actual = actual.native_base;
     }
     return null;
 }
@@ -111,7 +115,7 @@ KrtAstNode KrtNativeFindInterfaceImplementation(KrtAstNode actual, KrtAstNode re
         while (descendant != null && descendant != owner) {
             KrtAstNode method = descendant.declarations;
             while (method != null && method.native_owner == descendant) {
-                if (KrtNativeInterfaceMethodMatches(method, requirement, module, source)) { implementation = method; break; }
+                if (KrtNativeInterfaceMethodMatches(method, requirement, module, source) && KrtNativeAccessMode(method) == 1) { implementation = method; break; }
                 method = method.next;
             }
             descendant = descendant.native_base;
@@ -126,7 +130,7 @@ KrtAstNode KrtNativeFindInterfaceImplementation(KrtAstNode actual, KrtAstNode re
 // The override spelling is also valid for a class method that first satisfies
 // an interface contract, even when no virtual class method exists above it.
 bool KrtNativeMethodImplementsInterface(KrtAstNode method, KrtAstNode module, int64 source) {
-    if (method == null || method.native_owner == null) { return false; }
+    if (method == null || method.native_owner == null || KrtNativeAccessMode(method) != 1) { return false; }
     KrtAstNode interface_type = module.declarations;
     while (interface_type != null) {
         if (interface_type.value == 3 && interface_type.native_generic_parameters == null &&
@@ -169,7 +173,20 @@ bool KrtNativeValidateInterfaces(KrtAstNode type, KrtAstNode module, int64 sourc
             KrtAstNode requirement = interface_type.declarations;
             while (requirement != null && requirement.native_owner == interface_type) {
                 KrtAstNode implementation = KrtNativeFindInterfaceImplementation(type, requirement, module, source);
-                if ((implementation == null || implementation.native_abstract) && !type.native_abstract) { return false; }
+                if ((implementation == null || implementation.native_abstract) && !type.native_abstract) {
+                    KrtAstNode current_type = type;
+                    while (current_type != null) {
+                        KrtAstNode candidate = current_type.declarations;
+                        while (candidate != null && candidate.native_owner == current_type) {
+                            if (KrtNativeInterfaceMethodMatches(candidate,requirement,module,source) && KrtNativeAccessMode(candidate) != 1) {
+                                module.native_error = 11; KrtDiagnostic("E_MODIFIER",10,candidate.start); return false;
+                            }
+                            candidate = candidate.next;
+                        }
+                        current_type = current_type.native_base;
+                    }
+                    return false;
+                }
                 requirement = requirement.next;
             }
         }

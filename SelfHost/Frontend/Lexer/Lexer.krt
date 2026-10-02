@@ -101,32 +101,40 @@ void KrtLexerNext(KrtLexer lexer, KrtToken token) {
         token.SetKind(KrtTokenKind.Identifier);
         while (lexer_letter(lexer_at(lexer, 0)) || lexer_digit(lexer_at(lexer, 0))) { lexer_advance(lexer); }
     } else if (lexer_digit(first) || (first == 46 && lexer_digit(lexer_at(lexer, 1)))) {
-        token.SetKind(KrtTokenKind.Integer);
+        token.SetKind(KrtTokenKind.Number);
         if (first == 48 && (lexer_at(lexer, 1) == 120 || lexer_at(lexer, 1) == 88)) {
             lexer_advance(lexer); lexer_advance(lexer);
             int64 digits_start = lexer.position;
             while (lexer_hex_digit(lexer_at(lexer, 0)) >= 0) { lexer_advance(lexer); }
             if (lexer.position == digits_start) { token.SetError(5); }
+        } else if (first == 48 && (lexer_at(lexer, 1) == 98 || lexer_at(lexer, 1) == 66)) {
+            lexer_advance(lexer); lexer_advance(lexer);
+            int64 digits_start = lexer.position;
+            while (lexer_at(lexer, 0) == 48 || lexer_at(lexer, 0) == 49) { lexer_advance(lexer); }
+            if (lexer.position == digits_start || lexer_digit(lexer_at(lexer, 0)) || lexer_letter(lexer_at(lexer, 0))) {
+                token.SetError(5);
+                while (lexer_digit(lexer_at(lexer, 0)) || lexer_letter(lexer_at(lexer, 0))) { lexer_advance(lexer); }
+            }
         } else {
             while (lexer_digit(lexer_at(lexer, 0))) { lexer_advance(lexer); }
             if (lexer_at(lexer, 0) == 46 && (lexer_digit(lexer_at(lexer, 1)) || !lexer_letter(lexer_at(lexer, 1)) || lexer_at(lexer, 1) == 101 || lexer_at(lexer, 1) == 69 || lexer_at(lexer, 1) == 102 || lexer_at(lexer, 1) == 70 || lexer_at(lexer, 1) == 100 || lexer_at(lexer, 1) == 68)) {
-                token.SetKind(KrtTokenKind.Floating); lexer_advance(lexer);
+                token.SetCategory(KrtTokenCategory.Floating); lexer_advance(lexer);
                 while (lexer_digit(lexer_at(lexer, 0))) { lexer_advance(lexer); }
             }
             if (lexer_at(lexer, 0) == 101 || lexer_at(lexer, 0) == 69) {
-                token.SetKind(KrtTokenKind.Floating); lexer_advance(lexer);
+                token.SetCategory(KrtTokenCategory.Floating); lexer_advance(lexer);
                 if (lexer_at(lexer, 0) == 43 || lexer_at(lexer, 0) == 45) { lexer_advance(lexer); }
                 if (!lexer_digit(lexer_at(lexer, 0))) { token.SetError(5); }
                 while (lexer_digit(lexer_at(lexer, 0))) { lexer_advance(lexer); }
             }
             if (lexer_at(lexer, 0) == 102 || lexer_at(lexer, 0) == 70 || lexer_at(lexer, 0) == 100 || lexer_at(lexer, 0) == 68) {
-                if (token.kind != KrtTokenKind.Invalid) { token.SetKind(KrtTokenKind.Floating); }
+                if (token.kind != KrtTokenKind.Invalid) { token.SetCategory(KrtTokenCategory.Floating); }
                 lexer_advance(lexer);
             }
         }
         if (lexer_letter(lexer_at(lexer, 0))) { token.SetError(5); }
     } else if (first == 34 || first == 39) {
-        int64 quote = first; token.SetKind(quote == 39 ? KrtTokenKind.Character : KrtTokenKind.String); lexer_advance(lexer);
+        int64 quote = first; token.SetKind(quote == 39 ? KrtTokenKind.CharLiteral : KrtTokenKind.String); lexer_advance(lexer);
         int64 count = 0;
         while (lexer_at(lexer, 0) >= 0 && lexer_at(lexer, 0) != quote) {
             if (lexer_at(lexer, 0) == 92) { lexer_advance(lexer); }
@@ -135,29 +143,466 @@ void KrtLexerNext(KrtLexer lexer, KrtToken token) {
         if (lexer_at(lexer, 0) < 0) { token.SetError(3); }
         else { lexer_advance(lexer); if (quote == 39 && count != 1) { token.SetError(6); } }
     } else {
-        token.SetKind(KrtTokenKind.Punctuation); lexer_advance(lexer);
-        int64 second = lexer_at(lexer, 0);
-        if ((first == 61 || first == 33 || first == 60 || first == 62 || first == 43 || first == 45 ||
-             first == 42 || first == 47 || first == 37 || first == 38 || first == 124 || first == 94) && second == 61) { lexer_advance(lexer); }
-        else if (first == 61 && second == 62) { lexer_advance(lexer); }
-        else if (first == 63 && (second == 63 || second == 46)) { lexer_advance(lexer); }
-        else if ((first == 38 || first == 124 || first == 43 || first == 45 || first == 60 || first == 62) && second == first) { lexer_advance(lexer); }
+        int32 punctuation_length = 1;
+        KrtTokenKind punctuation = KrtLexerPunctuationKind(lexer, ref punctuation_length);
+        token.SetKind(punctuation);
+        if (punctuation == KrtTokenKind.Unknown) { token.SetError(1); }
+        int32 consumed = 0;
+        while (consumed < punctuation_length) { lexer_advance(lexer); consumed = consumed + 1; }
     }
     token.SetLength(lexer.position - token.start);
+    if (token.category == KrtTokenCategory.Identifier) { token.SetKind(KrtLexerWordKind(lexer.source, token.start, token.length)); }
 }
 
-// Physical storage rounds to 1/2/4/8 bytes; semantic precision stays distinct.
+// Semantic precision follows every canonical even-width integer spelling.
 int32 lexer_integer_type_bits(int64 source, int64 start, int64 length) {
     unsafe(using krt.mem;) {
         byte* bytes = (byte*)source; int64 index = start; int64 end = start + length;
         if (index < end && bytes[index] == 117) { index = index + 1; }
         if (index + 3 >= end || bytes[index] != 105 || bytes[index + 1] != 110 || bytes[index + 2] != 116) { return 0; }
-        index = index + 3; int32 bits = 0;
+        index = index + 3;if(bytes[index]==48){return 0;}int32 bits = 0;
         while (index < end) {
             if (bytes[index] < 48 || bytes[index] > 57 || bits > 128) { return 0; }
             bits = bits * 10 + bytes[index] - 48; index = index + 1;
         }
-        if (bits >= 2 && bits <= 64 && bits % 2 == 0) { return bits; }
-        return bits == 128 ? 128 : 0;
+        return bits>=2&&bits<=128&&bits%2==0?bits:0;
     }
+}
+
+// Widths are lexical names even when a downstream feature is not implemented.
+int32 KrtTokenIntegerBits(KrtTokenKind value) {
+    if (value >= KrtTokenKind.Int2 && value <= KrtTokenKind.Int128) { return ((int32)value - (int32)KrtTokenKind.Int2 + 1) * 2; }
+    if (value >= KrtTokenKind.Uint2 && value <= KrtTokenKind.Uint128) { return ((int32)value - (int32)KrtTokenKind.Uint2 + 1) * 2; }
+    return 0;
+}
+
+bool KrtTokenIsUnsigned(KrtTokenKind value) { return value >= KrtTokenKind.Uint2 && value <= KrtTokenKind.Uint128; }
+
+KrtTokenKind KrtTokenIntegerType(int32 bits, bool unsigned_value) {
+    if (unsigned_value) {
+        if (bits == 2) { return KrtTokenKind.Uint2; }
+        if (bits == 4) { return KrtTokenKind.Uint4; }
+        if (bits == 6) { return KrtTokenKind.Uint6; }
+        if (bits == 8) { return KrtTokenKind.Uint8; }
+        if (bits == 10) { return KrtTokenKind.Uint10; }
+        if (bits == 12) { return KrtTokenKind.Uint12; }
+        if (bits == 14) { return KrtTokenKind.Uint14; }
+        if (bits == 16) { return KrtTokenKind.Uint16; }
+        if (bits == 18) { return KrtTokenKind.Uint18; }
+        if (bits == 20) { return KrtTokenKind.Uint20; }
+        if (bits == 22) { return KrtTokenKind.Uint22; }
+        if (bits == 24) { return KrtTokenKind.Uint24; }
+        if (bits == 26) { return KrtTokenKind.Uint26; }
+        if (bits == 28) { return KrtTokenKind.Uint28; }
+        if (bits == 30) { return KrtTokenKind.Uint30; }
+        if (bits == 32) { return KrtTokenKind.Uint32; }
+        if (bits == 34) { return KrtTokenKind.Uint34; }
+        if (bits == 36) { return KrtTokenKind.Uint36; }
+        if (bits == 38) { return KrtTokenKind.Uint38; }
+        if (bits == 40) { return KrtTokenKind.Uint40; }
+        if (bits == 42) { return KrtTokenKind.Uint42; }
+        if (bits == 44) { return KrtTokenKind.Uint44; }
+        if (bits == 46) { return KrtTokenKind.Uint46; }
+        if (bits == 48) { return KrtTokenKind.Uint48; }
+        if (bits == 50) { return KrtTokenKind.Uint50; }
+        if (bits == 52) { return KrtTokenKind.Uint52; }
+        if (bits == 54) { return KrtTokenKind.Uint54; }
+        if (bits == 56) { return KrtTokenKind.Uint56; }
+        if (bits == 58) { return KrtTokenKind.Uint58; }
+        if (bits == 60) { return KrtTokenKind.Uint60; }
+        if (bits == 62) { return KrtTokenKind.Uint62; }
+        if (bits == 64) { return KrtTokenKind.Uint64; }
+        if (bits == 66) { return KrtTokenKind.Uint66; }
+        if (bits == 68) { return KrtTokenKind.Uint68; }
+        if (bits == 70) { return KrtTokenKind.Uint70; }
+        if (bits == 72) { return KrtTokenKind.Uint72; }
+        if (bits == 74) { return KrtTokenKind.Uint74; }
+        if (bits == 76) { return KrtTokenKind.Uint76; }
+        if (bits == 78) { return KrtTokenKind.Uint78; }
+        if (bits == 80) { return KrtTokenKind.Uint80; }
+        if (bits == 82) { return KrtTokenKind.Uint82; }
+        if (bits == 84) { return KrtTokenKind.Uint84; }
+        if (bits == 86) { return KrtTokenKind.Uint86; }
+        if (bits == 88) { return KrtTokenKind.Uint88; }
+        if (bits == 90) { return KrtTokenKind.Uint90; }
+        if (bits == 92) { return KrtTokenKind.Uint92; }
+        if (bits == 94) { return KrtTokenKind.Uint94; }
+        if (bits == 96) { return KrtTokenKind.Uint96; }
+        if (bits == 98) { return KrtTokenKind.Uint98; }
+        if (bits == 100) { return KrtTokenKind.Uint100; }
+        if (bits == 102) { return KrtTokenKind.Uint102; }
+        if (bits == 104) { return KrtTokenKind.Uint104; }
+        if (bits == 106) { return KrtTokenKind.Uint106; }
+        if (bits == 108) { return KrtTokenKind.Uint108; }
+        if (bits == 110) { return KrtTokenKind.Uint110; }
+        if (bits == 112) { return KrtTokenKind.Uint112; }
+        if (bits == 114) { return KrtTokenKind.Uint114; }
+        if (bits == 116) { return KrtTokenKind.Uint116; }
+        if (bits == 118) { return KrtTokenKind.Uint118; }
+        if (bits == 120) { return KrtTokenKind.Uint120; }
+        if (bits == 122) { return KrtTokenKind.Uint122; }
+        if (bits == 124) { return KrtTokenKind.Uint124; }
+        if (bits == 126) { return KrtTokenKind.Uint126; }
+        if (bits == 128) { return KrtTokenKind.Uint128; }
+    } else {
+        if (bits == 2) { return KrtTokenKind.Int2; }
+        if (bits == 4) { return KrtTokenKind.Int4; }
+        if (bits == 6) { return KrtTokenKind.Int6; }
+        if (bits == 8) { return KrtTokenKind.Int8; }
+        if (bits == 10) { return KrtTokenKind.Int10; }
+        if (bits == 12) { return KrtTokenKind.Int12; }
+        if (bits == 14) { return KrtTokenKind.Int14; }
+        if (bits == 16) { return KrtTokenKind.Int16; }
+        if (bits == 18) { return KrtTokenKind.Int18; }
+        if (bits == 20) { return KrtTokenKind.Int20; }
+        if (bits == 22) { return KrtTokenKind.Int22; }
+        if (bits == 24) { return KrtTokenKind.Int24; }
+        if (bits == 26) { return KrtTokenKind.Int26; }
+        if (bits == 28) { return KrtTokenKind.Int28; }
+        if (bits == 30) { return KrtTokenKind.Int30; }
+        if (bits == 32) { return KrtTokenKind.Int32; }
+        if (bits == 34) { return KrtTokenKind.Int34; }
+        if (bits == 36) { return KrtTokenKind.Int36; }
+        if (bits == 38) { return KrtTokenKind.Int38; }
+        if (bits == 40) { return KrtTokenKind.Int40; }
+        if (bits == 42) { return KrtTokenKind.Int42; }
+        if (bits == 44) { return KrtTokenKind.Int44; }
+        if (bits == 46) { return KrtTokenKind.Int46; }
+        if (bits == 48) { return KrtTokenKind.Int48; }
+        if (bits == 50) { return KrtTokenKind.Int50; }
+        if (bits == 52) { return KrtTokenKind.Int52; }
+        if (bits == 54) { return KrtTokenKind.Int54; }
+        if (bits == 56) { return KrtTokenKind.Int56; }
+        if (bits == 58) { return KrtTokenKind.Int58; }
+        if (bits == 60) { return KrtTokenKind.Int60; }
+        if (bits == 62) { return KrtTokenKind.Int62; }
+        if (bits == 64) { return KrtTokenKind.Int64; }
+        if (bits == 66) { return KrtTokenKind.Int66; }
+        if (bits == 68) { return KrtTokenKind.Int68; }
+        if (bits == 70) { return KrtTokenKind.Int70; }
+        if (bits == 72) { return KrtTokenKind.Int72; }
+        if (bits == 74) { return KrtTokenKind.Int74; }
+        if (bits == 76) { return KrtTokenKind.Int76; }
+        if (bits == 78) { return KrtTokenKind.Int78; }
+        if (bits == 80) { return KrtTokenKind.Int80; }
+        if (bits == 82) { return KrtTokenKind.Int82; }
+        if (bits == 84) { return KrtTokenKind.Int84; }
+        if (bits == 86) { return KrtTokenKind.Int86; }
+        if (bits == 88) { return KrtTokenKind.Int88; }
+        if (bits == 90) { return KrtTokenKind.Int90; }
+        if (bits == 92) { return KrtTokenKind.Int92; }
+        if (bits == 94) { return KrtTokenKind.Int94; }
+        if (bits == 96) { return KrtTokenKind.Int96; }
+        if (bits == 98) { return KrtTokenKind.Int98; }
+        if (bits == 100) { return KrtTokenKind.Int100; }
+        if (bits == 102) { return KrtTokenKind.Int102; }
+        if (bits == 104) { return KrtTokenKind.Int104; }
+        if (bits == 106) { return KrtTokenKind.Int106; }
+        if (bits == 108) { return KrtTokenKind.Int108; }
+        if (bits == 110) { return KrtTokenKind.Int110; }
+        if (bits == 112) { return KrtTokenKind.Int112; }
+        if (bits == 114) { return KrtTokenKind.Int114; }
+        if (bits == 116) { return KrtTokenKind.Int116; }
+        if (bits == 118) { return KrtTokenKind.Int118; }
+        if (bits == 120) { return KrtTokenKind.Int120; }
+        if (bits == 122) { return KrtTokenKind.Int122; }
+        if (bits == 124) { return KrtTokenKind.Int124; }
+        if (bits == 126) { return KrtTokenKind.Int126; }
+        if (bits == 128) { return KrtTokenKind.Int128; }
+    }
+    return KrtTokenKind.Eof;
+}
+
+bool KrtLexerWordEqual(int64 source, int64 start, int64 length, string word, int64 word_length) {
+    if (length != word_length) { return false; }
+    unsafe(using krt.mem;) {
+        byte* bytes = (byte*)source; byte* expected = (byte*)(int64)word;
+        int64 index = 0;
+        while (index < length) { if (bytes[start + index] != expected[index]) { return false; } index = index + 1; }
+    }
+    return true;
+}
+
+KrtTokenKind KrtLexerWordKind(int64 source, int64 start, int64 length) {
+    unsafe(using krt.mem;) {
+        byte* bytes = (byte*)source; int64 index = start; int64 end = start + length;
+        bool unsigned_value = index < end && bytes[index] == 117;
+        if (unsigned_value) { index = index + 1; }
+        if (index + 3 < end && bytes[index] == 105 && bytes[index + 1] == 110 && bytes[index + 2] == 116 && bytes[index + 3] != 48) {
+            index = index + 3; int32 width = 0;
+            while (index < end && bytes[index] >= 48 && bytes[index] <= 57 && width <= 128) { width = width * 10 + bytes[index] - 48; index = index + 1; }
+            if (index == end && width >= 2 && width <= 128 && width % 2 == 0) { return KrtTokenIntegerType(width, unsigned_value); }
+        }
+        if (length == 0) { return KrtTokenKind.Identifier; }
+        int64 first = bytes[start];
+        if (first == 95) {
+            if (KrtLexerWordEqual(source, start, length, "_", 1)) { return KrtTokenKind.Underscore; }
+        }
+        if (first == 97) {
+            if (KrtLexerWordEqual(source, start, length, "async", 5)) { return KrtTokenKind.Async; }
+            if (KrtLexerWordEqual(source, start, length, "await", 5)) { return KrtTokenKind.Await; }
+            if (KrtLexerWordEqual(source, start, length, "abstract", 8)) { return KrtTokenKind.Abstract; }
+            if (KrtLexerWordEqual(source, start, length, "as", 2)) { return KrtTokenKind.As; }
+        }
+        if (first == 98) {
+            if (KrtLexerWordEqual(source, start, length, "byte", 4)) { return KrtTokenKind.Uint8; }
+            if (KrtLexerWordEqual(source, start, length, "base", 4)) { return KrtTokenKind.Base; }
+            if (KrtLexerWordEqual(source, start, length, "break", 5)) { return KrtTokenKind.Break; }
+            if (KrtLexerWordEqual(source, start, length, "bool", 4)) { return KrtTokenKind.Bool; }
+            if (KrtLexerWordEqual(source, start, length, "by", 2)) { return KrtTokenKind.By; }
+        }
+        if (first == 99) {
+            if (KrtLexerWordEqual(source, start, length, "class", 5)) { return KrtTokenKind.Class; }
+            if (KrtLexerWordEqual(source, start, length, "catch", 5)) { return KrtTokenKind.Catch; }
+            if (KrtLexerWordEqual(source, start, length, "case", 4)) { return KrtTokenKind.Case; }
+            if (KrtLexerWordEqual(source, start, length, "continue", 8)) { return KrtTokenKind.Continue; }
+            if (KrtLexerWordEqual(source, start, length, "char", 4)) { return KrtTokenKind.Char; }
+            if (KrtLexerWordEqual(source, start, length, "console", 7)) { return KrtTokenKind.Console; }
+            if (KrtLexerWordEqual(source, start, length, "const", 5)) { return KrtTokenKind.Const; }
+        }
+        if (first == 100) {
+            if (KrtLexerWordEqual(source, start, length, "do", 2)) { return KrtTokenKind.Do; }
+            if (KrtLexerWordEqual(source, start, length, "delete", 6)) { return KrtTokenKind.Delete; }
+            if (KrtLexerWordEqual(source, start, length, "default", 7)) { return KrtTokenKind.Default; }
+            if (KrtLexerWordEqual(source, start, length, "double", 6)) { return KrtTokenKind.Float64; }
+            if (KrtLexerWordEqual(source, start, length, "delegate", 8)) { return KrtTokenKind.Delegate; }
+        }
+        if (first == 101) {
+            if (KrtLexerWordEqual(source, start, length, "else", 4)) { return KrtTokenKind.Else; }
+            if (KrtLexerWordEqual(source, start, length, "enum", 4)) { return KrtTokenKind.Enum; }
+            if (KrtLexerWordEqual(source, start, length, "exception", 9)) { return KrtTokenKind.Exception; }
+            if (KrtLexerWordEqual(source, start, length, "equals", 6)) { return KrtTokenKind.Equals; }
+            if (KrtLexerWordEqual(source, start, length, "extern", 6)) { return KrtTokenKind.Extern; }
+        }
+        if (first == 102) {
+            if (KrtLexerWordEqual(source, start, length, "function", 8)) { return KrtTokenKind.Function; }
+            if (KrtLexerWordEqual(source, start, length, "func", 4)) { return KrtTokenKind.Function; }
+            if (KrtLexerWordEqual(source, start, length, "fn", 2)) { return KrtTokenKind.Fn; }
+            if (KrtLexerWordEqual(source, start, length, "for", 3)) { return KrtTokenKind.For; }
+            if (KrtLexerWordEqual(source, start, length, "foreach", 7)) { return KrtTokenKind.Foreach; }
+            if (KrtLexerWordEqual(source, start, length, "false", 5)) { return KrtTokenKind.False; }
+            if (KrtLexerWordEqual(source, start, length, "fixed", 5)) { return KrtTokenKind.Fixed; }
+            if (KrtLexerWordEqual(source, start, length, "finally", 7)) { return KrtTokenKind.Finally; }
+            if (KrtLexerWordEqual(source, start, length, "float", 5)) { return KrtTokenKind.Float32; }
+            if (KrtLexerWordEqual(source, start, length, "float32", 7)) { return KrtTokenKind.Float32; }
+            if (KrtLexerWordEqual(source, start, length, "float64", 7)) { return KrtTokenKind.Float64; }
+            if (KrtLexerWordEqual(source, start, length, "from", 4)) { return KrtTokenKind.From; }
+        }
+        if (first == 103) {
+            if (KrtLexerWordEqual(source, start, length, "get", 3)) { return KrtTokenKind.Get; }
+            if (KrtLexerWordEqual(source, start, length, "group", 5)) { return KrtTokenKind.Group; }
+        }
+        if (first == 105) {
+            if (KrtLexerWordEqual(source, start, length, "if", 2)) { return KrtTokenKind.If; }
+            if (KrtLexerWordEqual(source, start, length, "in", 2)) { return KrtTokenKind.In; }
+            if (KrtLexerWordEqual(source, start, length, "interface", 9)) { return KrtTokenKind.Interface; }
+            if (KrtLexerWordEqual(source, start, length, "int", 3)) { return KrtTokenKind.Int32; }
+            if (KrtLexerWordEqual(source, start, length, "into", 4)) { return KrtTokenKind.Into; }
+            if (KrtLexerWordEqual(source, start, length, "is", 2)) { return KrtTokenKind.Is; }
+        }
+        if (first == 106) {
+            if (KrtLexerWordEqual(source, start, length, "join", 4)) { return KrtTokenKind.Join; }
+        }
+        if (first == 108) {
+            if (KrtLexerWordEqual(source, start, length, "let", 3)) { return KrtTokenKind.Let; }
+            if (KrtLexerWordEqual(source, start, length, "long", 4)) { return KrtTokenKind.Int64; }
+            if (KrtLexerWordEqual(source, start, length, "lock", 4)) { return KrtTokenKind.Lock; }
+        }
+        if (first == 109) {
+            if (KrtLexerWordEqual(source, start, length, "match", 5)) { return KrtTokenKind.Match; }
+        }
+        if (first == 110) {
+            if (KrtLexerWordEqual(source, start, length, "null", 4)) { return KrtTokenKind.Null; }
+            if (KrtLexerWordEqual(source, start, length, "new", 3)) { return KrtTokenKind.New; }
+            if (KrtLexerWordEqual(source, start, length, "namespace", 9)) { return KrtTokenKind.Namespace; }
+        }
+        if (first == 111) {
+            if (KrtLexerWordEqual(source, start, length, "override", 8)) { return KrtTokenKind.Override; }
+            if (KrtLexerWordEqual(source, start, length, "orderby", 7)) { return KrtTokenKind.Orderby; }
+            if (KrtLexerWordEqual(source, start, length, "on", 2)) { return KrtTokenKind.On; }
+            if (KrtLexerWordEqual(source, start, length, "operator", 8)) { return KrtTokenKind.Operator; }
+            if (KrtLexerWordEqual(source, start, length, "op_Addition", 11)) { return KrtTokenKind.OpAddition; }
+            if (KrtLexerWordEqual(source, start, length, "op_Subtraction", 14)) { return KrtTokenKind.OpSubtraction; }
+            if (KrtLexerWordEqual(source, start, length, "op_Multiply", 11)) { return KrtTokenKind.OpMultiply; }
+            if (KrtLexerWordEqual(source, start, length, "op_Division", 11)) { return KrtTokenKind.OpDivision; }
+            if (KrtLexerWordEqual(source, start, length, "op_Modulo", 9)) { return KrtTokenKind.OpModulo; }
+            if (KrtLexerWordEqual(source, start, length, "op_Equality", 11)) { return KrtTokenKind.OpEquality; }
+            if (KrtLexerWordEqual(source, start, length, "op_Inequality", 13)) { return KrtTokenKind.OpInequality; }
+            if (KrtLexerWordEqual(source, start, length, "op_LessThan", 11)) { return KrtTokenKind.OpLess; }
+            if (KrtLexerWordEqual(source, start, length, "op_GreaterThan", 14)) { return KrtTokenKind.OpGreater; }
+            if (KrtLexerWordEqual(source, start, length, "op_LessThanOrEqual", 18)) { return KrtTokenKind.OpLessEqual; }
+            if (KrtLexerWordEqual(source, start, length, "op_GreaterThanOrEqual", 21)) { return KrtTokenKind.OpGreaterEqual; }
+            if (KrtLexerWordEqual(source, start, length, "op_BitwiseAnd", 13)) { return KrtTokenKind.OpBitwiseAnd; }
+            if (KrtLexerWordEqual(source, start, length, "op_BitwiseOr", 12)) { return KrtTokenKind.OpBitwiseOr; }
+            if (KrtLexerWordEqual(source, start, length, "op_BitwiseXor", 13)) { return KrtTokenKind.OpBitwiseXor; }
+            if (KrtLexerWordEqual(source, start, length, "op_LeftShift", 12)) { return KrtTokenKind.OpLeftShift; }
+            if (KrtLexerWordEqual(source, start, length, "op_RightShift", 13)) { return KrtTokenKind.OpRightShift; }
+            if (KrtLexerWordEqual(source, start, length, "op_UnaryPlus", 12)) { return KrtTokenKind.OpUnaryPlus; }
+            if (KrtLexerWordEqual(source, start, length, "op_UnaryMinus", 13)) { return KrtTokenKind.OpUnaryMinus; }
+            if (KrtLexerWordEqual(source, start, length, "op_LogicalNot", 13)) { return KrtTokenKind.OpLogicalNot; }
+            if (KrtLexerWordEqual(source, start, length, "op_BitwiseNot", 13)) { return KrtTokenKind.OpBitwiseNot; }
+            if (KrtLexerWordEqual(source, start, length, "op_Increment", 12)) { return KrtTokenKind.OpIncrement; }
+            if (KrtLexerWordEqual(source, start, length, "op_Decrement", 12)) { return KrtTokenKind.OpDecrement; }
+            if (KrtLexerWordEqual(source, start, length, "op_True", 7)) { return KrtTokenKind.OpTrue; }
+            if (KrtLexerWordEqual(source, start, length, "op_False", 8)) { return KrtTokenKind.OpFalse; }
+            if (KrtLexerWordEqual(source, start, length, "op_Implicit", 11)) { return KrtTokenKind.OpImplicit; }
+            if (KrtLexerWordEqual(source, start, length, "op_Explicit", 11)) { return KrtTokenKind.OpExplicit; }
+        }
+        if (first == 112) {
+            if (KrtLexerWordEqual(source, start, length, "point", 5)) { return KrtTokenKind.Point; }
+            if (KrtLexerWordEqual(source, start, length, "public", 6)) { return KrtTokenKind.Public; }
+            if (KrtLexerWordEqual(source, start, length, "private", 7)) { return KrtTokenKind.Private; }
+            if (KrtLexerWordEqual(source, start, length, "protected", 9)) { return KrtTokenKind.Protected; }
+            if (KrtLexerWordEqual(source, start, length, "params", 6)) { return KrtTokenKind.Params; }
+        }
+        if (first == 114) {
+            if (KrtLexerWordEqual(source, start, length, "return", 6)) { return KrtTokenKind.Return; }
+        }
+        if (first == 115) {
+            if (KrtLexerWordEqual(source, start, length, "struct", 6)) { return KrtTokenKind.Struct; }
+            if (KrtLexerWordEqual(source, start, length, "static", 6)) { return KrtTokenKind.Static; }
+            if (KrtLexerWordEqual(source, start, length, "switch", 6)) { return KrtTokenKind.Switch; }
+            if (KrtLexerWordEqual(source, start, length, "string", 6)) { return KrtTokenKind.TypeString; }
+            if (KrtLexerWordEqual(source, start, length, "set", 3)) { return KrtTokenKind.Set; }
+            if (KrtLexerWordEqual(source, start, length, "select", 6)) { return KrtTokenKind.Select; }
+            if (KrtLexerWordEqual(source, start, length, "sizeof", 6)) { return KrtTokenKind.Sizeof; }
+            if (KrtLexerWordEqual(source, start, length, "stackalloc", 10)) { return KrtTokenKind.Stackalloc; }
+        }
+        if (first == 116) {
+            if (KrtLexerWordEqual(source, start, length, "true", 4)) { return KrtTokenKind.True; }
+            if (KrtLexerWordEqual(source, start, length, "this", 4)) { return KrtTokenKind.This; }
+            if (KrtLexerWordEqual(source, start, length, "try", 3)) { return KrtTokenKind.Try; }
+            if (KrtLexerWordEqual(source, start, length, "throw", 5)) { return KrtTokenKind.Throw; }
+            if (KrtLexerWordEqual(source, start, length, "template", 8)) { return KrtTokenKind.Template; }
+            if (KrtLexerWordEqual(source, start, length, "typename", 8)) { return KrtTokenKind.Typename; }
+        }
+        if (first == 117) {
+            if (KrtLexerWordEqual(source, start, length, "usize", 5)) { return KrtTokenKind.Uint64; }
+            if (KrtLexerWordEqual(source, start, length, "unsafe", 6)) { return KrtTokenKind.Unsafe; }
+            if (KrtLexerWordEqual(source, start, length, "using", 5)) { return KrtTokenKind.Using; }
+        }
+        if (first == 118) {
+            if (KrtLexerWordEqual(source, start, length, "var", 3)) { return KrtTokenKind.Var; }
+            if (KrtLexerWordEqual(source, start, length, "virtual", 7)) { return KrtTokenKind.Virtual; }
+            if (KrtLexerWordEqual(source, start, length, "void", 4)) { return KrtTokenKind.Void; }
+        }
+        if (first == 119) {
+            if (KrtLexerWordEqual(source, start, length, "while", 5)) { return KrtTokenKind.While; }
+            if (KrtLexerWordEqual(source, start, length, "where", 5)) { return KrtTokenKind.Where; }
+            if (KrtLexerWordEqual(source, start, length, "with", 4)) { return KrtTokenKind.With; }
+            if (KrtLexerWordEqual(source, start, length, "when", 4)) { return KrtTokenKind.When; }
+        }
+        if (first == 121) {
+            if (KrtLexerWordEqual(source, start, length, "yield", 5)) { return KrtTokenKind.Yield; }
+        }
+    }
+    return KrtTokenKind.Identifier;
+}
+
+KrtTokenKind KrtLexerPunctuationKind(KrtLexer lexer, ref int32 length) {
+    int64 first = lexer_at(lexer, 0); int64 second = lexer_at(lexer, 1); int64 third = lexer_at(lexer, 2);
+    length = 1;
+    if (first == 43) {
+        if (second == 43) { length = 2; return KrtTokenKind.Increment; }
+        if (second == 61) { length = 2; return KrtTokenKind.PlusAssign; }
+        return KrtTokenKind.Plus;
+    }
+    if (first == 45) {
+        if (second == 45) { length = 2; return KrtTokenKind.Decrement; }
+        if (second == 61) { length = 2; return KrtTokenKind.MinusAssign; }
+        if (second == 62) { length = 2; return KrtTokenKind.Arrow; }
+        return KrtTokenKind.Minus;
+    }
+    if (first == 42) {
+        if (second == 61) { length = 2; return KrtTokenKind.MulAssign; }
+        if (second == 42) { length = 2; return KrtTokenKind.Power; }
+        return KrtTokenKind.Multiply;
+    }
+    if (first == 47) {
+        if (second == 61) { length = 2; return KrtTokenKind.DivAssign; }
+        return KrtTokenKind.Divide;
+    }
+    if (first == 37) {
+        if (second == 61) { length = 2; return KrtTokenKind.ModAssign; }
+        return KrtTokenKind.Modulo;
+    }
+    if (first == 61) {
+        if (second == 61) { length = 2; return KrtTokenKind.Equal; }
+        if (second == 62) { length = 2; return KrtTokenKind.Lambda; }
+        return KrtTokenKind.Assign;
+    }
+    if (first == 33) {
+        if (second == 61) { length = 2; return KrtTokenKind.NotEqual; }
+        return KrtTokenKind.Not;
+    }
+    if (first == 60) {
+        if (second == 60 && third == 61) { length = 3; return KrtTokenKind.LshiftAssign; }
+        if (second == 61) { length = 2; return KrtTokenKind.LessEqual; }
+        if (second == 60) { length = 2; return KrtTokenKind.Lshift; }
+        return KrtTokenKind.Less;
+    }
+    if (first == 62) {
+        if (second == 62 && third == 61) { length = 3; return KrtTokenKind.RshiftAssign; }
+        if (second == 61) { length = 2; return KrtTokenKind.GreaterEqual; }
+        if (second == 62) { length = 2; return KrtTokenKind.Rshift; }
+        return KrtTokenKind.Greater;
+    }
+    if (first == 38) {
+        if (second == 38) { length = 2; return KrtTokenKind.And; }
+        if (second == 61) { length = 2; return KrtTokenKind.AndAssign; }
+        return KrtTokenKind.BitwiseAnd;
+    }
+    if (first == 124) {
+        if (second == 124) { length = 2; return KrtTokenKind.Or; }
+        if (second == 61) { length = 2; return KrtTokenKind.OrAssign; }
+        return KrtTokenKind.Pipe;
+    }
+    if (first == 94) {
+        if (second == 61) { length = 2; return KrtTokenKind.XorAssign; }
+        return KrtTokenKind.BitwiseXor;
+    }
+    if (first == 40) {
+        return KrtTokenKind.LeftParen;
+    }
+    if (first == 41) {
+        return KrtTokenKind.RightParen;
+    }
+    if (first == 36) {
+        return KrtTokenKind.Dollar;
+    }
+    if (first == 123) {
+        return KrtTokenKind.LeftBrace;
+    }
+    if (first == 125) {
+        return KrtTokenKind.RightBrace;
+    }
+    if (first == 91) {
+        return KrtTokenKind.LeftBracket;
+    }
+    if (first == 93) {
+        return KrtTokenKind.RightBracket;
+    }
+    if (first == 44) {
+        return KrtTokenKind.Comma;
+    }
+    if (first == 59) {
+        return KrtTokenKind.Semicolon;
+    }
+    if (first == 58) {
+        if (second == 58) { length = 2; return KrtTokenKind.DoubleColon; }
+        return KrtTokenKind.Colon;
+    }
+    if (first == 46) {
+        return KrtTokenKind.Dot;
+    }
+    if (first == 63) {
+        if (second == 58) { length = 2; return KrtTokenKind.QuestionColon; }
+        if (second == 63) { length = 2; return KrtTokenKind.NullCoalescing; }
+        if (second == 46) { length = 2; return KrtTokenKind.QuestionDot; }
+        return KrtTokenKind.Question;
+    }
+    if (first == 126) {
+        return KrtTokenKind.Tilde;
+    }
+    return KrtTokenKind.Unknown;
 }

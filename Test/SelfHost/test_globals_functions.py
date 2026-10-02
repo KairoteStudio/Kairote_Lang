@@ -2,7 +2,6 @@
 import os
 from pathlib import Path
 import subprocess
-import sys
 import tempfile
 import unittest
 
@@ -12,21 +11,25 @@ COMPILER = Path(os.environ.get('SELFHOST_COMPILER', ROOT / 'build/selfhost/stage
 
 @unittest.skipUnless(COMPILER.is_file(), 'build the self-hosted compiler first')
 class GlobalsAndFunctionPointers(unittest.TestCase):
-    def run_source(self, source, expected=0, rejected=False):
+    def run_source(self, source, expected=0, rejected=False, optimization=2, vm=False):
         with tempfile.TemporaryDirectory(prefix='kairote-globals-functions-') as directory:
             work = Path(directory)
             path = work / 'main.krt'
             path.write_text(source)
             binary = work / 'program'
-            compiled = subprocess.run([sys.executable, str(ROOT / 'SelfHost/Compile.py'), str(path),
-                                       '--compiler', str(COMPILER), '-o', str(binary)],
+            command=[str(ROOT / 'SelfHost/krtc'), str(path), '--compiler', str(COMPILER),
+                     f'-O{optimization}', '-o', str(binary)]
+            if vm:
+                command+=['target','vm']
+            compiled = subprocess.run(command,
                                       capture_output=True, text=True, timeout=60)
             if rejected:
                 self.assertNotEqual(compiled.returncode, 0, source)
                 self.assertFalse(binary.exists())
                 return
             self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr + source)
-            executed = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10)
+            argv=[str(COMPILER),'run-vm',str(binary)] if vm else [str(binary)]
+            executed = subprocess.run(argv, capture_output=True, text=True, timeout=10)
             self.assertEqual(executed.returncode, expected, executed.stderr + source)
 
     def test_globals_initialize_once_in_order_and_are_shared_by_calls(self):
@@ -103,8 +106,8 @@ class GlobalsAndFunctionPointers(unittest.TestCase):
             }
             int32 main(){
                 if(Calls.Apply(&read_value)!=17){return 1;}
-                fn(ref int32)->void set=&change;
-                int32 value=1; set(ref value);
+                fn(ref int32)->void setter=&change;
+                int32 value=1; setter(ref value);
                 return value==29 ? 0 : 2;
             }
         ''')
@@ -127,6 +130,32 @@ class GlobalsAndFunctionPointers(unittest.TestCase):
             static fn(int32)->int32 operation=&Ops.Add;
             int32 main(){ return operation(10); }
         ''', expected=17)
+
+    def test_function_type_results_preserve_nested_ref_and_object_shapes(self):
+        source='''
+            int32 increment(int32 value){return value+1;}
+            void set_value(ref int32 value){value=42;}
+            public fn(int32)->int32 ScalarFactory(){return &increment;}
+            fn(ref int32)->void RefFactory(){return &set_value;}
+            fn(int32)->int32 Echo(fn(int32)->int32 value){return value;}
+            class Item{public int32 value=42;}
+            Item Make(){return new Item();}
+            public fn()->Item GetFactory(){return &Make;}
+            fn()->fn()->Item NestedFactory(){return &GetFactory;}
+            class Calls{public static fn()->Item Factory(){return &Make;}}
+            int32 main(){
+                var callback=Echo(ScalarFactory());if(callback(41)!=42){return 1;}
+                int32 value=0;var setter=RefFactory();setter(ref value);if(value!=42){return 2;}
+                var nested=NestedFactory();var factory=nested();Item first=factory();
+                var member=Calls.Factory();Item second=member();
+                if(first.value!=42||second.value!=42){return 3;}
+                delete first;delete second;return 0;
+            }
+        '''
+        for level in range(4):
+            with self.subTest(optimization=level):
+                self.run_source(source,optimization=level)
+        self.run_source(source,vm=True)
 
     def test_invalid_globals_and_function_pointer_signatures_are_rejected(self):
         for source in (

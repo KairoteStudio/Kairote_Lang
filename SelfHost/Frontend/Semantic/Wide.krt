@@ -1,3 +1,3 @@
 bool KrtNativeWideKind(KrtAstNode node) {
-    return node != null && node.native_wide && (node.native_stride == 0 || node.kind == KrtAstKind.Index);
+    return node != null && node.native_wide && node.native_stride == 0;
 }

@@ -1,4 +1,5 @@
 // Stage-0 callable compiler entry point. It owns the pipeline but emits no C.
+static KrtNativeModule KrtDriverLastModule = null;
 bool KrtCompileSource(string source, int32 source_length, KrtKroObject output) {
     KrtLexer lexer = new KrtLexer();
     KrtToken token = new KrtToken();
@@ -84,6 +85,23 @@ bool KrtCompileNativeSource(string source, int32 source_length, KrtKroObject out
 }
 
 bool KrtCompileNativeSourceMode(string source, int32 source_length, KrtKroObject output, bool library_mode) {
+    KrtCompilerDiagnostics previous = KrtCurrentDiagnostics;
+    KrtCompilerDiagnostics report = new KrtCompilerDiagnostics(); report.limit = 64; report.stage = KrtDiagnosticStage.Parser;
+    KrtCurrentDiagnostics = report;
+    bool result = KrtCompileNativeSourceModeCore(source,source_length,output,library_mode);
+    if (!result) { KrtErrorReportFlush(report); }
+    KrtCurrentDiagnostics = previous; return result;
+}
+
+bool KrtCompileNativeSourceModeCore(string source, int32 source_length, KrtKroObject output, bool library_mode) {
+    int32 original_length = source_length;
+    bool print_runtime = KrtPrintRuntimeRequired((int64)source,source_length);
+    if (print_runtime) {
+        int64 original = KrtDriverCopyString((int64)source,source_length);
+        int64 extended = KrtDriverConcat(original,(int64)KrtPrintRuntimeSource());
+        if (extended == 0) { return false; }
+        source = (string)extended; source_length = (int32)KrtDriverStringLength(extended);
+    }
     KrtLexer lexer = new KrtLexer();
     KrtToken token = new KrtToken();
     KrtParser parser = new KrtParser();
@@ -93,7 +111,20 @@ bool KrtCompileNativeSourceMode(string source, int32 source_length, KrtKroObject
     }
     KrtParserInit(parser, lexer, token);
     KrtAstNode unit = KrtParserParseCompilationUnit(parser);
-    if (parser.errors != 0) { KrtDiagnostic("E_PARSE", 7, parser.error_start); return false; }
+    if (print_runtime) {
+        KrtAstNode helper = unit.left;
+        while (helper != null) { if (helper.start >= original_length) { helper.op = 241; } helper = helper.next; }
+    }
+    if (parser.errors != 0) {
+        KrtParserDiagnostic diagnostic = parser.diagnostics;
+        if (diagnostic == null) { KrtDiagnostic("E_PARSE",7,parser.error_start); }
+        while (diagnostic != null) {
+            KrtDiagnosticMessage("E_PARSE",7,diagnostic.position,diagnostic.message); diagnostic = diagnostic.next;
+        }
+        return false;
+    }
+    KrtCurrentDiagnostics.stage = KrtDiagnosticStage.Names;
+    if (!KrtNativeValidateAccess(unit,lexer.source,native_module)) { return false; }
     if (!KrtNativeResolvePrototypes(unit, lexer.source)) { KrtDiagnostic("E_LINKAGE", 9, 0); return false; }
     bool has_main = false; KrtAstNode candidate = unit.left;
     while (candidate != null) { if (KrtSemanticIsMain(candidate, lexer.source)) { has_main = true; } candidate = candidate.next; }
@@ -106,13 +137,22 @@ bool KrtCompileNativeSourceMode(string source, int32 source_length, KrtKroObject
         return true;
     }
     if (library_mode) { unit.op = 240; }
+    KrtCurrentDiagnostics.stage = KrtDiagnosticStage.Types;
     if (!KrtNativeLowerModule(unit, lexer.source, native_module)) {
+        if (KrtErrorReportHasErrors()) { return false; }
         if (unit.native_error == 1) { KrtDiagnostic("E_CONDITIONAL_ARRAY", 19, native_module.error_start); }
         else if (unit.native_error == 2) { KrtDiagnostic("E_ARGUMENT_COUNT", 16, native_module.error_start); }
         else if (unit.native_error == 3) { KrtDiagnostic("E_WRITABLE_REF", 14, native_module.error_start); }
         else if (unit.native_error == 4) { KrtDiagnostic("E_UNDEFINED_METHOD", 18, native_module.error_start); }
         else if (unit.native_error == 5) { KrtDiagnostic("E_NOT_NULLABLE", 14, native_module.error_start); }
         else if (unit.native_error == 6) { KrtDiagnostic("E_GENERIC_CONSTRAINT", 20, native_module.error_start); }
+        else if (unit.native_error == 7) { KrtDiagnostic("E_SWITCH", 8, native_module.error_start); }
+        else if (unit.native_error == 8) { KrtInheritanceDiagnostic(unit,native_module.error_start); }
+        else if (unit.native_error == 9) { KrtDiagnostic("E_ARGUMENT_NAME", 15, native_module.error_start); }
+        else if (unit.native_error == 10) { KrtDiagnostic("E_ACCESS", 8, native_module.error_start); }
+        else if (unit.native_error == 11) { KrtDiagnostic("E_MODIFIER", 10, native_module.error_start); }
+        else if (unit.native_error == 12) { KrtDiagnostic("E_LAYOUT", 8, native_module.error_start); }
+        else if (unit.native_error == 13) { KrtDiagnostic("E_ABI_UNSUPPORTED", 17, native_module.error_start); }
         else { KrtDiagnostic("E_LOWER", 7, native_module.error_start); }
         return false;
     }
@@ -120,12 +160,34 @@ bool KrtCompileNativeSourceMode(string source, int32 source_length, KrtKroObject
         if (!KrtKroEmitLibraryData(unit, lexer.source, output)) { KrtDiagnostic("E_LIBRARY_DATA", 14, unit.start); return false; }
         return true;
     }
+    KrtCurrentDiagnostics.stage = KrtDiagnosticStage.Optimization;
+    if (!KrtNativeOptimize(native_module, KrtDriverOptimization)) { KrtDiagnostic("E_OPTIMIZE", 10, 0); return false; }
+    native_module.ssa = KrtSsaBuild(native_module,unit,lexer.source);
+    if (native_module.ssa == null || !KrtSsaOptimize(native_module.ssa,KrtDriverOptimization)) { KrtDiagnostic("E_SSA",5,0); return false; }
+    KrtDriverLastModule = native_module;
+    if (KrtDriverArtifactTarget == 2) { return true; }
+    if (KrtDriverArtifactTarget == 4) {
+        KrtDriverLastVm = new KrtDriverBuffer();
+        if (!KrtVmEmit(native_module,KrtDriverLastVm)) { KrtDiagnostic("E_VM", 4, 0); return false; }
+        return true;
+    }
+    KrtCurrentDiagnostics.stage = KrtDiagnosticStage.Backend;
     if (!KrtKroEmitNativeModule(native_module, output)) { KrtDiagnostic("E_EMIT", 6, 0); return false; }
-    if ((library_mode || native_module.external_reloc_count > 0) && !KrtKroLibraryFunctions(native_module, unit, lexer.source, output)) { KrtDiagnostic("E_LIBRARY_SYMBOL", 16, 0); return false; }
+    if ((library_mode || native_module.external_reloc_count > 0 || KrtKroLibraryNeedsAbi(native_module,unit,lexer.source)) && !KrtKroLibraryFunctions(native_module, unit, lexer.source, output)) { KrtDiagnostic("E_LIBRARY_SYMBOL", 16, 0); return false; }
     return true;
 }
 
 void KrtDiagnostic(string code, int32 code_length, int64 position) {
+    KrtDiagnosticMessage(code,code_length,position,null);
+}
+
+void KrtDiagnosticWrite(string code, int32 code_length, int64 position, string message) {
+    KrtDriverLastErrorCode = (int64)code;
+    if (KrtDriverQuiet) { return; }
+    if (KrtDriverActiveBundle != null) {
+        KrtSourcesDiagnosticDetails(KrtDriverActiveBundle, code, code_length, position, message);
+        return;
+    }
     syscall(1, 2, (int64)code, code_length, 0, 0, 0);
     syscall(1, 2, (int64)" at byte ", 9, 0, 0, 0);
     unsafe(using krt.mem;) {
@@ -142,28 +204,16 @@ void KrtDiagnostic(string code, int32 code_length, int64 position) {
     }
 }
 
-// Read through EOF, including short reads. The extra byte detects oversized
-// inputs instead of silently compiling a truncated prefix.
+// Read legacy protocol input through the same heap-backed I/O as the CLI.
 bool KrtCompilePath(string input_path, string output_path) {
-    int64 input = syscall(2, (int64)input_path, 0, 0, 0, 0, 0);
-    if (input < 0) { KrtDiagnostic("E_INPUT", 7, 0); return false; }
-    unsafe(using krt.mem;) {
-        byte* buffer = stackalloc byte[1048577];
-        int64 length = 0;
-        while (length < 1048577) {
-            int64 chunk = syscall(0, input, (int64)(buffer + length), 1048577 - length, 0, 0, 0);
-            if (chunk < 0) { syscall(3, input, 0, 0, 0, 0, 0); KrtDiagnostic("E_READ", 6, length); return false; }
-            if (chunk == 0) { break; }
-            length = length + chunk;
-        }
-        syscall(3, input, 0, 0, 0, 0, 0);
-        if (length <= 0 || length > 1048576) { KrtDiagnostic("E_SIZE", 6, length); return false; }
-        KrtKroObject object = new KrtKroObject();
-        int64 library_marker = syscall(2, (int64)"library.mode", 0, 0, 0, 0, 0);
-        bool library_mode = library_marker >= 0;
-        if (library_mode) { syscall(3, library_marker, 0, 0, 0, 0, 0); }
-        if (!KrtCompileNativeSourceMode((string)(int64)buffer, (int32)length, object, library_mode)) { return false; }
-        if (!KrtKroWriteObjectToPath(object, output_path)) { KrtDiagnostic("E_OUTPUT", 8, 0); return false; }
-        return true;
-    }
+    KrtDriverBuffer source = new KrtDriverBuffer();
+    if (!KrtDriverReadFile((int64)input_path,source)) { KrtDiagnostic("E_INPUT",7,0); return false; }
+    if (source.length < 0 || source.length > 16777216) { KrtDiagnostic("E_SIZE",6,source.length); return false; }
+    KrtKroObject object = new KrtKroObject();
+    int64 library_marker = syscall(2,(int64)"library.mode",0,0,0,0,0);
+    bool library_mode = library_marker >= 0;
+    if (library_mode) { syscall(3,library_marker,0,0,0,0,0); }
+    if (!KrtCompileNativeSourceMode((string)source.data,(int32)source.length,object,library_mode)) { return false; }
+    if (!KrtKroWriteObjectToPath(object,output_path)) { KrtDiagnostic("E_OUTPUT",8,0); return false; }
+    return true;
 }

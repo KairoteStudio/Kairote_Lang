@@ -1,0 +1,63 @@
+KrtInheritanceStack KrtInheritanceStackFor(KrtAstNode module) {
+    if (module.native_inheritance_stack == null) {
+        KrtInheritanceStack stack = new KrtInheritanceStack();
+        stack.capacity = 32; stack.types = new KrtAstNode[stack.capacity];
+        stack.error_start = -1; module.native_inheritance_stack = stack;
+    }
+    return module.native_inheritance_stack;
+}
+
+bool KrtInheritanceStackPush(KrtInheritanceStack stack, KrtAstNode type) {
+    int32 index = 0; int32 duplicate = -1;
+    while (index < stack.depth) { if (stack.types[index] == type) { duplicate = index; break; } index = index + 1; }
+    if (duplicate >= 0 || stack.depth >= 16384) {
+        if (stack.error_start < 0) {
+            stack.cycle_types = new KrtAstNode[stack.depth + 1];
+            stack.error_start = type.start; index = 0;
+            while (index < stack.depth) { stack.cycle_types[index] = stack.types[index]; index = index + 1; }
+            stack.cycle_types[index] = type; stack.cycle_depth = index + 1;
+        }
+        return false;
+    }
+    if (stack.depth >= stack.capacity) {
+        int32 capacity = stack.capacity * 2; KrtAstNode[] types = new KrtAstNode[capacity]; index = 0;
+        while (index < stack.depth) { types[index] = stack.types[index]; index = index + 1; }
+        delete stack.types; stack.types = types; stack.capacity = capacity;
+    }
+    stack.types[stack.depth] = type; stack.depth = stack.depth + 1; return true;
+}
+
+void KrtInheritanceStackPop(KrtInheritanceStack stack) {
+    if (stack.depth > 0) { stack.depth = stack.depth - 1; stack.types[stack.depth] = null; }
+}
+
+bool KrtNativeResolveInheritance(KrtAstNode type, KrtAstNode module, int64 source) {
+    if (type == null) { return false; }
+    if (type.native_inheritance_state == 2) { return true; }
+    if (type.native_inheritance_state == 3) { return false; }
+    KrtInheritanceStack stack = KrtInheritanceStackFor(module);
+    stack.source = source;
+    if (!KrtInheritanceStackPush(stack,type)) { module.native_error = 8; return false; }
+    bool valid = KrtNativeResolveInheritanceInner(type,module,source);
+    KrtInheritanceStackPop(stack); return valid;
+}
+
+KrtLinkName KrtInheritanceCycleName(KrtInheritanceStack stack, int64 source) {
+    KrtLinkName path = KrtLinkNameNew(); int32 index = 0;
+    while (index < stack.cycle_depth) {
+        if (index != 0) { KrtLinkText(path," -> "); }
+        KrtLinkDeclaration(path,stack.cycle_types[index],source); index = index + 1;
+    }
+    return path;
+}
+
+void KrtInheritanceDiagnostic(KrtAstNode module, int64 position) {
+    KrtInheritanceStack stack = module.native_inheritance_stack;
+    if (stack == null || stack.cycle_depth == 0) { KrtDiagnostic("E_INHERITANCE",13,position); return; }
+    KrtLinkName path = KrtInheritanceCycleName(stack,stack.source);
+    unsafe(using krt.mem;) {
+        int64 text = KrtDriverCopyString((int64)(byte*)path.bytes,path.length);
+        int64 message = KrtDriverConcat((int64)"inheritance cycle: ",text);
+        KrtDiagnosticMessage("E_INHERITANCE",13,stack.error_start,(string)message);
+    }
+}

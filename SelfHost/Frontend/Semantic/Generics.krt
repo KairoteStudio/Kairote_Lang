@@ -1,9 +1,44 @@
-bool KrtNativeTypeEqual(KrtAstNode left, KrtAstNode right) {
-    if (left.native_function_pointer != null || right.native_function_pointer != null) { return KrtNativeFunctionShapesEqual(left.native_function_pointer, right.native_function_pointer); }
-    return left.native_bits == right.native_bits && left.native_type == right.native_type && left.native_width == right.native_width && left.native_stride == right.native_stride &&
+int32 KrtNativeTypeBaseWidth(KrtAstNode type) {
+    if (type.native_element_type == null && type.native_type != null && type.native_type.value == 2 && type.native_type.native_layout_state == 2) { return type.native_type.native_storage_size; }
+    if (type.native_base_width > 0) { return type.native_base_width; }
+    if (type.native_function_pointer != null || type.native_type != null || type.native_string || type.native_element_string) { return 8; }
+    if (type.native_float > 0) { return type.native_float; }
+    if (type.native_bits > 0) {
+        int32 width = 1; while (width * 8 < type.native_bits) { width = width * 2; } return width;
+    }
+    if (type.native_stride > 0) { return type.native_stride; }
+    return type.native_width;
+}
+
+bool KrtNativeTypeEqualDepth(KrtAstNode left, KrtAstNode right, int32 depth) {
+    if (left == right) { return true; }
+    if (left == null || right == null || depth > 64) { return false; }
+    if (left.native_fixed_length != right.native_fixed_length || (left.native_fixed_length > 0 &&
+        (left.native_storage_size != right.native_storage_size || left.native_alignment != right.native_alignment))) { return false; }
+    if ((left.native_element_type != null || right.native_element_type != null) &&
+        !KrtNativeTypeEqualDepth(left.native_element_type,right.native_element_type,depth + 1)) { return false; }
+    bool equal = left.native_nullable == right.native_nullable && left.native_pointee_nullable == right.native_pointee_nullable && left.native_pointer_depth == right.native_pointer_depth && KrtNativeTypeBaseWidth(left) == KrtNativeTypeBaseWidth(right) && left.native_bits == right.native_bits && left.native_type == right.native_type && left.native_width == right.native_width && KrtNativeSemanticStride(left) == KrtNativeSemanticStride(right) &&
         left.native_unsigned == right.native_unsigned && left.native_wide == right.native_wide && left.native_float == right.native_float && left.native_string == right.native_string &&
         left.native_array == right.native_array && left.native_boolean == right.native_boolean && left.native_element_unsigned == right.native_element_unsigned &&
-        left.native_element_boolean == right.native_element_boolean && left.native_element_string == right.native_element_string && left.native_void_pointer == right.native_void_pointer;
+        left.native_element_boolean == right.native_element_boolean && left.native_element_string == right.native_element_string && left.native_void_pointer == right.native_void_pointer &&
+        left.native_character == right.native_character && left.native_element_character == right.native_element_character;
+    if (!equal) { return false; }
+    KrtAstNode a = left.native_function_pointer; KrtAstNode b = right.native_function_pointer;
+    if (a == b) { return true; }
+    if (a == null || b == null || a.parameter_count != b.parameter_count || a.native_readonly != b.native_readonly ||
+        !KrtNativeTypeEqualDepth(a.native_type,b.native_type,depth + 1)) { return false; }
+    KrtAstNode first = a.declarations; KrtAstNode second = b.declarations;
+    int32 index = 0;
+    while (index < a.parameter_count) {
+        if (first == null || second == null || first.native_ref != second.native_ref ||
+            !KrtNativeTypeEqualDepth(first,second,depth + 1)) { return false; }
+        first = first.next; second = second.next; index = index + 1;
+    }
+    return first == null && second == null;
+}
+
+bool KrtNativeTypeEqual(KrtAstNode left, KrtAstNode right) {
+    return KrtNativeTypeEqualDepth(left,right,0);
 }
 
 bool KrtNativeTypeListEqual(KrtAstNode left, KrtAstNode right) {
@@ -29,81 +64,121 @@ KrtAstNode KrtNativeTypeParameter(KrtAstNode context, int64 source, int64 start,
     return null;
 }
 
-KrtAstNode KrtNativeParseTypeArguments(KrtAstNode node, KrtAstNode module, int64 source, int64 start, int64 length) {
-    KrtAstNode first = null; KrtAstNode tail = null;
-    int64 begin = start + 1; int64 end = start + length; int64 i = begin; int32 depth = 0;
-    unsafe(using krt.mem;) { byte* text = (byte*)source;
-        while (i < end) {
-            byte value = text[i];
-            if (value == 60) { depth = depth + 1; }
-            if ((value == 44 || value == 62) && depth == 0) {
-                int64 argument_start = begin; int64 argument_length = i - begin;
-                while (argument_length > 0 && KrtNameSpace(text[argument_start])) { argument_start = argument_start + 1; argument_length = argument_length - 1; }
-                while (argument_length > 0 && KrtNameSpace(text[argument_start + argument_length - 1])) { argument_length = argument_length - 1; }
-                if (argument_length == 0) { return null; }
-                KrtAstNode argument = KrtAstMake(KrtAstKind.Type, argument_start, argument_length);
-                argument.type_start = argument_start; argument.type_length = argument_length;
-                argument.native_scope = node.native_scope; argument.native_context = node.native_context;
-                if (!KrtNativeAnnotateType(argument, module, source, argument_start, argument_length)) { return null; }
-                if (first == null) { first = argument; } else { tail.next = argument; } tail = argument;
-                begin = i + 1; if (value == 62) { return first; }
-            } else if (value == 62) { depth = depth - 1; }
-            i = i + 1;
-        }
+KrtParser KrtNativeTypeParser(int64 source, int64 start, int64 length) {
+    KrtLexer lexer = new KrtLexer(); KrtToken token = new KrtToken(); KrtParser parser = new KrtParser();
+    unsafe(using krt.mem;) { if (!KrtLexerInit(lexer,(byte*)source,start + length)) { return null; } }
+    lexer.position = start; KrtParserInit(parser,lexer,token); return parser;
+}
+
+KrtAstNode KrtNativeTypeSyntax(int64 source, int64 start, int64 length) {
+    KrtParser parser = KrtNativeTypeParser(source,start,length); if (parser == null) { return null; }
+    KrtAstNode type = KrtParserParseType(parser);
+    if (parser.errors != 0 || parser.token.kind != KrtTokenKind.Eof) { return null; }
+    return type;
+}
+
+KrtAstNode KrtNativeBindTypeArguments(KrtAstNode node, KrtAstNode module, int64 source, KrtAstNode syntax) {
+    KrtAstNode first = null; KrtAstNode tail = null; KrtAstNode pattern = syntax.left;
+    while (pattern != null) {
+        KrtAstNode argument = KrtAstMake(KrtAstKind.Type,pattern.start,pattern.length);
+        argument.type_start = pattern.type_start; argument.type_length = pattern.type_length; argument.syntax_type = pattern;
+        argument.native_scope = node.native_scope; argument.native_context = node.native_context; argument.native_using_scope = node.native_using_scope;
+        if (!KrtNativeAnnotateType(argument,module,source,argument.type_start,argument.type_length)) { return null; }
+        if (first == null) { first = argument; } else { tail.next = argument; } tail = argument;
+        pattern = pattern.next;
     }
-    return null;
+    return first;
+}
+
+KrtAstNode KrtNativeParseTypeArguments(KrtAstNode node, KrtAstNode module, int64 source, int64 start, int64 length) {
+    KrtParser parser = KrtNativeTypeParser(source,start,length); if (parser == null) { return null; }
+    KrtAstNode syntax = KrtParserParseTypeArguments(parser);
+    if (syntax == null || parser.errors != 0 || parser.token.kind != KrtTokenKind.Eof) { return null; }
+    return KrtNativeBindTypeArguments(node,module,source,syntax);
+}
+
+// Apply one structural layer while retaining the complete element descriptor
+// for arrays and composite values. Plain pointers keep the established depth ABI.
+bool KrtNativeApplyTypeLayer(KrtAstNode node, bool array) {
+    if (!array && !node.native_array && node.native_pointer_depth >= 64) { return false; }
+    bool outer = node.native_nullable; uint64 mask = node.native_pointee_nullable;
+    if (array || node.native_array || node.native_fixed_length > 0 || node.native_element_type != null) {
+        KrtAstNode element = KrtAstMake(KrtAstKind.Type,node.start,0); KrtNativeCopyType(element,node);
+        node.native_element_type = element; node.native_base_width = KrtNativeValueStorage(element);
+        node.native_stride = node.native_base_width; node.native_width = 8;
+        node.native_array = array;
+        node.native_pointer_depth = array ? element.native_pointer_depth : (element.native_array ? 1 : element.native_pointer_depth + 1);
+        node.native_element_unsigned = element.native_unsigned; node.native_unsigned = false;
+        node.native_element_boolean = element.native_boolean; node.native_boolean = false;
+        node.native_element_string = element.native_string; node.native_string = false;
+        node.native_element_character = element.native_character; node.native_character = false;
+    } else {
+        bool indirect = node.native_pointer_depth > 0;
+        bool base_unsigned = indirect ? node.native_element_unsigned : node.native_unsigned;
+        bool base_boolean = indirect ? node.native_element_boolean : node.native_boolean;
+        bool base_string = indirect ? node.native_element_string : node.native_string;
+        bool base_character = indirect ? node.native_element_character : node.native_character;
+        node.native_base_width = KrtNativeTypeBaseWidth(node);
+        node.native_pointer_depth = node.native_pointer_depth + 1;
+        node.native_width = 8; node.native_stride = node.native_pointer_depth > 1 ? 8 : node.native_base_width;
+        node.native_element_unsigned = base_unsigned; node.native_unsigned = false;
+        node.native_element_boolean = base_boolean; node.native_boolean = false;
+        node.native_element_string = base_string; node.native_string = false;
+        node.native_element_character = base_character; node.native_character = false;
+    }
+    node.native_nullable = false;
+    node.native_pointee_nullable = array ? 0 : ((mask << 1) | (outer ? (uint64)1 : (uint64)0));
+    node.native_fixed_length = 0; node.native_aggregate = false; node.native_storage_size = 8; node.native_alignment = 8;
+    return true;
+}
+
+bool KrtNativeApplyTypeSuffix(KrtAstNode node, int32 pointers, int32 array_rank) {
+    int32 index = 0;
+    while (index < pointers) { if (!KrtNativeApplyTypeLayer(node,false)) { return false; } index = index + 1; }
+    index = 0;
+    while (index < array_rank) { if (!KrtNativeApplyTypeLayer(node,true)) { return false; } index = index + 1; }
+    return true;
+}
+
+bool KrtNativeApplySourceTypeSuffix(KrtAstNode node, KrtAstNode syntax) {
+    KrtAstNode suffix = syntax.syntax_suffixes;
+    while (suffix != null) {
+        if (suffix.op == 63) { node.native_nullable = true; }
+        else if (!KrtNativeApplyTypeLayer(node,suffix.op == 91)) { return false; }
+        suffix = suffix.next;
+    }
+    return true;
 }
 
 bool KrtNativeResolveNamedType(KrtAstNode node, KrtAstNode module, int64 source, int64 start, int64 length) {
-    int64 base_length = 0; int64 angle = -1; int32 depth = 0; bool pointer = false; bool array = false;
-    unsafe(using krt.mem;) {
-        byte* text = (byte*)source;
-        while (base_length < length) {
-            byte value = text[start + base_length];
-            if (value == 60) { if (depth == 0 && angle < 0) { angle = base_length; } depth = depth + 1; }
-            else if (value == 62) { depth = depth - 1; }
-            if (depth == 0 && (value == 42 || value == 91)) { break; }
-            base_length = base_length + 1;
-        }
-        if (depth != 0) { return false; }
-        int64 suffix = base_length;
-        while (suffix < length) {
-            if (text[start + suffix] == 42) { pointer = true; }
-            else if (text[start + suffix] == 91) { array = true; }
-            suffix = suffix + 1;
-        }
-        while (base_length > 0 && KrtNameSpace(text[start + base_length - 1])) { base_length = base_length - 1; }
+    KrtAstNode syntax = KrtNativeTypeSyntax(source,start,length); if (syntax == null) { return false; }
+    KrtAstNode component = syntax;
+    if (syntax.right != null) { component = syntax.right; while (component.next != null) { component = component.next; } }
+    int64 name_start = syntax.name_start; int64 name_length = component.name_start + component.name_length - name_start;
+    KrtAstNode generic_argument = null;
+    if (syntax.right == null && syntax.left == null) { generic_argument = KrtNativeTypeParameter(node.native_context,source,name_start,name_length); }
+    if (generic_argument != null) {
+        KrtNativeCopyType(node,generic_argument);
+        return KrtNativeApplySourceTypeSuffix(node,syntax);
     }
-    int64 name_length = angle >= 0 ? angle : base_length;
-    while (name_length > 0 && KrtNameAt(source, start + name_length - 1, 1, 0) < 0) { name_length = name_length - 1; }
-    KrtAstNode generic_argument = KrtNativeTypeParameter(node.native_context, source, start, name_length);
-    if (generic_argument != null && angle < 0) {
-        KrtNativeCopyType(node, generic_argument);
-        if (pointer || array) {
-            node.native_stride = node.native_width; node.native_width = 8; node.native_array = array;
-            node.native_element_unsigned = node.native_unsigned; node.native_unsigned = false;
-            node.native_element_boolean = node.native_boolean; node.native_boolean = false;
-            node.native_element_string = node.native_string; node.native_string = false;
-        }
-        return true;
-    }
-    KrtAstNode type = KrtNativeFindScopedType(module, source, start, name_length, node.native_scope);
+    KrtAstNode type = KrtNativeFindUsingType(module,source,name_start,name_length,node.native_scope,node.native_using_scope);
     if (type == null) { return false; }
-    if (angle >= 0) {
-        KrtAstNode arguments = KrtNativeParseTypeArguments(node, module, source, start + angle, base_length - angle);
+    if (component.left != null) {
+        KrtAstNode arguments = KrtNativeBindTypeArguments(node,module,source,component.left);
         if (arguments == null || type.native_generic_parameters == null) { return false; }
-        if (!KrtNativeCheckConstraints(type, arguments, module, source)) { module.native_error = 6; return false; }
-        type = KrtNativeInstantiateClass(type, arguments, module);
-        if (type == null) { return false; }
+        if (!KrtNativeCheckConstraints(type,arguments,module,source)) { module.native_error = 6; return false; }
+        type = KrtNativeInstantiateClass(type,arguments,module); if (type == null) { return false; }
     } else if (type.native_generic_parameters != null) {
         KrtAstNode context = node.native_context;
         while (context != null && context.native_generic_origin != type) { context = context.native_context; }
         if (context == null) { return false; } type = context;
     }
-    if (!KrtNativeResolveInheritance(type, module, source)) { return false; }
+    if (!KrtNativeLayoutProbe && !KrtNativeResolveInheritance(type,module,source)) { return false; }
     node.native_type = type; node.native_size = type.native_size; node.native_width = 8;
-    node.native_array = array; node.native_stride = pointer || array ? 8 : 0;
-    return true;
+    node.native_base_width = type.value == 2 && type.native_storage_size > 0 ? type.native_storage_size : 8;
+    node.native_pointer_depth = 0; node.native_array = false; node.native_stride = 0;
+    KrtNativeDescribeAggregate(node);
+    return KrtNativeApplySourceTypeSuffix(node,syntax);
 }
 
 KrtAstNode KrtNativeCloneAst(KrtAstNode node, KrtAstNode context, bool siblings) {
@@ -125,6 +200,15 @@ KrtAstNode KrtNativeCloneAst(KrtAstNode node, KrtAstNode context, bool siblings)
     copy.name_length = node.name_length;
     copy.type_start = node.type_start;
     copy.type_length = node.type_length;
+    // Source syntax is immutable. Every specialization keeps the original
+    // structural types and permission paths while binding its own AST nodes.
+    copy.syntax_type = node.syntax_type; copy.syntax_suffixes = node.syntax_suffixes; copy.syntax_parameter_types = node.syntax_parameter_types;
+    copy.syntax_modifiers = node.syntax_modifiers;
+    copy.syntax_argument_name_start = node.syntax_argument_name_start; copy.syntax_argument_name_length = node.syntax_argument_name_length;
+    copy.syntax_pointer_depth = node.syntax_pointer_depth; copy.syntax_array_rank = node.syntax_array_rank;
+    copy.syntax_nullable = node.syntax_nullable; copy.syntax_pointee_nullable = node.syntax_pointee_nullable;
+    copy.syntax_wildcard = node.syntax_wildcard; copy.syntax_permissions = node.syntax_permissions;
+    copy.syntax_declarations = node.syntax_declarations; copy.syntax_array_size = node.syntax_array_size;
     copy.value = node.value;
     copy.local_slot = node.local_slot;
     copy.element_width = node.element_width;
@@ -132,12 +216,18 @@ KrtAstNode KrtNativeCloneAst(KrtAstNode node, KrtAstNode context, bool siblings)
     copy.native_width = node.native_width;
     copy.native_bits = node.native_bits;
     copy.native_error = node.native_error;
+    copy.native_aggregate = node.native_aggregate; copy.native_storage_size = node.native_storage_size;
+    copy.native_alignment = node.native_alignment; copy.native_fixed_length = node.native_fixed_length;
     copy.native_global = 0;
     copy.native_function_pointer = node.native_function_pointer;
     copy.native_wide = node.native_wide; copy.native_high = node.native_high;
     copy.native_element_boolean = node.native_element_boolean;
+    copy.native_character = node.native_character; copy.native_element_character = node.native_element_character;
     copy.native_float = node.native_float;
     copy.native_stride = node.native_stride;
+    copy.native_nullable = node.native_nullable; copy.native_pointee_nullable = node.native_pointee_nullable;
+    copy.native_pointer_depth = node.native_pointer_depth; copy.native_base_width = node.native_base_width;
+    copy.native_element_type = node.native_element_type;
     copy.native_offset = node.native_offset;
     copy.native_size = node.native_size;
     copy.native_ref = node.native_ref;
@@ -155,6 +245,9 @@ KrtAstNode KrtNativeCloneAst(KrtAstNode node, KrtAstNode context, bool siblings)
     copy.native_static = node.native_static;
     copy.native_readonly = node.native_readonly;
     copy.native_scope = node.native_scope;
+    copy.native_using_scope = node.native_using_scope;
+    copy.native_generic_registry = node.native_generic_registry;
+    copy.native_inheritance_stack = node.native_inheritance_stack;
     copy.native_generic_parameters = node.native_generic_parameters;
     copy.native_constraints = node.native_constraints;
     copy.native_type_arguments = node.native_type_arguments;
@@ -170,18 +263,25 @@ KrtAstNode KrtNativeInstantiateClass(KrtAstNode declaration, KrtAstNode argument
     KrtAstNode parameter = declaration.native_generic_parameters; KrtAstNode argument = arguments;
     while (parameter != null && argument != null) { parameter = parameter.next; argument = argument.next; }
     if (parameter != null || argument != null || arguments == null) { return null; }
-    KrtAstNode instance = declaration.native_instances;
-    while (instance != null) { if (KrtNativeTypeListEqual(instance.native_type_arguments, arguments)) { return instance; } instance = instance.native_instances; }
-    if (module.native_locals >= 256) { return null; } module.native_locals = module.native_locals + 1;
+    KrtAstNode instance = KrtGenericRegistryFind(module,declaration,arguments);
+    if (instance != null) { return instance; }
     instance = KrtAstMake(KrtAstKind.TypeDeclaration, declaration.start, declaration.length);
     instance.name_start = declaration.name_start; instance.name_length = declaration.name_length;
     instance.native_scope = declaration.native_scope; instance.native_size = declaration.native_size; instance.value = declaration.value;
+    instance.native_using_scope = declaration.native_using_scope; instance.native_context = declaration.native_context;
+    instance.native_inheritance_stack = declaration.native_inheritance_stack;
+    instance.syntax_declarations = declaration.syntax_declarations; instance.syntax_type = declaration.syntax_type;
+    instance.syntax_modifiers = declaration.syntax_modifiers;
+    instance.native_static = declaration.native_static; instance.native_readonly = declaration.native_readonly;
     instance.native_generic_origin = declaration; instance.native_type_arguments = arguments;
     instance.native_instances = declaration.native_instances; declaration.native_instances = instance;
+    if (!KrtGenericRegistryAdd(module,declaration,arguments,instance)) { return null; }
     KrtParserAppendDeclaration(module, instance);
     instance.left = KrtNativeCloneAst(declaration.left, instance, true);
     instance.native_abstract = declaration.native_abstract;
     instance.body = KrtNativeCloneAst(declaration.body, instance, true);
+    KrtAstNode field = instance.body;
+    while (field != null) { field.native_owner = instance; field = field.next; }
     KrtAstNode method = declaration.declarations; KrtAstNode method_tail = null;
     while (method != null && method.native_owner == declaration) {
         KrtAstNode generated = KrtNativeCloneAst(method, instance, false);
@@ -197,50 +297,149 @@ KrtAstNode KrtNativeInstantiateFunction(KrtAstNode declaration, KrtAstNode argum
     KrtAstNode parameter = declaration.native_generic_parameters; KrtAstNode argument = arguments;
     while (parameter != null && argument != null) { parameter = parameter.next; argument = argument.next; }
     if (parameter != null || argument != null || arguments == null) { return null; }
-    KrtAstNode instance = declaration.native_instances;
-    while (instance != null) { if (KrtNativeTypeListEqual(instance.native_type_arguments, arguments)) { return instance; } instance = instance.native_instances; }
-    if (module.native_locals >= 256) { return null; } module.native_locals = module.native_locals + 1;
+    KrtAstNode instance = KrtGenericRegistryFind(module,declaration,arguments);
+    if (instance != null) { return instance; }
     KrtAstNode context = KrtAstMake(KrtAstKind.Type, declaration.start, 0);
     context.native_generic_origin = declaration; context.native_type_arguments = arguments; context.native_context = declaration.native_context;
     instance = KrtNativeCloneAst(declaration, context, false);
     instance.native_generic_parameters = null; instance.native_type_arguments = arguments; instance.native_generic_origin = declaration;
     instance.native_instances = declaration.native_instances; declaration.native_instances = instance;
+    if (!KrtGenericRegistryAdd(module,declaration,arguments,instance)) { return null; }
     KrtParserAppendDeclaration(module, instance); return instance;
+}
+
+// Inference follows structural source types, rather than interpreting every
+// suffix as one pointer. A substitution may itself be an array or pointer.
+class KrtGenericInference {
+    public KrtAstNode parameter;
+    public KrtAstNode inferred;
+    public KrtAstNode declaration;
+    public KrtNativeBinding binding;
+}
+
+KrtAstNode KrtNativeInferenceFormal(KrtAstNode declaration, int32 index, int64 source) {
+    int32 syntax_index = index;
+    if (declaration.native_owner != null && !declaration.native_static) { syntax_index = syntax_index - 1; }
+    KrtAstNode type = declaration.syntax_parameter_types;
+    while (type != null && syntax_index > 0) { type = type.next; syntax_index = syntax_index - 1; }
+    if (type != null && syntax_index == 0) { return type; }
+    return KrtNativeTypeSyntax(source,declaration.parameter_type_starts[index],declaration.parameter_type_lengths[index]);
+}
+
+bool KrtNativeInferenceContains(KrtAstNode type, KrtAstNode parameter, int64 source, int32 depth) {
+    if (type == null || depth > 64) { return false; }
+    if (type.op == 1) {
+        KrtAstNode signature = type.left;
+        if (KrtNativeInferenceContains(signature.syntax_type,parameter,source,depth + 1)) { return true; }
+        KrtAstNode argument = signature.syntax_parameter_types;
+        while (argument != null) {
+            if (KrtNativeInferenceContains(argument,parameter,source,depth + 1)) { return true; }
+            argument = argument.next;
+        }
+        return false;
+    }
+    if (type.left == null && type.right == null &&
+        KrtSemanticSameName(source,type.name_start,type.name_length,parameter.name_start,parameter.name_length)) { return true; }
+    KrtAstNode component = type;
+    while (component != null) {
+        if (component.left != null) {
+            KrtAstNode argument = component.left.left;
+            while (argument != null) {
+                if (KrtNativeInferenceContains(argument,parameter,source,depth + 1)) { return true; }
+                argument = argument.next;
+            }
+        }
+        if (component == type) { component = type.right; } else { component = component.next; }
+    }
+    return false;
+}
+
+KrtAstNode KrtNativeInferenceProjection(KrtAstNode actual, KrtAstNode declaration) {
+    KrtAstNode type = actual; int32 depth = 0;
+    while (type != null && depth < 16384) {
+        if (type == declaration || type.native_generic_origin == declaration) { return type; }
+        KrtAstNode contract = type.native_interfaces;
+        while (contract != null) {
+            if (contract.native_type == declaration || contract.native_type.native_generic_origin == declaration) { return contract.native_type; }
+            contract = contract.next;
+        }
+        type = type.native_base; depth = depth + 1;
+    }
+    return null;
+}
+
+KrtAstNode KrtNativeStripSourceTypeSuffix(KrtAstNode suffix, KrtAstNode type, int32 depth) {
+    if (suffix == null) { return type; }
+    if (depth > 192) { return null; }
+    KrtAstNode candidate = KrtNativeStripSourceTypeSuffix(suffix.next,type,depth + 1);
+    if (candidate == null) { return null; }
+    if (suffix.op == 63) { candidate.native_nullable = false; return candidate; }
+    if (suffix.op == 91 ? !candidate.native_array : (candidate.native_array || candidate.native_pointer_depth <= 0)) { return null; }
+    KrtAstNode element = KrtAstMake(KrtAstKind.Type,candidate.start,candidate.length);
+    KrtNativeElementType(element,candidate); return element;
+}
+
+bool KrtNativeInferPattern(KrtAstNode formal, KrtAstNode actual, KrtGenericInference state, int32 depth) {
+    if (formal == null || actual == null || depth > 64) { return false; }
+    if (!KrtNativeInferenceContains(formal,state.parameter,state.binding.source,0) || actual.kind == KrtAstKind.Null) { return true; }
+    if (actual.kind == KrtAstKind.ArrayLiteral && !KrtNativeArrayLiteralHasTypedElement(actual)) { return true; }
+    KrtAstNode candidate = KrtAstMake(KrtAstKind.Type,actual.start,actual.length);
+    KrtNativeCopyType(candidate,actual); candidate.native_base_width = KrtNativeTypeBaseWidth(candidate);
+    candidate = KrtNativeStripSourceTypeSuffix(formal.syntax_suffixes,candidate,0);
+    if (candidate == null) { return false; }
+    if (formal.op == 1) {
+        KrtAstNode expected = formal.left; KrtAstNode signature = candidate.native_function_pointer;
+        if (signature == null || expected.parameter_count != signature.parameter_count) { return false; }
+        if (!KrtNativeInferPattern(expected.syntax_type,signature.native_type,state,depth + 1)) { return false; }
+        KrtAstNode pattern = expected.syntax_parameter_types; KrtAstNode argument = signature.declarations; int32 index = 0;
+        while (pattern != null && argument != null) {
+            if (expected.parameter_refs[index] != argument.native_ref || !KrtNativeInferPattern(pattern,argument,state,depth + 1)) { return false; }
+            pattern = pattern.next; argument = argument.next; index = index + 1;
+        }
+        return pattern == null && argument == null;
+    }
+    if (formal.left == null && formal.right == null &&
+        KrtSemanticSameName(state.binding.source,formal.name_start,formal.name_length,state.parameter.name_start,state.parameter.name_length)) {
+        if (state.inferred != null && !KrtNativeTypeEqual(state.inferred,candidate)) { return false; }
+        state.inferred = candidate; return true;
+    }
+    KrtAstNode last = formal;
+    while (last.right != null) { last = last.right; }
+    if (formal.right != null) { last = formal.right; while (last.next != null) { last = last.next; } }
+    if (last.left == null || candidate.native_type == null || candidate.native_pointer_depth != 0 || candidate.native_array) { return false; }
+    int64 name_length = last.name_start + last.name_length - formal.type_start;
+    KrtAstNode declaration = KrtNativeFindUsingType(state.binding.module,state.binding.source,formal.type_start,name_length,
+        state.declaration.native_scope,state.declaration.native_using_scope);
+    if (declaration == null || declaration.native_generic_parameters == null) { return false; }
+    KrtAstNode projection = KrtNativeInferenceProjection(candidate.native_type,declaration);
+    if (projection == null) { return false; }
+    KrtAstNode pattern = last.left.left; KrtAstNode argument = projection.native_type_arguments;
+    while (pattern != null && argument != null) {
+        if (!KrtNativeInferPattern(pattern,argument,state,depth + 1)) { return false; }
+        pattern = pattern.next; argument = argument.next;
+    }
+    return pattern == null && argument == null;
 }
 
 KrtAstNode KrtNativeInferTypeArguments(KrtAstNode function_node, KrtAstNode arguments, int32 extra, KrtNativeBinding binding) {
     KrtAstNode result = null; KrtAstNode tail = null; KrtAstNode generic_parameter = function_node.native_generic_parameters;
     while (generic_parameter != null) {
-        KrtAstNode inferred = null; KrtAstNode argument = arguments; int32 index = extra;
-        while (argument != null && index < function_node.parameter_count) {
-            int64 start = function_node.parameter_type_starts[index]; int64 length = function_node.parameter_type_lengths[index];
-            int64 base_length = 0;
-            unsafe(using krt.mem;) { byte* text = (byte*)binding.source;
-                while (base_length < length && (lexer_letter(text[start + base_length]) || lexer_digit(text[start + base_length]))) { base_length = base_length + 1; }
-            }
-            if (KrtSemanticSameName(binding.source, start, base_length, generic_parameter.name_start, generic_parameter.name_length)) {
-                KrtAstNode actual = argument;
-                if (argument.kind == KrtAstKind.Unary && argument.op == 200) { actual = argument.left; }
-                // Null supplies no concrete type; another argument may infer T.
-                if (actual.kind == KrtAstKind.Null) { index = index + 1; argument = argument.next; continue; }
-                KrtAstNode candidate = KrtAstMake(KrtAstKind.Type, actual.start, actual.length); KrtNativeCopyType(candidate, actual);
-                if (length > base_length) {
-                    if (actual.native_stride <= 0) { return null; }
-                    candidate.native_width = actual.native_stride; candidate.native_stride = 0; candidate.native_array = false;
-                    candidate.native_unsigned = actual.native_element_unsigned;
-                    candidate.native_boolean = actual.native_element_boolean;
-                    candidate.native_string = actual.native_element_string;
-                    candidate.native_element_unsigned = candidate.native_string;
-                    candidate.native_element_boolean = false; candidate.native_element_string = false;
-                    if (candidate.native_string) { candidate.native_stride = 1; }
-                }
-                if (inferred != null && !KrtNativeTypeEqual(inferred, candidate)) { return null; }
-                inferred = candidate;
-            }
-            index = index + 1; argument = argument.next;
+        KrtGenericInference state = new KrtGenericInference(); state.parameter = generic_parameter;
+        state.declaration = function_node; state.binding = binding;
+        int32 index = extra;
+        while (index < function_node.parameter_count) {
+            KrtAstNode argument = arguments;
+            while (argument != null && argument.native_argument_index != index) { argument = argument.next; }
+            if (argument == null) { return null; }
+            bool reference = argument.kind == KrtAstKind.Unary && argument.op == 200;
+            if (reference != function_node.parameter_refs[index]) { return null; }
+            KrtAstNode actual = argument; if (reference) { actual = argument.left; }
+            KrtAstNode formal = KrtNativeInferenceFormal(function_node,index,binding.source);
+            if (!KrtNativeInferPattern(formal,actual,state,0)) { return null; }
+            index = index + 1;
         }
-        if (inferred == null) { return null; }
-        if (result == null) { result = inferred; } else { tail.next = inferred; } tail = inferred;
+        if (state.inferred == null) { return null; }
+        if (result == null) { result = state.inferred; } else { tail.next = state.inferred; } tail = state.inferred;
         generic_parameter = generic_parameter.next;
     }
     return result;
@@ -255,7 +454,17 @@ KrtAstNode KrtNativeSpecializeCall(KrtAstNode candidate, KrtAstNode node, int32 
     if (node.left.native_type_arguments != null) {
         KrtAstNode source_arguments = node.left.native_type_arguments;
         arguments = KrtNativeParseTypeArguments(node, binding.module, binding.source, source_arguments.type_start, source_arguments.type_length);
-    } else { arguments = KrtNativeInferTypeArguments(candidate, node.right, extra, binding); }
+    } else {
+        KrtAstNode supplied = node.right; int32 first_parameter = extra;
+        if (extra == 1 && candidate.native_owner == null && node.left.kind == KrtAstKind.Member) {
+            // Extension syntax omits its receiver from the ordinary argument
+            // list, but that receiver still participates in type inference.
+            KrtAstNode receiver = node.left.left;
+            supplied = KrtAstMake(KrtAstKind.Type,receiver.start,receiver.length);
+            KrtNativeCopyType(supplied,receiver); supplied.native_argument_index = 0; supplied.next = node.right; first_parameter = 0;
+        }
+        arguments = KrtNativeInferTypeArguments(candidate,supplied,first_parameter,binding);
+    }
     if (arguments == null) { return null; }
     if (!KrtNativeCheckConstraints(candidate, arguments, binding.module, binding.source)) { binding.candidate_error = 6; return null; }
     return KrtNativeInstantiateFunction(candidate, arguments, binding.module);
@@ -270,16 +479,21 @@ bool KrtNativePrepareModule(KrtAstNode module, int64 source, KrtNativeModule out
     if (!KrtNativePrepareExternals(module, source, output)) { return false; }
     KrtNativeGlobalState state = module.native_globals;
     bool changed = true; int32 passes = 0;
-    while (changed && passes < 1024) {
+    while (changed && passes < 16384) {
         state.changed = false; changed = false;
-        KrtAstNode function_node = module.left; int32 count = 0;
-        while (function_node != null && count < 1024) {
+        KrtAstNode function_node = module.left; int32 count = 0; bool all_bound = true;
+        while (function_node != null && count < 16384) {
             if (function_node.op != 221 && !KrtNativeIsTemplate(function_node) && !function_node.native_bound) {
-                if (!KrtNativeBindFunction(function_node, module, source)) { output.error_start = function_node.native_offset; return false; }
+                module.native_error = 0;
+                if (!KrtNativeBindFunction(function_node, module, source)) {
+                    if (all_bound) { output.error_start = function_node.native_offset; }
+                    KrtNativeBindingDiagnostic(module,function_node.native_offset); all_bound = false;
+                }
                 changed = true;
             }
             function_node = function_node.next; count = count + 1;
         }
+        if (!all_bound) { return false; }
         if (function_node != null || !KrtNativeBindGlobalInitializers(module, source)) { return false; }
         changed = changed || state.changed;
         if (!changed) {
@@ -298,6 +512,7 @@ bool KrtNativePrepareModule(KrtAstNode module, int64 source, KrtNativeModule out
         passes = passes + 1;
     }
     if (changed || !KrtNativeFinishGlobals(module)) { return false; }
+    if(!KrtNativePrepareExternals(module,source,output)){return false;}
     KrtAstNode previous = null; KrtAstNode function_node = module.left;
     while (function_node != null) {
         KrtAstNode next = function_node.next;
