@@ -38,10 +38,12 @@ bool KrtNativePrepareDispatch(KrtAstNode type, KrtAstNode module, int64 source) 
     if (type.native_dispatch_state == 2) { return true; }
     if (type.native_dispatch_state == 1 || type.native_dispatch_state == 3) { return false; }
     if (type.native_generic_parameters != null || type.value == 4) { return true; }
+    KrtNativeClosureProbeJournal(module,type);
     type.native_dispatch_state = 1;
     if (type.native_base != null && !KrtNativePrepareDispatch(type.native_base, module, source)) { type.native_dispatch_state = 3; return false; }
     KrtAstNode method = type.declarations;
     while (method != null && method.native_owner == type) {
+        KrtNativeClosureProbeJournal(module,method);
         if ((method.op == 223 && !method.native_abstract) || (method.native_abstract && !type.native_abstract) ||
             (method.native_virtual && (method.native_static || method.op == 220 || method.op == 221 || method.native_generic_parameters != null))) { type.native_dispatch_state = 3; return false; }
         if (method.native_virtual) {
@@ -110,7 +112,7 @@ bool KrtNativeBindDispatchCall(KrtAstNode node, KrtNativeBinding binding) {
         return KrtNativeBindingError(binding, node);
     }
     KrtAstNode receiver = node.left.left;
-    bool base_call = receiver.kind == KrtAstKind.Identifier && receiver.op == 212;
+    bool base_call = receiver.op == 212;
     if (base_call) { return !method.native_abstract || KrtNativeBindingError(binding, node); }
     node.native_virtual = true; node.local_slot = binding.slots; binding.slots = binding.slots + 1;
     return true;

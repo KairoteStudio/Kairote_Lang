@@ -1,22 +1,3 @@
-enum KrtDiagnosticStage { Lexer = 0, Parser = 1, Names = 2, Types = 3, Generics = 4, Lowering = 5, Optimization = 6, Backend = 7 }
-
-class KrtDiagnosticRecord {
-    public string code;
-    public int32 code_length;
-    public int64 position;
-    public string message;
-    public KrtDiagnosticStage stage;
-    public KrtDiagnosticRecord next;
-}
-
-class KrtCompilerDiagnostics {
-    public KrtDiagnosticRecord head;
-    public KrtDiagnosticRecord tail;
-    public int32 count;
-    public int32 limit;
-    public KrtDiagnosticStage stage;
-}
-
 static KrtCompilerDiagnostics KrtCurrentDiagnostics = null;
 
 void KrtErrorReportAdd(KrtCompilerDiagnostics report, string code, int32 code_length, int64 position, string message) {
@@ -60,5 +41,6 @@ void KrtNativeBindingDiagnostic(KrtAstNode module, int64 position) {
     else if (module.native_error == 11) { KrtDiagnostic("E_MODIFIER",10,position); }
     else if (module.native_error == 12) { KrtDiagnostic("E_LAYOUT",8,position); }
     else if (module.native_error == 13) { KrtDiagnostic("E_ABI_UNSUPPORTED",17,position); }
+    else if (module.native_error == 14) { KrtDiagnostic("E_CAPTURE_BORROW",16,position); }
     else { KrtDiagnostic("E_LOWER",7,position); }
 }

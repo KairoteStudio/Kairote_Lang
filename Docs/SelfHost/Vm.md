@@ -9,7 +9,8 @@ invoke ArkLink, a C compiler, Python, or the seed compiler.
 The VM executes native integer widths, float32/float64, boxed int128/uint128,
 locals and references, branches, function and indirect calls, globals and their
 initializers, classes and arrays, memory allocation, strings, exceptions, and
-Linux syscalls. Process exit status is the value returned by `main`; stdout and
+Linux syscalls. EBC v4 also supports lexical closures through the same typed
+callback values as free functions. Process exit status is the value returned by `main`; stdout and
 stderr follow the program's syscalls. A VM entry function takes no arguments.
 Precompiled KRO objects and external KRO calls are rejected because EBC does not
 contain a native linker table.
@@ -94,7 +95,36 @@ For both memory operations, `args` is the byte size and `extra` is the alignment
 Copies are explicit for struct and fixed-array assignment, value parameters and
 returns. Frame arenas are aligned to 16 bytes and expire when their call exits;
 the interpreter checks the complete source and destination ranges for copies.
-Modules without this metadata continue to use version 1 or 2.
+Modules without aggregate metadata or closure environment instructions continue
+to use version 1 or 2.
+
+## EBC version 4
+
+Version 4 adds tagged closure values and opcode `73`, `closure.environment`.
+The header, 28-byte function records, 24-byte instructions and data layout are
+identical to version 3, with version `4` at header offset 4. A module containing
+opcode `73` is serialized as version 4 even when it has no aggregate values.
+
+A free function or noncapturing lambda is a positive handle: its function index
+plus one. A capturing lambda is a 64-bit word with the high bit set. Clearing
+that bit gives the address of a 16-byte descriptor holding the function handle
+at offset 0 and environment address at offset 8. An indirect call resolves the
+handle and saves the environment in a separate frame field. Opcode `73` pushes
+that environment; it must be the first instruction of its function and both
+operands must be zero. Direct/free function calls use environment zero.
+
+The environment does not consume a source parameter or the aggregate hidden
+result pointer. The existing 128-source-parameter limit and aggregate result
+metadata remain unchanged. Descriptor and environment memory are checked by
+the interpreter before use; expired descriptors or invalid handles report
+`E_VM`. The compiler's ordinary IR performs cell sharing, scope cleanup and
+explicit callback deletion in both native and VM execution.
+
+The interpreter still reads versions 1, 2 and 3 with their original callable
+rules. Versions 2 and 3 reject opcode `73`; their indirect calls accept ordinary
+function handles, not tagged closure descriptors. New bytecode does not change
+the meaning of old chunks. Closure syntax, ownership and borrow boundaries are
+documented in [Closures.md](Closures.md).
 
 Project builds cache the primary bytecode and its `.ebc` sidecar. Cache restore
 recreates missing outputs; `clean` removes an output only when its hash still

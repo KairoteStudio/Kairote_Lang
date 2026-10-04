@@ -14,6 +14,12 @@ struct SocketTimeout {
     public int64 microseconds;
 }
 
+// The body is borrowed while Run sends it. Its owner remains the handler.
+public struct HttpResponse {
+    public int32 status;
+    public string body;
+}
+
 public static class HttpServer {
     private const int64 SYS_socket = 41;
     private const int64 SYS_accept = 43;
@@ -25,9 +31,7 @@ public static class HttpServer {
     private const int64 SYS_setsockopt = 54;
     private const int64 MSG_NOSIGNAL = 0x4000;
 
-    private static bool SendAll(int64 client, string response) {
-        int64 data = Sys.InternalStringPtr(response);
-        int64 length = Sys.InternalStringLength(response);
+    private static bool SendBytes(int64 client, int64 data, int64 length) {
         int64 written = 0;
         while (written < length) {
             int64 count = Sys.Syscall(SYS_sendto, client, data + written,
@@ -37,6 +41,56 @@ public static class HttpServer {
             written += count;
         }
         return true;
+    }
+
+    private static bool SendAll(int64 client, string response) {
+        return SendBytes(client, Sys.InternalStringPtr(response),
+                         Sys.InternalStringLength(response));
+    }
+
+    private static bool SendDecimal(int64 client, int64 value) {
+        unsafe(using krt.mem;) {
+            byte* digits = stackalloc byte[20];
+            int32 position = 20;
+            do {
+                position--;
+                digits[position] = (byte)(48 + value % 10);
+                value /= 10;
+            } while (value != 0);
+            return SendBytes(client, (int64)(digits + position), 20 - position);
+        }
+    }
+
+    private static string Reason(int32 status) {
+        if (status == 200) { return "OK"; }
+        if (status == 201) { return "Created"; }
+        if (status == 202) { return "Accepted"; }
+        if (status == 204) { return "No Content"; }
+        if (status == 304) { return "Not Modified"; }
+        if (status == 400) { return "Bad Request"; }
+        if (status == 404) { return "Not Found"; }
+        if (status == 405) { return "Method Not Allowed"; }
+        if (status == 431) { return "Request Header Fields Too Large"; }
+        if (status == 500) { return "Internal Server Error"; }
+        return "Response";
+    }
+
+    private static bool SendResponse(int64 client, HttpResponse response) {
+        if (response.status < 200 || response.status > 599) {
+            return Respond(client, 500);
+        }
+        int64 length = Sys.InternalStringLength(response.body);
+        bool header = SendAll(client, "HTTP/1.1 ") && SendDecimal(client, response.status) &&
+                      SendAll(client, " ") && SendAll(client, Reason(response.status)) &&
+                      SendAll(client, "\r\nContent-Type: text/plain; charset=utf-8");
+        if (!header) { return false; }
+        if (response.status == 204 || response.status == 304) {
+            return SendAll(client, "\r\nConnection: close\r\n\r\n");
+        }
+        return SendAll(client, "\r\nContent-Length: ") &&
+               SendDecimal(client, length) &&
+               SendAll(client, "\r\nConnection: close\r\n\r\n") &&
+               SendBytes(client, Sys.InternalStringPtr(response.body), length);
     }
 
     private static bool Respond(int64 client, int32 status) {
@@ -52,10 +106,22 @@ public static class HttpServer {
         if (status == 431) {
             return SendAll(client, "HTTP/1.1 431 Request Header Fields Too Large\r\nContent-Length: 25\r\nConnection: close\r\n\r\nRequest Header Too Large\n");
         }
+        if (status == 500) {
+            return SendAll(client, "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 22\r\nConnection: close\r\n\r\nInternal Server Error\n");
+        }
         return SendAll(client, "HTTP/1.1 400 Bad Request\r\nContent-Length: 12\r\nConnection: close\r\n\r\nBad Request\n");
     }
 
-    private static bool HandleClient(int64 client) {
+    private static HttpResponse DefaultHandler(string path) {
+        HttpResponse response = default(HttpResponse);
+        response.status = path == "/" ? 200 : 404;
+        response.body = response.status == 200 ? "Hello, Kairote!\n" : "Not Found\n";
+        return response;
+    }
+
+    // The request path is borrowed from this call's request buffer. A handler
+    // must copy the path before keeping it after the call returns.
+    private static bool HandleClient(int64 client, fn(string)->HttpResponse handler) {
         unsafe(using krt.mem;) {
             byte* request = stackalloc byte[4096];
             int64 length = 0;
@@ -98,14 +164,26 @@ public static class HttpServer {
                 (request[version + 7] != 48 && request[version + 7] != 49)) {
                 return Respond(client, 400);
             }
-            bool root = path_end == 5 && request[4] == 47;
-            return Respond(client, root ? 200 : 404);
+            request[path_end] = 0;
+            try {
+                HttpResponse response = handler((string)(request + 4));
+                return SendResponse(client, response);
+            } catch {
+                return Respond(client, 500);
+            }
         }
     }
 
     // A zero port asks the kernel for an available port. A zero connection limit
     // keeps listening; a positive limit exits normally after that many accepts.
     public static int32 Run(int32 port, int32 connection_limit) {
+        return Run(port, connection_limit, &DefaultHandler);
+    }
+
+    // Run borrows the handler. The caller retains ownership of a closure and
+    // deletes it after Run returns. Each valid GET calls the handler once.
+    public static int32 Run(int32 port, int32 connection_limit,
+                            fn(string)->HttpResponse handler) {
         if (port < 0 || port > 65535 || connection_limit < 0) { return 1; }
         unsafe(using krt.mem;) {
             SockAddrIn address;
@@ -166,7 +244,7 @@ public static class HttpServer {
                 }
                 bool configured = Sys.Syscall(SYS_setsockopt, client, 1, 20, (int64)&timeout, sizeof(SocketTimeout), 0) == 0 &&
                                   Sys.Syscall(SYS_setsockopt, client, 1, 21, (int64)&timeout, sizeof(SocketTimeout), 0) == 0;
-                if (configured) { HandleClient(client); }
+                if (configured) { HandleClient(client, handler); }
                 int64 closed = Sys.Syscall(3, client, 0, 0, 0, 0, 0);
                 handled++;
                 if (!configured || closed != 0) {

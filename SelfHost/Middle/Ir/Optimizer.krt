@@ -122,7 +122,7 @@ bool KrtNativeTailSafe(KrtNativeModule module, int32 function_index) {
     while (index < last) {
         int32 op = module.ops[index];
         // Frame addresses and exception frames must retain their lifetime.
-        if (op == 29 || op == 30 || op == 50 || op == 51 || op == 52 || op == 69 || (op >= 70 && op <= 72)) { return false; }
+        if (op == 29 || op == 30 || op == 50 || op == 51 || op == 52 || op == 69 || (op >= 70 && op <= 73)) { return false; }
         index = index + 1;
     }
     return true;

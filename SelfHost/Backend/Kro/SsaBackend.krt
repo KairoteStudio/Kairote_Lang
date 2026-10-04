@@ -168,6 +168,8 @@ bool KrtKroEmitSsaModule(KrtSsaModule ssa, KrtKroObject output) {
                 if (!KrtKroNativeU32(output, ref pc, 0) || !KrtKroNativeByte(output, ref pc, 80)) { return false; }
             } else if (op == 46) {
                 if (!KrtKroNativeIndirectCall(output, ref pc, arity, frame_slots)) { return false; }
+            } else if (op == 73) {
+                if (ssa.args[index] != 0 || ssa.extra[index] != 0 || !KrtKroNativeClosureEnvironment(output, ref pc)) { return false; }
             } else if (op == (int32)KrtNativeOp.Call) {
                 if (arity < 0 || arity > 129 || patch_count >= patch_capacity) { return false; }
                 int32 scratch_base = frame_slots;

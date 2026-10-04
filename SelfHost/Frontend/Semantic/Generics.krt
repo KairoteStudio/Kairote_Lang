@@ -266,6 +266,7 @@ KrtAstNode KrtNativeInstantiateClass(KrtAstNode declaration, KrtAstNode argument
     KrtAstNode instance = KrtGenericRegistryFind(module,declaration,arguments);
     if (instance != null) { return instance; }
     instance = KrtAstMake(KrtAstKind.TypeDeclaration, declaration.start, declaration.length);
+    KrtNativeClosureProbeJournal(module,declaration);
     instance.name_start = declaration.name_start; instance.name_length = declaration.name_length;
     instance.native_scope = declaration.native_scope; instance.native_size = declaration.native_size; instance.value = declaration.value;
     instance.native_using_scope = declaration.native_using_scope; instance.native_context = declaration.native_context;
@@ -302,6 +303,7 @@ KrtAstNode KrtNativeInstantiateFunction(KrtAstNode declaration, KrtAstNode argum
     KrtAstNode context = KrtAstMake(KrtAstKind.Type, declaration.start, 0);
     context.native_generic_origin = declaration; context.native_type_arguments = arguments; context.native_context = declaration.native_context;
     instance = KrtNativeCloneAst(declaration, context, false);
+    KrtNativeClosureProbeJournal(module,declaration);
     instance.native_generic_parameters = null; instance.native_type_arguments = arguments; instance.native_generic_origin = declaration;
     instance.native_instances = declaration.native_instances; declaration.native_instances = instance;
     if (!KrtGenericRegistryAdd(module,declaration,arguments,instance)) { return null; }
@@ -381,6 +383,7 @@ KrtAstNode KrtNativeStripSourceTypeSuffix(KrtAstNode suffix, KrtAstNode type, in
 
 bool KrtNativeInferPattern(KrtAstNode formal, KrtAstNode actual, KrtGenericInference state, int32 depth) {
     if (formal == null || actual == null || depth > 64) { return false; }
+    if (KrtNativeClosureNeedsContext(actual)) { return true; }
     if (!KrtNativeInferenceContains(formal,state.parameter,state.binding.source,0) || actual.kind == KrtAstKind.Null) { return true; }
     if (actual.kind == KrtAstKind.ArrayLiteral && !KrtNativeArrayLiteralHasTypedElement(actual)) { return true; }
     KrtAstNode candidate = KrtAstMake(KrtAstKind.Type,actual.start,actual.length);
@@ -434,6 +437,10 @@ KrtAstNode KrtNativeInferTypeArguments(KrtAstNode function_node, KrtAstNode argu
             bool reference = argument.kind == KrtAstKind.Unary && argument.op == 200;
             if (reference != function_node.parameter_refs[index]) { return null; }
             KrtAstNode actual = argument; if (reference) { actual = argument.left; }
+            if (KrtNativeClosureNeedsContext(actual)) {
+                actual = KrtNativeClosureInferShape(actual,binding);
+                if (actual == null) { index = index + 1; continue; }
+            }
             KrtAstNode formal = KrtNativeInferenceFormal(function_node,index,binding.source);
             if (!KrtNativeInferPattern(formal,actual,state,0)) { return null; }
             index = index + 1;
@@ -522,5 +529,281 @@ bool KrtNativePrepareModule(KrtAstNode module, int64 source, KrtNativeModule out
         } else { previous = function_node; }
         function_node = next;
     }
+    KrtNativeFunctionIndexInvalidate(module);
     return true;
+}
+
+// Preserve the complete node state without normalizing widths, strides or
+// lexical metadata. Journal records borrow all child and descriptor pointers.
+void KrtNativeClosureProbeCopyNode(KrtAstNode target,KrtAstNode original) {
+    target.kind = original.kind;
+    target.start = original.start;
+    target.length = original.length;
+    target.child_count = original.child_count;
+    target.left = original.left;
+    target.right = original.right;
+    target.next = original.next;
+    target.alternate = original.alternate;
+    target.body = original.body;
+    target.declarations = original.declarations;
+    target.op = original.op;
+    target.grouped = original.grouped;
+    target.parameter_count = original.parameter_count;
+    target.parameter_starts = original.parameter_starts;
+    target.parameter_lengths = original.parameter_lengths;
+    target.parameter_type_starts = original.parameter_type_starts;
+    target.parameter_type_lengths = original.parameter_type_lengths;
+    target.parameter_refs = original.parameter_refs;
+    target.name_start = original.name_start;
+    target.name_length = original.name_length;
+    target.type_start = original.type_start;
+    target.type_length = original.type_length;
+    target.syntax_type = original.syntax_type;
+    target.syntax_suffixes = original.syntax_suffixes;
+    target.syntax_array_size = original.syntax_array_size;
+    target.syntax_parameter_types = original.syntax_parameter_types;
+    target.syntax_argument_name_start = original.syntax_argument_name_start;
+    target.syntax_argument_name_length = original.syntax_argument_name_length;
+    target.syntax_modifiers = original.syntax_modifiers;
+    target.syntax_pointer_depth = original.syntax_pointer_depth;
+    target.syntax_array_rank = original.syntax_array_rank;
+    target.syntax_nullable = original.syntax_nullable;
+    target.syntax_pointee_nullable = original.syntax_pointee_nullable;
+    target.syntax_wildcard = original.syntax_wildcard;
+    target.syntax_permissions = original.syntax_permissions;
+    target.syntax_declarations = original.syntax_declarations;
+    target.value = original.value;
+    target.local_slot = original.local_slot;
+    target.native_argument_index = original.native_argument_index;
+    target.native_argument_slot = original.native_argument_slot;
+    target.element_width = original.element_width;
+    target.native_type = original.native_type;
+    target.native_width = original.native_width;
+    target.native_float = original.native_float;
+    target.native_error = original.native_error;
+    target.native_bits = original.native_bits;
+    target.native_wide = original.native_wide;
+    target.native_high = original.native_high;
+    target.native_element_boolean = original.native_element_boolean;
+    target.native_stride = original.native_stride;
+    target.native_offset = original.native_offset;
+    target.native_size = original.native_size;
+    target.native_ref = original.native_ref;
+    target.native_aggregate = original.native_aggregate;
+    target.native_storage_size = original.native_storage_size;
+    target.native_alignment = original.native_alignment;
+    target.native_fixed_length = original.native_fixed_length;
+    target.native_element_type = original.native_element_type;
+    target.native_layout_state = original.native_layout_state;
+    target.native_frame_offset = original.native_frame_offset;
+    target.native_argument_frame_offset = original.native_argument_frame_offset;
+    target.native_receiver_frame_offset = original.native_receiver_frame_offset;
+    target.native_frame_bytes = original.native_frame_bytes;
+    target.native_hidden_result_slot = original.native_hidden_result_slot;
+    target.native_locals = original.native_locals;
+    target.native_bound = original.native_bound;
+    target.native_unsigned = original.native_unsigned;
+    target.native_element_unsigned = original.native_element_unsigned;
+    target.native_element_string = original.native_element_string;
+    target.native_boolean = original.native_boolean;
+    target.native_character = original.native_character;
+    target.native_element_character = original.native_element_character;
+    target.native_void_pointer = original.native_void_pointer;
+    target.native_array = original.native_array;
+    target.native_pointer_depth = original.native_pointer_depth;
+    target.native_nullable = original.native_nullable;
+    target.native_pointee_nullable = original.native_pointee_nullable;
+    target.native_base_width = original.native_base_width;
+    target.native_string = original.native_string;
+    target.native_global = original.native_global;
+    target.native_globals = original.native_globals;
+    target.native_function_pointer = original.native_function_pointer;
+    target.native_static = original.native_static;
+    target.native_readonly = original.native_readonly;
+    target.native_scope = original.native_scope;
+    target.native_using_scope = original.native_using_scope;
+    target.native_generic_registry = original.native_generic_registry;
+    target.native_closure_probe_state = original.native_closure_probe_state;
+    target.native_inheritance_stack = original.native_inheritance_stack;
+    target.native_function_index = original.native_function_index;
+    target.native_signature_cache = original.native_signature_cache;
+    target.native_context = original.native_context;
+    target.native_generic_parameters = original.native_generic_parameters;
+    target.native_constraints = original.native_constraints;
+    target.native_constraint_depth = original.native_constraint_depth;
+    target.native_type_arguments = original.native_type_arguments;
+    target.native_generic_origin = original.native_generic_origin;
+    target.native_instances = original.native_instances;
+    target.native_owner = original.native_owner;
+    target.native_target = original.native_target;
+    target.native_external_next = original.native_external_next;
+    target.native_base = original.native_base;
+    target.native_interfaces = original.native_interfaces;
+    target.native_base_call = original.native_base_call;
+    target.native_inheritance_state = original.native_inheritance_state;
+    target.native_virtual = original.native_virtual;
+    target.native_override = original.native_override;
+    target.native_abstract = original.native_abstract;
+    target.native_dispatch_slot = original.native_dispatch_slot;
+    target.native_dispatch_state = original.native_dispatch_state;
+    target.native_variable = original.native_variable;
+    target.native_lexical_block = original.native_lexical_block;
+    target.native_lexical_function = original.native_lexical_function;
+    target.native_capture_boxed = original.native_capture_boxed;
+    target.native_cell_slot = original.native_cell_slot;
+    target.native_capture_index = original.native_capture_index;
+    target.native_cell_initial_parameter = original.native_cell_initial_parameter;
+    target.native_stack_borrow = original.native_stack_borrow;
+    target.native_cell_owners = original.native_cell_owners;
+    target.native_closure_record_slot = original.native_closure_record_slot;
+    target.native_closure_lowering = original.native_closure_lowering;
+    target.native_for_scoped = original.native_for_scoped;
+    target.native_closure_function = original.native_closure_function;
+    target.native_closure_shape = original.native_closure_shape;
+    target.native_closure_signature = original.native_closure_signature;
+    target.native_closure_expected_type = original.native_closure_expected_type;
+    target.native_captures = original.native_captures;
+    target.native_closure_environment_slot = original.native_closure_environment_slot;
+    target.native_closure_descriptor_slot = original.native_closure_descriptor_slot;
+    target.native_closure_environment_temp_slot = original.native_closure_environment_temp_slot;
+}
+
+void KrtNativeClosureProbeJournal(KrtAstNode module,KrtAstNode declaration) {
+    KrtNativeClosureProbeState state = module.native_closure_probe_state;
+    if (state == null || declaration == null) { return; }
+    KrtNativeClosureProbeMutation previous = state.mutations;
+    while (previous != null) { if (previous.declaration == declaration) { return; } previous = previous.next; }
+    KrtNativeClosureProbeMutation mutation = new KrtNativeClosureProbeMutation();
+    mutation.declaration = declaration; mutation.snapshot = new KrtAstNode();
+    KrtNativeClosureProbeCopyNode(mutation.snapshot,declaration);
+    mutation.next = state.mutations; state.mutations = mutation;
+}
+
+void KrtNativeClosureProbeSyntax(KrtAstNode module,KrtAstNode node) {
+    while (node != null) {
+        KrtNativeClosureProbeJournal(module,node);
+        KrtNativeClosureProbeSyntax(module,node.left); KrtNativeClosureProbeSyntax(module,node.right);
+        KrtNativeClosureProbeSyntax(module,node.alternate); KrtNativeClosureProbeSyntax(module,node.body);
+        node = node.next;
+    }
+}
+
+void KrtNativeClosureProbeType(KrtAstNode module,KrtAstNode type) {
+    if (module.native_closure_probe_state == null) { return; }
+    KrtNativeClosureProbeJournal(module,type);
+    KrtAstNode reference = type.left;
+    while (reference != null) { KrtNativeClosureProbeJournal(module,reference); reference = reference.next; }
+    reference = type.native_interfaces;
+    while (reference != null) { KrtNativeClosureProbeJournal(module,reference); reference = reference.next; }
+    KrtAstNode field = type.body;
+    while (field != null) {
+        KrtNativeClosureProbeJournal(module,field);
+        KrtNativeClosureProbeSyntax(module,field.syntax_array_size); field = field.next;
+    }
+    KrtAstNode method = type.declarations;
+    while (method != null && method.native_owner == type) {
+        KrtNativeClosureProbeJournal(module,method);
+        KrtNativeClosureProbeJournal(module,method.left);
+        KrtNativeClosureProbeJournal(module,method.native_base_call); method = method.next;
+    }
+}
+
+KrtAstNode KrtNativeClosureProbeTail(KrtAstNode node) {
+    if (node == null) { return null; }
+    while (node.next != null) { node = node.next; } return node;
+}
+
+KrtGenericRegistry KrtNativeClosureProbeRegistry(KrtGenericRegistry original) {
+    if (original == null) { return null; }
+    KrtGenericRegistry copy = new KrtGenericRegistry(); copy.capacity = original.capacity; copy.count = original.count;
+    copy.declarations = new KrtAstNode[copy.capacity]; copy.arguments = new KrtAstNode[copy.capacity];
+    copy.instances = new KrtAstNode[copy.capacity]; copy.states = new int32[copy.capacity]; int32 index = 0;
+    while (index < copy.capacity) {
+        copy.declarations[index] = original.declarations[index]; copy.arguments[index] = original.arguments[index];
+        copy.instances[index] = original.instances[index]; copy.states[index] = original.states[index]; index = index + 1;
+    }
+    return copy;
+}
+
+KrtNativeGlobalState KrtNativeClosureProbeGlobals(KrtNativeGlobalState original) {
+    if (original == null) { return null; }
+    KrtNativeGlobalState copy = new KrtNativeGlobalState();
+    copy.output = new KrtNativeModule(); copy.output.global_count = original.output.global_count;
+    copy.output.error_start = original.output.error_start; copy.output.errors = original.output.errors;
+    copy.initializer = original.initializer; copy.changed = original.changed;
+    KrtNativeGlobalEntry entry = original.first; KrtNativeGlobalEntry tail = null;
+    while (entry != null) {
+        KrtNativeGlobalEntry generated = new KrtNativeGlobalEntry(); generated.declaration = entry.declaration;
+        generated.owner = entry.owner; generated.assignment = entry.assignment; generated.bound = entry.bound;
+        if (tail == null) { copy.first = generated; } else { tail.next = generated; }
+        tail = generated; entry = entry.next;
+    }
+    return copy;
+}
+
+KrtInheritanceStack KrtNativeClosureProbeInheritance(KrtInheritanceStack original) {
+    if (original == null) { return null; }
+    KrtInheritanceStack copy = new KrtInheritanceStack(); copy.capacity = original.capacity;
+    copy.depth = original.depth; copy.cycle_depth = original.cycle_depth;
+    copy.error_start = original.error_start; copy.source = original.source;
+    copy.types = new KrtAstNode[copy.capacity]; int32 index = 0;
+    while (index < original.depth) { copy.types[index] = original.types[index]; index = index + 1; }
+    if (original.cycle_types != null) {
+        copy.cycle_types = new KrtAstNode[original.cycle_depth]; index = 0;
+        while (index < original.cycle_depth) { copy.cycle_types[index] = original.cycle_types[index]; index = index + 1; }
+    }
+    return copy;
+}
+
+KrtNativeClosureProbeState KrtNativeClosureProbeBegin(KrtAstNode module) {
+    KrtNativeClosureProbeState state = new KrtNativeClosureProbeState(); state.previous = module.native_closure_probe_state;
+    state.functions = module.left; state.function_tail = KrtNativeClosureProbeTail(module.left);
+    state.types = module.declarations; state.type_tail = KrtNativeClosureProbeTail(module.declarations);
+    state.globals = module.body; state.global_tail = KrtNativeClosureProbeTail(module.body);
+    state.child_count = module.child_count; state.native_locals = module.native_locals;
+    state.native_error = module.native_error; state.constraint_depth = module.native_constraint_depth;
+    state.registry = module.native_generic_registry; state.function_index = module.native_function_index;
+    state.global_state = module.native_globals; state.inheritance_stack = module.native_inheritance_stack;
+    state.diagnostics = KrtCurrentDiagnostics; state.error_code = KrtDriverLastErrorCode;
+    module.native_generic_registry = KrtNativeClosureProbeRegistry(state.registry);
+    module.native_function_index = null;
+    module.native_globals = KrtNativeClosureProbeGlobals(state.global_state);
+    module.native_inheritance_stack = KrtNativeClosureProbeInheritance(state.inheritance_stack);
+    KrtCurrentDiagnostics = new KrtCompilerDiagnostics();
+    KrtCurrentDiagnostics.limit = state.diagnostics == null ? 128 : state.diagnostics.limit;
+    if (state.diagnostics != null) { KrtCurrentDiagnostics.stage = state.diagnostics.stage; }
+    module.native_closure_probe_state = state; return state;
+}
+
+void KrtNativeClosureProbeEnd(KrtAstNode module,KrtNativeClosureProbeState state) {
+    KrtNativeClosureProbeMutation mutation = state.mutations;
+    while (mutation != null) {
+        KrtNativeClosureProbeMutation next = mutation.next;
+        KrtNativeClosureProbeCopyNode(mutation.declaration,mutation.snapshot);
+        delete mutation.snapshot; delete mutation; mutation = next;
+    }
+    module.left = state.functions; module.declarations = state.types; module.body = state.globals;
+    if (state.function_tail != null) { state.function_tail.next = null; }
+    if (state.type_tail != null) { state.type_tail.next = null; }
+    if (state.global_tail != null) { state.global_tail.next = null; }
+    module.child_count = state.child_count; module.native_locals = state.native_locals;
+    module.native_error = state.native_error; module.native_constraint_depth = state.constraint_depth;
+    KrtNativeFunctionIndexInvalidate(module); module.native_function_index = state.function_index;
+    KrtGenericRegistry registry = module.native_generic_registry;
+    if (registry != null) { delete registry.declarations; delete registry.arguments; delete registry.instances; delete registry.states; delete registry; }
+    module.native_generic_registry = state.registry;
+    KrtNativeGlobalState globals = module.native_globals;
+    if (globals != null) {
+        KrtNativeGlobalEntry entry = globals.first;
+        while (entry != null) { KrtNativeGlobalEntry next = entry.next; delete entry; entry = next; }
+        delete globals.output; delete globals;
+    }
+    module.native_globals = state.global_state;
+    KrtInheritanceStack inheritance = module.native_inheritance_stack;
+    if (inheritance != null) { delete inheritance.types; delete inheritance.cycle_types; delete inheritance; }
+    module.native_inheritance_stack = state.inheritance_stack;
+    KrtDiagnosticRecord record = KrtCurrentDiagnostics.head;
+    while (record != null) { KrtDiagnosticRecord next = record.next; delete record; record = next; }
+    delete KrtCurrentDiagnostics; KrtCurrentDiagnostics = state.diagnostics; KrtDriverLastErrorCode = state.error_code;
+    module.native_closure_probe_state = state.previous; delete state;
 }

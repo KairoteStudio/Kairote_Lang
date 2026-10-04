@@ -153,6 +153,7 @@ bool KrtCompileNativeSourceModeCore(string source, int32 source_length, KrtKroOb
         else if (unit.native_error == 11) { KrtDiagnostic("E_MODIFIER", 10, native_module.error_start); }
         else if (unit.native_error == 12) { KrtDiagnostic("E_LAYOUT", 8, native_module.error_start); }
         else if (unit.native_error == 13) { KrtDiagnostic("E_ABI_UNSUPPORTED", 17, native_module.error_start); }
+        else if (unit.native_error == 14) { KrtDiagnostic("E_CAPTURE_BORROW", 16, native_module.error_start); }
         else { KrtDiagnostic("E_LOWER", 7, native_module.error_start); }
         return false;
     }

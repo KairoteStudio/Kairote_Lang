@@ -53,6 +53,7 @@ bool KrtNativeResolveLayout(KrtAstNode root, KrtAstNode module, int64 source) {
     while (depth >= 0) {
         KrtAstNode type = types[depth];
         if (type.native_layout_state == 0) {
+            KrtNativeClosureProbeType(module,type);
             type.native_layout_state = 1; fields[depth] = type.body;
             offsets[depth] = type.value == 1 ? (type.native_base == null ? 8 : type.native_base.native_size) : 0;
             alignments[depth] = type.value == 1 ? 8 : 1;

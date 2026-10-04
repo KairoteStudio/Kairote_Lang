@@ -8,9 +8,7 @@ bool KrtNativeLowerArguments(KrtAstNode arguments, KrtAstNode target, int32 extr
         if (named) { index = argument.native_argument_index; }
         if (index < 0 || target == null || index >= target.parameter_count) { return false; }
         KrtAstNode expected = KrtAstMake(KrtAstKind.Type, argument.start, argument.length);
-        expected.native_scope = target.native_scope; expected.native_context = target.native_context;
-        expected.native_using_scope = target.native_using_scope;
-        if (!KrtNativeAnnotateType(expected, ast, source, target.parameter_type_starts[index], target.parameter_type_lengths[index])) { return false; }
+        if (!KrtNativeSignatureType(expected,target,index,ast,source)) { return false; }
         if (!target.parameter_refs[index] && KrtNativeInlineValue(expected)) {
             // Snapshot immediately after evaluating this actual. A later
             // actual can mutate its original through a ref or method call.

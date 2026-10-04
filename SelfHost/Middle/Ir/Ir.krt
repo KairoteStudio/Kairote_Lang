@@ -412,7 +412,8 @@ enum KrtNativeOp {
     FloatConvert = 38, FloatBinary = 39, FloatCompare = 40, FloatNeg = 41, FloatBool = 42, FloatPostIncrement = 43, WideConvert = 60, WideBinary = 61, WideCompare = 62, WideUnary = 63, WideLiteral = 66, WidePostIncrement = 67, WideFloat = 68, WideRef = 69,
     GlobalAddress = 44, FunctionAddress = 45, IndirectCall = 46,
     TryEnter = 50, TryLeave = 51, Throw = 52, CatchValue = 53, CatchType = 54,
-    AggregateFrameAddress = 70, AggregateCopy = 71, AggregateZero = 72
+    AggregateFrameAddress = 70, AggregateCopy = 71, AggregateZero = 72,
+    ClosureEnvironment = 73
 }
 
 bool KrtNativeInit(KrtNativeModule module) {
@@ -644,6 +645,7 @@ bool KrtNativeLowerLValue(KrtAstNode expression, KrtAstNode module_ast, KrtNativ
     if (expression == null) { return false; }
     if (expression.native_global > 0) { return KrtNativeLowerGlobalAddress(expression, module); }
     if (expression.kind == KrtAstKind.Identifier) {
+        if (KrtNativeCellReference(expression.native_variable)) { return KrtNativeLowerCellAddress(expression.native_variable,module); }
         if (KrtNativeInlineValue(expression)) {
             if (expression.native_ref || expression.op == 211) {
                 return expression.local_slot != -1 && KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,KrtNativeSlot(expression.local_slot),0) >= 0;
@@ -673,9 +675,15 @@ bool KrtNativeLowerLValue(KrtAstNode expression, KrtAstNode module_ast, KrtNativ
 }
 
 bool KrtNativeLowerExpression(KrtAstNode expression, KrtAstNode module_ast, KrtNativeModule module, int64 source) {
+    if (expression != null && expression.kind == KrtAstKind.NullConditional) { return KrtNativeLowerNullConditional(expression,module_ast,module,source); }
+    if (expression != null && expression.kind == KrtAstKind.GuardReceiver) {
+        return KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,expression.local_slot,0) >= 0;
+    }
+    if (expression != null && expression.kind == KrtAstKind.Binary && expression.op == 113) { return KrtNativeLowerNullCoalescing(expression,module_ast,module,source); }
     if (expression != null && expression.kind == KrtAstKind.TypeTest) { return KrtNativeLowerTypeTest(expression,module_ast,module,source); }
     if (expression == null) { return false; }
     if (expression.native_global > 0) { return KrtNativeLowerGlobalValue(expression, module); }
+    if (expression.kind == KrtAstKind.Lambda) { return KrtNativeLowerClosure(expression,module); }
     if (expression.kind != KrtAstKind.Call && expression.native_target != null && expression.native_function_pointer != null) { return KrtNativeLowerFunctionAddress(expression, module); }
     if (expression.kind == KrtAstKind.Call && expression.op == 232) { return KrtNativeLowerIndirectCall(expression, module_ast, module, source); }
     if (expression.kind == KrtAstKind.DefaultValue) {
@@ -695,6 +703,7 @@ bool KrtNativeLowerExpression(KrtAstNode expression, KrtAstNode module_ast, KrtN
         return KrtNativeEmit(module, (int32)KrtNativeOp.Data, offset, module.data_length - offset) >= 0;
     }
     if (expression.kind == KrtAstKind.Identifier) {
+        if (KrtNativeCellReference(expression.native_variable)) { return KrtNativeLowerCellValue(expression,module); }
         if (KrtNativeInlineValue(expression)) { return KrtNativeLowerLValue(expression,module_ast,module,source); }
         if (expression.local_slot == -1 || KrtNativeEmit(module, (int32)KrtNativeOp.LoadLocal, KrtNativeSlot(expression.local_slot), 0) < 0) { return false; }
         if (expression.native_ref) { return KrtNativeEmit(module, (int32)KrtNativeOp.Load, 0, KrtNativeValueWidth(expression)) >= 0 && KrtNativeNormalizeWide(module,expression); }
@@ -872,6 +881,7 @@ bool KrtNativeLowerStatement(KrtAstNode statement, KrtAstNode module_ast, KrtAst
     if (statement.kind == KrtAstKind.Switch) { return KrtNativeLowerSwitch(statement, module_ast, unit, module, source, breaks, continues, ref depth); }
     if (statement.kind == KrtAstKind.Throw) { return KrtNativeLowerThrow(statement, module_ast, module, source); }
     if (statement.kind == KrtAstKind.Variable) {
+        if (statement.native_capture_boxed) { return KrtNativeLowerCellInitialize(statement,module_ast,module,source); }
         if (KrtNativeInlineValue(statement)) {
             if (!KrtNativeLowerAggregateFrame(statement,module)) { return false; }
             if (statement.left == null) { return KrtNativeLowerAggregateZero(statement,module); }
@@ -890,7 +900,7 @@ bool KrtNativeLowerStatement(KrtAstNode statement, KrtAstNode module_ast, KrtAst
             return KrtNativeLowerLValue(statement.left,module_ast,module,source) &&
                 KrtNativeLowerExpression(statement.right,module_ast,module,source) && KrtNativeLowerAggregateCopy(statement.left,module);
         }
-        if (statement.left.kind == KrtAstKind.Identifier && statement.left.native_global == 0 && !statement.left.native_ref) {
+        if (statement.left.kind == KrtAstKind.Identifier && statement.left.native_global == 0 && !statement.left.native_ref && !KrtNativeCellReference(statement.left.native_variable)) {
             if (statement.left.local_slot == -1 || !KrtNativeLowerExpression(statement.right, module_ast, module, source)) { return false; }
             return KrtNativeConvertValue(module, statement.right, statement.left) &&
                 KrtNativeEmit(module, (int32)KrtNativeOp.StoreLocal, KrtNativeSlot(statement.left.local_slot), 0) >= 0;
@@ -901,13 +911,31 @@ bool KrtNativeLowerStatement(KrtAstNode statement, KrtAstNode module_ast, KrtAst
             KrtNativeEmit(module, (int32)KrtNativeOp.Store, 0, KrtNativeWidth(statement.left)) >= 0;
     }
     if (statement.kind == KrtAstKind.CompoundAssign) { return KrtNativeLowerCompound(statement,module_ast,module,source); }
+    if (statement.kind == KrtAstKind.Expression && statement.op == 243) {
+        return statement.native_variable != null && KrtNativeLowerReleaseCell(module,statement.native_variable.native_cell_slot);
+    }
+    if (statement.kind == KrtAstKind.Expression && statement.op == 244) {
+        return KrtNativeLowerTemporaryClosureBody(statement.left,module_ast,module,source);
+    }
+    if (statement.kind == KrtAstKind.Expression && statement.op == 245) {
+        return statement.left != null &&
+            KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,statement.left.native_closure_descriptor_slot,0) >= 0 &&
+            KrtNativeLowerDeleteClosure(module,statement.left.native_size) &&
+            KrtNativeEmit(module,(int32)KrtNativeOp.Const,0,0) >= 0 &&
+            KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,statement.left.native_closure_descriptor_slot,0) >= 0;
+    }
     if (statement.kind == KrtAstKind.Expression || statement.kind == KrtAstKind.Delete) {
         if (statement.left == null) { return statement.kind == KrtAstKind.Expression; }
+        if (statement.kind == KrtAstKind.Delete && statement.left.native_function_pointer != null &&
+            !statement.left.native_array && statement.left.native_pointer_depth == 0) {
+            return KrtNativeLowerExpression(statement.left,module_ast,module,source) && KrtNativeLowerDeleteClosure(module,statement.local_slot);
+        }
         int32 discard = statement.kind == KrtAstKind.Delete ? (int32)KrtNativeOp.Free : (int32)KrtNativeOp.Drop;
         return KrtNativeLowerExpression(statement.left, module_ast, module, source) && KrtNativeEmit(module, discard, 0, 0) >= 0;
     }
     if (statement.kind == KrtAstKind.Return) {
-        bool is_void = unit.op == 220 || unit.type_length == 0 || KrtNativeSpanWord(source, unit.type_start, unit.type_length, "void");
+        bool is_void = unit.native_closure_function ? unit.native_closure_signature != null && unit.native_closure_signature.native_readonly :
+            unit.op == 220 || unit.type_length == 0 || KrtNativeSpanWord(source, unit.type_start, unit.type_length, "void");
         if ((statement.left == null && !is_void) || (statement.left != null && is_void)) { return false; }
         if (!is_void && KrtNativeInlineValue(unit)) {
             if (unit.native_hidden_result_slot < 0 || statement.left == null ||
@@ -992,6 +1020,14 @@ bool KrtNativeLowerStatement(KrtAstNode statement, KrtAstNode module_ast, KrtAst
 
 bool KrtNativeLowerBlock(KrtAstNode block, KrtAstNode module_ast, KrtAstNode unit, KrtNativeModule module, int64 source, int32[] breaks, int32[] continues, ref int32 depth) {
     if (block == null || block.kind != KrtAstKind.Block) { return false; }
+    if (block.native_cell_owners != null && !block.native_closure_lowering) {
+        return KrtNativeLowerCellOwnerBlock(block,module_ast,unit,module,source,breaks,continues,ref depth);
+    }
+    KrtNativeCellOwner owner = block.native_cell_owners;
+    while (owner != null) {
+        if (owner.declaration.native_cell_initial_parameter && !KrtNativeLowerCellInitialize(owner.declaration,module_ast,module,source)) { return false; }
+        owner = owner.next;
+    }
     KrtAstNode statement = block.left;
     while (statement != null) {
         if (!KrtNativeLowerStatement(statement, module_ast, unit, module, source, breaks, continues, ref depth)) { return false; }
@@ -1027,6 +1063,9 @@ bool KrtNativeLowerFunction(KrtAstNode module_ast, KrtAstNode unit, KrtNativeMod
     if (unit.native_abstract) { return KrtNativeLowerDispatchTrap(module) && KrtNativeEmit(module, (int32)KrtNativeOp.Const, 0, 0) >= 0 && KrtNativeEmit(module, (int32)KrtNativeOp.Return, 0, 1) >= 0; }
     int32[] breaks = new int32[64]; int32[] continues = new int32[64];
     int32 depth = 0;
+    if (unit.native_closure_function && (unit.native_closure_environment_slot < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.ClosureEnvironment,0,0) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,unit.native_closure_environment_slot,0) < 0)) { return false; }
     if (!KrtNativeLowerAggregateParameters(unit,module)) { return false; }
     if (!KrtNativeLowerBlock(unit.left, module_ast, unit, module, source, breaks, continues, ref depth)) { return false; }
     // A final return is also a target for branches that fall out of a trailing

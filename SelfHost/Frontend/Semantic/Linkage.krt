@@ -52,7 +52,7 @@ void KrtLinkType(KrtLinkName name, KrtAstNode type, int64 source, int32 depth) {
     if (!type.native_array && type.native_stride != 0 && !type.native_string && pointer_depth == 0) { pointer_depth = 1; }
     while (pointer_depth > 0) { KrtLinkByte(name, 80); pointer_depth = pointer_depth - 1; }
     if (type.native_function_pointer != null) {
-        KrtLinkText(name, "fn("); KrtAstNode signature = type.native_function_pointer;
+        KrtLinkText(name, "fn2("); KrtAstNode signature = type.native_function_pointer;
         KrtAstNode parameter = signature.declarations;
         while (parameter != null) { KrtLinkType(name, parameter, source, depth + 1); KrtLinkByte(name, 59); parameter = parameter.next; }
         KrtLinkText(name, ")>");
@@ -105,20 +105,20 @@ KrtLinkName KrtNativeFunctionLinkNameLegacy(KrtAstNode function_node, KrtAstNode
     int32 index = 0;
     while (index < function_node.parameter_count) {
         KrtAstNode parameter = KrtAstMake(KrtAstKind.Type, function_node.start, 0);
-        parameter.native_scope = function_node.native_scope; parameter.native_context = function_node.native_context;
-        parameter.native_using_scope = function_node.native_using_scope;
-        if (!KrtNativeAnnotateType(parameter, module, source, function_node.parameter_type_starts[index], function_node.parameter_type_lengths[index])) { name.valid = false; return name; }
+        if (!KrtNativeSignatureType(parameter,function_node,index,module,source)) { name.valid = false; return name; }
         parameter.native_ref = function_node.parameter_refs[index]; KrtLinkType(name, parameter, source, 0); KrtLinkByte(name, 59);
         index = index + 1;
     }
     if (include_result) {
         KrtLinkByte(name, 36);
-        if (function_node.type_length == 0 || KrtNativeSpanWord(source, function_node.type_start, function_node.type_length, "void")) { KrtLinkByte(name, 118); }
+        KrtAstNode closure=function_node.native_closure_signature;
+        if(closure==null&&function_node.native_closure_shape){closure=function_node;}
+        bool result_void=closure!=null?closure.native_readonly:
+            (function_node.type_length==0||KrtNativeSpanWord(source,function_node.type_start,function_node.type_length,"void"));
+        if (result_void) { KrtLinkByte(name, 118); }
         else {
             KrtAstNode result = KrtAstMake(KrtAstKind.Type, function_node.start, 0);
-            result.native_scope = function_node.native_scope; result.native_context = function_node.native_context;
-            result.native_using_scope = function_node.native_using_scope;
-            if (!KrtNativeAnnotateType(result, module, source, function_node.type_start, function_node.type_length)) { name.valid = false; return name; }
+            if (!KrtNativeSignatureType(result,function_node,-1,module,source)) { name.valid = false; return name; }
             KrtLinkType(name, result, source, 0);
         }
     }
@@ -173,6 +173,7 @@ bool KrtNativeResolvePrototypes(KrtAstNode module, int64 source) {
         else { previous = candidate; }
         candidate = next;
     }
+    KrtNativeFunctionIndexInvalidate(module);
     return true;
 }
 

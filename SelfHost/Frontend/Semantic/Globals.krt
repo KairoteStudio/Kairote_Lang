@@ -1,6 +1,7 @@
 bool KrtNativeBindGlobal(KrtAstNode node, KrtAstNode declaration, KrtNativeBinding binding) {
     if (!KrtNativeAccessAllowed(declaration,binding,null,false)) { return KrtNativeAccessError(binding,node); }
     if (declaration.native_readonly) {
+        KrtNativeClosureProbeSyntax(binding.module,declaration.left);
         // A constant's type and names belong to its concrete declaring class.
         KrtAstNode context = KrtAstMake(KrtAstKind.Function, declaration.start, 0);
         context.native_scope = declaration.native_scope; context.native_owner = declaration.native_context;
@@ -81,6 +82,7 @@ KrtAstNode KrtNativeFindGlobalExpression(KrtAstNode node, KrtNativeBinding bindi
 }
 
 bool KrtNativeRegisterGlobal(KrtAstNode declaration, KrtAstNode owner, KrtAstNode module, int64 source) {
+    KrtNativeClosureProbeJournal(module,declaration);
     KrtNativeGlobalState state = module.native_globals;
     if (state == null || (owner != null && owner.native_generic_parameters != null)) { return false; }
     KrtNativeGlobalEntry previous = state.first;
@@ -161,7 +163,7 @@ bool KrtNativeBindGlobalInitializers(KrtAstNode module, int64 source) {
                 bool valid = false;
                 if (declaration.left.kind == KrtAstKind.ArrayLiteral && declaration.native_array) {
                     valid = KrtNativeBindArrayLiteral(declaration.left, declaration, binding);
-                } else { valid = KrtNativeBindExpression(declaration.left, binding); }
+                } else { valid = KrtNativeBindContextExpression(declaration.left, declaration, binding); }
                 if (!valid || !KrtNativeCompatibleValue(declaration, declaration.left)) {
                     state.output.error_start = binding.error_start >= 0 ? binding.error_start : declaration.start; return false;
                 }

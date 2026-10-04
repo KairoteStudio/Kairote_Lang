@@ -1,0 +1,110 @@
+// Reference null tests inspect the address, never a pointee or array header.
+bool KrtNativeReferenceValue(KrtAstNode type) {
+    if (type == null || KrtNativeInlineValue(type)) { return false; }
+    return KrtNativePointerValue(type) || type.native_array || type.native_string ||
+        (type.native_type != null && (type.native_type.value == 1 || type.native_type.value == 3));
+}
+
+bool KrtNativeFunctionLabelsEqual(KrtAstNode a, KrtAstNode b, int64 source) {
+    if (a == b) { return true; }
+    if (a == null || b == null || a.parameter_count != b.parameter_count) { return false; }
+    if (a.parameter_starts == null || a.parameter_lengths == null ||
+        b.parameter_starts == null || b.parameter_lengths == null) { return false; }
+    int32 index = 0;
+    while (index < a.parameter_count) {
+        if (!KrtSemanticSameName(source,a.parameter_starts[index],a.parameter_lengths[index],
+                                b.parameter_starts[index],b.parameter_lengths[index])) { return false; }
+        index = index + 1;
+    }
+    return true;
+}
+
+// A dynamically selected callback only retains labels shared by both arms.
+// Signature descriptors are shared immutable type data; never edit them.
+void KrtNativeMergeCallbackLabels(KrtAstNode target, KrtAstNode a, KrtAstNode b, int64 source) {
+    if (a == null || b == null) { return; }
+    KrtAstNode shape = target.native_function_pointer;
+    KrtAstNode first = a.native_function_pointer; KrtAstNode second = b.native_function_pointer;
+    if (shape != null && first != null && second != null && first != second) {
+        KrtAstNode anonymous = KrtAstMake(KrtAstKind.Function,shape.start,shape.length);
+        anonymous.native_closure_shape = shape.native_closure_shape || shape.native_closure_signature != null;
+        if (KrtNativeFunctionLabelsEqual(first,second,source)) {
+            anonymous.parameter_starts = shape.parameter_starts; anonymous.parameter_lengths = shape.parameter_lengths;
+        }
+        anonymous.parameter_count = shape.parameter_count;
+        anonymous.parameter_type_starts = shape.parameter_type_starts; anonymous.parameter_type_lengths = shape.parameter_type_lengths;
+        anonymous.parameter_refs = shape.parameter_refs;
+        anonymous.type_start = shape.type_start; anonymous.type_length = shape.type_length;
+        anonymous.native_type = KrtAstMake(KrtAstKind.Type,shape.native_type.start,0);
+        KrtNativeCopyType(anonymous.native_type,shape.native_type);
+        KrtNativeMergeCallbackLabels(anonymous.native_type,first.native_type,second.native_type,source);
+        KrtAstNode original = shape.declarations; KrtAstNode left = first.declarations; KrtAstNode right = second.declarations;
+        KrtAstNode tail = null;
+        while (original != null && left != null && right != null) {
+            KrtAstNode parameter = KrtAstMake(KrtAstKind.Type,original.start,0);
+            KrtNativeCopyType(parameter,original); parameter.native_ref = original.native_ref;
+            KrtNativeMergeCallbackLabels(parameter,left,right,source);
+            if (tail == null) { anonymous.declarations = parameter; } else { tail.next = parameter; }
+            tail = parameter; original = original.next; left = left.next; right = right.next;
+        }
+        anonymous.native_readonly = shape.native_readonly;
+        anonymous.native_scope = shape.native_scope; anonymous.native_context = shape.native_context;
+        anonymous.native_using_scope = shape.native_using_scope;
+        target.native_function_pointer = anonymous;
+    }
+    if (target.native_element_type != null && a.native_element_type != null && b.native_element_type != null) {
+        KrtAstNode element = KrtAstMake(KrtAstKind.Type,target.start,0);
+        KrtNativeCopyType(element,target.native_element_type);
+        KrtNativeMergeCallbackLabels(element,a.native_element_type,b.native_element_type,source);
+        target.native_element_type = element;
+    }
+}
+
+bool KrtNativeBindNullCoalescing(KrtAstNode node, KrtNativeBinding binding) {
+    if (!KrtNativeBindExpression(node.left,binding)) { return false; }
+    if (node.left.kind != KrtAstKind.Null && !KrtNativeReferenceValue(node.left)) { return KrtNativeBindingError(binding,node); }
+    if (node.right.kind == KrtAstKind.ArrayLiteral && node.left.native_array) {
+        if (!KrtNativeBindArrayLiteral(node.right,node.left,binding)) { return false; }
+    } else if (!KrtNativeBindContextExpression(node.right,node.native_closure_expected_type != null ? node.native_closure_expected_type : (node.left.kind == KrtAstKind.Null ? null : node.left),binding)) { return false; }
+    if (KrtNativeVoidValue(node.right)) { return KrtNativeBindingError(binding,node); }
+    if (node.left.kind == KrtAstKind.Null) {
+        KrtNativeCopyType(node,node.right);
+        if (node.right.kind == KrtAstKind.Null) { node.kind = KrtAstKind.Null; }
+        return KrtNativeCheckValueAccess(node,binding) && KrtNativeBindAggregateFrame(node,binding);
+    }
+    if (node.right.kind == KrtAstKind.Null) {
+        KrtNativeCopyType(node,node.left); node.native_nullable = true;
+        return KrtNativeCheckValueAccess(node,binding);
+    }
+    if (!KrtNativeReferenceValue(node.right)) { return KrtNativeBindingError(binding,node); }
+    KrtNativeCopyType(node,node.left);
+    node.native_stack_borrow = node.left.native_stack_borrow || node.right.native_stack_borrow;
+    if (KrtNativePointerValue(node.left) || KrtNativePointerValue(node.right)) {
+        if (!KrtNativePointerEqualIgnoringOuter(node.left,node.right)) { return KrtNativeBindingError(binding,node); }
+    } else if (node.left.native_array || node.right.native_array || node.left.native_string || node.right.native_string) {
+        if (!KrtNativePointerEqualIgnoringOuter(node.left,node.right)) { return KrtNativeBindingError(binding,node); }
+    } else {
+        KrtAstNode common = node.left.native_type;
+        if (KrtNativeDerivesFrom(common,node.right.native_type)) { common = node.right.native_type; }
+        while (common != null && !KrtNativeDerivesFrom(node.right.native_type,common)) { common = common.native_base; }
+        if (common == null) { return KrtNativeBindingError(binding,node); }
+        node.native_type = common; node.native_size = common.native_size;
+    }
+    node.native_nullable = node.right.native_nullable;
+    KrtNativeMergeCallbackLabels(node,node.left,node.right,binding.source);
+    return KrtNativeCheckValueAccess(node,binding);
+}
+
+bool KrtNativeBindNullConditional(KrtAstNode node, KrtNativeBinding binding) {
+    if (node.left == null || node.right == null || !KrtNativeBindExpression(node.left,binding)) { return false; }
+    if (!KrtNativeReferenceValue(node.left)) { return KrtNativeBindingError(binding,node.left); }
+    node.local_slot = binding.slots; binding.slots = binding.slots + 1;
+    KrtAstNode previous_type = binding.guard_type; int32 previous_slot = binding.guard_slot;
+    binding.guard_type = node.left; binding.guard_slot = node.local_slot;
+    bool valid = KrtNativeBindExpression(node.right,binding);
+    binding.guard_type = previous_type; binding.guard_slot = previous_slot;
+    if (!valid) { return false; }
+    KrtNativeCopyType(node,node.right);
+    if (KrtNativePointerValue(node)) { node.native_nullable = true; }
+    return KrtNativeCheckValueAccess(node,binding) && KrtNativeBindAggregateFrame(node,binding);
+}

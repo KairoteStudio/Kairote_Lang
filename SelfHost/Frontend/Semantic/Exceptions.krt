@@ -1,7 +1,7 @@
 // Scalar exceptions use exact type identities; class throws read the object's
 // runtime identity so a base-typed variable retains its actual exception type.
 int64 KrtNativeExceptionType(KrtAstNode type, KrtAstNode module) {
-    if (type == null || type.native_array || (type.native_stride > 0 && !type.native_string)) { return -1; }
+    if (type == null || KrtNativeVoidValue(type) || type.native_array || (type.native_stride > 0 && !type.native_string)) { return -1; }
     if (type.native_type != null) {
         KrtAstNode declaration = module.declarations; int64 identity = 64;
         while (declaration != null) {
@@ -29,7 +29,7 @@ bool KrtNativeBindThrow(KrtAstNode statement, KrtNativeBinding binding) {
         statement.native_target = binding.catch_target; return true;
     }
     if (!KrtNativeBindExpression(statement.left, binding)) { return false; }
-    if (statement.left.kind == KrtAstKind.Null || KrtNativeExceptionType(statement.left, binding.module) < 0) { return KrtNativeBindingError(binding, statement); }
+    if (KrtNativeVoidValue(statement.left) || statement.left.kind == KrtAstKind.Null || KrtNativeExceptionType(statement.left, binding.module) < 0) { return KrtNativeBindingError(binding, statement); }
     return true;
 }
 
@@ -44,6 +44,7 @@ bool KrtNativeBindTry(KrtAstNode statement, KrtNativeBinding binding) {
         KrtNativeName saved = binding.names; binding.depth = binding.depth + 1; binding.catch_target = statement;
         if (clause.left != null) {
             KrtAstNode variable = clause.left;
+            variable.native_lexical_block = clause.right; variable.native_cell_initial_parameter = true;
             if (!KrtNativeAnnotateType(variable, binding.module, binding.source, variable.type_start, variable.type_length) ||
                 KrtNativeExceptionType(variable, binding.module) < 0) { return KrtNativeBindingError(binding, variable); }
             if (variable.name_length > 0) {

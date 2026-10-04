@@ -68,7 +68,7 @@ void KrtAbiShape(KrtAbiBytes bytes,KrtAstNode type,KrtAbiSignature signature,int
     if(type.native_pointer_depth>0||type.native_stride>0){KrtAbiByte(bytes,80);KrtAbiWord(bytes,KrtNativeSemanticStride(type));KrtAbiShape(bytes,KrtNativeArrayElement(type),signature,source,depth+1);return;}
     if(type.native_void_pointer){KrtAbiByte(bytes,86);return;}
     if(type.native_function_pointer!=null){
-        KrtAbiByte(bytes,102);KrtAstNode shape=type.native_function_pointer;KrtAbiWord(bytes,shape.parameter_count);
+        KrtAbiByte(bytes,102);KrtAbiWord(bytes,2);KrtAstNode shape=type.native_function_pointer;KrtAbiWord(bytes,shape.parameter_count);
         KrtAstNode parameter=shape.declarations;while(parameter!=null){KrtAbiShape(bytes,parameter,signature,source,depth+1);parameter=parameter.next;}
         KrtAbiByte(bytes,shape.native_readonly?1:0);if(!shape.native_readonly){KrtAbiShape(bytes,shape.native_type,signature,source,depth+1);}return;
     }
@@ -91,6 +91,8 @@ KrtAbiSignature KrtAbiFunction(KrtAstNode declaration,KrtAstNode module,int64 so
     bool readonly_receiver=declaration.native_owner!=null&&declaration.native_owner.value==2&&!declaration.native_static&&(declaration.syntax_modifiers&16)!=0;
     KrtAbiByte(result.contract,readonly_receiver?1:0);
     KrtAstNode shape=KrtAstMake(KrtAstKind.Function,declaration.start,0);
+    shape.native_closure_signature=declaration.native_closure_signature;
+    if(shape.native_closure_signature==null&&declaration.native_closure_shape){shape.native_closure_signature=declaration;}
     shape.native_scope=declaration.native_scope;shape.native_context=declaration.native_context;shape.native_using_scope=declaration.native_using_scope;
     shape.type_start=declaration.type_start;shape.type_length=declaration.type_length;shape.parameter_count=declaration.parameter_count;
     shape.parameter_type_starts=declaration.parameter_type_starts;shape.parameter_type_lengths=declaration.parameter_type_lengths;shape.parameter_refs=declaration.parameter_refs;

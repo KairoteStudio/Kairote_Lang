@@ -1,0 +1,1 @@
+int32 Apply(fn(int32)->int32 callback,int32 value){return callback(value);}

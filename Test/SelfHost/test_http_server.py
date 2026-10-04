@@ -24,9 +24,10 @@ class HttpServerTests(unittest.TestCase):
         self.work = Path(self.directory.name)
         self.env = dict(os.environ, PATH='')
 
-    def compile(self, level, connection_limit):
+    def compile(self, level, connection_limit, source=None):
         main = self.work / f'main-O{level}-{connection_limit}.krt'
-        main.write_text(f'int32 main(){{return HttpServer.Run(0,{connection_limit});}}')
+        main.write_text(source if source is not None else
+                        f'int32 main(){{return HttpServer.Run(0,{connection_limit});}}')
         output = main.with_suffix('')
         result = subprocess.run([str(COMPILER), str(SERVER), str(main), f'-O{level}',
                                  '--linker', str(LINKER), '-o', str(output)],
@@ -87,7 +88,11 @@ class HttpServerTests(unittest.TestCase):
         self.assertEqual(int(lines[0].split(b' ')[1]), expected_status, response)
         fields = dict(line.split(b': ', 1) for line in lines[1:])
         self.assertEqual(fields[b'Connection'], b'close')
-        self.assertEqual(int(fields[b'Content-Length']), len(body), response)
+        if expected_status in (204, 304):
+            self.assertNotIn(b'Content-Length', fields)
+            self.assertEqual(body, b'')
+        else:
+            self.assertEqual(int(fields[b'Content-Length']), len(body), response)
         self.assertEqual(body, expected_body)
         return response
 
@@ -143,6 +148,88 @@ class HttpServerTests(unittest.TestCase):
                     client.sendall(b'POST / HTTP/1.1\r\nHost: loopback\r\nContent-Length: 0\r\n\r\n')
                     self.receive(client, 405, b'Method Not Allowed\n')
                 self.request(port, '/', 200, b'Hello, Kairote!\n')
+                self.finish(process, port)
+
+    def test_optional_service_configuration_and_response_struct_snapshots(self):
+        source = '''
+struct Listener{int32 port;int32 connections;byte tag[2];}
+class Settings{public Listener listener;public string name;}
+static int32 loads=0;
+Settings Load(){loads++;return null;}
+Settings Defaults(){Settings value=new Settings();value.name="loopback";
+    value.listener.connections=2;value.listener.tag[0]=7;value.listener.tag[1]=11;return value;}
+int32 main(){Settings requested=Load();Settings selected=requested??Defaults();
+    Listener missing=requested?.listener;Listener snapshot=selected?.listener;
+    string name=requested?.name??selected.name;
+    if(loads!=1 || name!="loopback" || missing.connections!=0 || missing.tag[1]!=0){return 90;}
+    selected.listener.connections=99;selected.listener.tag[1]=19;
+    if(snapshot.connections!=2 || snapshot.tag[1]!=11){return 91;}
+    delete selected;return HttpServer.Run(snapshot.port,snapshot.connections);}
+'''
+        for level in (0, 2):
+            with self.subTest(optimization=level):
+                process, port = self.start(self.compile(level, 2, source))
+                self.fragmented(port, '/', 200, b'Hello, Kairote!\n')
+                self.request(port, '/missing', 404, b'Not Found\n')
+                self.finish(process, port)
+
+    def test_escaping_closure_handler_shared_state_utf8_and_exception_cleanup(self):
+        source = '''
+struct Settings{int32 success;string greeting;byte tag[2];}
+struct Handlers{fn(string)->HttpResponse respond;fn()->int32 count;}
+Handlers Make(Settings options){
+    int32 requests=0;Handlers handlers=default(Handlers);
+    handlers.respond=function(string path)=>{
+        requests++;
+        if(options.tag[0]!=7 || options.tag[1]!=11){throw 91;}
+        if(path=="/fail"){throw 23;}
+        HttpResponse response=default(HttpResponse);
+        if(path=="/"){response.status=options.success;response.body=options.greeting;}
+        else{response.status=404;response.body="Closure route missing\\n";}
+        return response;
+    };
+    handlers.count=function()=>requests;return handlers;
+}
+int32 main(){
+    Settings settings=default(Settings);settings.success=200;
+    settings.greeting="你好，闭包！\\n";settings.tag[0]=7;settings.tag[1]=11;
+    Handlers handlers=Make(settings);settings.success=503;settings.tag[0]=99;
+    int32 status=HttpServer.Run(0,4,handlers.respond);
+    int32 count=handlers.count();delete handlers.respond;delete handlers.count;
+    if(status!=0){return status;}return count==4?0:92;
+}
+'''
+        for level in (0, 2):
+            with self.subTest(optimization=level):
+                process, port = self.start(self.compile(level, 4, source))
+                self.request(port, '/', 200, '你好，闭包！\n'.encode())
+                self.request(port, '/missing', 404, b'Closure route missing\n')
+                self.request(port, '/fail', 500, b'Internal Server Error\n')
+                self.fragmented(port, '/', 200, '你好，闭包！\n'.encode())
+                self.finish(process, port)
+
+    def test_handler_empty_body_bodyless_statuses_and_invalid_terminal_status(self):
+        source = '''
+HttpResponse Reply(string path){
+    HttpResponse response=default(HttpResponse);response.status=200;
+    if(path=="/empty"){return response;}
+    response.body="ignored body";
+    if(path=="/no-content"){response.status=204;}
+    else if(path=="/not-modified"){response.status=304;}
+    else if(path=="/interim"){response.status=199;}
+    else{response.status=600;}
+    return response;
+}
+int32 main(){return HttpServer.Run(0,5,&Reply);}
+'''
+        for level in (0, 2):
+            with self.subTest(optimization=level):
+                process, port = self.start(self.compile(level, 5, source))
+                self.request(port, '/empty', 200, b'')
+                self.request(port, '/no-content', 204, b'')
+                self.request(port, '/not-modified', 304, b'')
+                self.request(port, '/interim', 500, b'Internal Server Error\n')
+                self.request(port, '/invalid', 500, b'Internal Server Error\n')
                 self.finish(process, port)
 
 

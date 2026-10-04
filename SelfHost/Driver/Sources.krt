@@ -116,6 +116,7 @@ void KrtSourcesDiagnosticDetails(KrtSourceBundle bundle, string code, int32 code
     else if (KrtDriverStringEqual((int64)code, (int64)"E_CONDITIONAL_ARRAY")) { KrtSourcesWrite("Conditional array operands must have the same element type and storage"); }
     else if (KrtDriverStringEqual((int64)code, (int64)"E_ARGUMENT_COUNT")) { KrtSourcesWrite("argument count does not match any callable declaration"); }
     else if (KrtDriverStringEqual((int64)code, (int64)"E_WRITABLE_REF")) { KrtSourcesWrite("reference arguments require writable storage and the ref marker"); }
+    else if (KrtDriverStringEqual((int64)code, (int64)"E_CAPTURE_BORROW")) { KrtSourcesWrite("closures cannot capture ref parameters, inline struct receivers, or values borrowed from stack storage"); }
     else if (KrtDriverStringEqual((int64)code, (int64)"E_UNDEFINED_METHOD")) { KrtSourcesWrite("Undefined method for the supplied receiver and argument types"); }
     else if (KrtDriverStringEqual((int64)code, (int64)"E_NOT_NULLABLE")) { KrtSourcesWrite("null requires an explicitly nullable '?' type; indirect calls require a nonnullable function pointer"); }
     else if (KrtDriverStringEqual((int64)code, (int64)"E_GENERIC_CONSTRAINT")) { KrtSourcesWrite("generic type arguments do not satisfy the declared constraints"); }

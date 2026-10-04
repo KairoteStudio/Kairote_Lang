@@ -59,9 +59,8 @@ bool KrtNativeCommitArguments(KrtAstNode arguments, KrtAstNode target, int32 ext
     while (argument != null) {
         int32 index = argument.native_argument_index;
         KrtAstNode expected = KrtAstMake(KrtAstKind.Type,argument.start,0);
-        expected.native_scope = target.native_scope; expected.native_context = target.native_context; expected.native_using_scope = target.native_using_scope;
-        if (!KrtNativeAnnotateType(expected,binding.module,binding.source,target.parameter_type_starts[index],target.parameter_type_lengths[index])) { return KrtNativeBindingError(binding,argument); }
-        if (KrtNativeInlineValue(expected) && !target.parameter_refs[index]) {
+        if (!KrtNativeSignatureType(expected,target,index,binding.module,binding.source)) { return KrtNativeBindingError(binding,argument); }
+        if (KrtNativeInlineValue(expected) && !target.parameter_refs[index] && argument.native_argument_frame_offset < 0) {
             argument.native_argument_frame_offset = KrtNativeReserveFrame(binding,expected);
             if (argument.native_argument_frame_offset < 0) { return KrtNativeBindingError(binding,argument); }
         }
@@ -69,7 +68,7 @@ bool KrtNativeCommitArguments(KrtAstNode arguments, KrtAstNode target, int32 ext
     }
     if (KrtNativeHasNamedArguments(arguments)) {
         while (arguments != null) {
-            arguments.native_argument_slot = binding.slots; binding.slots = binding.slots + 1;
+            if (arguments.native_argument_slot < 0) { arguments.native_argument_slot = binding.slots; binding.slots = binding.slots + 1; }
             arguments = arguments.next;
         }
     }

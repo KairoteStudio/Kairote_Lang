@@ -14,6 +14,17 @@ bool KrtNativeAnnotateFunctionType(KrtAstNode node, KrtAstNode module, int64 sou
 }
 
 bool KrtNativePrepareFunctionShape(KrtAstNode signature, KrtAstNode module, int64 source) {
+    KrtNativeClosureProbeJournal(module,signature);
+    KrtAstNode closure = signature.native_closure_signature;
+    if (closure == null && signature.native_closure_shape) { closure = signature; }
+    if (closure != null) {
+        if (closure.native_type == null || closure.parameter_count != signature.parameter_count) { return false; }
+        signature.native_type = closure.native_type; signature.declarations = closure.declarations;
+        signature.native_readonly = closure.native_readonly;
+        KrtAstNode parameter = signature.declarations; int32 count = 0;
+        while (parameter != null) { count = count + 1; parameter = parameter.next; }
+        return count == signature.parameter_count;
+    }
     int64 start = signature.start;
     KrtAstNode result_type = KrtAstMake(KrtAstKind.Type, start, 0);
     result_type.native_scope = signature.native_scope; result_type.native_context = signature.native_context;
@@ -68,9 +79,12 @@ bool KrtNativeBindFunctionAddress(KrtAstNode node, KrtNativeBinding binding) {
         }
         start = target.name_start; length = target.name_length;
     } else { return false; }
-    KrtAstNode selected = null; KrtAstNode candidate = binding.module.left; bool inaccessible = false;
+    KrtAstNode selected = null; bool inaccessible = false;
+    KrtNativeFunctionEntry entry = KrtNativeFunctionCandidates(binding.module,binding.source,start,length);
+    if (binding.module.native_function_index == null || !binding.module.native_function_index.ok) { binding.module.native_error = 0; return KrtNativeBindingError(binding,node); }
     int64 best = -1; int32 best_file = -1;
-    while (candidate != null) {
+    while (entry != null) {
+        KrtAstNode candidate = entry.declaration;
         bool visible = owner == null ? (candidate.native_owner == null || candidate.native_owner == binding.unit.native_owner || KrtNativeDerivesFrom(binding.unit.native_owner,candidate.native_owner)) :
             candidate.native_owner == owner || KrtNativeDerivesFrom(owner,candidate.native_owner);
         bool unbound_struct=target.kind==KrtAstKind.Member&&owner!=null&&owner.value==2&&
@@ -89,10 +103,12 @@ bool KrtNativeBindFunctionAddress(KrtAstNode node, KrtNativeBinding binding) {
                 }
             }
         }
-        candidate = candidate.next;
+        entry = KrtNativeFunctionCandidateNext(entry,binding.module,binding.source);
     }
+    if (binding.module.native_function_index == null || !binding.module.native_function_index.ok) { binding.module.native_error = 0; return KrtNativeBindingError(binding,node); }
     if (selected == null) { if (inaccessible) { return KrtNativeAccessError(binding,node); } return false; }
     KrtAstNode signature = KrtAstMake(KrtAstKind.Function, selected.start, selected.length);
+    signature.native_closure_signature = selected.native_closure_signature;
     signature.type_start = selected.type_start; signature.type_length = selected.type_length;
     signature.parameter_count = selected.parameter_count;
     signature.parameter_starts = selected.parameter_starts; signature.parameter_lengths = selected.parameter_lengths;
@@ -114,10 +130,13 @@ bool KrtNativeBindIndirectCall(KrtAstNode node, KrtNativeBinding binding) {
     if (node.left.native_nullable) { binding.module.native_error=5; return KrtNativeBindingError(binding,node.left); }
     KrtAstNode signature = node.left.native_function_pointer;
     if (signature == null || signature.parameter_count != node.parameter_count) { return KrtNativeBindingError(binding, node); }
-    if (!KrtNativeCommitArguments(node.right, signature, 0, binding)) { return false; }
+    KrtAstNode invalid = KrtNativeMapArguments(node.right,signature,0,binding.source);
+    if (invalid != null) { return KrtNativeArgumentNameError(binding,invalid); }
     KrtAstNode argument = node.right; int32 index = 0;
     while (argument != null) {
-        if (!KrtNativeBindCallArgument(argument,binding)) { return false; }
+        KrtAstNode expected = KrtAstMake(KrtAstKind.Type,argument.start,argument.length);
+        if (!KrtNativeSignatureType(expected,signature,argument.native_argument_index,binding.module,binding.source) ||
+            !KrtNativeBindContextExpression(argument,expected,binding)) { return false; }
         binding.candidate_error=0;
         if(KrtNativeArgumentScore(argument,signature,argument.native_argument_index,binding)<0){
             if(binding.candidate_error>0){binding.module.native_error=binding.candidate_error;}
@@ -125,9 +144,16 @@ bool KrtNativeBindIndirectCall(KrtAstNode node, KrtNativeBinding binding) {
         }
         argument = argument.next; index = index + 1;
     }
-    if (!KrtNativeContextArguments(node.right,signature,0,binding)) { return false; }
+    if (!KrtNativeCommitArguments(node.right,signature,0,binding)) { return false; }
     node.op = 232; node.native_scope = signature.native_scope; node.native_context = signature.native_context;
-    if (!KrtNativeAnnotateType(node, binding.module, binding.source, signature.type_start, signature.type_length)) { return KrtNativeBindingError(binding,node); }
+    int32 delete_slot = node.native_size;
+    if (!KrtNativeSignatureType(node,signature,-1,binding.module,binding.source)) { return KrtNativeBindingError(binding,node); }
+    if (node.left.kind == KrtAstKind.Lambda && node.native_closure_record_slot < 0) {
+        node.native_closure_record_slot = binding.slots; binding.slots = binding.slots + 6;
+        node.native_closure_descriptor_slot = binding.slots; binding.slots = binding.slots + 1;
+        node.native_closure_environment_temp_slot = binding.slots; binding.slots = binding.slots + 1;
+        node.native_size = binding.slots; binding.slots = binding.slots + 4;
+    } else if (node.left.kind == KrtAstKind.Lambda) { node.native_size = delete_slot; }
     return KrtNativeCheckValueAccess(node,binding) && KrtNativeBindAggregateFrame(node,binding);
 }
 

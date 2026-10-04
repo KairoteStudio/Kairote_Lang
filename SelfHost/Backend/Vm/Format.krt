@@ -31,7 +31,7 @@ bool KrtVmWidth(int64 width) {
 }
 
 bool KrtVmSupported(int32 op) {
-    return (op >= 0 && op <= 46) || (op >= 50 && op <= 54) || (op >= 60 && op <= 63) || (op >= 66 && op <= 72);
+    return (op >= 0 && op <= 46) || (op >= 50 && op <= 54) || (op >= 60 && op <= 63) || (op >= 66 && op <= 73);
 }
 
 bool KrtVmAlignment(int64 alignment) { return alignment >= 1 && alignment <= 16 && (alignment & (alignment - 1)) == 0; }
@@ -42,7 +42,8 @@ int32 KrtVmPhysicalParameters(KrtNativeModule module, int32 function_index) {
     return count;
 }
 
-bool KrtVmValidate(KrtNativeModule module) {
+bool KrtVmValidateVersion(KrtNativeModule module, int32 version) {
+    if (version < 2 || version > 4) { return false; }
     if (module == null || module.count <= 0 || module.count > 16777216 || module.function_count <= 0 || module.function_count > 16384 ||
         module.entry < 0 || module.entry >= module.function_count || module.global_count < 0 || module.global_count > 65536 ||
         module.initializer_index < -1 || module.initializer_index >= module.function_count || module.data_length < 0 || module.data_length > 262144) { return false; }
@@ -63,6 +64,7 @@ bool KrtVmValidate(KrtNativeModule module) {
         while (index < last) {
             int32 op = module.ops[index]; int64 argument = module.args[index]; int64 extra = module.extra[index];
             if (!KrtVmSupported(op)) { KrtDriverError("E_VM","instruction is not supported by the VM backend"); return false; }
+            if (op == 73 && (version < 4 || argument != 0 || extra != 0 || index != first)) { return false; }
             if ((op == 2 || op == 3 || op == 29) && (argument < 0 || argument >= locals)) { return false; }
             if ((op == 17 || op == 18) && (argument < first || argument >= last)) { return false; }
             if (op == 18 && (extra < first || extra >= last)) { return false; }
@@ -99,6 +101,8 @@ bool KrtVmValidate(KrtNativeModule module) {
     return KrtVmPhysicalParameters(module,module.entry) == 0 && (module.initializer_index < 0 || KrtVmPhysicalParameters(module,module.initializer_index) == 0);
 }
 
+bool KrtVmValidate(KrtNativeModule module) { return KrtVmValidateVersion(module,4); }
+
 bool KrtVmEmitV1(KrtNativeModule module, KrtDriverBuffer artifact) {
     if (module.global_count != 0 || module.initializer_index >= 0 || module.parameter_counts[module.entry] != 0) { return false; }
     int32 first = module.starts[module.entry]; int32 last = module.count;
@@ -133,7 +137,14 @@ bool KrtVmEmit(KrtNativeModule module, KrtDriverBuffer artifact) {
         if (module.function_frame_bytes[metadata_index] > 0 || module.aggregate_return_sizes[metadata_index] > 0) { version = 3; }
         metadata_index = metadata_index + 1;
     }
-    int32 function_bytes = 12; if (version == 3) { function_bytes = 28; }
+    // Version 4 extends callable values with tagged closure descriptors. It
+    // retains version 3's exact aggregate function metadata and instruction words.
+    int32 callable_index = 0;
+    while (callable_index < module.count) {
+        if (module.ops[callable_index] == 73) { version = 4; }
+        callable_index = callable_index + 1;
+    }
+    int32 function_bytes = 12; if (version >= 3) { function_bytes = 28; }
     int64 size = 32 + (int64)module.function_count * function_bytes + (int64)module.count * 24 + module.data_length;
     if (size > 67108864) { KrtDriverError("E_VM","VM bytecode exceeds the 64 MiB artifact buffer limit"); return false; }
     int64 data = KrtDriverAlloc(size); if (data == 0) { return false; }
@@ -143,7 +154,7 @@ bool KrtVmEmit(KrtNativeModule module, KrtDriverBuffer artifact) {
     int64 position = 32; int32 index = 0;
     while (index < module.function_count) {
         KrtVmWrite(data,position,module.starts[index],4); KrtVmWrite(data,position + 4,module.local_counts[index],4); KrtVmWrite(data,position + 8,module.parameter_counts[index],4);
-        if (version == 3) {
+        if (version >= 3) {
             KrtVmWrite(data,position + 12,module.function_frame_bytes[index],4); KrtVmWrite(data,position + 16,module.aggregate_return_sizes[index],4);
             KrtVmWrite(data,position + 20,module.aggregate_return_alignments[index],4); KrtVmWrite(data,position + 24,module.hidden_result_slots[index],4);
         }
@@ -162,8 +173,8 @@ bool KrtVmEmit(KrtNativeModule module, KrtDriverBuffer artifact) {
 
 bool KrtVmReadV2(KrtDriverBuffer artifact, KrtNativeModule module) {
     if (artifact.length < 32 || KrtVmRead(artifact.data,6,2) != 0) { return false; }
-    int32 version = (int32)KrtVmRead(artifact.data,4,2); if (version != 2 && version != 3) { return false; }
-    int32 function_bytes = 12; if (version == 3) { function_bytes = 28; }
+    int32 version = (int32)KrtVmRead(artifact.data,4,2); if (version < 2 || version > 4) { return false; }
+    int32 function_bytes = 12; if (version >= 3) { function_bytes = 28; }
     int64 count = KrtVmRead(artifact.data,8,4); int64 functions = KrtVmRead(artifact.data,12,4); int64 data_length = KrtVmRead(artifact.data,28,4);
     if (count <= 0 || count > 16777216 || functions <= 0 || functions > 16384 || data_length > 262144 ||
         artifact.length != 32 + functions * function_bytes + count * 24 + data_length || !KrtNativeInit(module)) { return false; }
@@ -176,7 +187,7 @@ bool KrtVmReadV2(KrtDriverBuffer artifact, KrtNativeModule module) {
     int64 position = 32; int32 index = 0;
     while (index < module.function_count) {
         module.starts[index] = (int32)KrtVmRead(artifact.data,position,4); module.local_counts[index] = (int32)KrtVmRead(artifact.data,position + 4,4); module.parameter_counts[index] = (int32)KrtVmRead(artifact.data,position + 8,4);
-        if (version == 3) {
+        if (version >= 3) {
             module.function_frame_bytes[index] = (int32)KrtVmRead(artifact.data,position + 12,4); module.aggregate_return_sizes[index] = (int32)KrtVmRead(artifact.data,position + 16,4);
             module.aggregate_return_alignments[index] = (int32)KrtVmRead(artifact.data,position + 20,4); module.hidden_result_slots[index] = (int32)KrtVmRead(artifact.data,position + 24,4);
         }
@@ -189,5 +200,5 @@ bool KrtVmReadV2(KrtDriverBuffer artifact, KrtNativeModule module) {
         position = position + 24; index = index + 1;
     }
     module.data = artifact.data + position;
-    return KrtVmValidate(module);
+    return KrtVmValidateVersion(module,version);
 }

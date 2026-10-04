@@ -1,9 +1,11 @@
 bool KrtNativeBindTypeTest(KrtAstNode node, KrtNativeBinding binding) {
     if (!KrtNativeBindExpression(node.left,binding)) { return false; }
+    if (KrtNativeVoidValue(node.left)) { return KrtNativeBindingError(binding,node); }
     KrtAstNode target = KrtAstMake(KrtAstKind.Type,node.type_start,node.type_length);
     target.native_scope = binding.unit.native_scope; target.native_context = binding.unit.native_context;
     target.native_using_scope = binding.using_scope;
     if (!KrtNativeAnnotateType(target,binding.module,binding.source,node.type_start,node.type_length)) { return KrtNativeBindingError(binding,node); }
+    if (KrtNativeVoidValue(target)) { return KrtNativeBindingError(binding,target); }
     if (!KrtNativeCheckValueAccess(target,binding)) { return false; }
     if (KrtNativePointerValue(node.left) || KrtNativePointerValue(target)) {
         if (target.native_nullable) { binding.module.native_error = 5; return KrtNativeBindingError(binding,target); }
@@ -14,7 +16,11 @@ bool KrtNativeBindTypeTest(KrtAstNode node, KrtNativeBinding binding) {
     node.native_target = target; node.local_slot = binding.slots; binding.slots = binding.slots + 1;
     if (node.name_length > 0) {
         KrtAstNode variable = KrtAstMake(KrtAstKind.Variable,node.start,node.length);
+        variable.native_lexical_block = binding.lexical_block; variable.native_lexical_function = binding.unit;
         KrtNativeCopyType(variable,target); variable.name_start = node.name_start; variable.name_length = node.name_length;
+        variable.native_stack_borrow = node.left.native_stack_borrow;
+        KrtNativeInheritStackBorrow(variable,node.left);
+        if (KrtNativeInlineValue(variable) && !KrtNativeBindAggregateFrame(variable,binding)) { return false; }
         variable.local_slot = binding.slots; binding.slots = binding.slots + 1; node.right = variable;
     }
     node.native_width = 1; node.native_bits = 8; node.native_boolean = true; node.native_unsigned = true;

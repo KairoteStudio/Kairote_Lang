@@ -228,7 +228,7 @@ return read(pointer)+read(&pointer)+1;}}
 int32 apply(fn(int32*)->int32 callback,int32* value){return callback(value);}
 ''')
         names = {name for name, _ in read_object(library)[1]}
-        self.assertIn('_KRT1$apply$fn(Pi32;)>i32;Pi32;$i32', names)
+        self.assertIn('_KRT1$apply$fn2(Pi32;)>i32;Pi32;$i32', names)
         caller = self.object('main', '''
 extern int32 apply(fn(int32*)->int32 callback,int32* value);
 int32 read(int32* value){unsafe(using krt.mem;){return *value;}}

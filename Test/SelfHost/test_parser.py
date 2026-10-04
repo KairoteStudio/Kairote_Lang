@@ -48,6 +48,34 @@ int32 main() {{
     if (unit.type_length != 0 || unit.left.left.left.value != 7) {{ return 3; }}
 ''')
 
+    def test_coalescing_is_right_associative_and_binds_above_ternary(self):
+        self.check_ast('int32 main(){return a??b??c?d:e??f;}', '''
+    KrtAstNode value=unit.left.left.left;
+    if(value.kind!=KrtAstKind.Ternary || value.left.kind!=KrtAstKind.Binary || value.left.op!=113){return 2;}
+    if(value.left.left.kind!=KrtAstKind.Identifier || value.left.right.kind!=KrtAstKind.Binary || value.left.right.op!=113){return 3;}
+    if(value.left.right.left.kind!=KrtAstKind.Identifier || value.left.right.right.kind!=KrtAstKind.Identifier){return 4;}
+    if(value.right.kind!=KrtAstKind.Identifier || value.alternate.kind!=KrtAstKind.Binary || value.alternate.op!=113){return 5;}
+''')
+
+    def test_conditional_postfix_chains_retain_receivers_and_group_boundaries(self):
+        self.check_ast('int32 main(){return Fetch()?.items[Next()]?.Read(Arg());}', '''
+    KrtAstNode outer=unit.left.left.left;KrtAstNode inner=outer.right;
+    if(outer.kind!=KrtAstKind.NullConditional || outer.left.kind!=KrtAstKind.Call || inner.kind!=KrtAstKind.NullConditional){return 2;}
+    if(inner.left.kind!=KrtAstKind.Index || inner.left.right.kind!=KrtAstKind.Call || inner.left.left.kind!=KrtAstKind.Member){return 3;}
+    if(inner.left.left.left.kind!=KrtAstKind.GuardReceiver || inner.right.kind!=KrtAstKind.Call || inner.right.right.kind!=KrtAstKind.Call){return 4;}
+    if(inner.right.left.kind!=KrtAstKind.Member || inner.right.left.left.kind!=KrtAstKind.GuardReceiver || outer.length!=inner.length){return 5;}
+''')
+        self.check_ast('int32 main(){return (route?.child).Read();}', '''
+    KrtAstNode call=unit.left.left.left;
+    if(call.kind!=KrtAstKind.Call || call.left.kind!=KrtAstKind.Member || call.left.left.kind!=KrtAstKind.NullConditional || !call.left.left.grouped){return 2;}
+    if(call.left.left.right.kind!=KrtAstKind.Member || call.left.left.right.left.kind!=KrtAstKind.GuardReceiver){return 3;}
+''')
+        self.check_ast('int32 main(){return routes?[Next()].child;}', '''
+    KrtAstNode guard=unit.left.left.left;
+    if(guard.kind!=KrtAstKind.NullConditional || guard.left.kind!=KrtAstKind.Identifier || guard.right.kind!=KrtAstKind.Member){return 2;}
+    if(guard.right.left.kind!=KrtAstKind.Index || guard.right.left.left.kind!=KrtAstKind.GuardReceiver || guard.right.left.right.kind!=KrtAstKind.Call){return 3;}
+''')
+
     def test_function_type_returns_are_distinct_from_fn_declaration_keywords(self):
         self.check_ast('private class Hidden{}public fn()->Hidden GetFactory(){return &Make;}Hidden Make(){return new Hidden();}fn named(){return 42;}class Holder{public static fn(int32)->fn()->int32 Chain(){return &Factory;}public fn Read(){return 7;}}', '''
     KrtAstNode factory=unit.left;KrtAstNode type=factory.syntax_type;
@@ -241,10 +269,155 @@ int32 main() {{
     KrtAstNode lambda_node = unit.left.left.left;
     if (lambda_node.kind != KrtAstKind.Lambda || lambda_node.parameter_count != 2) { return 2; }
     if (lambda_node.parameter_lengths[0] != 5 || lambda_node.parameter_lengths[1] != 6) { return 3; }
-    if (lambda_node.parameter_type_lengths[0] != 6 || lambda_node.parameter_type_lengths[1] != 6) { return 4; }
+    if (lambda_node.parameter_type_lengths[0] != 5 || lambda_node.parameter_type_lengths[1] != 5) { return 4; }
     if (lambda_node.parameter_refs[0] || !lambda_node.parameter_refs[1]) { return 5; }
     if (lambda_node.left.kind != KrtAstKind.Binary || lambda_node.left.op != 43) { return 6; }
 ''')
+
+    def test_lambda_keywords_keep_expression_and_block_bodies(self):
+        declarations=[]
+        for keyword in ('function', 'func', 'fn'):
+            declarations.extend((
+                f'var expression{keyword}={keyword}(int32 value)=>value+1;',
+                f'var arrow{keyword}={keyword}(int32 value)->int64=>{{return value;}};',
+                f'var block{keyword}={keyword}()->void{{return;}};',
+            ))
+        self.check_ast('int32 main(){'+''.join(declarations)+'return 0;}', '''
+    KrtAstNode declaration=unit.left.left;int32 index=0;
+    while(index<9){
+        KrtAstNode lambda_node=declaration.left;
+        if(declaration.kind!=KrtAstKind.Variable || lambda_node.kind!=KrtAstKind.Lambda || lambda_node.child_count!=1){return 2;}
+        if(index%3==0){
+            if(lambda_node.parameter_count!=1 || lambda_node.syntax_type!=null || lambda_node.left.kind!=KrtAstKind.Binary || lambda_node.left.op!=43){return 3;}
+        }else{
+            if(lambda_node.syntax_type==null || lambda_node.left.kind!=KrtAstKind.Block || lambda_node.left.left.kind!=KrtAstKind.Return){return 4;}
+            if(index%3==1 && (lambda_node.type_length!=5 || lambda_node.parameter_count!=1 || lambda_node.left.left.left.kind!=KrtAstKind.Identifier)){return 5;}
+            if(index%3==2 && (lambda_node.type_length!=4 || lambda_node.parameter_count!=0 || lambda_node.left.left.left!=null)){return 6;}
+        }
+        declaration=declaration.next;index=index+1;
+    }
+    if(declaration.kind!=KrtAstKind.Return || declaration.left.value!=0 || declaration.next!=null){return 7;}
+''')
+
+    def test_lambda_contextual_parameters_keep_type_slots_and_modifiers(self):
+        self.check_ast('int32 main(){var callback=function(first,ref int64 second,readonly third,ref readonly Outer.Inner<int32>?* fourth,fn(int32)->int64 fifth)=>first+second;return 0;}', '''
+    KrtAstNode lambda_node=unit.left.left.left;
+    if(lambda_node.kind!=KrtAstKind.Lambda || lambda_node.parameter_count!=5){return 2;}
+    if(lambda_node.parameter_type_lengths[0]!=0 || lambda_node.parameter_type_lengths[1]!=5 || lambda_node.parameter_type_lengths[2]!=0){return 3;}
+    if(lambda_node.parameter_lengths[0]!=5 || lambda_node.parameter_lengths[1]!=6 || lambda_node.parameter_lengths[2]!=5 || lambda_node.parameter_lengths[3]!=6 || lambda_node.parameter_lengths[4]!=5){return 4;}
+    if(lambda_node.parameter_refs[0] || !lambda_node.parameter_refs[1] || lambda_node.parameter_refs[2] || !lambda_node.parameter_refs[3] || lambda_node.parameter_refs[4]){return 5;}
+    KrtAstNode type=lambda_node.syntax_parameter_types;
+    if(type==null || type.type_length!=0 || type.name_length!=0 || type.syntax_modifiers!=0){return 6;}
+    type=type.next;if(type.type_length!=5 || type.name_length!=5 || type.syntax_modifiers!=0){return 7;}
+    type=type.next;if(type.type_length!=0 || type.name_length!=0 || type.syntax_modifiers!=16 || !type.native_readonly){return 8;}
+    type=type.next;if(type.right==null || type.syntax_pointer_depth!=1 || type.syntax_pointee_nullable!=1 || type.syntax_modifiers!=16 || !type.native_readonly){return 9;}
+    type=type.next;if(type.op!=1 || type.left.parameter_count!=1 || type.left.type_length!=5 || type.next!=null){return 10;}
+    if(lambda_node.left.kind!=KrtAstKind.Binary || lambda_node.left.op!=43 || unit.left.left.next.left.value!=0){return 11;}
+''')
+
+    def test_lambda_nested_return_and_immediate_call_shapes(self):
+        self.check_ast('int32 main(){var make=fn(int32 first)->fn(int32)->int32=>fn(int32 second)=>first+second;var result=(function(int32 value){return value+1;})(4);return result;}', '''
+    KrtAstNode outer=unit.left.left.left;
+    if(outer.kind!=KrtAstKind.Lambda || outer.syntax_type.op!=1 || outer.syntax_type.left.parameter_count!=1 || outer.syntax_type.left.type_length!=5){return 2;}
+    if(outer.left.kind!=KrtAstKind.Lambda || outer.left.parameter_count!=1 || outer.left.left.kind!=KrtAstKind.Binary || outer.left.next!=null){return 3;}
+    KrtAstNode call=unit.left.left.next.left;
+    if(call.kind!=KrtAstKind.Call || call.left.kind!=KrtAstKind.Lambda || !call.left.grouped || call.left.left.kind!=KrtAstKind.Block || call.right.value!=4){return 4;}
+    if(call.parameter_count!=1 || unit.left.left.next.next.left.kind!=KrtAstKind.Identifier){return 5;}
+''')
+
+    def test_lambda_postfix_preserves_expression_and_block_body_boundaries(self):
+        self.check_ast('int32 main(){var expression=(function(int32 value)=>value+1)(41);var direct=function(int32 value){return value+1;}(41);var arrow=function(int32 value)=>{return value+1;}(41);return 0;}', '''
+    KrtAstNode declaration=unit.left.left;int32 index=0;
+    while(index<3){
+        KrtAstNode call=declaration.left;
+        if(call.kind!=KrtAstKind.Call || call.parameter_count!=1 || call.right.value!=41 || call.left.kind!=KrtAstKind.Lambda || call.left.parameter_count!=1){return 2;}
+        if(index==0 && (!call.left.grouped || call.left.left.kind!=KrtAstKind.Binary || call.left.left.op!=43)){return 3;}
+        if(index!=0 && (call.left.grouped || call.left.left.kind!=KrtAstKind.Block || call.left.left.left.kind!=KrtAstKind.Return)){return 4;}
+        declaration=declaration.next;index=index+1;
+    }
+    if(declaration.kind!=KrtAstKind.Return || declaration.left.value!=0){return 5;}
+''')
+
+    def test_lambda_statements_preserve_fn_type_declaration_lookahead(self):
+        statements=[]
+        for keyword in ('function','func','fn'):
+            statements.extend((f'{keyword}(int32 value){{return value+1;}}(41);',f'{keyword}()=>1;'))
+        self.check_ast('int32 main(){'+''.join(statements)+'fn(int32)->int32 callback;return 0;}', '''
+    KrtAstNode statement=unit.left.left;int32 index=0;
+    while(index<6){
+        if(statement.kind!=KrtAstKind.Expression){return 2;}
+        if(index%2==0){
+            if(statement.left.kind!=KrtAstKind.Call || statement.left.left.kind!=KrtAstKind.Lambda || statement.left.left.left.kind!=KrtAstKind.Block || statement.left.right.value!=41){return 3;}
+        }else{
+            if(statement.left.kind!=KrtAstKind.Lambda || statement.left.parameter_count!=0 || statement.left.left.kind!=KrtAstKind.Integer || statement.left.left.value!=1){return 4;}
+        }
+        statement=statement.next;index=index+1;
+    }
+    if(statement.kind!=KrtAstKind.Variable || statement.syntax_type.op!=1 || statement.syntax_type.left.parameter_count!=1 || statement.syntax_type.left.type_length!=5){return 5;}
+    if(statement.next.kind!=KrtAstKind.Return || statement.next.left.value!=0){return 6;}
+''')
+
+    def test_lambda_field_and_array_initializers_keep_independent_nodes(self):
+        self.check_ast('struct Handler{public fn(int32)->int32 callback=function(value)=>value+1;}int32 main(){fn(int32)->int32 callbacks[2]=[function(first)=>first+1,function(int32 second){return second+2;}];return 0;}', '''
+    KrtAstNode handler=unit.declarations;KrtAstNode field=handler.body;
+    if(handler.value!=2 || field.syntax_type.op!=1 || field.left.kind!=KrtAstKind.Lambda || field.left.parameter_count!=1 || field.left.parameter_type_lengths[0]!=0 || field.left.next!=null){return 2;}
+    if(handler.declarations.op!=220 || handler.declarations.left.left.right!=field.left){return 3;}
+    KrtAstNode literal=unit.left.left.left.left;
+    if(literal.kind!=KrtAstKind.ArrayLiteral || literal.child_count!=2 || literal.left.kind!=KrtAstKind.Lambda || literal.left.next.kind!=KrtAstKind.Lambda || unit.left.left.left.syntax_type.syntax_array_rank!=1 || unit.left.left.left.syntax_array_size.value!=2){return 4;}
+    if(literal.left.parameter_type_lengths[0]!=0 || literal.left.left.kind!=KrtAstKind.Binary || literal.left.next.parameter_type_lengths[0]!=5 || literal.left.next.left.kind!=KrtAstKind.Block || literal.left.next.next!=null){return 5;}
+    if(literal.left.left.next!=null || literal.left.next.left.next!=null || unit.left.left.left.next.left.value!=0){return 6;}
+''',compilation_unit=True)
+
+    def test_lambda_source_spans_exclude_parameter_modifiers_and_trailing_space(self):
+        source='int32 main(){var invoke = function (readonly ref int64 value, next) -> int32 => value + next   ;return 0;}'
+        start=source.index('function')
+        end=source.index('next   ;')+4
+        value_start=source.index('value,')
+        next_start=source.index('next)')
+        type_start=source.index('int64')
+        return_start=source.index('int32 =>')
+        self.check_ast(source, f'''
+    KrtAstNode lambda_node=unit.left.left.left;
+    if(lambda_node.start!={start} || lambda_node.length!={end-start} || lambda_node.parameter_count!=2){{return 2;}}
+    if(lambda_node.parameter_starts[0]!={value_start} || lambda_node.parameter_lengths[0]!=5 || lambda_node.parameter_starts[1]!={next_start} || lambda_node.parameter_lengths[1]!=4){{return 3;}}
+    if(lambda_node.parameter_type_starts[0]!={type_start} || lambda_node.parameter_type_lengths[0]!=5 || lambda_node.parameter_type_lengths[1]!=0){{return 4;}}
+    if(lambda_node.type_start!={return_start} || lambda_node.type_length!=5 || lambda_node.syntax_type.type_start!={return_start}){{return 5;}}
+    if(!lambda_node.parameter_refs[0] || lambda_node.syntax_parameter_types.syntax_modifiers!=16 || lambda_node.left.length!=12){{return 6;}}
+''')
+
+    def test_lambda_parameter_boundary_and_overflow_recovery(self):
+        parameters=','.join(f'int32 p{index}' for index in range(128))
+        self.check_ast(f'int32 main(){{var callback=function({parameters})=>p127;return 42;}}', '''
+    KrtAstNode lambda_node=unit.left.left.left;
+    if(lambda_node.parameter_count!=128 || lambda_node.parameter_lengths[127]!=4 || lambda_node.parameter_type_lengths[127]!=5){return 2;}
+    KrtAstNode type=lambda_node.syntax_parameter_types;int32 count=0;while(type!=null){count=count+1;type=type.next;}
+    if(count!=128 || lambda_node.left.kind!=KrtAstKind.Identifier || lambda_node.left.length!=4 || unit.left.left.next.left.value!=42){return 3;}
+''')
+        overflow=parameters+',int32 p128'
+        self.check_ast(f'int32 main(){{var broken=function({overflow})=>p0;return 42;}}int32 valid(){{return 7;}}', '''
+    KrtAstNode invalid=unit.left.left.left;
+    if(invalid.kind!=KrtAstKind.Invalid || invalid.left.left.parameter_count!=128 || invalid.left.left.left.kind!=KrtAstKind.Identifier){return 2;}
+    KrtAstNode type=invalid.left.left.syntax_parameter_types;int32 count=0;while(type!=null){count=count+1;type=type.next;}
+    if(count!=128 || unit.left.left.left.next.left.value!=42 || unit.left.next.left.left.left.value!=7){return 3;}
+    if(parser.diagnostics.expected!=KrtTokenKind.RightParen || parser.diagnostics.next!=null){return 4;}
+''',compilation_unit=True,expected_errors=1)
+
+    def test_malformed_lambda_recovers_following_statements_and_declarations(self):
+        for source in (
+            'int32 main(){var broken=function(int32 value,)=>value;return 42;}int32 valid(){return 7;}',
+            'int32 main(){var broken=function(int32 value) value;return 42;}int32 valid(){return 7;}',
+            'int32 main(){var broken=function(int32 value)=>;return 42;}int32 valid(){return 7;}',
+            'int32 main(){var broken=function(int32 value)=>{int32 bad=;return value;};return 42;}int32 valid(){return 7;}',
+            'int32 main(){var broken=function(ref ref int32 value)=>value;return 42;}int32 valid(){return 7;}',
+            'int32 main(){var broken=function(readonly readonly value)=>value;return 42;}int32 valid(){return 7;}',
+            'int32 main(){var broken=function(int32 value)->=>value;return 42;}int32 valid(){return 7;}',
+        ):
+            with self.subTest(source=source):
+                self.check_ast(source, '''
+    if(unit.left.left.left.kind!=KrtAstKind.Invalid || unit.left.left.left.next.kind!=KrtAstKind.Return || unit.left.left.left.next.left.value!=42){return 2;}
+    if(unit.left.next==null || unit.left.next.left.left.left.value!=7 || unit.left.next.next!=null){return 3;}
+    if(parser.diagnostics==null || parser.diagnostics.next!=null){return 4;}
+''',compilation_unit=True,expected_errors=1)
 
     def test_type_meta_expressions(self):
         self.check_ast('int32 main() { return sizeof(int64) + default(int32); }', '''
@@ -302,9 +475,31 @@ int32 main() {{
     def test_null_operator_tokens_and_associativity(self):
         self.check_ast('int32 main() { return a?.field ?? b ?? c; }', '''
     KrtAstNode expression = unit.left.left.left;
-    if (expression.kind != KrtAstKind.Binary || expression.op != 113) { return 2; }
-    if (expression.left.kind != KrtAstKind.Member || expression.left.op != 114) { return 3; }
-    if (expression.right.kind != KrtAstKind.Binary || expression.right.op != 113) { return 4; }
+    if (expression == null || expression.kind != KrtAstKind.Binary || expression.op != 113 || expression.child_count != 2 || expression.start != 22 || expression.length != 18) { return 2; }
+    KrtAstNode guard = expression.left; KrtAstNode fallback = expression.right;
+    if (guard == null || guard.kind != KrtAstKind.NullConditional || guard.child_count != 2 || guard.op != 0 || guard.start != 22 || guard.length != 8) { return 3; }
+    KrtAstNode receiver = guard.left; KrtAstNode member = guard.right;
+    if (receiver == null || receiver.kind != KrtAstKind.Identifier || receiver.start != 22 || receiver.length != 1) { return 4; }
+    if (member == null || member.kind != KrtAstKind.Member || member.child_count != 1 || member.op != 0 || member.start != 22 || member.length != 8 || member.name_start != 25 || member.name_length != 5 || member.right != null) { return 5; }
+    KrtAstNode saved = member.left;
+    if (saved == null || saved.kind != KrtAstKind.GuardReceiver || saved.start != receiver.start || saved.length != receiver.length || saved.op != 0 || saved.name_start != 0 || saved.name_length != 0) { return 6; }
+    if (fallback == null || fallback.kind != KrtAstKind.Binary || fallback.op != 113 || fallback.child_count != 2 || fallback.start != 34 || fallback.length != 6) { return 7; }
+    KrtAstNode b = fallback.left; KrtAstNode c = fallback.right;
+    if (b == null || c == null || b.kind != KrtAstKind.Identifier || c.kind != KrtAstKind.Identifier || b.start != 34 || b.length != 1 || c.start != 39 || c.length != 1) { return 8; }
+    KrtAstNode[] leaves = [receiver, saved, b, c];
+    for (int32 i = 0; i < 4; i++) {
+        if (leaves[i].child_count != 0 || leaves[i].left != null || leaves[i].right != null) { return 9; }
+    }
+    KrtAstNode[] nodes = [expression, guard, receiver, member, saved, fallback, b, c];
+    for (int32 i = 0; i < 8; i++) {
+        if (nodes[i].next != null || nodes[i].alternate != null || nodes[i].body != null || nodes[i].declarations != null || nodes[i].grouped) { return 10; }
+        for (int32 j = i + 1; j < 8; j++) { if (nodes[i] == nodes[j]) { return 11; } }
+    }
+    unsafe(using krt.mem;) {
+        byte* text = (byte*)(int64)input;
+        if (text[receiver.start] != 97 || text[b.start] != 98 || text[c.start] != 99 || text[member.name_start] != 102 || text[member.name_start + 1] != 105 || text[member.name_start + 2] != 101 || text[member.name_start + 3] != 108 || text[member.name_start + 4] != 100) { return 12; }
+    }
+    delete leaves; delete nodes;
 ''')
 
     def test_typed_lookahead_retains_type_children_and_grouped_postfix(self):

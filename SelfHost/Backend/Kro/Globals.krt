@@ -49,9 +49,30 @@ bool KrtKroNativeIndirectCall(KrtKroObject output, ref int32 pc, int32 arity, in
         if (!KrtKroNativeFrameLoad(output, ref pc, scratch + argument)) { return false; }
         argument = argument - 1;
     }
-    // Load the saved pointer without changing the already aligned argument stack.
+    // Raw code addresses remain unchanged. A negative callable tags a heap
+    // descriptor containing the code address and its shared environment.
+    // r10 carries the environment without shifting any source or sret argument.
     if (!KrtKroNativeCode(output, ref pc, 0x858b48, 3) || !KrtKroNativeU32(output, ref pc, -8 * (scratch + 125)) ||
+        !KrtKroNativeCode(output, ref pc, 0xc08548, 3) || !KrtKroNativeCode(output, ref pc, 0x850f, 2)) { return false; }
+    int32 nonnull = pc;
+    if (!KrtKroNativeU32(output, ref pc, 0) ||
+        !KrtKroNativeByte(output, ref pc, 191) || !KrtKroNativeU32(output, ref pc, 127) ||
+        !KrtKroNativeByte(output, ref pc, 184) || !KrtKroNativeU32(output, ref pc, 60) ||
+        !KrtKroNativeCode(output, ref pc, 0x0b0f050f, 4) ||
+        !KrtKroEmitTextU32(output, nonnull, pc - nonnull - 4) ||
+        !KrtKroNativeCode(output, ref pc, 0xd23145, 3) ||
+        !KrtKroNativeCode(output, ref pc, 0xc08548, 3) || !KrtKroNativeCode(output, ref pc, 0x890f, 2)) { return false; }
+    int32 raw = pc;
+    if (!KrtKroNativeU32(output, ref pc, 0) ||
+        !KrtKroNativeCode(output, ref pc, 0x3ff0ba0f48, 5) ||
+        !KrtKroNativeCode(output, ref pc, 0x08508b4c, 4) ||
+        !KrtKroNativeCode(output, ref pc, 0x008b48, 3) ||
+        !KrtKroEmitTextU32(output, raw, pc - raw - 4) ||
         !KrtKroNativeCode(output, ref pc, 0xd0ff, 2) ||
         !KrtKroNativeCode(output, ref pc, 0xa58b48, 3) || !KrtKroNativeU32(output, ref pc, -8 * (scratch + 124))) { return false; }
     return KrtKroNativeByte(output, ref pc, 80);
+}
+
+bool KrtKroNativeClosureEnvironment(KrtKroObject output, ref int32 pc) {
+    return KrtKroNativeCode(output, ref pc, 0x5241, 2);
 }

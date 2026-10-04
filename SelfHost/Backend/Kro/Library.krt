@@ -158,7 +158,7 @@ bool KrtKroLibraryPublicSignature(KrtAstNode function_node, KrtAstNode ast, int6
 }
 
 bool KrtKroLibraryPublicDefinition(KrtAstNode declaration,KrtAbiSignature signature) {
-    return KrtNativeAccessExported(declaration)&&declaration.op!=220&&declaration.op!=230&&declaration.op!=241&&declaration.native_generic_origin==null&&
+    return !declaration.native_closure_function&&KrtNativeAccessExported(declaration)&&declaration.op!=220&&declaration.op!=230&&declaration.op!=241&&declaration.native_generic_origin==null&&
         signature.supported&&signature.contract.ok&&
         (declaration.native_owner==null||(declaration.native_owner.native_generic_parameters==null&&
             (declaration.native_owner.native_generic_origin==null||declaration.native_owner.value==2)));

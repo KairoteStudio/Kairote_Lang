@@ -1,0 +1,93 @@
+// Cache only successful concrete type descriptions, independently of mutable
+// activation declarations and the source position of each use.
+KrtNativeSignatureCache KrtNativeSignatureState(KrtAstNode function_node, KrtAstNode module, int64 source) {
+    KrtNativeSignatureCache cache = function_node.native_signature_cache;
+    if (cache == null || cache.module != module || cache.source != source ||
+        cache.scope != function_node.native_scope || cache.using_scope != function_node.native_using_scope ||
+        cache.context != function_node.native_context || cache.owner != function_node.native_owner ||
+        cache.parameter_count != function_node.parameter_count) {
+        cache = new KrtNativeSignatureCache();
+        if (cache == null) { return null; }
+        cache.module = module; cache.source = source;
+        cache.scope = function_node.native_scope; cache.using_scope = function_node.native_using_scope;
+        cache.context = function_node.native_context; cache.owner = function_node.native_owner;
+        cache.parameter_count = function_node.parameter_count;
+        cache.parameters = new KrtAstNode[function_node.parameter_count];
+        cache.parameter_starts = new int64[function_node.parameter_count];
+        cache.parameter_lengths = new int64[function_node.parameter_count];
+        if (cache.parameters == null || cache.parameter_starts == null || cache.parameter_lengths == null) {
+            delete cache.parameters; delete cache.parameter_starts; delete cache.parameter_lengths;
+            delete cache; return null;
+        }
+        function_node.native_signature_cache = cache;
+    }
+    return cache;
+}
+
+bool KrtNativeSignatureTypeCore(KrtAstNode target, KrtAstNode function_node, int32 index, KrtAstNode module, int64 source) {
+    target.native_scope = function_node.native_scope; target.native_context = function_node.native_context;
+    target.native_using_scope = function_node.native_using_scope;
+    if (index < -1 || index >= function_node.parameter_count) { return false; }
+    int64 start = index < 0 ? function_node.type_start : function_node.parameter_type_starts[index];
+    int64 length = index < 0 ? function_node.type_length : function_node.parameter_type_lengths[index];
+    // Layout probes deliberately permit unresolved nominal layouts. Their
+    // provisional descriptions must never replace a settled signature shape.
+    if (KrtNativeLayoutProbe || module.native_closure_probe_state != null) { return KrtNativeAnnotateType(target,module,source,start,length); }
+    KrtNativeSignatureCache cache = KrtNativeSignatureState(function_node,module,source);
+    if (cache == null) { return KrtNativeAnnotateType(target,module,source,start,length); }
+    KrtAstNode description = null;
+    if (index < 0) {
+        if (cache.return_start == start && cache.return_length == length) { description = cache.result; }
+    } else if (cache.parameter_starts[index] == start && cache.parameter_lengths[index] == length) {
+        description = cache.parameters[index];
+    }
+    if (description != null) {
+        KrtNativeCopyType(target,description);
+        // File-private and owner access depend on this use's position, even
+        // when the declaration's complete type shape was resolved earlier.
+        return KrtNativeFinishTypeAnnotation(target,module,source);
+    }
+    if (!KrtNativeAnnotateType(target,module,source,start,length)) { return false; }
+    description = new KrtAstNode();
+    if (description == null) { return true; }
+    description.kind = KrtAstKind.Type;
+    KrtNativeCopyType(description,target);
+    if (index < 0) {
+        cache.return_start = start; cache.return_length = length; cache.result = description;
+    } else {
+        cache.parameter_starts[index] = start; cache.parameter_lengths[index] = length;
+        cache.parameters[index] = description;
+    }
+    return true;
+}
+
+bool KrtNativeSignatureType(KrtAstNode target, KrtAstNode function_node, int32 index, KrtAstNode module, int64 source) {
+    KrtAstNode closure = function_node.native_closure_signature;
+    if (closure == null && function_node.native_closure_shape) { closure = function_node; }
+    if (closure != null) {
+        if (index < -1 || index >= closure.parameter_count) { return false; }
+        KrtAstNode description = closure.native_type;
+        if (index >= 0) {
+            description = closure.declarations; int32 parameter = 0;
+            while (description != null && parameter < index) { description = description.next; parameter = parameter + 1; }
+        }
+        if (description == null) { return false; }
+        target.native_scope = function_node.native_scope; target.native_context = function_node.native_context;
+        target.native_using_scope = function_node.native_using_scope;
+        KrtNativeCopyType(target,description);
+        return KrtNativeFinishTypeAnnotation(target,module,source);
+    }
+    if (!KrtNativeSignatureTypeCore(target,function_node,index,module,source)) { return false; }
+    // Prepared callback shapes retain their value's naming contract, including
+    // nested callbacks. Re-resolving layout/access must not restore labels
+    // erased by a dynamic choice from its original source or generic context.
+    if (function_node.native_type != null && function_node.native_type.kind == KrtAstKind.Type) {
+        KrtAstNode contract = function_node.native_type;
+        if (index >= 0) {
+            contract = function_node.declarations; int32 position = 0;
+            while (contract != null && position < index) { contract = contract.next; position = position + 1; }
+        }
+        if (contract != null) { KrtNativeMergeCallbackLabels(target,target,contract,source); }
+    }
+    return true;
+}

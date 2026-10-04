@@ -47,7 +47,7 @@ void KrtSsaResultType(KrtSsaModule ssa, int32 value) {
     if (op == 16 || op == 31 || op == 35 || op == 40 || op == 42 || op == 62) { width = 1; kind = 1; }
     if (op == 28 && (ssa.args[value] != 8 && ssa.args[value] != -8)) { width = (int32)ssa.args[value]; kind = 1; }
     if (op == 22) { width = (int32)ssa.extra[value]; kind = (width == 16 || width == -16) ? 4 : 1; }
-    if (op == 21 || op == 24 || op == 25 || op == 29 || op == 30 || op == 36 || op == 44 || op == 45 || op == 69) { width = 8; kind = 3; }
+    if (op == 21 || op == 24 || op == 25 || op == 29 || op == 30 || op == 36 || op == 44 || op == 45 || op == 69 || op == 73) { width = 8; kind = 3; }
     if (op == 70) { width = (int32)ssa.extra[value]; kind = 5; }
     if (op == 37) { width = 4; kind = 1; }
     if (op == 39 || op == 41 || op == 43) { width = (int32)ssa.extra[value]; kind = 2; }
@@ -147,6 +147,30 @@ KrtSsaModule KrtSsaBuild(KrtNativeModule module, KrtAstNode unit, int64 source) 
         if (function_index+1 < module.function_count) { last = module.starts[function_index+1]; }
         int32 locals = module.local_counts[function_index]; int32 parameters = module.parameter_counts[function_index];
         int32 first_block = ssa.function_blocks[function_index]; int32 blocks = ssa.function_block_counts[function_index];
+        // Build each distinct predecessor edge once. Descending source order
+        // plus prepend preserves the prior ascending phi operand order.
+        int32[] predecessor_heads = new int32[blocks];
+        int32[] predecessor_next = new int32[blocks*2]; int32[] predecessor_blocks = new int32[blocks*2];
+        int32 relative_block = 0;
+        while (relative_block < blocks) { predecessor_heads[relative_block] = -1; relative_block = relative_block+1; }
+        int32 predecessor_count = 0; int32 predecessor_block = first_block+blocks-1;
+        while (predecessor_block >= first_block) {
+            int32 left = ssa.block_left[predecessor_block]; int32 right = ssa.block_right[predecessor_block];
+            int32 side = 0;
+            while (side < 2) {
+                int32 target = side == 0 ? left : right;
+                if (target >= 0 && (side == 0 || right != left)) {
+                    if (target < first_block || target >= first_block+blocks) {
+                        delete predecessor_heads; delete predecessor_next; delete predecessor_blocks; return null;
+                    }
+                    predecessor_blocks[predecessor_count] = predecessor_block;
+                    predecessor_next[predecessor_count] = predecessor_heads[target-first_block];
+                    predecessor_heads[target-first_block] = predecessor_count; predecessor_count = predecessor_count+1;
+                }
+                side = side+1;
+            }
+            predecessor_block = predecessor_block-1;
+        }
         KrtSsaEscapeInfo escape_info = KrtSsaEscapes(module,function_index,first,last,ssa.handlers[function_index]);
         bool[] escaped = escape_info.values;
         int32 maximum = 0; int32 index = first;
@@ -222,27 +246,27 @@ KrtSsaModule KrtSsaBuild(KrtNativeModule module, KrtAstNode unit, int64 source) 
         while (block < first_block+blocks) {
             int32 phi = ssa.block_phis[block]; int32 phi_end = phi+ssa.block_phi_counts[block];
             while (phi < phi_end) {
-                ssa.operand_starts[phi] = ssa.operand_count; int32 predecessor = first_block;
-                while (predecessor < first_block+blocks) {
-                    if (ssa.block_left[predecessor] == block || ssa.block_right[predecessor] == block) {
-                        int32 slot = (int32)ssa.args[phi]; int32 incoming = 0;
-                        if (slot >= 0) { incoming = final_locals[(predecessor-first_block)*locals+slot]; }
-                        else {
-                            int32 position = -1-slot;
-                            if (position >= final_depths[predecessor-first_block]) { return null; }
-                            incoming = final_stack[(predecessor-first_block)*maximum+position];
-                        }
-                        if (ssa.operand_count >= ssa.operand_capacity) { return null; }
-                        ssa.operands[ssa.operand_count] = incoming; ssa.phi_predecessors[ssa.operand_count] = predecessor;
-                        ssa.operand_count = ssa.operand_count+1; ssa.operand_counts[phi] = ssa.operand_counts[phi]+1;
+                ssa.operand_starts[phi] = ssa.operand_count; int32 item = predecessor_heads[block-first_block];
+                while (item >= 0) {
+                    int32 predecessor = predecessor_blocks[item];
+                    int32 slot = (int32)ssa.args[phi]; int32 incoming = 0;
+                    if (slot >= 0) { incoming = final_locals[(predecessor-first_block)*locals+slot]; }
+                    else {
+                        int32 position = -1-slot;
+                        if (position >= final_depths[predecessor-first_block]) { return null; }
+                        incoming = final_stack[(predecessor-first_block)*maximum+position];
                     }
-                    predecessor = predecessor+1;
+                    if (ssa.operand_count >= ssa.operand_capacity) { return null; }
+                    ssa.operands[ssa.operand_count] = incoming; ssa.phi_predecessors[ssa.operand_count] = predecessor;
+                    ssa.operand_count = ssa.operand_count+1; ssa.operand_counts[phi] = ssa.operand_counts[phi]+1;
+                    item = predecessor_next[item];
                 }
                 phi = phi+1;
             }
             block = block+1;
         }
         delete final_locals; delete final_stack; delete final_depths; delete names; delete stack; delete escaped; delete escape_info;
+        delete predecessor_heads; delete predecessor_next; delete predecessor_blocks;
         function_index = function_index+1;
     }
     bool changed = true; int32 rounds = 0;
@@ -302,6 +326,10 @@ bool KrtSsaValidate(KrtSsaModule ssa) {
                     alignment <= 0 || alignment > 16 || (alignment & (alignment-1)) != 0) { return false; }
             } else if (op == 19 || op == 46) {
                 if (ssa.extra[value] < 0 || ssa.extra[value] > 129 || ssa.operand_counts[value] != ssa.extra[value]+(op == 46 ? 1 : 0)) { return false; }
+            } else if (op == 73) {
+                if (ssa.args[value] != 0 || ssa.extra[value] != 0 || ssa.operand_counts[value] != 0 || !ssa.results[value] ||
+                    ssa.types[value] != 1 || ssa.widths[value] != 64 || ssa.semantic_types == null || ssa.semantic_widths == null ||
+                    ssa.semantic_types[value] != 3 || ssa.semantic_widths[value] != 8) { return false; }
             } else if (op == 101) {
                 if (phi_inputs < 0) {
                     int32 first_block = ssa.function_blocks[function_index]; int32 blocks = ssa.function_block_counts[function_index];

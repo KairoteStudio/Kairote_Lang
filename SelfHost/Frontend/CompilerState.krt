@@ -1,6 +1,59 @@
 // Shared compiler records retain one layout across AST, binding and IR.
 // Algorithms live in their component files; these records carry only state.
 
+// A concrete function owns immutable resolved signature shapes. Activation
+// parameters, call-site positions and access results remain separate.
+class KrtNativeCapture {
+    public KrtAstNode provider;
+    public KrtAstNode declaration;
+    public int32 index;
+    public KrtNativeCapture next;
+}
+class KrtNativeCellOwner {
+    public KrtAstNode declaration;
+    public KrtNativeCellOwner next;
+}
+
+// A contextual overload probe restores mutations through a nested journal.
+// Registry entries keep canonical nominal identities while each probe owns its
+// bucket storage, lookup index, globals and diagnostics.
+class KrtNativeClosureProbeMutation {
+    public KrtAstNode declaration;
+    public KrtAstNode snapshot;
+    public KrtNativeClosureProbeMutation next;
+}
+class KrtNativeClosureProbeState {
+    public KrtNativeClosureProbeState previous;
+    public KrtNativeClosureProbeMutation mutations;
+    public KrtAstNode functions; public KrtAstNode function_tail;
+    public KrtAstNode types; public KrtAstNode type_tail;
+    public KrtAstNode globals; public KrtAstNode global_tail;
+    public int32 child_count; public int32 native_locals;
+    public int32 native_error; public int32 constraint_depth;
+    public KrtGenericRegistry registry;
+    public KrtNativeFunctionIndex function_index;
+    public KrtNativeGlobalState global_state;
+    public KrtInheritanceStack inheritance_stack;
+    public KrtCompilerDiagnostics diagnostics;
+    public int64 error_code;
+}
+
+class KrtNativeSignatureCache {
+    public KrtAstNode module;
+    public int64 source;
+    public KrtAstNode scope;
+    public KrtUsingScope using_scope;
+    public KrtAstNode context;
+    public KrtAstNode owner;
+    public int32 parameter_count;
+    public KrtAstNode[] parameters;
+    public int64[] parameter_starts;
+    public int64[] parameter_lengths;
+    public KrtAstNode result;
+    public int64 return_start;
+    public int64 return_length;
+}
+
 // Mutable program storage is separate from activation-record local slots.
 class KrtNativeGlobalEntry {
     public KrtAstNode declaration;
@@ -27,6 +80,27 @@ class KrtGenericRegistry {
     public KrtAstNode[] arguments;
     public KrtAstNode[] instances;
     public int32[] states;
+}
+
+// Name buckets retain declaration order independently of the AST sibling link.
+// Entries stay stable when the bucket table grows during generic expansion.
+class KrtNativeFunctionEntry {
+    public KrtAstNode declaration;
+    public KrtNativeFunctionEntry next;
+}
+class KrtNativeFunctionBucket {
+    public int64 name_start;
+    public int64 name_length;
+    public uint64 hash;
+    public KrtNativeFunctionEntry first;
+    public KrtNativeFunctionEntry last;
+}
+class KrtNativeFunctionIndex {
+    public int32 capacity;
+    public int32 name_count;
+    public KrtNativeFunctionBucket[] buckets;
+    public KrtAstNode last_indexed_function;
+    public bool ok;
 }
 
 // Keep the active type-resolution path separate from cached layout states.

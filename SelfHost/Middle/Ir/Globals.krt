@@ -13,6 +13,9 @@ bool KrtNativeLowerFunctionAddress(KrtAstNode node, KrtNativeModule module) {
 }
 
 bool KrtNativeLowerIndirectCall(KrtAstNode node, KrtAstNode ast, KrtNativeModule module, int64 source) {
+    if (node.native_closure_record_slot >= 0 && !node.native_closure_lowering) {
+        return KrtNativeLowerTemporaryClosureCall(node,ast,module,source);
+    }
     KrtAstNode signature = node.left.native_function_pointer;
     if (signature == null || !KrtNativeLowerExpression(node.left, ast, module, source)) { return false; }
     if (KrtNativeInlineValue(node)) {

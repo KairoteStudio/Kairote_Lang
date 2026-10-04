@@ -32,6 +32,7 @@ string KrtArtifactOp(int32 op) {
     if (op == 63) { return "wide.unary"; } if (op == 66) { return "wide.literal"; } if (op == 67) { return "wide.post.increment"; }
     if (op == 68) { return "wide.float"; } if (op == 69) { return "wide.ref"; }
     if (op == 70) { return "aggregate.address"; } if (op == 71) { return "aggregate.copy"; } if (op == 72) { return "aggregate.zero"; }
+    if (op == 73) { return "closure.environment"; }
     return "unknown";
 }
 

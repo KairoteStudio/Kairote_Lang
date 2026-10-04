@@ -1,0 +1,36 @@
+bool KrtNativeLowerNullCoalescing(KrtAstNode expression, KrtAstNode ast, KrtNativeModule module, int64 source) {
+    if (!KrtNativeLowerExpression(expression.left,ast,module,source) ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.Dup,0,0) < 0) { return false; }
+    int32 branch = KrtNativeEmit(module,(int32)KrtNativeOp.Branch,-1,-1);
+    if (branch < 0 || !KrtNativeConvertValue(module,expression.left,expression)) { return false; }
+    int32 jump = KrtNativeEmit(module,(int32)KrtNativeOp.Jump,-1,0);
+    int32 fallback = module.count;
+    if (jump < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.Drop,0,0) < 0 ||
+        !KrtNativeLowerExpression(expression.right,ast,module,source) ||
+        !KrtNativeConvertValue(module,expression.right,expression)) { return false; }
+    module.args[branch] = branch + 1; module.extra[branch] = fallback; module.args[jump] = module.count;
+    return true;
+}
+
+bool KrtNativeLowerNullConditional(KrtAstNode expression, KrtAstNode ast, KrtNativeModule module, int64 source) {
+    if (!KrtNativeLowerExpression(expression.left,ast,module,source) ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,expression.local_slot,0) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,expression.local_slot,0) < 0) { return false; }
+    int32 branch = KrtNativeEmit(module,(int32)KrtNativeOp.Branch,-1,-1);
+    if (branch < 0) { return false; }
+    if (KrtNativeInlineValue(expression)) {
+        // Both branches produce the same independent value storage. A field
+        // result cannot retain a writable alias into the original receiver.
+        if (!KrtNativeLowerAggregateFrame(expression,module) ||
+            !KrtNativeLowerExpression(expression.right,ast,module,source) ||
+            !KrtNativeLowerAggregateCopy(expression,module) || !KrtNativeLowerAggregateFrame(expression,module)) { return false; }
+    } else if (!KrtNativeLowerExpression(expression.right,ast,module,source) ||
+               !KrtNativeConvertValue(module,expression.right,expression)) { return false; }
+    int32 jump = KrtNativeEmit(module,(int32)KrtNativeOp.Jump,-1,0);
+    int32 absent = module.count;
+    KrtAstNode zero = KrtAstMake(KrtAstKind.DefaultValue,expression.start,0);
+    KrtNativeCopyType(zero,expression); zero.native_frame_offset = expression.native_frame_offset;
+    if (jump < 0 || !KrtNativeLowerExpression(zero,ast,module,source)) { return false; }
+    module.args[branch] = branch + 1; module.extra[branch] = absent; module.args[jump] = module.count;
+    return true;
+}

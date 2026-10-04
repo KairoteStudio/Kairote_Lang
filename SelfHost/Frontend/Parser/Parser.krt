@@ -28,6 +28,101 @@ KrtAstNode KrtParserParseArgument(KrtParser parser) {
     return argument;
 }
 
+// A statement beginning with fn can be a function type or a lambda. Inspect
+// only its balanced signature and optional return type; leave the body untouched.
+bool KrtParserLambdaBodyAhead(KrtParser parser) {
+    if (!KrtParserIsWord(parser, "function") && !KrtParserIsWord(parser, "func") && !KrtParserIsWord(parser, "fn")) { return false; }
+    KrtParser probe = KrtParserFork(parser); KrtLexerNext(probe.lexer, probe.token);
+    if (!KrtParserTokenText(probe, 40)) { return false; }
+    int32 parentheses = 1; KrtLexerNext(probe.lexer, probe.token);
+    while (parentheses > 0 && probe.token.kind != KrtTokenKind.Eof) {
+        if (KrtParserTokenText(probe, 40)) { parentheses = parentheses + 1; }
+        else if (KrtParserTokenText(probe, 41)) { parentheses = parentheses - 1; }
+        KrtLexerNext(probe.lexer, probe.token);
+    }
+    if (parentheses != 0) { return false; }
+    if (probe.token.kind == KrtTokenKind.Arrow) {
+        KrtLexerNext(probe.lexer, probe.token);
+        if (KrtParserParseType(probe) == null || probe.errors != 0) { return false; }
+    }
+    return KrtParserTokenText2(probe, 61, 62) || KrtParserTokenText(probe, 123);
+}
+
+KrtAstNode KrtParserParseLambda(KrtParser parser) {
+    int64 start = parser.token.start;
+    KrtLexerNext(parser.lexer, parser.token);
+    if (!KrtParserExpect(parser, KrtTokenKind.LeftParen)) { return KrtAstMake(KrtAstKind.Invalid, start, 0); }
+    KrtAstNode lambda = KrtAstMake(KrtAstKind.Lambda, start, 0);
+    lambda.parameter_starts = new int64[128]; lambda.parameter_lengths = new int64[128];
+    lambda.parameter_type_starts = new int64[128]; lambda.parameter_type_lengths = new int64[128];
+    lambda.parameter_refs = new bool[128]; bool overflow_reported = false;
+    while (!KrtParserTokenText(parser, 41) && parser.token.kind != KrtTokenKind.Eof) {
+        bool parameter_fits = lambda.parameter_count < 128;
+        if (!parameter_fits && !overflow_reported) {
+            KrtParserRecordExpected(parser, KrtTokenKind.RightParen, "lambda exceeds 128 parameters"); overflow_reported = true;
+        }
+        bool by_reference = false; bool parameter_readonly = false;
+        while (KrtParserIsWord(parser, "ref") || KrtParserIsWord(parser, "readonly")) {
+            if (KrtParserIsWord(parser, "ref")) {
+                if (by_reference) { KrtParserRecordExpected(parser, KrtTokenKind.Identifier, "repeated ref modifier"); }
+                by_reference = true;
+            } else {
+                if (parameter_readonly) { KrtParserRecordExpected(parser, KrtTokenKind.Identifier, "repeated readonly modifier"); }
+                parameter_readonly = true;
+            }
+            KrtLexerNext(parser.lexer, parser.token);
+        }
+        int64 parameter_type_start = parser.token.start;
+        KrtParser probe = KrtParserFork(parser);
+        KrtAstNode parameter_type = KrtParserParseType(probe);
+        bool explicit_type = parameter_type != null && probe.errors == 0 && probe.token.kind == KrtTokenKind.Identifier;
+        if (explicit_type) { KrtParserCommit(parser, probe); }
+        else {
+            if (parser.token.kind != KrtTokenKind.Identifier && parser.token.kind != KrtTokenKind.Underscore) {
+                KrtParserRecordExpected(parser, KrtTokenKind.Identifier, "expected lambda parameter name"); return lambda;
+            }
+            // Every parameter owns a type slot. A zero length requests contextual
+            // inference without shifting later explicit types to the wrong index.
+            parameter_type = KrtAstMake(KrtAstKind.Type, parameter_type_start, 0);
+            parameter_type.type_start = parameter_type_start;
+        }
+        if (parser.token.kind != KrtTokenKind.Identifier && parser.token.kind != KrtTokenKind.Underscore) {
+            KrtParserRecordExpected(parser, KrtTokenKind.Identifier, "expected lambda parameter name"); return lambda;
+        }
+        if (parameter_fits) {
+            int32 index = lambda.parameter_count;
+            parameter_type.syntax_modifiers = parameter_readonly ? 16 : 0;
+            parameter_type.native_readonly = parameter_readonly;
+            KrtParserAppendParameterType(lambda, parameter_type);
+            lambda.parameter_type_starts[index] = parameter_type_start;
+            lambda.parameter_type_lengths[index] = explicit_type ? parameter_type.type_length : 0;
+            lambda.parameter_starts[index] = parser.token.start; lambda.parameter_lengths[index] = parser.token.length;
+            lambda.parameter_refs[index] = by_reference; lambda.parameter_count = index + 1;
+        }
+        KrtLexerNext(parser.lexer, parser.token);
+        if (!KrtParserTokenText(parser, 44)) { break; }
+        KrtLexerNext(parser.lexer, parser.token);
+        if (KrtParserTokenText(parser, 41)) {
+            KrtParserRecordExpected(parser, KrtTokenKind.Identifier, "expected lambda parameter after comma"); return lambda;
+        }
+    }
+    if (!KrtParserExpect(parser, KrtTokenKind.RightParen)) { return lambda; }
+    if (parser.token.kind == KrtTokenKind.Arrow) {
+        KrtLexerNext(parser.lexer, parser.token);
+        lambda.syntax_type = KrtParserParseType(parser);
+        if (lambda.syntax_type == null) { return lambda; }
+        lambda.type_start = lambda.syntax_type.type_start; lambda.type_length = lambda.syntax_type.type_length;
+    }
+    bool expression_arrow = KrtParserTokenText2(parser, 61, 62);
+    if (expression_arrow) { KrtLexerNext(parser.lexer, parser.token); }
+    else if (!KrtParserTokenText(parser, 123)) {
+        KrtParserRecordExpected(parser, KrtTokenKind.Lambda, "expected lambda arrow or block body"); return lambda;
+    }
+    lambda.left = KrtParserTokenText(parser, 123) ? KrtParserParseBlock(parser) : KrtParserParseExpression(parser, 1);
+    lambda.length = lambda.left.start + lambda.left.length - start; lambda.child_count = 1;
+    return lambda.left.kind == KrtAstKind.Block ? KrtParserParsePostfix(parser, lambda) : lambda;
+}
+
 KrtAstNode KrtParserParsePrimary(KrtParser parser) {
     KrtToken token = parser.token;
     KrtAstKind kind = KrtAstKind.Invalid;
@@ -110,48 +205,7 @@ KrtAstNode KrtParserParsePrimary(KrtParser parser) {
         return KrtParserParsePostfix(parser, node);
     }
     if (KrtParserIsWord(parser, "function") || KrtParserIsWord(parser, "func") || KrtParserIsWord(parser, "fn")) {
-        int64 start = token.start;
-        KrtLexerNext(parser.lexer, parser.token);
-        if (!KrtParserTokenText(parser, 40)) { KrtParserRecordError(parser); return KrtAstMake(KrtAstKind.Invalid, start, 0); }
-        KrtAstNode lambda = KrtAstMake(KrtAstKind.Lambda, start, 0);
-        lambda.parameter_starts = new int64[256]; lambda.parameter_lengths = new int64[256];
-        lambda.parameter_type_starts = new int64[256]; lambda.parameter_type_lengths = new int64[256];
-        lambda.parameter_refs = new bool[256];
-        KrtLexerNext(parser.lexer, parser.token);
-        while (!KrtParserTokenText(parser, 41)) {
-            int32 index = lambda.parameter_count;
-            if (index >= 256) { KrtParserRecordError(parser); return lambda; }
-            if (KrtParserIsWord(parser, "ref")) {
-                lambda.parameter_refs[index] = true; KrtLexerNext(parser.lexer, parser.token);
-            }
-            if (parser.token.category != KrtTokenCategory.Identifier) { KrtParserRecordError(parser); return lambda; }
-            int64 parameter_start = parser.token.start;
-            int64 parameter_length = parser.token.length;
-            KrtAstNode parameter_type = KrtParserParseType(parser);
-            if (parameter_type == null) { return lambda; }
-            if (parser.token.category == KrtTokenCategory.Identifier) {
-                KrtParserAppendParameterType(lambda, parameter_type);
-                lambda.parameter_type_starts[index] = parameter_start;
-                lambda.parameter_type_lengths[index] = parser.token.start - parameter_start;
-                parameter_start = parser.token.start; parameter_length = parser.token.length;
-                KrtLexerNext(parser.lexer, parser.token);
-            }
-            lambda.parameter_starts[index] = parameter_start; lambda.parameter_lengths[index] = parameter_length;
-            lambda.parameter_count = index + 1;
-            if (!KrtParserTokenText(parser, 44)) { break; }
-            KrtLexerNext(parser.lexer, parser.token);
-            if (KrtParserTokenText(parser, 41)) { KrtParserRecordError(parser); return lambda; }
-        }
-        if (!KrtParserTokenText(parser, 41)) { KrtParserRecordError(parser); return lambda; }
-        KrtLexerNext(parser.lexer, parser.token);
-        if (!KrtParserTokenText2(parser, 61, 62)) {
-            KrtParserRecordError(parser); return KrtAstMake(KrtAstKind.Invalid, start, 0);
-        }
-        KrtLexerNext(parser.lexer, parser.token);
-        KrtAstNode body = KrtParserParseExpression(parser, 1);
-        lambda.length = body.start + body.length - start;
-        lambda.left = body; lambda.child_count = 1;
-        return lambda;
+        return KrtParserParseLambda(parser);
     }
     if (KrtParserTokenText(parser, 91) || KrtParserTokenText(parser, 123)) {
         int64 start = token.start;
@@ -247,8 +301,19 @@ KrtAstNode KrtParserParsePrimary(KrtParser parser) {
     return KrtParserParsePostfix(parser, node);
 }
 
+KrtAstNode KrtParserFinishGuard(KrtAstNode guarded, KrtAstNode node) {
+    if (guarded == null) { return node; }
+    KrtAstNode guard = guarded;
+    while (guard != null && guard.kind == KrtAstKind.NullConditional) {
+        guard.length = node.start + node.length - guard.start; guard = guard.right;
+    }
+    return guarded;
+}
+
 KrtAstNode KrtParserParsePostfix(KrtParser parser, KrtAstNode node) {
+        KrtAstNode guarded = null; KrtAstNode guard_tail = null;
         while (true) {
+            if (guard_tail != null) { guard_tail.right = node; }
             if (KrtParserGenericCallAhead(parser)) { node.native_type_arguments = KrtParserCallTypeArguments(parser); }
             if (KrtParserTokenText(parser, 40)) {
                 KrtLexerNext(parser.lexer, parser.token);
@@ -289,12 +354,35 @@ KrtAstNode KrtParserParsePostfix(KrtParser parser, KrtAstNode node) {
                 node = member;
                 continue;
             }
-            if (KrtParserTokenText2(parser, 63, 46)) {
+            bool conditional_index = false;
+            if (KrtParserTokenText(parser,63)) {
+                unsafe(using krt.mem;) {
+                    conditional_index = parser.token.start + 1 < parser.lexer.length &&
+                        ((byte*)parser.lexer.source)[parser.token.start + 1] == 91;
+                }
+            }
+            if (KrtParserTokenText2(parser, 63, 46) || conditional_index) {
+                KrtAstNode guard = KrtAstMake(KrtAstKind.NullConditional,node.start,0);
+                guard.left = node; guard.child_count = 2;
+                KrtAstNode receiver = KrtAstMake(KrtAstKind.GuardReceiver,node.start,node.length);
+                if (guarded == null) { guarded = guard; } else { guard_tail.right = guard; }
+                guard_tail = guard;
                 KrtLexerNext(parser.lexer, parser.token);
-                if (parser.token.category != KrtTokenCategory.Identifier) { KrtParserRecordError(parser); return node; }
-                KrtAstNode member = KrtAstMake(KrtAstKind.Member, node.start, parser.token.start + parser.token.length - node.start);
-                member.left = node; member.name_start = parser.token.start; member.name_length = parser.token.length; member.op = 114; member.child_count = 1;
-                KrtLexerNext(parser.lexer, parser.token); node = member; continue;
+                if (conditional_index) {
+                    KrtLexerNext(parser.lexer,parser.token);
+                    KrtAstNode index = KrtParserParseExpression(parser,1);
+                    if (!KrtParserTokenText(parser,93)) { KrtParserRecordError(parser); return guarded; }
+                    int64 end = parser.token.start + parser.token.length;
+                    KrtLexerNext(parser.lexer,parser.token);
+                    node = KrtAstMake(KrtAstKind.Index,receiver.start,end - receiver.start);
+                    node.left = receiver; node.right = index; node.child_count = 2;
+                } else {
+                    if (parser.token.category != KrtTokenCategory.Identifier) { KrtParserRecordError(parser); return guarded; }
+                    node = KrtAstMake(KrtAstKind.Member, receiver.start, parser.token.start + parser.token.length - receiver.start);
+                    node.left = receiver; node.name_start = parser.token.start; node.name_length = parser.token.length; node.child_count = 1;
+                    KrtLexerNext(parser.lexer, parser.token);
+                }
+                continue;
             }
             if (KrtParserTokenText(parser, 91)) {
                 KrtLexerNext(parser.lexer, parser.token);
@@ -310,13 +398,14 @@ KrtAstNode KrtParserParsePostfix(KrtParser parser, KrtAstNode node) {
                 int32 operation = KrtParserTokenText2(parser, 43, 43) ? 201 : 202;
                 int64 increment_end=parser.token.start+parser.token.length;
                 KrtLexerNext(parser.lexer, parser.token);
+                node = KrtParserFinishGuard(guarded,node); guarded = null; guard_tail = null;
                 node = KrtAstMakeUnary(operation, node);
                 node.length=increment_end-node.start;
                 continue;
             }
             break;
         }
-    return node;
+    return KrtParserFinishGuard(guarded,node);
 }
 
 int32 KrtParserOperator(KrtParser parser) {
@@ -404,7 +493,7 @@ int32 KrtParserPrecedence(KrtParser parser) {
     return 0;
 }
 
-KrtAstNode KrtParserParseExpression(KrtParser parser, int32 minimum) {
+KrtAstNode KrtParserParseBinary(KrtParser parser, int32 minimum) {
     KrtAstNode left = KrtParserParseUnary(parser);
     while (true) {
         int32 precedence = KrtParserPrecedence(parser);
@@ -421,9 +510,14 @@ KrtAstNode KrtParserParseExpression(KrtParser parser, int32 minimum) {
             if(parser.token.kind==KrtTokenKind.Identifier){check.name_start=parser.token.start;check.name_length=parser.token.length;KrtLexerNext(parser.lexer,parser.token);}
             check.length=parser.token.start-check.start;left=check;continue;
         }
-        KrtAstNode right = KrtParserParseExpression(parser, operation == 113 ? precedence : precedence + 1);
+        KrtAstNode right = KrtParserParseBinary(parser, operation == 113 ? precedence : precedence + 1);
         left = KrtAstMakeBinary(operation, left, right);
     }
+    return left;
+}
+
+KrtAstNode KrtParserParseExpression(KrtParser parser, int32 minimum) {
+    KrtAstNode left = KrtParserParseBinary(parser,minimum);
     if (minimum == 1 && KrtParserTokenText(parser, 63)) {
         KrtLexerNext(parser.lexer, parser.token);
         KrtAstNode when_true = KrtParserParseExpression(parser, 1);
@@ -1065,6 +1159,7 @@ KrtAstNode KrtParserParseStatement(KrtParser parser) {
         if (!KrtParserTokenText(parser, 40)) { KrtParserRecordError(parser); return KrtAstMake(KrtAstKind.Invalid, start, 0); }
         KrtLexerNext(parser.lexer, parser.token);
         int64 type_start = parser.token.start; int64 type_length = parser.token.length;
+        bool variable_readonly = KrtParserIsWord(parser, "let");
         KrtAstNode iteration_type = KrtParserParseType(parser);
         if (iteration_type == null) { return KrtAstMake(KrtAstKind.Invalid, start, 0); }
         type_length = iteration_type.type_length;
@@ -1079,6 +1174,7 @@ KrtAstNode KrtParserParseStatement(KrtParser parser) {
         KrtAstNode body = KrtParserParseBody(parser);
         KrtAstNode variable = KrtAstMake(KrtAstKind.Variable, type_start, name_start + name_length - type_start);
         variable.syntax_type = iteration_type;
+        variable.native_readonly = variable_readonly; variable.syntax_modifiers = variable_readonly ? 4096 : 0;
         variable.type_start = type_start; variable.type_length = type_length; variable.name_start = name_start; variable.name_length = name_length;
         KrtAstNode result = KrtAstMake(KrtAstKind.Foreach, start, parser.token.start - start);
         result.left = variable; result.right = collection; result.body = body; result.child_count = 3;
@@ -1087,7 +1183,7 @@ KrtAstNode KrtParserParseStatement(KrtParser parser) {
     KrtAstNode local_type = KrtParserLocalTypeAhead(parser);
     bool local_const = KrtParserIsWord(parser, "const");
     if (local_const) { KrtLexerNext(parser.lexer, parser.token); }
-    if (KrtParserIsWord(parser, "var") || KrtParserIsWord(parser, "let") || (KrtParserIsBuiltinType(parser) && !KrtParserBuiltinCastAhead(parser)) || KrtParserIsWord(parser, "fn") || local_type != null || local_const) {
+    if (KrtParserIsWord(parser, "var") || KrtParserIsWord(parser, "let") || (KrtParserIsBuiltinType(parser) && !KrtParserBuiltinCastAhead(parser)) || (KrtParserIsWord(parser, "fn") && !KrtParserLambdaBodyAhead(parser)) || local_type != null || local_const) {
         int64 start = parser.token.start;
         bool inferred=KrtParserIsWord(parser,"var")||KrtParserIsWord(parser,"let");bool local_readonly=local_const||KrtParserIsWord(parser,"let");
         KrtAstNode declaration_type=null;

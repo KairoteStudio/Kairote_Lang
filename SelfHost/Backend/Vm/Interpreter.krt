@@ -4,6 +4,7 @@ class KrtVmRegion {
     public int64 data;
     public int64 length;
     public bool live;
+    public int32 references;
     public KrtVmRegion next;
 }
 class KrtVmAllocation {
@@ -22,6 +23,7 @@ class KrtVmFrame {
     public int64 locals_size;
     public int64 aggregate_base;
     public int64 aggregate_size;
+    public int64 environment;
     public KrtVmRegion region;
     public KrtVmAllocation allocations;
     public KrtVmFrame previous;
@@ -37,6 +39,7 @@ class KrtVmState {
     public KrtVmFrame frame;
     public KrtVmHandler handler;
     public bool failed;
+    public bool closure_callables;
 }
 class KrtVmHandler {
     public KrtVmFrame frame;
@@ -47,8 +50,42 @@ class KrtVmHandler {
 }
 
 KrtVmRegion KrtVmAddRegion(KrtVmState state, int64 data, int64 length) {
-    KrtVmRegion region = new KrtVmRegion(); region.data = data; region.length = length; region.live = true;
+    if (data <= 0 || length <= 0 || data > 9223372036854775807 - length) { state.failed = true; return null; }
+    KrtVmRegion region = new KrtVmRegion(); region.data = data; region.length = length; region.live = true; region.references = 1;
     region.next = state.regions; state.regions = region; return region;
+}
+
+void KrtVmReleaseRegion(KrtVmRegion region) {
+    if (region == null) { return; }
+    region.references = region.references - 1;
+    if (region.references == 0) { delete region; }
+}
+
+void KrtVmRemoveRegion(KrtVmState state, KrtVmRegion removed) {
+    KrtVmRegion previous = null; KrtVmRegion region = state.regions;
+    while (region != null) {
+        if (region == removed) {
+            if (previous == null) { state.regions = region.next; } else { previous.next = region.next; }
+            region.next = null; region.live = false; KrtVmReleaseRegion(region); return;
+        }
+        previous = region; region = region.next;
+    }
+}
+
+void KrtVmForgetAllocations(KrtVmState state, KrtVmRegion removed) {
+    KrtVmFrame frame = state.frame;
+    while (frame != null) {
+        KrtVmAllocation previous = null; KrtVmAllocation allocation = frame.allocations;
+        while (allocation != null) {
+            KrtVmAllocation next = allocation.next;
+            if (allocation.region == removed) {
+                if (previous == null) { frame.allocations = next; } else { previous.next = next; }
+                KrtVmReleaseRegion(removed); delete allocation;
+            } else { previous = allocation; }
+            allocation = next;
+        }
+        frame = frame.previous;
+    }
 }
 bool KrtVmMemory(KrtVmState state, int64 address, int64 width) {
     if (address <= 0 || width <= 0) { state.failed = true; return false; }
@@ -64,6 +101,20 @@ void KrtVmPush(KrtVmState state, int64 value) {
     unsafe(using krt.mem;) { ((int64*)state.stack)[state.depth] = value; }
     state.depth = state.depth + 1;
 }
+
+bool KrtVmResolveCallable(KrtVmState state, int64 callable, ref int32 target, ref int64 environment) {
+    target = -1; environment = 0;
+    if (callable < 0) {
+        int64 descriptor = callable & 9223372036854775807;
+        if (!state.closure_callables || !KrtVmMemory(state,descriptor,16)) { state.failed = true; return false; }
+        callable = KrtVmRead(descriptor,0,8); environment = KrtVmRead(descriptor,8,8);
+        if (environment != 0 && !KrtVmMemory(state,environment,1)) { return false; }
+    }
+    if (callable <= 0 || callable > state.module.function_count) { state.failed = true; return false; }
+    target = (int32)callable - 1;
+    return true;
+}
+
 int64 KrtVmPop(KrtVmState state) {
     int32 first = 0; if (state.frame != null) { first = state.frame.stack_base; }
     if (state.depth <= first) { state.failed = true; return 0; }
@@ -92,6 +143,7 @@ int64 KrtVmAllocate(KrtVmState state, int64 count, int64 stride, bool temporary)
     KrtVmRegion region = KrtVmAddRegion(state,data,size);
     if (temporary && state.frame != null) {
         KrtVmAllocation allocation = new KrtVmAllocation(); allocation.data = data; allocation.length = size; allocation.region = region;
+        region.references = region.references + 1;
         allocation.next = state.frame.allocations; state.frame.allocations = allocation;
     }
     return data + 16;
@@ -100,7 +152,9 @@ void KrtVmFree(KrtVmState state, int64 pointer) {
     if (pointer == 0) { return; }
     KrtVmRegion region = state.regions;
     while (region != null) {
-        if (region.live && region.data == pointer - 16) { region.live = false; syscall(11,region.data,region.length,0,0,0,0); return; }
+        if (region.live && region.data == pointer - 16) {
+            syscall(11,region.data,region.length,0,0,0,0); KrtVmForgetAllocations(state,region); KrtVmRemoveRegion(state,region); return;
+        }
         region = region.next;
     }
     state.failed = true;
@@ -143,18 +197,20 @@ bool KrtVmStringEqual(KrtVmState state, int64 left, int64 right) {
     return true;
 }
 
-KrtVmFrame KrtVmEnter(KrtVmState state, int32 function_index, int32 arity, KrtVmFrame previous) {
+KrtVmFrame KrtVmEnter(KrtVmState state, int32 function_index, int32 arity, KrtVmFrame previous, int64 environment) {
     KrtNativeModule module = state.module;
     if (function_index < 0 || function_index >= module.function_count || arity < 0 || arity > 129 || arity != KrtVmPhysicalParameters(module,function_index) ||
         state.frames >= 4096 || state.depth < arity) { state.failed = true; return null; }
     KrtVmFrame frame = new KrtVmFrame(); frame.function_index = function_index; frame.first = module.starts[function_index]; frame.last = module.count;
     if (function_index + 1 < module.function_count) { frame.last = module.starts[function_index + 1]; }
     frame.pc = frame.first; frame.previous = previous; frame.stack_base = state.depth - arity;
+    frame.environment = environment;
     int64 scalar_bytes = (int64)module.local_counts[function_index] * 8;
     frame.aggregate_size = module.function_frame_bytes[function_index];
     frame.locals_size = scalar_bytes + frame.aggregate_size + 15; if (frame.locals_size == 0) { frame.locals_size = 8; }
-    frame.locals = syscall(9,0,frame.locals_size,3,34,-1,0); if (frame.locals < 0) { state.failed = true; return null; }
+    frame.locals = syscall(9,0,frame.locals_size,3,34,-1,0); if (frame.locals < 0) { state.failed = true; delete frame; return null; }
     frame.region = KrtVmAddRegion(state,frame.locals,frame.locals_size);
+    frame.region.references = frame.region.references + 1;
     frame.aggregate_base = (frame.locals + scalar_bytes + 15) & -16;
     unsafe(using krt.mem;) {
         int64* stack = (int64*)state.stack; int64* locals = (int64*)frame.locals; int32 index = 0;
@@ -167,31 +223,50 @@ KrtVmFrame KrtVmEnter(KrtVmState state, int32 function_index, int32 arity, KrtVm
     state.depth = frame.stack_base; state.frames = state.frames + 1; return frame;
 }
 void KrtVmLeave(KrtVmState state, KrtVmFrame frame) {
-    while (state.handler != null && state.handler.frame == frame) { state.handler = state.handler.previous; }
+    while (state.handler != null && state.handler.frame == frame) { KrtVmHandler removed = state.handler; state.handler = removed.previous; delete removed; }
     KrtVmAllocation allocation = frame.allocations;
     while (allocation != null) {
-        if (allocation.region.live) { allocation.region.live = false; syscall(11,allocation.data,allocation.length,0,0,0,0); }
-        allocation = allocation.next;
+        KrtVmAllocation next = allocation.next;
+        if (allocation.region.live) { syscall(11,allocation.data,allocation.length,0,0,0,0); KrtVmRemoveRegion(state,allocation.region); }
+        KrtVmReleaseRegion(allocation.region); delete allocation; allocation = next;
     }
-    frame.region.live = false; syscall(11,frame.locals,frame.locals_size,0,0,0,0); state.frames = state.frames - 1;
+    if (frame.region.live) { syscall(11,frame.locals,frame.locals_size,0,0,0,0); KrtVmRemoveRegion(state,frame.region); }
+    KrtVmReleaseRegion(frame.region); state.frames = state.frames - 1; delete frame;
+}
+
+void KrtVmDispose(KrtVmState state) {
+    while (state.frame != null) { KrtVmFrame removed = state.frame; state.frame = removed.previous; KrtVmLeave(state,removed); }
+    while (state.handler != null) { KrtVmHandler removed = state.handler; state.handler = removed.previous; delete removed; }
+    while (state.regions != null) { KrtVmRemoveRegion(state,state.regions); }
+    if (state.globals != 0) { syscall(11,state.globals,(int64)state.module.global_count * 8,0,0,0,0); }
+    if (state.stack != 0) { syscall(11,state.stack,2097152,0,0,0,0); }
+    delete state;
 }
 
 void KrtVmForgetMemory(KrtVmState state, int64 start, int64 length) {
     if (start < 0 || length <= 0 || start > 9223372036854775807 - length) { return; }
     int64 end = start + length; KrtVmRegion region = state.regions;
     while (region != null) {
+        KrtVmRegion next = region.next;
         if (region.live && start < region.data + region.length && end > region.data) {
-            region.live = false;
             if (start > region.data) { KrtVmAddRegion(state,region.data,start - region.data); }
             if (end < region.data + region.length) { KrtVmAddRegion(state,end,region.data + region.length - end); }
+            KrtVmForgetAllocations(state,region);
+            KrtVmRemoveRegion(state,region);
         }
-        region = region.next;
+        region = next;
     }
 }
 
 int64 KrtVmSystemCall(KrtVmState state, int64[] arguments, int32 arity) {
     int64 result = syscall(arguments[0],arguments[1],arguments[2],arguments[3],arguments[4],arguments[5],arguments[6]);
-    if (arguments[0] == 9 && arity >= 3 && result >= 0 && arguments[2] > 0) { KrtVmAddRegion(state,result,arguments[2]); }
+    if (arguments[0] == 9 && arity >= 3 && result >= 0 && arguments[2] > 0) {
+        if (arity >= 5 && (arguments[4] & 16) != 0) {
+            int64 length = arguments[2]; if (length < 9223372036854771712) { length = (length + 4095) & -4096; }
+            KrtVmForgetMemory(state,result,length);
+        }
+        KrtVmAddRegion(state,result,arguments[2]);
+    }
     else if (arguments[0] == 11 && arity >= 3 && result == 0) {
         int64 length = arguments[2]; if (length > 0 && length < 9223372036854771712) { length = (length + 4095) & -4096; }
         KrtVmForgetMemory(state,arguments[1],length);
@@ -203,21 +278,24 @@ int64 KrtVmSystemCall(KrtVmState state, int64[] arguments, int32 arity) {
     return result;
 }
 
-int32 KrtVmExecute(KrtNativeModule module) {
+int32 KrtVmExecuteVersion(KrtNativeModule module, int32 version) {
     KrtVmState state = new KrtVmState(); state.module = module; state.stack = KrtDriverAlloc(2097152);
-    if (state.stack == 0) { return 1; }
+    state.closure_callables = version >= 4;
+    if (state.stack == 0) { delete state; return 1; }
     if (module.data_length > 0) { KrtVmAddRegion(state,module.data,module.data_length); }
     if (module.global_count > 0) {
-        state.globals = KrtDriverAlloc((int64)module.global_count * 8); if (state.globals == 0) { return 1; }
+        state.globals = KrtDriverAlloc((int64)module.global_count * 8); if (state.globals == 0) { KrtVmDispose(state); return 1; }
         KrtVmAddRegion(state,state.globals,(int64)module.global_count * 8);
     }
-    state.frame = KrtVmEnter(state,module.entry,0,null);
+    state.frame = KrtVmEnter(state,module.entry,0,null,0);
     if (module.initializer_index >= 0 && !state.failed) {
-        state.frame = KrtVmEnter(state,module.initializer_index,0,state.frame); state.frame.discard_result = true;
+        KrtVmFrame entered = KrtVmEnter(state,module.initializer_index,0,state.frame,0);
+        if (entered != null) { state.frame = entered; entered.discard_result = true; }
     }
     int64 result = 0;
     while (state.frame != null && !state.failed) {
         KrtVmFrame frame = state.frame;
+        if (!frame.region.live) { state.failed = true; break; }
         if (frame.pc < frame.first || frame.pc >= frame.last) { state.failed = true; break; }
         int32 index = frame.pc; frame.pc = frame.pc + 1;
         int32 op = module.ops[index]; int64 argument = module.args[index]; int64 extra = module.extra[index];
@@ -234,11 +312,12 @@ int32 KrtVmExecute(KrtNativeModule module) {
         else if (op == 15) { KrtVmPush(state,~KrtVmPop(state)); }
         else if (op == 17) { frame.pc = (int32)argument; }
         else if (op == 18) { int64 condition = KrtVmPop(state); if (condition != 0) { frame.pc = (int32)argument; } else { frame.pc = (int32)extra; } }
-        else if (op == 19) { state.frame = KrtVmEnter(state,(int32)argument,(int32)extra,frame); }
+        else if (op == 19) { KrtVmFrame entered = KrtVmEnter(state,(int32)argument,(int32)extra,frame,0); if (entered != null) { state.frame = entered; } }
         else if (op == 20) {
             result = 0; if (extra == 1) { result = KrtVmPop(state); }
+            bool discard_result = frame.discard_result;
             state.depth = frame.stack_base; state.frame = frame.previous; KrtVmLeave(state,frame);
-            if (state.frame != null && !frame.discard_result) { KrtVmPush(state,result); }
+            if (state.frame != null && !discard_result) { KrtVmPush(state,result); }
         }
         else if (op == 21) {
             int64 offset = extra; if (argument != 0) { offset = KrtVmPop(state) * extra; }
@@ -251,7 +330,7 @@ int32 KrtVmExecute(KrtNativeModule module) {
         else if (op == 26) {
             int64[] arguments = new int64[7]; int32 item = (int32)extra - 1;
             while (item >= 0) { arguments[item] = KrtVmPop(state); item = item - 1; }
-            int64 value = KrtVmSystemCall(state,arguments,(int32)extra); KrtVmPush(state,value);
+            int64 value = KrtVmSystemCall(state,arguments,(int32)extra); delete arguments; KrtVmPush(state,value);
         }
         else if (op == 27) { KrtVmPop(state); }
         else if (op == 28) { int64 value = KrtVmPop(state); KrtVmPush(state,KrtNativeFoldCast(value,argument)); }
@@ -288,30 +367,34 @@ int32 KrtVmExecute(KrtNativeModule module) {
             int32 arity = (int32)extra;
             if (arity < 0 || arity > 129 || state.depth - frame.stack_base < arity + 1) { state.failed = true; }
             else {
-                int64 target = 0;
+                int64 callable = 0;
                 unsafe(using krt.mem;) {
-                    int64* stack = (int64*)state.stack; int32 start = state.depth - arity - 1; target = stack[start] - 1; int32 item = 0;
+                    int64* stack = (int64*)state.stack; int32 start = state.depth - arity - 1; callable = stack[start]; int32 item = 0;
                     while (item < arity) { stack[start + item] = stack[start + item + 1]; item = item + 1; }
                 }
                 state.depth = state.depth - 1;
-                if (target < 0 || target >= module.function_count) { state.failed = true; }
-                else { state.frame = KrtVmEnter(state,(int32)target,arity,frame); }
+                int64 environment = 0; int32 target = -1;
+                if (KrtVmResolveCallable(state,callable,ref target,ref environment)) {
+                    KrtVmFrame entered = KrtVmEnter(state,target,arity,frame,environment); if (entered != null) { state.frame = entered; }
+                }
             }
         }
+        else if (op == 73) { KrtVmPush(state,frame.environment); }
         else if (op == 50) {
             KrtVmHandler handler = new KrtVmHandler(); handler.frame = frame; handler.slot = (int32)extra; handler.target = (int32)argument; handler.depth = state.depth;
             handler.previous = state.handler; state.handler = handler;
         }
         else if (op == 51) {
             if (state.handler == null || state.handler.frame != frame || state.handler.slot != argument) { state.failed = true; }
-            else { state.handler = state.handler.previous; }
+            else { KrtVmHandler removed = state.handler; state.handler = removed.previous; delete removed; }
         }
         else if (op == 52) {
             int64 type = KrtVmPop(state); int64 value = KrtVmPop(state); KrtVmHandler handler = state.handler;
-            if (handler == null) { KrtDriverError("E_VM","uncaught VM exception"); return 127; }
+            if (handler == null) { KrtDriverError("E_VM","uncaught VM exception"); KrtVmDispose(state); return 127; }
             while (state.frame != handler.frame) { KrtVmFrame expired = state.frame; state.frame = expired.previous; KrtVmLeave(state,expired); }
             state.handler = handler.previous; state.depth = handler.depth; state.frame.pc = handler.target;
             KrtVmWrite(state.frame.locals,((int64)handler.slot + 1) * 8,type,8); KrtVmWrite(state.frame.locals,((int64)handler.slot + 2) * 8,value,8);
+            delete handler;
         }
         else if (op == 53 || op == 54) {
             int64 slot = argument + 1; if (op == 53) { slot = argument + 2; } KrtVmPush(state,KrtVmRead(frame.locals,slot * 8,8));
@@ -378,7 +461,8 @@ int32 KrtVmExecute(KrtNativeModule module) {
         }
         else { state.failed = true; }
     }
-    if (state.failed) { KrtDriverError("E_VM","invalid VM operation, memory address or stack state"); return 1; }
+    bool failed = state.failed; KrtVmDispose(state);
+    if (failed) { KrtDriverError("E_VM","invalid VM operation, memory address or stack state"); return 1; }
     return (int32)result;
 }
 
@@ -403,6 +487,8 @@ bool KrtVmReadArtifact(int64 path, KrtDriverBuffer artifact) {
     }
 }
 
+int32 KrtVmExecute(KrtNativeModule module) { return KrtVmExecuteVersion(module,4); }
+
 int32 KrtVmRun(int64 path) {
     KrtDriverBuffer artifact = new KrtDriverBuffer();
     if (!KrtVmReadArtifact(path,artifact)) { KrtDriverError("E_VM","unable to read bytecode file (maximum 64 MiB)"); return 1; }
@@ -410,6 +496,6 @@ int32 KrtVmRun(int64 path) {
     int64 version = KrtVmRead(artifact.data,4,2);
     if (version == 1) { return KrtVmRunV1(artifact); }
     KrtNativeModule module = new KrtNativeModule();
-    if ((version != 2 && version != 3) || !KrtVmReadV2(artifact,module)) { KrtDriverError("E_VM","invalid or unsupported bytecode file"); return 1; }
-    return KrtVmExecute(module);
+    if ((version < 2 || version > 4) || !KrtVmReadV2(artifact,module)) { KrtDriverError("E_VM","invalid or unsupported bytecode file"); return 1; }
+    return KrtVmExecuteVersion(module,(int32)version);
 }

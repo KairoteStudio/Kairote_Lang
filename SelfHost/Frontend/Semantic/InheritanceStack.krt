@@ -35,6 +35,7 @@ bool KrtNativeResolveInheritance(KrtAstNode type, KrtAstNode module, int64 sourc
     if (type == null) { return false; }
     if (type.native_inheritance_state == 2) { return true; }
     if (type.native_inheritance_state == 3) { return false; }
+    KrtNativeClosureProbeType(module,type);
     KrtInheritanceStack stack = KrtInheritanceStackFor(module);
     stack.source = source;
     if (!KrtInheritanceStackPush(stack,type)) { module.native_error = 8; return false; }

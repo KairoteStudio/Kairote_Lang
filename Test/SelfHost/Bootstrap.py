@@ -38,6 +38,12 @@ NATIVE_DRIVER_MODULES = (
     "Test.SelfHost.test_struct_pointer_layout",
     "Test.SelfHost.test_control_flow",
     "Test.SelfHost.test_contextual_arguments",
+    "Test.SelfHost.test_symbol_index", "Test.SelfHost.test_signature_cache",
+    "Test.SelfHost.test_nullable_operators", "Test.SelfHost.test_foreach_bindings",
+    "Test.SelfHost.test_void_values",
+    "Test.SelfHost.test_nested_callback_contracts",
+    "Test.SelfHost.test_closures", "Test.SelfHost.test_closure_patterns",
+    "Test.SelfHost.test_closure_inference",
 )
 
 
@@ -179,7 +185,40 @@ PROBES.update({
 })
 
 
+PROBES.update({
+    "nullable_response": ('struct Reply{int32 status;byte tag[2];}class Route{public Reply reply;}'
+                          'int32 main(){Route missing=null;Route live=new Route();live.reply.status=42;live.reply.tag[1]=7;'
+                          'Route selected=missing??live;Reply empty=missing?.reply;Reply copy=selected?.reply;'
+                          'selected.reply.status=99;if(empty.status!=0||empty.tag[1]!=0||copy.status!=42||copy.tag[1]!=7){return 1;}'
+                          'delete live;return 0;}',0),
+    "foreach_inferred_char": ('void bump(ref char value){value=\'x\';}'
+                              'int32 main(){int32 sum=0;foreach(auto value in "ab"){char before=value;bump(ref value);sum+=before;}'
+                              'foreach(let value in [7,11]){sum+=value;}return sum==213?0:1;}',0),
+})
+
+PROBES.update({
+    "closure_shared_escape": ('fn(int32)->int32 Counter(int32 initial){return function(int32 amount)=>{initial+=amount;return initial;};}'
+                             'int32 main(){var first=Counter(5);var second=Counter(100);int32 a=first(7);int32 b=first(3);'
+                             'int32 c=second(9);delete first;delete second;return a==12&&b==15&&c==109?42:1;}',42),
+    "closure_transitive": ('fn()->fn(int32)->int32 Factory(int32 offset){return function()=>function(int32 value)=>value+offset;}'
+                           'int32 main(){var outer=Factory(19);var inner=outer();delete outer;int32 value=inner(23);delete inner;return value;}',42),
+    "closure_recursive": ('int32 main(){var factorial=function(int32 value)->int32{if(value<2){return 1;}return value*factorial(value-1);};'
+                          'int32 result=factorial(5);delete factorial;return result==120?42:1;}',42),
+    "closure_struct_copy": ('struct Packet{int32 value;int32 tag[2];}fn()->int32 Read(Packet value){return function()=>value.value+value.tag[1];}'
+                            'int32 main(){Packet value=default(Packet);value.value=19;value.tag[1]=23;var read=Read(value);'
+                            'value.value=99;value.tag[1]=100;int32 result=read();delete read;return result;}',42),
+    "closure_temporary_throw": ('int32 main(){int32 captured=35;try{(function()=>{throw captured+7;})();}'
+                                'catch(int32 error){return error;}return 1;}',42),
+})
+
 ERROR_CASES = {
+    "closure_ref_capture": "fn()->int32 Read(ref int32 value){return function()=>value;}int32 main(){return 0;}",
+    "closure_stack_capture": "int32 main(){unsafe(using krt.mem;){int32* value=stackalloc int32[1];var read=function()=>value[0];}return 0;}",
+    "closure_pattern_borrow": "int32 main(){unsafe(using krt.mem;){int32 value=7;int32* pointer=&value;if(pointer is int32* live){var read=function()=>*live;}}return 0;}",
+    "closure_missing_context": "int32 main(){var read=function(value)=>value;return 0;}",
+    "conditional_assignment": "class A{public int32 n;}int32 main(){A a=null;a?.n=7;return 0;}",
+    "void_value": "void log(){}int32 main(){int32 n=log();return n;}",
+    "readonly_foreach": "int32 main(){foreach(let n in [1,2]){n++;}return 0;}",
     "syntax": "int32 main() { return (1 + ); }",
     "undefined": "int32 main() { return missing; }",
     "type": 'int32 main() { int32 value = "text"; return value; }',
