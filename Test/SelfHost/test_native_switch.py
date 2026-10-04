@@ -5,7 +5,7 @@ import subprocess
 import tempfile
 import unittest
 
-from Test.SelfHost.Bootstrap import Bootstrap
+from Test.SelfHost.Bootstrap import ARKLINK, Bootstrap
 
 
 class NativeSwitchTests(unittest.TestCase):
@@ -65,6 +65,52 @@ if(result!=2){return 2;}float64 f=2.5;switch(f){case 1.5:return 3;case 2.5:break
 uint128 wide=18446744073709551617;switch(wide){case 18446744073709551616:return 5;
 case 18446744073709551617:break;default:return 6;}return 0;}
 """)
+
+    def test_wide_selector_snapshot_survives_mutating_labels_at_all_levels(self):
+        source = """
+static int32 calls=0;
+static int32 labels=0;
+uint96 Select(ref uint96 value){calls++;return value;}
+uint96 Change(ref uint96 value){labels++;value+=7;return value;}
+int126 SelectSigned(ref int126 value){calls++;return value;}
+int126 ChangeSigned(ref int126 value){labels++;value-=9;return value;}
+uint128 ChangeField(ref uint128 value){labels++;value+=11;return value;}
+class Ledger{public uint128 value;}
+int32 main(){
+uint96 narrow=((uint96)1<<85)+3;uint96 expected=narrow;int32 matched=0;
+switch(Select(ref narrow)){case Change(ref narrow):return 1;
+case expected:matched++;break;default:return 2;}
+if(narrow!=expected+7 || calls!=1 || labels!=1 || matched!=1){return 3;}
+int126 signed_value=-((int126)1<<103)-5;int126 signed_expected=signed_value;
+switch(SelectSigned(ref signed_value)){case ChangeSigned(ref signed_value):return 4;
+case signed_expected:matched++;break;default:return 5;}
+if(signed_value!=signed_expected-9 || calls!=2 || labels!=2 || matched!=2){return 6;}
+Ledger ledger=new Ledger();ledger.value=((uint128)1<<127)+17;uint128 field_expected=ledger.value;
+switch(ledger.value){case ChangeField(ref ledger.value):return 7;
+case field_expected:matched++;break;default:return 8;}
+if(ledger.value!=field_expected+11 || labels!=3 || matched!=3){return 9;}delete ledger;
+int128 full=-((int128)1<<110)-19;
+switch(full){case 0:return 10;case -((int128)1<<110)-19:break;default:return 11;}
+float64 fraction=2.5;switch(fraction){case 1.5:return 12;case 2.5:break;default:return 13;}
+string text="b";switch(text){case "a":return 14;case "b":break;default:return 15;}
+char letter='B';switch(letter){case 'A':return 16;case 'B':break;default:return 17;}
+return calls==2 && labels==3 && matched==3 ? 0 : 18;}
+"""
+        for target in ('native', 'vm'):
+            for level in range(4):
+                with self.subTest(target=target, level=level):
+                    work = Path(self.directory.name) / f"snapshot-{target}-O{level}"
+                    work.mkdir()
+                    path = work / 'program.krt'; path.write_text(source)
+                    output = work / 'program'
+                    command = [str(self.compiler), str(path), f'-O{level}', '--linker', str(ARKLINK), '-o', str(output)]
+                    if target == 'vm':
+                        command += ['target', 'vm']
+                    result = subprocess.run(command, cwd=work, capture_output=True, text=True, timeout=30)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    command = [str(self.compiler), 'run-vm', str(output)] if target == 'vm' else [str(output)]
+                    result = subprocess.run(command, cwd=work, capture_output=True, text=True, timeout=10)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_nested_switch_break_and_continue_enclosing_loops(self):
         self.check("loop-transfers", """

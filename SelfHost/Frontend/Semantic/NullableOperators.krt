@@ -1,8 +1,7 @@
 // Reference null tests inspect the address, never a pointee or array header.
 bool KrtNativeReferenceValue(KrtAstNode type) {
     if (type == null || KrtNativeInlineValue(type)) { return false; }
-    return KrtNativePointerValue(type) || type.native_array || type.native_string ||
-        (type.native_type != null && (type.native_type.value == 1 || type.native_type.value == 3));
+    return KrtNativePointerValue(type) || type.native_array || type.native_string || KrtNativeReferenceObjectValue(type);
 }
 
 bool KrtNativeFunctionLabelsEqual(KrtAstNode a, KrtAstNode b, int64 source) {
@@ -74,6 +73,19 @@ bool KrtNativeBindNullCoalescing(KrtAstNode node, KrtNativeBinding binding) {
     }
     if (node.right.kind == KrtAstKind.Null) {
         KrtNativeCopyType(node,node.left); node.native_nullable = true;
+        return KrtNativeCheckValueAccess(node,binding);
+    }
+    if (KrtNativeObjectValue(node.right) && KrtNativeCompatibleValue(node.right,node.left)) {
+        KrtNativeCopyType(node,node.right);
+        node.native_stack_borrow = node.left.native_stack_borrow || node.right.native_stack_borrow;
+        return KrtNativeCheckValueAccess(node,binding);
+    }
+    KrtAstNode contextual = node.native_closure_expected_type != null ? node.native_closure_expected_type : node.left;
+    if (KrtNativeReferenceObjectValue(contextual) && KrtNativeCompatibleValue(contextual,node.left) &&
+        KrtNativeCompatibleValue(contextual,node.right) &&
+        (KrtNativeObjectConversion(contextual,node.right) || KrtNativeBoxingConversion(contextual,node.right))) {
+        KrtNativeCopyType(node,contextual);
+        node.native_stack_borrow = node.left.native_stack_borrow || node.right.native_stack_borrow;
         return KrtNativeCheckValueAccess(node,binding);
     }
     if (!KrtNativeReferenceValue(node.right)) { return KrtNativeBindingError(binding,node); }

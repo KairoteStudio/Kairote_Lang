@@ -98,15 +98,26 @@ zig build
 cmake -S . -B build
 cmake --build build --target KrtC ArkLink -j4
 python3 Test/SelfHost/Bootstrap.py
-./SelfHost/krtc hello.krt -o hello
+./SelfHost/krtc hello-selfhost.krt -o hello-selfhost
+./hello-selfhost
 ./SelfHost/krtc build path/to/project
 ```
 
-详见 [SelfHost 编译器](./SelfHost/README.md) 和 [工程构建](./Docs/SelfHost/Projects.md)。公有具体结构体对象使用 ABI2 完整布局契约；跨对象文件的命名类/接口/枚举、二进制泛型函数模板和通用外部 ABI 仍有明确限制。
+上面的 `hello-selfhost.krt` 使用 SelfHost 的顶层 `main` 入口：
+
+```KrtL
+using System;
+int32 main() {
+    Console.WriteLine("Hello, KairoteLang!");
+    return 0;
+}
+```
+
+详见 [SelfHost 编译器](./SelfHost/README.md) 和 [工程构建](./Docs/SelfHost/Projects.md)。[通用迭代器与生成器](./Docs/SelfHost/Iterators.md)、[装箱](./Docs/SelfHost/Boxing.md) 和 [跨模块 ABI](./Docs/SelfHost/ModuleAbi.md) 均由原生编译器实现。结构体保留 ABI2 布局契约；命名类、接口、枚举、二进制泛型模板及模块静态存储使用 ABI3 契约。通用 C ABI 的支持范围单独说明。
 
 ### 编写你的第一个 KairoteLang 程序 或 [学习文档](./Docs/KrtC/Doc/README.md)
 
-创建 `hello.krt` 文件：
+下面是 Re.KrtC 的入口示例；创建 `hello.krt` 文件：
 
 ```KrtL
 using System

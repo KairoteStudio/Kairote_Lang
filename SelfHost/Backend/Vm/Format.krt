@@ -31,7 +31,7 @@ bool KrtVmWidth(int64 width) {
 }
 
 bool KrtVmSupported(int32 op) {
-    return (op >= 0 && op <= 46) || (op >= 50 && op <= 54) || (op >= 60 && op <= 63) || (op >= 66 && op <= 73);
+    return (op >= 0 && op <= 46) || (op >= 50 && op <= 54) || (op >= 60 && op <= 63) || (op >= 66 && op <= 76);
 }
 
 bool KrtVmAlignment(int64 alignment) { return alignment >= 1 && alignment <= 16 && (alignment & (alignment - 1)) == 0; }
@@ -43,7 +43,7 @@ int32 KrtVmPhysicalParameters(KrtNativeModule module, int32 function_index) {
 }
 
 bool KrtVmValidateVersion(KrtNativeModule module, int32 version) {
-    if (version < 2 || version > 4) { return false; }
+    if (version < 2 || version > 6) { return false; }
     if (module == null || module.count <= 0 || module.count > 16777216 || module.function_count <= 0 || module.function_count > 16384 ||
         module.entry < 0 || module.entry >= module.function_count || module.global_count < 0 || module.global_count > 65536 ||
         module.initializer_index < -1 || module.initializer_index >= module.function_count || module.data_length < 0 || module.data_length > 262144) { return false; }
@@ -65,6 +65,9 @@ bool KrtVmValidateVersion(KrtNativeModule module, int32 version) {
             int32 op = module.ops[index]; int64 argument = module.args[index]; int64 extra = module.extra[index];
             if (!KrtVmSupported(op)) { KrtDriverError("E_VM","instruction is not supported by the VM backend"); return false; }
             if (op == 73 && (version < 4 || argument != 0 || extra != 0 || index != first)) { return false; }
+            if (op == 74 && (version < 5 || argument < 0 || argument >= module.runtime_type_count || extra != 0)) { return false; }
+            if (op == 75 && (version < 5 || argument != 0 || extra != 0)) { return false; }
+            if (op == 76 && (version < 5 || argument != 0 || (extra != 0 && extra != 1))) { return false; }
             if ((op == 2 || op == 3 || op == 29) && (argument < 0 || argument >= locals)) { return false; }
             if ((op == 17 || op == 18) && (argument < first || argument >= last)) { return false; }
             if (op == 18 && (extra < first || extra >= last)) { return false; }
@@ -90,7 +93,10 @@ bool KrtVmValidateVersion(KrtNativeModule module, int32 version) {
             if (op == 61 && argument != 43 && argument != 45 && argument != 42 && argument != 47 && argument != 37 && argument != 38 && argument != 124 && argument != 94 && argument != 106 && argument != 107) { return false; }
             if (op == 62 && argument != 61 && argument != 101 && argument != 60 && argument != 62 && argument != 102 && argument != 103) { return false; }
             if (op == 63 && argument != 33 && argument != 45 && argument != 126) { return false; }
+            if (op == 67 && ((argument != -1 && argument != 1) || (extra != 0 && extra != 1) ||
+                (version>=6&&extra!=1))) { return false; }
             if (op == 68 && (argument < 1 || argument > 4 || (extra != 4 && extra != 8))) { return false; }
+            if(op==69&&(argument!=0||extra!=0||version>=6)){return false;}
             if (op == 70 && (argument < 0 || extra <= 0 || argument > frame_bytes || extra > frame_bytes - argument)) { return false; }
             if ((op == 71 || op == 72) && (argument <= 0 || argument > 67108864 || !KrtVmAlignment(extra))) { return false; }
             index = index + 1;
@@ -101,7 +107,7 @@ bool KrtVmValidateVersion(KrtNativeModule module, int32 version) {
     return KrtVmPhysicalParameters(module,module.entry) == 0 && (module.initializer_index < 0 || KrtVmPhysicalParameters(module,module.initializer_index) == 0);
 }
 
-bool KrtVmValidate(KrtNativeModule module) { return KrtVmValidateVersion(module,4); }
+bool KrtVmValidate(KrtNativeModule module) { return KrtVmValidateVersion(module,6); }
 
 bool KrtVmEmitV1(KrtNativeModule module, KrtDriverBuffer artifact) {
     if (module.global_count != 0 || module.initializer_index >= 0 || module.parameter_counts[module.entry] != 0) { return false; }
@@ -130,8 +136,8 @@ bool KrtVmEmitV1(KrtNativeModule module, KrtDriverBuffer artifact) {
 
 bool KrtVmEmit(KrtNativeModule module, KrtDriverBuffer artifact) {
     artifact.ok = false;
-    if (!KrtVmValidate(module)) { KrtDriverError("E_VM","invalid or unsupported VM module"); return false; }
-    if (KrtVmEmitV1(module,artifact)) { return true; }
+    if (!KrtVmValidate(module) || !KrtVmRuntimeValidate(module)) { KrtDriverError("E_VM","invalid or unsupported VM module"); return false; }
+    if (module.runtime_type_count == 0 && KrtVmEmitV1(module,artifact)) { return true; }
     int32 version = 2; int32 metadata_index = 0;
     while (metadata_index < module.function_count) {
         if (module.function_frame_bytes[metadata_index] > 0 || module.aggregate_return_sizes[metadata_index] > 0) { version = 3; }
@@ -144,8 +150,16 @@ bool KrtVmEmit(KrtNativeModule module, KrtDriverBuffer artifact) {
         if (module.ops[callable_index] == 73) { version = 4; }
         callable_index = callable_index + 1;
     }
+    if (module.runtime_type_count > 0 || module.runtime_length > 0) { version = 6; }
+    callable_index=0;
+    while(callable_index<module.count){
+        int32 op=module.ops[callable_index];
+        if((op>=60&&op<=69)||(op>=74&&op<=76)){version=6;}
+        callable_index=callable_index+1;
+    }
     int32 function_bytes = 12; if (version >= 3) { function_bytes = 28; }
     int64 size = 32 + (int64)module.function_count * function_bytes + (int64)module.count * 24 + module.data_length;
+    if (version >= 5) { size = size + KrtVmRuntimeFooterSize(module); }
     if (size > 67108864) { KrtDriverError("E_VM","VM bytecode exceeds the 64 MiB artifact buffer limit"); return false; }
     int64 data = KrtDriverAlloc(size); if (data == 0) { return false; }
     KrtVmWrite(data,0,0x45534243,4); KrtVmWrite(data,4,version,2); KrtVmWrite(data,6,0,2);
@@ -168,16 +182,18 @@ bool KrtVmEmit(KrtNativeModule module, KrtDriverBuffer artifact) {
     unsafe(using krt.mem;) { byte* target = (byte*)data; index = 0;
         while (index < module.data_length) { target[position + index] = module.data_storage[index]; index = index + 1; }
     }
+    if (version >= 5 && !KrtVmRuntimeEmit(module,data,position+module.data_length)) { return false; }
     artifact.data = data; artifact.length = size; artifact.ok = true; return true;
 }
 
 bool KrtVmReadV2(KrtDriverBuffer artifact, KrtNativeModule module) {
     if (artifact.length < 32 || KrtVmRead(artifact.data,6,2) != 0) { return false; }
-    int32 version = (int32)KrtVmRead(artifact.data,4,2); if (version < 2 || version > 4) { return false; }
+    int32 version = (int32)KrtVmRead(artifact.data,4,2); if (version < 2 || version > 6) { return false; }
     int32 function_bytes = 12; if (version >= 3) { function_bytes = 28; }
     int64 count = KrtVmRead(artifact.data,8,4); int64 functions = KrtVmRead(artifact.data,12,4); int64 data_length = KrtVmRead(artifact.data,28,4);
+    int64 plain_size=32+functions*function_bytes+count*24+data_length;
     if (count <= 0 || count > 16777216 || functions <= 0 || functions > 16384 || data_length > 262144 ||
-        artifact.length != 32 + functions * function_bytes + count * 24 + data_length || !KrtNativeInit(module)) { return false; }
+        plain_size>artifact.length || (version<5&&artifact.length!=plain_size) || !KrtNativeInit(module)) { return false; }
     // NativeInit starts with a small growable instruction buffer. Deserialization
     // owns a known instruction count and must allocate that full extent first.
     module.ops = new int32[(int32)count]; module.args = new int64[(int32)count]; module.extra = new int64[(int32)count];
@@ -200,5 +216,6 @@ bool KrtVmReadV2(KrtDriverBuffer artifact, KrtNativeModule module) {
         position = position + 24; index = index + 1;
     }
     module.data = artifact.data + position;
+    if (version >= 5 && !KrtVmRuntimeRead(artifact,module,plain_size)) { return false; }
     return KrtVmValidateVersion(module,version);
 }

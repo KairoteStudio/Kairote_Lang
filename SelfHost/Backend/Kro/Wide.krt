@@ -1,10 +1,25 @@
-// Wide integers use immutable 16-byte boxes in scalar slots and packed array storage.
+// Wide values are 16-byte values. Expression snapshots live in this function's
+// frame; persistent locals, arguments, fields and results copy their bytes.
+int32 KrtKroWideScratchBytes(int32 operation, int64 argument, int64 extra) {
+    if (operation == 22) { return extra == 16 || extra == -16 ? 16 : 0; }
+    if (operation == 60) { return argument == 2 ? 0 : 16; }
+    if (operation == 61 || operation == 66 || operation == 69) { return 16; }
+    if (operation == 63) { return argument == 33 ? 0 : 16; }
+    if (operation == 67) { return 48; }
+    if (operation == 68) { return argument == 3 || argument == 4 ? 16 : 0; }
+    return 0;
+}
+
 bool KrtKroNativeWideBox(KrtKroObject output, ref int32 pc) {
-    if (!(KrtKroNativeCode(output, ref pc, 70503322192, 5))) { return false; }
-    if (!KrtKroNativeAllocate(output, ref pc, 0)) { return false; }
-    if (!(KrtKroNativeCode(output, ref pc, 432418789677913, 7) &&
-        KrtKroNativeCode(output, ref pc, 56445937812343112, 7))) { return false; }
-    return true;
+    if (output.native_wide_cursor < 0 || output.native_wide_cursor > output.native_wide_limit - 16 ||
+        output.native_wide_base < output.native_wide_cursor + 16) { return false; }
+    int32 displacement = output.native_wide_cursor - output.native_wide_base;
+    output.native_wide_cursor = output.native_wide_cursor + 16;
+    // lea rcx,[rbp+disp32]; mov [rcx],rax; mov [rcx+8],rdx; mov rax,rcx.
+    // rcx is caller scratch; r12/r13 remain untouched for SSA allocation.
+    return KrtKroNativeCode(output,ref pc,0x8d48,2) && KrtKroNativeByte(output,ref pc,0x8d) &&
+        KrtKroNativeU32(output,ref pc,displacement) && KrtKroNativeCode(output,ref pc,0x018948,3) &&
+        KrtKroNativeCode(output,ref pc,0x08518948,4) && KrtKroNativeCode(output,ref pc,0xc88948,3);
 }
 
 bool KrtKroNativeWideLoad(KrtKroObject output, ref int32 pc) {

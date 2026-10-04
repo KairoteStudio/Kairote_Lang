@@ -16,7 +16,7 @@ class NamedArgumentTests(unittest.TestCase):
         cls.bootstrap = Bootstrap(cls.work)
         cls.compiler = (Path(os.environ["SELFHOST_COMPILER"]).resolve()
                         if "SELFHOST_COMPILER" in os.environ else cls.bootstrap.seed())
-        cls.linker = ROOT / "build/ArkLink/ArkLink"
+        cls.linker = Path(os.environ.get("ARKLINK", ROOT / "build/ArkLink/ArkLink")).resolve()
 
     @classmethod
     def tearDownClass(cls):

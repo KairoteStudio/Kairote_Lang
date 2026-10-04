@@ -10,18 +10,20 @@
 | public | 可通过正常名称、类型、调用和导入规则访问 |
 | private 成员 | 仅声明类；允许访问同类的其他实例。泛型实例按同一个原始泛型声明判断 owner，不能因 clone 丢失 private |
 | protected 成员 | 声明类及派生类；派生 caller 使用普通实例 receiver 时，receiver 的静态类型必须是 caller 或其派生类。this/base 和合法静态访问使用各自规则 |
-| internal | 同一次编译合并的 KRO assembly；显式 roots、quoted import 和 using 加载的源码属于同一 assembly |
-| protected internal | 派生访问与同 assembly 访问取 OR |
-| private protected | 派生访问与同 assembly 访问取 AND，并保留 protected receiver 限制 |
+| internal | 同一次源码编译所属的模块；显式 roots、quoted import 和 using 加载的源码共享模块来源，独立 KRO 保留各自来源 |
+| protected internal | 派生访问与同模块访问取 OR |
+| private protected | 派生访问与同模块访问取 AND，并保留 protected receiver 限制 |
 | 顶层 private 类型、函数、变量 | 原始源文件内可见；文件合并和导入不会将它变成全局 public |
 
 顶层 protected 和 private protected 不合法。成员访问检查适用于读、写、自增、复合赋值、ref、实例/静态调用及函数取址。private 字段隐藏基类字段时，不可通过忽略派生字段来绕过检查；显式的基类静态视图仍访问基类自身的公开字段。
 
-internal 的边界是一次源码编译，不是目录或 namespace。跨 KRO 的 public/default 符号可按已有外部 ABI 链接；private/internal 符号不导出，不能通过 extern 声明绕过。当前这不代表跨 KRO 的完整类 ABI 已实现。
+internal 的边界由原始源码模块决定，目录和 namespace 不提供额外访问权限。当前 ABI3 支持跨 KRO 的公开类、接口、枚举、构造函数、派发及泛型模板，完整契约见 [ModuleAbi.md](ModuleAbi.md)。private/internal 实现不属于公共源码接口；KRO 为泛型模板和运行时派发保留的依赖、描述符及实现别名仍受声明来源的访问规则约束。
 
 不同原始文件可以在同一 namespace 各自声明同名 private 函数、变量、常量和类型；每个文件内的使用绑定到自己的声明。另一文件的同名 public 声明也可以共存，同文件 private 优先。同一文件的重复 private 声明仍拒绝，跨文件 extern 原型不能绑定到不可见的 private 定义。
 
 extern 没有可链接的公开定义时报告 E_LINK；另一 KRO 的同名 public 定义仍可满足 extern，同时本次编译中的 file-private helper 继续绑定到自己的 private 定义。
+
+另一个 KRO 的同名 internal 实现与消费模块的公共 extern 原型分别保留。模板实例沿用原声明的模块来源，其内部调用可以绑定到所属模块的 helper；消费代码继续按自身来源选择公开接口。同模块的 public/internal 重载按实参类型比较，同类可访问的 private/public 重载也保持参数精度匹配。
 
 ## 构造、泛型与派发
 

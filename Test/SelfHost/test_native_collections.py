@@ -141,7 +141,7 @@ delete values;delete indices;delete data;delete words;return 0;}
             'missing-constructor': 'class Box { public Box(int32 x) {} } int32 main(){Box b=new Box();return 0;}',
             'unknown-constructor': 'class Box {} int32 main(){Box b=new Box(1);return 0;}',
             'wrong-constructor-type': 'class Box {public Box(int32 x){}} int32 main(){Box b=new Box("bad");return 0;}',
-            'non-array-foreach': 'int32 main(){foreach(int32 x in 17){}return 0;}',
+            'non-iterable-foreach': 'int32 main(){foreach(int32 x in 17){}return 0;}',
             'scope-escape': 'int32 main(){foreach(var x in [1,2]){}return x;}',
             'mixed-array': 'int32 main(){int32[] a=[1,"bad"];return 0;}',
         }
@@ -151,8 +151,15 @@ delete values;delete indices;delete data;delete words;return 0;}
                 (work/'program.krt').write_text(source)
                 result=subprocess.run([self.compiler],cwd=work,capture_output=True,text=True,timeout=10)
                 self.assertNotEqual(result.returncode,0,result.stdout+result.stderr)
-                self.assertIn('E_LOWER',result.stdout+result.stderr)
+                diagnostic = 'E_ITERATOR' if name == 'non-iterable-foreach' else 'E_LOWER'
+                self.assertIn(diagnostic,result.stdout+result.stderr)
                 self.assertFalse((work/'stage1-probe.kro').exists())
+                sentinel=b'existing collection artifact\x00'
+                output=work/'stage1-probe.kro';output.write_bytes(sentinel)
+                repeated=subprocess.run([self.compiler],cwd=work,capture_output=True,text=True,timeout=10)
+                self.assertNotEqual(repeated.returncode,0,repeated.stdout+repeated.stderr)
+                self.assertEqual(repeated.stdout+repeated.stderr,result.stdout+result.stderr)
+                self.assertEqual(output.read_bytes(),sentinel)
 
 
 if __name__ == '__main__':

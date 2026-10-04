@@ -1,57 +1,57 @@
 bool KrtNativeLowerTypeTestMatch(KrtAstNode expression, KrtAstNode ast, KrtNativeModule module) {
-    KrtAstNode target = expression.native_target;
-    bool target_class = target.native_type != null && (target.native_type.value == 1 || target.native_type.value == 3) && target.native_stride == 0;
-    bool source_class = expression.left.native_type != null && (expression.left.native_type.value == 1 || expression.left.native_type.value == 3) && expression.left.native_stride == 0;
-    if (!target_class || !source_class) {
-        bool pointer_pattern = KrtNativePointerValue(target);
-        bool same = expression.left.kind != KrtAstKind.Null && (pointer_pattern ?
-            KrtNativePointerEqualIgnoringOuter(target,expression.left) : KrtNativeTypeEqual(target,expression.left));
-        if (same && (target.native_string || target.native_array || pointer_pattern)) {
-            return KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,expression.local_slot,0) >= 0 && KrtNativeEmit(module,(int32)KrtNativeOp.BoolNot,0,0) >= 0 && KrtNativeEmit(module,(int32)KrtNativeOp.BoolNot,0,0) >= 0;
+    KrtAstNode target = expression.native_target; KrtAstNode source_type = expression.left;
+    if (KrtNativeReferenceObjectValue(source_type)) {
+        return KrtNativeLowerRuntimeMatch(module,expression.local_slot,target,!KrtNativeReferenceObjectValue(target));
+    }
+    if (KrtNativeObjectConversion(target,source_type) || KrtNativeBoxingConversion(target,source_type)) {
+        if (KrtNativeBoxReferenceWrapper(source_type)) {
+            return KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,expression.local_slot,0) >= 0 &&
+                KrtNativeEmit(module,(int32)KrtNativeOp.BoolNot,0,0) >= 0 &&
+                KrtNativeEmit(module,(int32)KrtNativeOp.BoolNot,0,0) >= 0;
         }
-        return KrtNativeEmit(module,(int32)KrtNativeOp.Const,same ? 1 : 0,0) >= 0;
+        return KrtNativeEmit(module,(int32)KrtNativeOp.Const,source_type.kind == KrtAstKind.Null ? 0 : 1,0) >= 0;
+    }
+    bool pointer_pattern = KrtNativePointerValue(target);
+    bool same = source_type.kind != KrtAstKind.Null && (pointer_pattern ?
+        KrtNativePointerEqualIgnoringOuter(target,source_type) : KrtNativeTypeEqual(target,source_type));
+    if (same && (target.native_string || target.native_array || pointer_pattern)) {
+        return KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,expression.local_slot,0) >= 0 &&
+            KrtNativeEmit(module,(int32)KrtNativeOp.BoolNot,0,0) >= 0 &&
+            KrtNativeEmit(module,(int32)KrtNativeOp.BoolNot,0,0) >= 0;
+    }
+    return KrtNativeEmit(module,(int32)KrtNativeOp.Const,same ? 1 : 0,0) >= 0;
+}
+
+bool KrtNativeLowerTypeTestValue(KrtAstNode expression, KrtNativeModule module) {
+    KrtAstNode target = expression.right;
+    if (KrtNativeReferenceObjectValue(expression.left) && !KrtNativeReferenceObjectValue(target)) {
+        return KrtNativeLowerBoxPayload(module,expression.local_slot,target);
     }
     if (KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,expression.local_slot,0) < 0) { return false; }
-    int32 present = KrtNativeEmit(module,(int32)KrtNativeOp.Branch,-1,-1);
-    if (present < 0) { return false; } module.args[present] = module.count;
-    int32 patches = -1; int64 identity = 64; KrtAstNode actual = ast.declarations;
-    while (actual != null) {
-        if (actual.value == 1 && actual.native_generic_parameters == null && KrtNativeDerivesFrom(actual,target.native_type)) {
-            if (KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,expression.local_slot,0) < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.Load,0,8) < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.Const,identity,0) < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.Compare,61,0) < 0) { return false; }
-            int32 branch = KrtNativeEmit(module,(int32)KrtNativeOp.Branch,-1,-1);
-            if (branch < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.Const,1,0) < 0) { return false; }
-            int32 patch = KrtNativeEmit(module,(int32)KrtNativeOp.Jump,-1,patches);
-            if (patch < 0) { return false; } patches = patch;
-            module.args[branch] = branch + 1; module.extra[branch] = module.count;
-        }
-        actual = actual.next; identity = identity + 1;
-    }
-    module.extra[present] = module.count;
-    if (KrtNativeEmit(module,(int32)KrtNativeOp.Const,0,0) < 0) { return false; }
-    return KrtNativePatchLoop(module,patches,module.count);
+    if (KrtNativeBoxingConversion(target,expression.left)) { return KrtNativeLowerBoxCreate(module,expression.left); }
+    if (KrtNativeWideKind(target)) { return KrtNativeConvertValue(module,expression.left,target); }
+    return true;
 }
 
 bool KrtNativeLowerTypeTest(KrtAstNode expression, KrtAstNode ast, KrtNativeModule module, int64 source) {
-    if (!KrtNativeLowerExpression(expression.left,ast,module,source) || KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,expression.local_slot,0) < 0) { return false; }
-    if (expression.right != null && (KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,expression.local_slot,0) < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,expression.right.local_slot,0) < 0)) { return false; }
-    if (!KrtNativeLowerTypeTestMatch(expression,ast,module)) { return false; }
-    if (expression.right != null && (expression.right.native_capture_boxed || KrtNativeInlineValue(expression.right) || KrtNativeWideKind(expression.right))) {
-        // A failed pattern has no value of the target type. In particular, a
-        // scalar source must not be dereferenced as struct or boxed-wide bytes.
-        // Preserve the boolean while copying the typed value only on success.
-        if (KrtNativeEmit(module,(int32)KrtNativeOp.Dup,0,0) < 0) { return false; }
-        int32 matched = KrtNativeEmit(module,(int32)KrtNativeOp.Branch,-1,-1);
-        if (matched < 0) { return false; }
-        if (expression.right.native_capture_boxed) {
-            if (!KrtNativeLowerPatternCell(expression.right,module)) { return false; }
-        } else if (KrtNativeInlineValue(expression.right)) {
-            if (!KrtNativeLowerAggregateFrame(expression.right,module) ||
-                KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,expression.right.local_slot,0) < 0 ||
-                !KrtNativeLowerAggregateCopy(expression.right,module)) { return false; }
-        } else if (KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,expression.right.local_slot,0) < 0 ||
-            !KrtNativeConvertValue(module,expression.left,expression.right) ||
-            KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,expression.right.local_slot,0) < 0) { return false; }
-        module.args[matched] = matched + 1; module.extra[matched] = module.count;
+    if (!KrtNativeLowerExpression(expression.left,ast,module,source) ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,expression.local_slot,0) < 0 ||
+        !KrtNativeLowerTypeTestMatch(expression,ast,module)) { return false; }
+    if (expression.right == null) { return true; }
+    // Preserve the boolean, and materialize the typed result only on success.
+    // This protects every scalar/aggregate/wide/capture path from false reads.
+    if (KrtNativeEmit(module,(int32)KrtNativeOp.Dup,0,0) < 0) { return false; }
+    int32 matched = KrtNativeEmit(module,(int32)KrtNativeOp.Branch,-1,-1);
+    if (matched < 0) { return false; } module.args[matched] = module.count;
+    if (!KrtNativeLowerTypeTestValue(expression,module) ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,expression.right.local_slot,0) < 0) { return false; }
+    if (expression.right.native_capture_boxed) {
+        if (!KrtNativeLowerPatternCell(expression.right,module)) { return false; }
+    } else if (KrtNativeInlineValue(expression.right)) {
+        if (!KrtNativeLowerAggregateFrame(expression.right,module) ||
+            KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,expression.right.local_slot,0) < 0 ||
+            !KrtNativeLowerAggregateCopy(expression.right,module)) { return false; }
     }
+    module.extra[matched] = module.count;
     return true;
 }

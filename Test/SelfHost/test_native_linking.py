@@ -9,8 +9,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPILER = Path(os.environ.get('SELFHOST_COMPILER', ROOT / 'build/selfhost/stage2/program')).resolve()
-LINKER = ROOT / 'build/ArkLink/ArkLink'
-if not LINKER.is_file():
+LINKER = Path(os.environ.get('ARKLINK', ROOT / 'build/ArkLink/ArkLink')).resolve()
+if 'ARKLINK' not in os.environ and not LINKER.is_file():
     LINKER = ROOT / 'ArkLink/build/ArkLink'
 
 
@@ -44,11 +44,12 @@ class NativeLinkingTests(unittest.TestCase):
     def ok(self, result):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def object(self, name, source):
+    def object(self, name, source, level=None, objects=()):
         path = self.work / (name + '.krt')
         path.write_text(source)
         target = path.with_suffix('.kro')
-        self.ok(self.invoke(path, '-c', '-o', target))
+        options = () if level is None else (f'-O{level}',)
+        self.ok(self.invoke(path, *objects, *options, '-c', '-o', target))
         return target
 
     def execute(self, objects, expected=42):
@@ -138,13 +139,27 @@ class NativeLinkingTests(unittest.TestCase):
         self.assertIn('E_LINK', result.stderr)
         self.assertEqual(output.read_bytes(), b'previous output')
 
-    def test_class_containing_external_signatures_are_rejected(self):
-        source = self.work / 'bad.krt'
-        for declaration in ['extern Box consume(Box x);', 'extern void consume(fn(Box)->int32 callback);']:
-            with self.subTest(declaration=declaration):
-                source.write_text('class Box{public int32 n;}' + declaration + 'int32 main(){return 0;}')
-                result = self.invoke(source, '-c', '-o', self.work / 'bad.kro')
-                self.assertNotEqual(result.returncode, 0)
+    def test_class_values_and_callbacks_have_independent_native_contracts(self):
+        declarations = 'namespace Contracts;public class Box{public int32 n;public extern Box(int32 initial);}'
+        provider = declarations.replace('public extern Box(int32 initial);',
+                                        'public Box(int32 initial){n=initial;}') + '''
+Box consume(Box value){value.n++;return value;}
+int32 apply(fn(Box)->int32 callback,Box value){return callback(value);}
+'''
+        consumer = declarations + '''extern Box consume(Box value);
+extern int32 apply(fn(Box)->int32 callback,Box value);
+int32 Read(Box value){return value.n+1;}
+int32 main(){Box value=new Box(40);Box same=consume(value);
+int32 result=apply(&Read,same);delete value;return result;}
+'''
+        for level in range(4):
+            library = self.object(f'class-provider-o{level}', provider, level)
+            caller = self.object(f'class-consumer-o{level}', consumer, level)
+            symbols = read_object(library)[1]
+            self.assertTrue(any(name.startswith('_KRT3$Contracts.consume$') and symbol[4] == 1
+                                for name, symbol in symbols))
+            for objects in ((caller, library), (library, caller)):
+                self.execute(objects)
 
     def test_primitive_exceptions_unwind_across_objects_and_run_finally(self):
         library = self.object('throwing', '''void fail(){throw "cross object";}
@@ -167,27 +182,44 @@ class NativeLinkingTests(unittest.TestCase):
             if(!first(flags) || values[1]!=2.5){return 1;}int32 n=40;run(&inc,ref n);return n;}''')
         self.execute([caller, library])
 
-    def test_library_named_exception_identity_is_explicitly_rejected(self):
-        path = self.work / 'bad.krt'
-        for source in [
-            'class Failure{} void fail(){throw new Failure();}',
-            'class Failure{} void check(fn()->void callback){try{callback();}catch(Failure e){}}',
-        ]:
-            with self.subTest(source=source):
-                path.write_text(source)
-                result = self.invoke(path, '-c', '-o', self.work / 'bad.kro')
-                self.assertNotEqual(result.returncode, 0)
+    def test_named_exceptions_cross_linked_calls_in_both_directions(self):
+        declarations = 'namespace Failures;public class Failure{public int32 code;public extern Failure(int32 value);}'
+        provider = declarations.replace('public extern Failure(int32 value);',
+                                        'public Failure(int32 value){code=value;}') + '''
+void fail(){throw new Failure(35);}
+int32 check(fn()->void callback){try{callback();return 1;}catch(Failure value){
+int32 code=value.code;delete value;return code;}}
+'''
+        consumer = declarations + '''extern void fail();extern int32 check(fn()->void callback);
+void Raise(){throw new Failure(42);}
+int32 main(){int32 score=0;try{fail();return 1;}catch(Failure value){score=value.code;delete value;}
+return score==35&&check(&Raise)==42?42:2;}
+'''
+        for level in range(4):
+            library = self.object(f'exception-provider-o{level}', provider, level)
+            caller = self.object(f'exception-consumer-o{level}', consumer, level)
+            for objects in ((caller, library), (library, caller)):
+                self.execute(objects)
 
-    def test_generic_owner_specializations_remain_local_symbols(self):
-        library = self.object('generic', '''class Box<T>{public static int32 value(){return 21;}}
-            int32 answer(){return Box<int32>.value()+Box<string>.value();}''')
-        symbols = read_object(library)[1]
-        generic_methods = [(name, symbol) for name, symbol in symbols if '.value$' in name]
-        self.assertEqual(len(generic_methods), 2)
-        self.assertEqual(len({name for name, _ in generic_methods}), 2)
-        self.assertTrue(all(symbol[4] == 0 for _, symbol in generic_methods))
-        caller = self.object('main', 'extern int32 answer(); int32 main(){return answer();}')
-        self.execute([caller, library])
+    def test_closed_generic_owner_methods_and_weak_storage_share_exact_identity(self):
+        provider = '''namespace GenericState;public class Box<T>{public static int32 calls=0;
+public static int32 value(){calls++;return calls+20;}}
+int32 answer(){return Box<int32>.value()+Box<string>.value();}'''
+        consumer = '''using GenericState;int32 main(){if(answer()!=42){return 1;}
+if(Box<int32>.value()!=22||Box<string>.value()!=22||Box<int64>.value()!=21){return 2;}
+return Box<int32>.calls==2&&Box<string>.calls==2&&Box<int64>.calls==1?42:3;}'''
+        for level in range(4):
+            library = self.object(f'generic-provider-o{level}', provider, level)
+            methods = [(name, symbol) for name, symbol in read_object(library)[1] if '.value$' in name]
+            self.assertEqual(len(methods), 2)
+            self.assertEqual(len({name for name, _ in methods}), 2)
+            self.assertTrue(all(name.startswith('_KRT3$') and symbol[4] == 1 for name, symbol in methods))
+            caller = self.object(f'generic-consumer-o{level}', consumer, level, (library,))
+            imported = [(name, symbol) for name, symbol in read_object(caller)[1] if '.value$' in name]
+            self.assertEqual(len(imported), 3)
+            self.assertTrue(all(name.startswith('_KRT3$') and symbol[4] == 2 for name, symbol in imported))
+            for objects in ((caller, library), (library, caller)):
+                self.execute(objects)
 
     def test_generic_function_arguments_and_owner_are_in_symbol_identity(self):
         library = self.object('generic-identities', '''

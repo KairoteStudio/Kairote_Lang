@@ -2,8 +2,15 @@
 // The selector travels through one reserved local, including string, IEEE and
 // wide integer values. Labels use the same equality machinery as expressions.
 bool KrtNativeLowerSwitch(KrtAstNode statement, KrtAstNode module_ast, KrtAstNode unit, KrtNativeModule module, int64 source, int32[] breaks, int32[] continues, ref int32 depth) {
-    if (depth >= 64 || statement.native_target == null || statement.local_slot < 0 ||
-        !KrtNativeLowerExpression(statement.left, module_ast, module, source) ||
+    if (depth >= 64 || statement.native_target == null || statement.local_slot < 0) { return false; }
+    if (KrtNativeInlineValue(statement.native_target)) {
+        // Keep the selector's value independent of the source and of temporary
+        // storage reused while evaluating later labels.
+        if (!KrtNativeLowerAggregateFrame(statement.native_target,module) ||
+            !KrtNativeLowerExpression(statement.left,module_ast,module,source) ||
+            !KrtNativeConvertInlineValue(module,statement.left,statement.native_target) ||
+            !KrtNativeLowerAggregateCopy(statement.native_target,module)) { return false; }
+    } else if (!KrtNativeLowerExpression(statement.left, module_ast, module, source) ||
         KrtNativeEmit(module, (int32)KrtNativeOp.StoreLocal, statement.local_slot, 0) < 0) { return false; }
     KrtAstNode default_clause = null; KrtAstNode clause = statement.right;
     while (clause != null) {

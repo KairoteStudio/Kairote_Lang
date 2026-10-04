@@ -58,6 +58,7 @@ int32 KrtDriverCompileBundle(KrtDriverOptions options, KrtSourceBundle bundle) {
     KrtDriverPath link_objects = null; bool ok = true;
     if (bundle != null) {
         KrtDriverActiveBundle = bundle;
+        if(!KrtModulesImport(bundle,options.objects)){ok=false;}
         if (!KrtSourcesValidate(bundle)) { ok = false; }
         if (ok && (bundle.length < 0 || bundle.length > 16777216)) { KrtDriverError("E_SIZE","combined source must contain 0 to 16777216 bytes"); ok = false; }
         if (ok) {
@@ -65,7 +66,7 @@ int32 KrtDriverCompileBundle(KrtDriverOptions options, KrtSourceBundle bundle) {
             KrtDriverLastModule = null; KrtDriverLastVm = null;
             ok = KrtCompileNativeSourceMode((string)bundle.data,(int32)bundle.length,object,options.object_mode);
             if (ok && options.show_ir) { ok = KrtArtifactWriteIr(KrtDriverLastModule,1); }
-            if (ok && !options.check) {
+            if (ok && (!options.check || (options.objects!=null&&options.target<2))) {
                 if (options.target == 2) { ok = KrtArtifactIr(KrtDriverLastModule,object_path); }
                 else if (options.target == 3) { ok = KrtArtifactAssembly(object,KrtDriverLastModule,object_path); }
                 else if (options.target == 4) {
@@ -82,6 +83,9 @@ int32 KrtDriverCompileBundle(KrtDriverOptions options, KrtSourceBundle bundle) {
         if (!KrtDriverFileExists(input.value)) { KrtDriverError("E_INPUT",(string)KrtDriverConcat((int64)"object file not found: ",input.value)); ok = false; }
         else { link_objects = KrtDriverAppend(link_objects,input.value); }
         input = input.next;
+    }
+    if(ok&&options.target<2&&options.objects!=null&&(options.object_mode||options.check)){
+        ok=KrtDriverAbiCheckContracts(link_objects,!options.object_mode);
     }
     if (ok && !options.check) {
         int64 artifact = object_path;
@@ -114,7 +118,7 @@ int32 KrtDriverCompile(KrtDriverOptions options) {
         input = input.next;
     }
     if (roots == null && options.objects == null) { KrtDriverError("E_INPUT","no input files specified"); KrtDriverQuiet = previous_quiet; return 1; }
-    if (options.object_mode && options.objects != null) { KrtDriverError("E_OPTION","-c accepts source files; omit -c to link existing KRO objects"); KrtDriverQuiet = previous_quiet; return 1; }
+    if (options.object_mode && roots == null) { KrtDriverError("E_OPTION","-c requires source files; KRO inputs supply declaration references"); KrtDriverQuiet = previous_quiet; return 1; }
     if (options.output == 0) {
         int64 first = 0;
         if (options.sources != null) { first = options.sources.value; }
@@ -130,7 +134,7 @@ int32 KrtDriverCompile(KrtDriverOptions options) {
     KrtSourceBundle bundle = null;
     if (roots != null) {
         bundle = new KrtSourceBundle();
-        if (!KrtSourcesCollect(roots,options.includes,options.library_root,bundle)) { KrtDriverQuiet = previous_quiet; return 1; }
+        if (!KrtSourcesCollectModules(roots,options.includes,options.library_root,bundle,options.objects)) { KrtDriverQuiet = previous_quiet; return 1; }
     }
     if (options.list_sources || options.emit_source) {
         if (bundle != null && options.list_sources) {

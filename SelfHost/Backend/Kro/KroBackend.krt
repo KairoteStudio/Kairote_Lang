@@ -38,6 +38,11 @@ class KrtKroObject {
     public byte[] symbol_bytes;
     public byte[] string_bytes;
     public byte[] text_relocation_bytes;
+    // Emission assigns each wide-producing instruction independent frame
+    // storage. These offsets are compiler state, never object-file metadata.
+    public int32 native_wide_base;
+    public int32 native_wide_cursor;
+    public int32 native_wide_limit;
 }
 
 bool KrtKroBeginText(KrtKroObject object, int32 word_capacity) {
@@ -388,7 +393,7 @@ bool KrtKroWriteSymbols(KrtKroObject object, int64 file_descriptor) {
         byte[] relocations = object.text_relocation_bytes;
         return KrtKroWriteBytes(data, object.data_size, file_descriptor) &&
             KrtKroWriteBytes(symbols, object.symbol_count * 32, file_descriptor) &&
-            KrtKroWriteBytes(relocations, object.text_reloc_count * 16, file_descriptor) &&
+            KrtKroWriteBytes(relocations, object.total_reloc_count * 16, file_descriptor) &&
             KrtKroWriteBytes(names, object.strtab_size, file_descriptor);
     }
     if ((object.symbol_count != 1 && object.symbol_count != 2) ||
@@ -739,7 +744,7 @@ bool KrtKroNativeStackDepths(KrtNativeModule module, int32 first, int32 last, in
         int32 depth = depths[index];
         int32 need = 0;
         int32 delta = 0;
-        if (op == 1 || op == 2 || op == 25 || op == 29 || op == 53 || op == 54 || op == 66 || op == 44 || op == 45 || op == 70 || op == 73) { delta = 1; }
+        if (op == 1 || op == 2 || op == 25 || op == 29 || op == 53 || op == 54 || op == 66 || op == 44 || op == 45 || op == 70 || op == 73 || op == 74) { delta = 1; }
         else if (op == 3 || op == 27 || op == 34) { need = 1; delta = -1; }
         else if ((op >= 4 && op <= 13) || op == 16 || op == 35 || op == 36 || op == 39 || op == 40 || op == 61 || op == 62) { need = 2; delta = -1; }
         else if (op == 14 || op == 15 || op == 22 || op == 24 || op == 28 || op == 30 || op == 31 || op == 33 || op == 37 || op == 38 || op == 41 || op == 42 || op == 43 || op == 60 || op == 63 || op == 67 || op == 68 || op == 69) { need = 1; }
@@ -750,6 +755,8 @@ bool KrtKroNativeStackDepths(KrtNativeModule module, int32 first, int32 last, in
         else if (op == 21) { need = module.args[index] == 0 ? 1 : 2; delta = 1 - need; }
         else if (op == 23 || op == 71) { need = 2; delta = -2; }
         else if (op == 72) { need = 1; delta = -1; }
+        else if (op == 75) { need=1;delta=0; }
+        else if (op == 76) { need=1;delta=-1; }
         else if (op == 32) { need = 1; delta = 1; }
         else if (op == 52) { need = 2; delta = -2; }
         else if (op != 0 && op != 17 && op != 50 && op != 51) { return false; }
@@ -790,6 +797,7 @@ bool KrtKroEmitStackModule(KrtNativeModule module, KrtKroObject output) {
         if (module.ops[estimate_index] == 24) { capacity = capacity + 128; }
         if (module.ops[estimate_index] >= 35 && module.ops[estimate_index] <= 54) { capacity = capacity + 512; }
         if (module.ops[estimate_index] >= 60 && module.ops[estimate_index] <= 69) { capacity = capacity + 1024; }
+        if (module.ops[estimate_index] == 75) { capacity=capacity+160; }
         if (module.ops[estimate_index] == 22 && (module.extra[estimate_index] == 16 || module.extra[estimate_index] == -16)) { capacity = capacity + 256; }
         estimate_index = estimate_index + 1;
     }
@@ -843,9 +851,16 @@ bool KrtKroEmitStackModule(KrtNativeModule module, KrtKroObject output) {
         if (!KrtKroNativeByte(output, ref pc, 85) || !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 229)) { return false; }
         // Calls reserve 123 stack arguments plus rsp, indirect target, and
         // separate register-save pairs for the function and wide operations.
-        int32 frame = (module.local_counts[function_index] + 129) * 8;
-        if (frame < 0 || frame > 1048576) { return false; }
+        int64 wide_bytes = 0; int32 wide_index = block_first;
+        while (wide_index < block_last) {
+            wide_bytes = wide_bytes + KrtKroWideScratchBytes(module.ops[wide_index],module.args[wide_index],module.extra[wide_index]);
+            wide_index++;
+        }
+        int64 frame_bytes = (int64)(module.local_counts[function_index] + 129) * 8 + wide_bytes;
+        if (frame_bytes < 0 || frame_bytes > 1048576) { return false; }
+        int32 frame = (int32)frame_bytes;
         if ((frame & 15) != 0) { frame = frame + 8; }
+        output.native_wide_base = frame; output.native_wide_cursor = 0; output.native_wide_limit = (int32)wide_bytes;
         if (frame > 0) {
             if (frame <= 127) { if (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 131) || !KrtKroNativeByte(output, ref pc, 236) || !KrtKroNativeByte(output, ref pc, frame)) { return false; } }
             else if (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 129) || !KrtKroNativeByte(output, ref pc, 236) || !KrtKroNativeU32(output, ref pc, frame)) { return false; }
@@ -919,7 +934,11 @@ bool KrtKroEmitStackModule(KrtNativeModule module, KrtKroObject output) {
                 patch_offsets[patch_count] = pc; patch_targets[patch_count] = (int32)module.extra[index]; patch_kinds[patch_count] = 1; patch_count = patch_count + 1;
                 if (!KrtKroNativeU32(output, ref pc, 0)) { return false; }
             } else if (op == 44) {
-                if (!KrtKroNativeGlobalAddress(output, ref pc, (int32)module.args[index], module.global_count)) { return false; }
+                if (!KrtKroNativeGlobalAddress(module,output,ref pc,(int32)module.args[index])) { return false; }
+            } else if (op == 75) {
+                if(!KrtKroNativeGuardEnter(output,ref pc)){return false;}
+            } else if (op == 76) {
+                if(!KrtKroNativeGuardFinish(output,ref pc,(int32)module.extra[index])){return false;}
             } else if (op == 45) {
                 if (patch_count >= patch_capacity || module.args[index] < -module.external_count || module.args[index] >= module.function_count || !KrtKroNativeCode(output, ref pc, 0x058d48, 3)) { return false; }
                 patch_offsets[patch_count] = pc; patch_targets[patch_count] = (int32)module.args[index]; patch_kinds[patch_count] = 2; patch_count = patch_count + 1;
@@ -928,6 +947,8 @@ bool KrtKroEmitStackModule(KrtNativeModule module, KrtKroObject output) {
                 if (!KrtKroNativeIndirectCall(output, ref pc, arity, module.local_counts[function_index])) { return false; }
             } else if (op == 73) {
                 if (module.args[index] != 0 || module.extra[index] != 0 || !KrtKroNativeClosureEnvironment(output, ref pc)) { return false; }
+            } else if (op == 74) {
+                if (module.extra[index] != 0 || !KrtKroRuntimeAddress(module,output,ref pc,(int32)module.args[index])) { return false; }
             } else if (op == (int32)KrtNativeOp.Call) {
                 if (arity < 0 || arity > 129 || patch_count >= patch_capacity) { return false; }
                 int32 scratch_base = module.local_counts[function_index];

@@ -6,7 +6,7 @@ and the compatibility sidecar `program.ebc`. Run either file with
 in Kairote and run inside the native compiler process. VM compilation does not
 invoke ArkLink, a C compiler, Python, or the seed compiler.
 
-The VM executes native integer widths, float32/float64, boxed int128/uint128,
+The VM executes native integer widths, float32/float64, int128/uint128 values,
 locals and references, branches, function and indirect calls, globals and their
 initializers, classes and arrays, memory allocation, strings, exceptions, and
 Linux syscalls. EBC v4 also supports lexical closures through the same typed
@@ -125,6 +125,80 @@ rules. Versions 2 and 3 reject opcode `73`; their indirect calls accept ordinary
 function handles, not tagged closure descriptors. New bytecode does not change
 the meaning of old chunks. Closure syntax, ownership and borrow boundaries are
 documented in [Closures.md](Closures.md).
+
+## EBC version 5
+
+Version 5 adds runtime type descriptors for boxing, checked casts, interface
+dispatch and typed exceptions. It keeps the 32-byte header, 28-byte function
+records and 24-byte instructions. After the ordinary module data, a runtime
+footer contains these little-endian fields:
+
+| Field | Storage |
+| --- | --- |
+| Footer magic `0x3554524b` (`KRT5`) | 32 bits |
+| Runtime blob byte length | 32 bits |
+| Type descriptor count | 32 bits |
+| Relocation count | 32 bits |
+| Descriptor offsets within the blob | One signed 32-bit offset per type |
+| Relocations | Three signed 32-bit fields per record: offset, kind, target |
+| Runtime blob | The declared number of bytes, with relocation pointers zero |
+
+A relocation patches one 64-bit pointer. Kind `0` targets an offset in the same
+blob; kind `1` targets a descriptor by type index; kind `2` targets a VM function
+handle, the function index plus one. Negative external function targets are
+rejected. The blob is limited to 16 MiB and 65,536 descriptors; the complete
+artifact remains limited to 64 MiB.
+
+Descriptors occupy 96 bytes at 16-byte aligned offsets. Their 64-bit fields are
+hash, canonical key length, key pointer, type kind, value storage size, alignment,
+base descriptor, interface count, interface table pointer, method count, method
+table pointer and flags, in that order. Method entries occupy 40 bytes: method
+key hash, key length, key pointer, function handle and receiver adjustment.
+Boxed struct methods use a 16-byte adjustment to reach the value payload.
+Canonical bytes determine type and method equality; a hash only selects lookup
+candidates.
+
+The reader validates exact lengths, every descriptor and table range, storage
+and alignment, type/base/interface relationships, key hashes, function targets,
+relocation ownership and zero pointer fields before patching. Shared identical
+key ranges are permitted; overlapping unrelated records and partial key aliases
+are rejected. It copies the validated blob into an aligned runtime allocation,
+then applies relocations. This region can be read during execution but cannot
+be stored through, cleared, overwritten by a value copy or explicitly freed by
+the program. The interpreter releases it after execution.
+
+Opcode `74` pushes a descriptor address: `args` is a valid type index and `extra`
+is zero. Opcode `75` enters a global initialization guard, consuming its address
+and returning whether this invocation acquired initialization. Both operands
+are zero. Opcode `76` finishes that guard; `args` is zero and `extra` is one for
+success or zero to reset after an exception. VM guard execution is single
+threaded. Earlier versions reject these instructions.
+
+## EBC version 6
+
+Version 6 keeps version 5's serialization layout and footer magic. Its version
+field distinguishes the wide integer value convention: int128 and uint128 have
+16-byte inline storage in locals, parameters, fields, arrays, captures and
+returns. Value arguments copy their bytes; wide results use the aggregate hidden
+result pointer. Each wide-producing instruction receives fixed temporary space
+in its current call frame. A repeated operation reuses that space, and frame
+exit releases it with the frame rather than accumulating heap allocations.
+Reads take a value snapshot, including when a later operand modifies the source.
+
+The compiler currently emits version 6 for runtime descriptors, initialization
+guard instructions or wide operations. Version 6 rejects the legacy wide-field
+reference opcode `69` and requires packed inline storage for wide increment
+opcode `67`. Versions 1–5 remain readable with their original wide convention;
+their pointer-backed wide temporaries retain the old immutable allocation
+semantics. Reading a newer artifact does not silently change an older file's
+value ABI.
+
+[test_vm_runtime_types.py](../../Test/SelfHost/test_vm_runtime_types.py) checks
+descriptor dispatch, checked conversions, malformed footers and relocations,
+read-only metadata, all serialized blob alignment residues and an actual legacy
+version 5 wide-alias program. [test_wide_lifetimes.py](../../Test/SelfHost/test_wide_lifetimes.py)
+checks value snapshots, references, calls, captures and repeated arithmetic in
+native and VM execution.
 
 Project builds cache the primary bytecode and its `.ebc` sidecar. Cache restore
 recreates missing outputs; `clean` removes an output only when its hash still

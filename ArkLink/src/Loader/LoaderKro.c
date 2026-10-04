@@ -191,7 +191,9 @@ ArkLinkResult ark_link_load_kro(const char* path, ArkLinkUnit** unit) {
         desc.name = ".data";
         desc.data = data_buf;
         desc.size = (size_t)header.data_size;
-        desc.alignment = 8;
+        // Native structures and 128-bit scalars can require sixteen-byte
+        // alignment. Each input contribution starts at that boundary too.
+        desc.alignment = 16;
         desc.flags = ARK_SECTION_READ | ARK_SECTION_WRITE;
 
         ArkLinkSection* sec = ark_link_unit_add_section(new_unit, &desc);

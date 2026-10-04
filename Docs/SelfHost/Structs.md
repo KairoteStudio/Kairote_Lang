@@ -81,6 +81,12 @@ contain 129 arguments. Native frame arenas and VM v3 arenas are aligned to
 the machine backend consumes them directly. Optimizations that would invalidate
 aggregate frame lifetimes do not inline or eliminate these frames.
 
+Wide integer values also use 16-byte inline storage, value copies and hidden
+result pointers. Each native or VM wide operation uses temporary storage in its
+current call frame; repeated arithmetic does not allocate a new persistent heap
+object. VM v6 records this value convention. Published v1–v5 bytecode retains its
+original convention when read.
+
 The `struct` constraint accepts struct values; `unmanaged` also examines nested
 fields and rejects managed references, strings and dynamic arrays. Pointers,
 function pointers and inline arrays of unmanaged elements remain eligible.
@@ -131,12 +137,13 @@ O0/O2 and VM O2 produce the same output and independent snapshots.
 
 This source-library workflow merges the sources into one compilation. For
 independently compiled native objects, ordinary public functions can consume and
-return public concrete structs, including closed generic values. Import the same
-layout declaration source in both modules and use consumer `extern` prototypes.
+return public concrete structs, including closed generic values. Consumers can
+read layout declarations and ordinary public function prototypes from KRO
+metadata, or supply matching declaration sources and `extern` prototypes.
 The ABI2 manifest records complete reachable layouts and the value/ref/callback
-contract; the native driver compares exact bytes before linking. See
+contract; both the native driver and standalone ArkLink compare exact bytes before linking. See
 [struct object contracts](Projects.md#struct-objects-and-abi2) for diagnostics,
-strong-definition rules and the distinction from bare ArkLink invocation.
+strong-definition rules and checks before output publication.
 
 ## Verification and remaining boundaries
 
@@ -161,15 +168,34 @@ conditions across native and VM O0–O3. The read-only source-library audit is r
 in `build/selfhost-next-struct/isolated-report.json`, including compiler/source
 hashes, exact commands and the independent expected results.
 
-Struct inheritance/interfaces and boxing are not implemented. External native
-signatures support concrete struct graphs; named classes, interfaces and enums
-remain unsupported. Generic function templates need source declarations and are
-not imported from binary objects. Shared method bodies do not receive weak/ODR
-merging, and extern constructors remain unsupported. Explicit unsafe pointers
-allow system interfaces such as `sockaddr_in`; they do not establish a general
+Structs can implement interfaces. Converting a struct to an interface or
+`object` creates an independent box containing its complete value. Interface
+methods access that box's payload, and a checked cast back to the struct copies
+the payload into independent value storage. Generic constraints can call a
+concrete struct implementation directly. Structs do not inherit the storage of
+another struct or class. See [boxing](Boxing.md) for type tests, checked casts,
+reference wrappers and manual ownership.
+
+Native ABI3 supports named classes, interfaces and enums, exact runtime type and
+method identities, public constructors and imported generic templates. Public
+metadata carries declarations and template bodies, so a consumer need not retain
+the provider's source files. Compatible generated definitions and runtime
+directories share stable symbols; ordinary strong definitions remain checked
+for conflicts. Existing concrete ABI2 objects remain compatible where their
+physical value convention is unchanged. Wide value and callback contracts carry
+their newer physical convention explicitly. These are Kairote contracts;
+explicit unsafe pointers used for `sockaddr_in` do not establish a general
 foreign-function ABI.
 
 [test_struct_linkage.py](../../Test/SelfHost/test_struct_linkage.py) exercises
 independent objects, value/ref/hidden-result calls, typed callbacks, concrete
 generic layouts, exact mismatch rejection, malformed manifests and preserved
 outputs. These gates are separate from the source-library and VM tests.
+
+[test_boxing.py](../../Test/SelfHost/test_boxing.py),
+[test_module_abi.py](../../Test/SelfHost/test_module_abi.py) and
+[test_wide_lifetimes.py](../../Test/SelfHost/test_wide_lifetimes.py) cover these
+newer contracts. [test_runtime_http.py](../../Test/SelfHost/test_runtime_http.py)
+combines independently compiled private struct implementations, lazy route
+iteration, boxed request/response values and actual HTTP requests. The older
+audit reports above remain evidence for their recorded source snapshots.

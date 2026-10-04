@@ -6,8 +6,8 @@ import tempfile
 import unittest
 ROOT = Path(__file__).resolve().parents[2]
 COMPILER = Path(os.environ.get('SELFHOST_COMPILER', ROOT / 'build/selfhost/stage2/program'))
-LINKER = ROOT / 'build/ArkLink/ArkLink'
-if not LINKER.exists():
+LINKER = Path(os.environ.get('ARKLINK', ROOT / 'build/ArkLink/ArkLink')).resolve()
+if 'ARKLINK' not in os.environ and not LINKER.exists():
     LINKER = ROOT / 'ArkLink/build/ArkLink'
 
 

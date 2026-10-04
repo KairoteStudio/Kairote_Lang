@@ -151,7 +151,12 @@ bool KrtNativeClosureNeedsContext(KrtAstNode node) {
 
 bool KrtNativeBindContextExpression(KrtAstNode node, KrtAstNode expected, KrtNativeBinding binding) {
     if (node == null) { return true; }
-    if (node.kind == KrtAstKind.Lambda) { return KrtNativeBindLambda(node,expected,binding); }
+    if (node.kind == KrtAstKind.Lambda) {
+        if (KrtNativeObjectValue(expected)) {
+            return KrtNativeBindLambda(node,null,binding) && KrtNativeCompatibleValue(expected,node);
+        }
+        return KrtNativeBindLambda(node,expected,binding);
+    }
     if (node.kind == KrtAstKind.ArrayLiteral && expected != null && expected.native_array) { return KrtNativeBindArrayLiteral(node,expected,binding); }
     if (node.kind == KrtAstKind.Ternary && expected != null) {
         node.native_closure_expected_type = expected;

@@ -7,7 +7,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 SEED = Path(os.environ.get('KRTC', ROOT / 'build/Re.KrtC/KrtC')).resolve()
-LINKER = ROOT / 'build/ArkLink/ArkLink'
+LINKER = Path(os.environ.get('ARKLINK', ROOT / 'build/ArkLink/ArkLink')).resolve()
 
 
 class NamespaceTests(unittest.TestCase):

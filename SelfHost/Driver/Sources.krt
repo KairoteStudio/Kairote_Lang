@@ -12,6 +12,8 @@ class KrtSourceDirective {
 }
 
 class KrtSourceFile {
+    public bool imported_metadata;
+    public int64 module_authority;
     public int64 path;
     public int64 original;
     public int64 transformed;
@@ -458,7 +460,7 @@ bool KrtSourcesVisit(KrtSourceBundle bundle, KrtSourceFile file) {
     return true;
 }
 
-bool KrtSourcesCollect(KrtDriverPath roots, KrtDriverPath include_dirs, int64 library_root, KrtSourceBundle bundle) {
+bool KrtSourcesCollectModules(KrtDriverPath roots, KrtDriverPath include_dirs, int64 library_root, KrtSourceBundle bundle, KrtDriverPath objects) {
     if (roots == null) { return false; }
     KrtDriverPath path = include_dirs;
     while (path != null) { KrtSourcesAddSearch(bundle, path.value); path = path.next; }
@@ -477,6 +479,7 @@ bool KrtSourcesCollect(KrtDriverPath roots, KrtDriverPath include_dirs, int64 li
     // resolved. Their order never determines whether a namespace alias binds.
     path = roots;
     while (path != null) { if (KrtSourcesLoad(bundle, path.value) == null) { return false; } path = path.next; }
+    if(!KrtModulesImport(bundle,objects)){return false;}
     path = roots;
     while (path != null) {
         KrtSourceFile file = KrtSourcesFindFile(bundle, KrtDriverAbsolutePath(path.value));
@@ -500,4 +503,8 @@ bool KrtSourcesCollect(KrtDriverPath roots, KrtDriverPath include_dirs, int64 li
         output[offset] = 0; bundle.length = offset;
     }
     return true;
+}
+
+bool KrtSourcesCollect(KrtDriverPath roots,KrtDriverPath include_dirs,int64 library_root,KrtSourceBundle bundle){
+    return KrtSourcesCollectModules(roots,include_dirs,library_root,bundle,null);
 }

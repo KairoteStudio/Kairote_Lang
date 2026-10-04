@@ -1,8 +1,18 @@
 // Using visibility follows lexical frames and the files each directive loaded.
 int32 KrtNativeNameFilePriority(KrtAstNode declaration, int64 position) {
-    if (KrtNativeAccessMode(declaration) != 2 || KrtNativeAccessOwner(declaration) != null) { return 1; }
+    if(declaration==null){return 0;}
+    int32 access=KrtNativeAccessMode(declaration);
+    KrtAstNode origin=KrtNativeAccessOrigin(declaration);
+    if(access==8192){
+        return KrtModulesSameModule(origin.start,position)?2:0;
+    }
+    // Member access is checked separately. Public and internal overloads in
+    // one module must compete by argument quality at the same visibility tier.
+    if (access != 2 || KrtNativeAccessOwner(declaration) != null) {
+        return KrtModulesSameModule(origin.start,position)?2:1;
+    }
     KrtAstNode caller = KrtAstMake(KrtAstKind.Function,position,0);
-    return KrtNativeAccessSameFile(declaration,caller) ? 2 : 0;
+    return KrtNativeAccessSameFile(declaration,caller) ? 3 : 0;
 }
 
 bool KrtNativeImportedFile(KrtAstNode declaration, KrtAstNode imported) {
@@ -123,6 +133,7 @@ KrtAstNode KrtNativeFindScopedType(KrtAstNode module, int64 source, int64 start,
 KrtAstNode KrtNativeExpressionTypeName(KrtAstNode node, KrtNativeBinding binding) {
     if (node == null) { return null; }
     KrtAstNode first = node; while (first.kind == KrtAstKind.Member) { first = first.left; }
+    if (first.op == 247) { return null; }
     if (first.kind != KrtAstKind.Identifier || KrtNativeFindName(binding, first.start, first.length) != null) { return null; }
     if (node.native_type_arguments != null) {
         KrtAstNode descriptor = KrtAstMake(KrtAstKind.Type, first.start, 0);
@@ -142,6 +153,7 @@ KrtAstNode KrtNativeExpressionTypeName(KrtAstNode node, KrtNativeBinding binding
 bool KrtNativeNamespaceCallable(KrtAstNode callee, KrtNativeBinding binding) {
     if (callee.kind != KrtAstKind.Member) { return false; }
     KrtAstNode first = callee; while (first.kind == KrtAstKind.Member) { first = first.left; }
+    if (first.op == 247) { return false; }
     if (first.kind != KrtAstKind.Identifier || KrtNativeFindName(binding, first.start, first.length) != null) { return false; }
     int64 length = callee.name_start + callee.name_length - first.start;
     KrtAstNode function_node = binding.module.left;
@@ -168,7 +180,9 @@ int64 KrtNativeFunctionScopeScore(KrtAstNode function_node, KrtAstNode callee, K
     while (frame != null) {
         KrtAstNode imported = frame.imports;
         while (imported != null) {
-            if (KrtNativeUsingMatches(function_node, imported, binding.source, callee.start, callee.length)) { return priority; }
+            if (KrtNativeUsingMatches(function_node, imported, binding.source,
+                callee.kind == KrtAstKind.Member ? callee.name_start : callee.start,
+                callee.kind == KrtAstKind.Member ? callee.name_length : callee.length)) { return priority; }
             imported = imported.next;
         }
         frame = frame.parent; priority = priority - 1;

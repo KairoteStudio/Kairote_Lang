@@ -6,7 +6,7 @@ import subprocess
 import tempfile
 import unittest
 
-from Support import COMPILER, LEVELS, ROOT, LibraryTestCase
+from Support import LEVELS, ROOT, LibraryTestCase, compiler_command
 
 
 class LibraryImports(LibraryTestCase):
@@ -22,7 +22,7 @@ class LibraryImports(LibraryTestCase):
             source_path.write_text(source)
             for level in LEVELS:
                 with self.subTest(optimization=level):
-                    result = subprocess.run([str(COMPILER), f"-O{level}", str(source_path), "-o", str(work / "Program")],
+                    result = subprocess.run(compiler_command(f"-O{level}", source_path, "-o", work / "Program"),
                                             cwd=work, capture_output=True, text=True, timeout=30)
                     self.assertGreater(result.returncode, 0, result.stdout + result.stderr)
                     self.assertIn(diagnostic, result.stdout + result.stderr)
@@ -245,7 +245,7 @@ int32 main() {{ return ImportLevel0.Value() == {depth} ? 0 : 1; }}
 ''')
             for level in LEVELS:
                 with self.subTest(optimization=level):
-                    compiled = subprocess.run([str(COMPILER), f"-O{level}", "build", "project.krt"], cwd=work,
+                    compiled = subprocess.run(compiler_command(f"-O{level}", "build", "project.krt"), cwd=work,
                                               capture_output=True, text=True, timeout=60)
                     self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
                     self.assertNotIn("AddressSanitizer", compiled.stderr)
@@ -275,7 +275,7 @@ static uint128 retained_wide = (uint128)18446744073709551623;
 ''')
             for level in LEVELS:
                 with self.subTest(optimization=level):
-                    compiled = subprocess.run([str(COMPILER), f"-O{level}", "build", "project.krt"], cwd=work,
+                    compiled = subprocess.run(compiler_command(f"-O{level}", "build", "project.krt"), cwd=work,
                                               capture_output=True, text=True, timeout=60)
                     self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
                     self.assertNotIn("AddressSanitizer", compiled.stderr)
@@ -284,14 +284,51 @@ static uint128 retained_wide = (uint128)18446744073709551623;
                     self.assertGreaterEqual(len(object_data), 64)
                     header = struct.unpack_from("<16I", object_data)
                     self.assertEqual(header[0], 0x004F524B)
-                    self.assertEqual(header[4], 0, "Data-only objects must have no executable entry sequence")
-                    self.assertEqual(header[6], 24)
                     data_start = 64 + header[4] + header[5]
                     payload = object_data[data_start:data_start + header[6]]
-                    self.assertEqual(payload, (123456789).to_bytes(8, "little") +
-                                     (18446744073709551623).to_bytes(16, "little"))
-                    self.assertIn(b"retained_data\0", object_data)
-                    self.assertIn(b"retained_wide\0", object_data)
+                    symbol_start = data_start + header[6]
+                    string_start = symbol_start + header[12] * 32 + header[14] * 16
+                    strings = object_data[string_start:]
+                    symbols = {}
+                    for index in range(header[12]):
+                        record = struct.unpack_from("<8I", object_data, symbol_start + index * 32)
+                        name = strings[record[0]:].split(b"\0", 1)[0].decode()
+                        symbols[name] = record
+                    if any(name.startswith("_KRTG3$") for name in symbols):
+                        # Stable storage keeps ABI3 alignment and initialization
+                        # aliases. The aliases share one return-only function;
+                        # this object contains no executable entry or assignments.
+                        self.assertEqual(header[4], 3)
+                        self.assertEqual(object_data[64:67], b"\x31\xc0\xc3")
+                        self.assertNotIn("main", symbols)
+                        self.assertNotIn("_start", symbols)
+                        self.assertNotIn("_KRT_MODULE_INIT_GUARD", symbols)
+                        code = {name: record for name, record in symbols.items() if record[3] == 1}
+                        self.assertEqual(len(code), 2)
+                        for name, record in code.items():
+                            self.assertTrue(name.startswith("_KRTL3$"), name)
+                            self.assertEqual(record[1:3], (0, 3))
+                        for field, width, value in (("retained_data", 8, 123456789),
+                                                    ("retained_wide", 16, 18446744073709551623)):
+                            name, record = next((name, record) for name, record in symbols.items()
+                                                if name.startswith("_KRTG3$") and
+                                                field.encode().hex() in name)
+                            self.assertEqual(record[2:4], (width, 3))
+                            self.assertEqual(record[1] % width, 0)
+                            self.assertLessEqual(record[1] + width, len(payload))
+                            self.assertEqual(payload[record[1]:record[1] + width],
+                                             value.to_bytes(width, "little"))
+                            guard = symbols[name.replace("_KRTG3$", "_KRTJ3$", 1)]
+                            self.assertEqual(guard[2:4], (16, 3))
+                            self.assertEqual(payload[guard[1]:guard[1] + 16],
+                                             (2).to_bytes(8, "little") + bytes(8))
+                    else:
+                        self.assertEqual(header[4], 0, "Data-only objects must have no executable entry sequence")
+                        self.assertEqual(header[6], 24)
+                        self.assertEqual(payload, (123456789).to_bytes(8, "little") +
+                                         (18446744073709551623).to_bytes(16, "little"))
+                        self.assertIn("retained_data", symbols)
+                        self.assertIn("retained_wide", symbols)
                     executed = subprocess.run([str(work / "bin/linux/Program")], capture_output=True, timeout=10)
                     self.assertEqual(executed.returncode, 0, executed.stderr)
 

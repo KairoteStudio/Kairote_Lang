@@ -1,0 +1,359 @@
+// Runtime lookup keys and object contracts contain the complete nominal bytes.
+// A digest is an index hint only; independently compiled modules compare the
+// bytes before accepting a type or a dispatch slot.
+KrtAbiBytes KrtModuleTypeIdentity(KrtAstNode declaration, int64 source) {
+    KrtAbiBytes identity = KrtAbiNew();
+    if (declaration == null || declaration.native_generic_parameters != null) { identity.ok = false; return identity; }
+    KrtAbiText(identity,"KRTTYPE3"); KrtAbiWord(identity,(int32)declaration.value);
+    if (declaration.value == 5) { KrtAbiText(identity,"object"); return identity; }
+    if (declaration.native_generator != null) {
+        KrtAbiBytes generated=KrtModuleGeneratorIdentity(declaration,source);KrtAbiAppend(identity,generated);return identity;
+    }
+    KrtAstNode type = KrtAstMake(KrtAstKind.Type,declaration.start,0); type.native_type = declaration;
+    KrtLinkName name = KrtLinkNameNew(); KrtLinkType(name,type,source,0); KrtAbiName(identity,name);
+    if (!KrtNativeAccessExported(declaration)) {
+        int64 authority = KrtModulesSourceAuthority(declaration.start); int64 length = authority!=0?KrtDriverStringLength(authority):0;
+        if (length==0 || length>4096) { identity.ok=false; return identity; }
+        KrtAbiWord(identity,(int32)length);
+        unsafe(using krt.mem;) { byte* text=(byte*)authority; int64 index=0; while(index<length){KrtAbiByte(identity,(int32)text[index]);index=index+1;} }
+    }
+    return identity;
+}
+
+KrtAbiBytes KrtModuleGeneratorIdentity(KrtAstNode declaration,int64 source){
+    KrtAbiBytes identity=KrtAbiNew();KrtAbiText(identity,"KRTGENERATOR3");KrtAbiWord(identity,declaration.native_generator_role);
+    KrtAstNode factory=declaration.native_generator.factory;KrtLinkName name=KrtLinkNameNew();
+    if(factory.native_owner!=null){KrtAstNode owner_shape=KrtAstMake(KrtAstKind.Type,factory.native_owner.start,0);owner_shape.native_type=factory.native_owner;KrtLinkType(name,owner_shape,source,0);KrtLinkByte(name,46);int64 character=0;
+        while(character<factory.name_length){KrtLinkByte(name,(int32)KrtNameAt(source,factory.name_start,factory.name_length,character));character=character+1;}}
+    else{KrtLinkDeclaration(name,factory,source);}
+    KrtAbiName(identity,name);KrtAstNode argument=factory.native_type_arguments;int32 arguments=0;
+    while(argument!=null){arguments=arguments+1;argument=argument.next;}KrtAbiWord(identity,arguments);argument=factory.native_type_arguments;
+    while(argument!=null){KrtLinkName shape=KrtLinkNameNew();KrtLinkType(shape,argument,source,0);KrtAbiName(identity,shape);argument=argument.next;}
+    KrtAbiWord(identity,factory.parameter_count);KrtAstNode parameter=factory.declarations;int32 parameters=0;
+    while(parameter!=null){KrtLinkName shape=KrtLinkNameNew();KrtLinkType(shape,parameter,source,0);KrtAbiName(identity,shape);parameters=parameters+1;parameter=parameter.next;}
+    if(parameters!=factory.parameter_count){identity.ok=false;return identity;}
+    KrtLinkName result=KrtLinkNameNew();KrtLinkType(result,factory,source,0);KrtAbiName(identity,result);
+    if(!KrtNativeAccessExported(factory)){
+        int64 authority=KrtModulesSourceAuthority(factory.start);int64 length=authority!=0?KrtDriverStringLength(authority):0;
+        if(length==0||length>4096){identity.ok=false;return identity;}KrtAbiWord(identity,(int32)length);
+        unsafe(using krt.mem;){byte* text=(byte*)authority;int64 index=0;while(index<length){KrtAbiByte(identity,(int32)text[index]);index=index+1;}}
+    }
+    return identity;
+}
+
+KrtAbiBytes KrtModuleValueIdentity(KrtAstNode type, int64 source) {
+    if (type != null && type.native_type != null && !type.native_array && type.native_fixed_length<=0 && type.native_pointer_depth == 0 && type.native_stride == 0) {
+        return KrtModuleTypeIdentity(type.native_type,source);
+    }
+    KrtAbiBytes identity = KrtAbiNew(); KrtAbiText(identity,"KRTVALUE3");
+    KrtLinkName name = KrtLinkNameNew(); KrtLinkType(name,type,source,0); KrtAbiName(identity,name); return identity;
+}
+
+uint64 KrtModuleTypeHash(KrtAstNode declaration, int64 source) {
+    return KrtAbiHash(KrtModuleTypeIdentity(declaration,source));
+}
+
+KrtLinkName KrtModuleDescriptorName(KrtAbiBytes identity) {
+    KrtLinkName name = KrtLinkNameNew(); KrtLinkText(name,"_KRTD3$");
+    if (identity == null || !identity.ok) { name.valid = false; return name; }
+    int32 index = 0;
+    while (index < identity.count) {
+        int32 value = (int32)identity.data[index]; int32 high = value >> 4; int32 low = value & 15;
+        KrtLinkByte(name,high<10?48+high:87+high); KrtLinkByte(name,low<10?48+low:87+low); index = index + 1;
+    }
+    return name;
+}
+
+KrtLinkName KrtModuleImplementationName(KrtAstNode method,KrtAstNode module,int64 source){
+    KrtAbiBytes identity=KrtAbiNew();KrtAbiText(identity,"KRTIMPLEMENTATION3");
+    if(method==null||method.native_owner==null){KrtLinkName invalid=KrtLinkNameNew();invalid.valid=false;return invalid;}
+    KrtAbiBytes owner=KrtModuleTypeIdentity(method.native_owner,source);KrtAbiWord(identity,owner.count);KrtAbiAppend(identity,owner);
+    KrtAbiBytes key=KrtModuleMethodIdentity(method,module,source);KrtAbiWord(identity,key.count);KrtAbiAppend(identity,key);
+    KrtAstNode result=KrtAstMake(KrtAstKind.Type,method.start,0);
+    if(!KrtNativeSignatureType(result,method,-1,module,source)){identity.ok=false;}
+    KrtLinkName shape=KrtLinkNameNew();KrtLinkType(shape,result,source,0);KrtAbiName(identity,shape);
+    KrtLinkName name=KrtModuleDescriptorName(identity);if(name.valid){name.bytes[4]=82;}return name;
+}
+
+KrtAbiBytes KrtModuleGlobalIdentity(KrtAstNode declaration,KrtAstNode owner,int64 source){
+    KrtAbiBytes identity=KrtAbiNew();KrtAbiText(identity,"KRTGLOBAL3");
+    if(owner!=null){KrtAbiBytes nominal=KrtModuleTypeIdentity(owner,source);KrtAbiWord(identity,nominal.count);KrtAbiAppend(identity,nominal);}
+    else{KrtAbiWord(identity,0);}
+    KrtLinkName name=KrtLinkNameNew();if(owner==null){KrtLinkDeclaration(name,declaration,source);}
+    else{int64 index=0;while(index<declaration.name_length){KrtLinkByte(name,(int32)KrtNameAt(source,declaration.name_start,declaration.name_length,index));index=index+1;}}
+    KrtAbiName(identity,name);
+    if(!KrtNativeAccessExported(declaration)){
+        int64 authority=KrtModulesSourceAuthority(declaration.start);int64 length=authority!=0?KrtDriverStringLength(authority):0;
+        if(length==0||length>4096){identity.ok=false;return identity;}KrtAbiWord(identity,(int32)length);
+        unsafe(using krt.mem;){byte* text=(byte*)authority;int64 index=0;while(index<length){KrtAbiByte(identity,(int32)text[index]);index=index+1;}}
+    }
+    return identity;
+}
+
+KrtLinkName KrtModuleGlobalName(KrtAstNode declaration,KrtAstNode owner,int64 source,int32 letter){
+    KrtLinkName name=KrtModuleDescriptorName(KrtModuleGlobalIdentity(declaration,owner,source));
+    if(name.valid){name.bytes[4]=(byte)letter;}return name;
+}
+
+KrtAbiSignature KrtModuleGlobalSignature(KrtNativeGlobalEntry entry,KrtAstNode ast,int64 source){
+    KrtAbiSignature signature=new KrtAbiSignature();signature.supported=true;signature.module=ast;signature.uses_named=true;
+    signature.nominal=KrtAbiNew();KrtAbiText(signature.nominal,"_KRTT$");KrtAbiAppend(signature.nominal,KrtModuleGlobalIdentity(entry.declaration,entry.owner,source));
+    signature.contract=KrtAbiNew();KrtAbiText(signature.contract,"KRTTYPE3");KrtAbiAppend(signature.contract,signature.nominal);
+    KrtAbiWord(signature.contract,entry.storage_size);KrtAbiWord(signature.contract,KrtNativeAccessMode(entry.declaration));
+    KrtAbiShape(signature.contract,entry.declaration,signature,source,0);return signature;
+}
+
+KrtAbiBytes KrtModuleMethodIdentity(KrtAstNode method, KrtAstNode module, int64 source) {
+    KrtAbiBytes identity = KrtAbiNew(); KrtAbiText(identity,"KRTMETHOD3");
+    if (method == null || method.native_owner == null) { identity.ok = false; return identity; }
+    KrtAstNode slot = method.native_dispatch_slot != null ? method.native_dispatch_slot : method;
+    KrtAbiBytes owner = KrtModuleTypeIdentity(slot.native_owner,source);
+    KrtAbiWord(identity,owner.count); KrtAbiAppend(identity,owner);
+    KrtLinkName name = KrtLinkNameNew(); int64 character = 0;
+    while (character < slot.name_length) { KrtLinkByte(name,(int32)KrtNameAt(source,slot.name_start,slot.name_length,character)); character = character + 1; }
+    KrtAbiName(identity,name); KrtAbiByte(identity,slot.native_static ? 1 : 0);
+    bool wide_physical=false;int32 first = slot.native_static ? 0 : 1; KrtAbiWord(identity,slot.parameter_count-first);
+    while (first < slot.parameter_count) {
+        KrtAstNode parameter = KrtAstMake(KrtAstKind.Type,slot.start,0);
+        if (!KrtNativeSignatureType(parameter,slot,first,module,source)) { identity.ok = false; return identity; }
+        parameter.native_ref = slot.parameter_refs[first];
+        if(KrtAbiWidePhysicalBoundary(parameter,0)){wide_physical=true;}
+        KrtLinkName parameter_name = KrtLinkNameNew(); KrtLinkType(parameter_name,parameter,source,0); KrtAbiName(identity,parameter_name);
+        first = first + 1;
+    }
+    if(slot.type_length>0&&!KrtNativeSpanWord(source,slot.type_start,slot.type_length,"void")){
+        KrtAstNode result=KrtAstMake(KrtAstKind.Type,slot.start,0);
+        if(!KrtNativeSignatureType(result,slot,-1,module,source)){identity.ok=false;return identity;}
+        if(KrtAbiWidePhysicalBoundary(result,0)){wide_physical=true;}
+    }
+    if(wide_physical){KrtAbiText(identity,"KRTWIDE3");}
+    return identity;
+}
+
+class KrtModuleAbiMember {
+    public KrtAbiBytes contract;
+    public KrtModuleAbiMember next;
+}
+
+KrtModuleAbiMember KrtModuleAbiMemberInsert(KrtModuleAbiMember list, KrtAbiBytes contract) {
+    KrtModuleAbiMember inserted = new KrtModuleAbiMember(); inserted.contract = contract;
+    KrtModuleAbiMember item = list; KrtModuleAbiMember previous = null;
+    while (item != null && KrtAbiCompare(item.contract,contract) < 0) { previous = item; item = item.next; }
+    inserted.next = item;
+    if (previous == null) { return inserted; } previous.next = inserted; return list;
+}
+
+void KrtModuleAbiMembers(KrtAbiBytes bytes, KrtModuleAbiMember list) {
+    int32 count = 0; KrtModuleAbiMember item = list;
+    while (item != null) { count = count + 1; item = item.next; }
+    KrtAbiWord(bytes,count); item = list;
+    while (item != null) { KrtAbiWord(bytes,item.contract.count); KrtAbiAppend(bytes,item.contract); item = item.next; }
+}
+
+int32 KrtModuleGenericParameter(KrtAstNode method,int64 source,int64 start,int64 length){
+    KrtAstNode parameter=method.native_generic_parameters;int32 index=0;
+    while(parameter!=null){if(KrtSemanticSameName(source,start,length,parameter.name_start,parameter.name_length)){return index;}parameter=parameter.next;index=index+1;}
+    return -1;
+}
+
+void KrtModuleGenericDefinition(KrtAbiBytes bytes,KrtAstNode type,int64 source){
+    if(type==null){bytes.ok=false;return;}KrtAbiByte(bytes,78);KrtAbiWord(bytes,(int32)type.value);
+    KrtLinkName name=KrtLinkNameNew();KrtLinkDeclaration(name,type,source);KrtAbiName(bytes,name);
+    if(!KrtNativeAccessExported(type)){
+        int64 authority=KrtModulesSourceAuthority(type.start);int64 length=authority!=0?KrtDriverStringLength(authority):0;
+        if(length==0||length>4096){bytes.ok=false;return;}KrtAbiWord(bytes,(int32)length);
+        unsafe(using krt.mem;){byte* text=(byte*)authority;int64 index=0;while(index<length){KrtAbiByte(bytes,text[index]);index=index+1;}}
+    }else{KrtAbiWord(bytes,0);}
+}
+
+// Open signatures describe type constructors and parameter positions. They do
+// not invent concrete substitutions or instantiate code while writing an ABI.
+void KrtModuleGenericActual(KrtAbiBytes bytes,KrtAstNode type,int64 source,int32 depth){
+    if(type==null||depth>64){bytes.ok=false;return;}
+    if(type.native_nullable){KrtAbiByte(bytes,81);}
+    if(type.native_fixed_length>0){KrtAbiByte(bytes,70);KrtAbiWord(bytes,type.native_fixed_length);KrtModuleGenericActual(bytes,KrtNativeArrayElement(type),source,depth+1);return;}
+    if(type.native_array){KrtAbiByte(bytes,65);KrtModuleGenericActual(bytes,KrtNativeArrayElement(type),source,depth+1);return;}
+    if(type.native_pointer_depth>0||(!type.native_string&&type.native_stride>0&&type.native_function_pointer==null)){
+        KrtAbiByte(bytes,80);KrtModuleGenericActual(bytes,KrtNativeArrayElement(type),source,depth+1);return;
+    }
+    if(type.native_function_pointer!=null){
+        KrtAstNode signature=type.native_function_pointer;KrtAbiByte(bytes,102);KrtAbiWord(bytes,3);KrtAbiWord(bytes,signature.parameter_count);
+        KrtAstNode parameter=signature.declarations;int32 count=0;
+        while(parameter!=null){KrtAbiByte(bytes,parameter.native_ref?1:0);KrtModuleGenericActual(bytes,parameter,source,depth+1);count=count+1;parameter=parameter.next;}
+        if(count!=signature.parameter_count){bytes.ok=false;return;}
+        if(signature.native_readonly){KrtAbiByte(bytes,86);}else{KrtModuleGenericActual(bytes,signature.native_type,source,depth+1);}return;
+    }
+    if(type.native_type!=null&&type.native_type.value!=5){
+        KrtAstNode definition=type.native_type.native_generic_origin!=null?type.native_type.native_generic_origin:type.native_type;
+        KrtModuleGenericDefinition(bytes,definition,source);KrtAstNode argument=type.native_type.native_type_arguments;int32 arguments=0;
+        while(argument!=null){arguments=arguments+1;argument=argument.next;}KrtAbiWord(bytes,arguments);argument=type.native_type.native_type_arguments;
+        while(argument!=null){KrtModuleGenericActual(bytes,argument,source,depth+1);argument=argument.next;}return;
+    }
+    KrtAstNode scalar=KrtAstMake(KrtAstKind.Type,type.start,0);KrtNativeCopyType(scalar,type);scalar.native_ref=false;scalar.native_nullable=false;
+    KrtLinkName name=KrtLinkNameNew();KrtLinkType(name,scalar,source,0);KrtAbiByte(bytes,83);KrtAbiName(bytes,name);delete scalar;
+}
+
+void KrtModuleGenericSuffixes(KrtAbiBytes bytes,KrtAstNode suffix,int32 depth){
+    if(suffix==null){return;}if(depth>64){bytes.ok=false;return;}
+    KrtModuleGenericSuffixes(bytes,suffix.next,depth+1);
+    if(suffix.op==42){KrtAbiByte(bytes,80);}else if(suffix.op==91){KrtAbiByte(bytes,65);}else if(suffix.op==63){KrtAbiByte(bytes,81);}else{bytes.ok=false;}
+}
+
+void KrtModuleGenericSyntax(KrtAbiBytes bytes,KrtAstNode syntax,KrtAstNode method,KrtAstNode module,int64 source,int32 depth){
+    if(syntax==null||depth>64){bytes.ok=false;return;}
+    KrtModuleGenericSuffixes(bytes,syntax.syntax_suffixes,0);
+    if(syntax.op==1){
+        KrtAstNode signature=syntax.left;if(signature==null){bytes.ok=false;return;}
+        KrtAbiByte(bytes,102);KrtAbiWord(bytes,3);KrtAbiWord(bytes,signature.parameter_count);KrtAstNode parameter=signature.syntax_parameter_types;int32 index=0;
+        while(parameter!=null){KrtAbiByte(bytes,signature.parameter_refs[index]?1:0);KrtModuleGenericSyntax(bytes,parameter,method,module,source,depth+1);index=index+1;parameter=parameter.next;}
+        if(index!=signature.parameter_count){bytes.ok=false;return;}
+        if(KrtNativeSpanWord(source,signature.type_start,signature.type_length,"void")){KrtAbiByte(bytes,86);}
+        else{KrtModuleGenericSyntax(bytes,signature.syntax_type,method,module,source,depth+1);}return;
+    }
+    if(syntax.left==null&&syntax.right==null){
+        int32 parameter=KrtModuleGenericParameter(method,source,syntax.name_start,syntax.name_length);
+        if(parameter>=0){KrtAbiByte(bytes,71);KrtAbiWord(bytes,parameter);return;}
+        KrtAstNode actual=KrtNativeTypeParameter(method.native_context,source,syntax.name_start,syntax.name_length);
+        if(actual!=null){KrtModuleGenericActual(bytes,actual,source,depth+1);return;}
+        if(KrtNativeSpanWord(source,syntax.name_start,syntax.name_length,"void")&&syntax.syntax_suffixes==null){KrtAbiByte(bytes,86);return;}
+    }
+    KrtAstNode component=syntax;if(syntax.right!=null){component=syntax.right;while(component.next!=null){component=component.next;}}
+    int64 length=component.name_start+component.name_length-syntax.name_start;
+    KrtAstNode declaration=KrtNativeFindUsingType(module,source,syntax.name_start,length,method.native_scope,method.native_using_scope);
+    if(declaration!=null){
+        if(component.left==null&&declaration.native_generic_parameters!=null){
+            KrtAstNode context=method.native_context;while(context!=null&&context.native_generic_origin!=declaration){context=context.native_context;}
+            if(context==null){bytes.ok=false;return;}KrtAstNode shape=KrtAstMake(KrtAstKind.Type,context.start,0);shape.native_type=context;
+            KrtModuleGenericActual(bytes,shape,source,depth+1);delete shape;return;
+        }
+        KrtModuleGenericDefinition(bytes,declaration,source);KrtAstNode argument=component.left!=null?component.left.left:null;int32 arguments=0;
+        while(argument!=null){arguments=arguments+1;argument=argument.next;}KrtAstNode formal=declaration.native_generic_parameters;int32 arity=0;
+        while(formal!=null){arity=arity+1;formal=formal.next;}if(arguments!=arity){bytes.ok=false;return;}
+        KrtAbiWord(bytes,arguments);argument=component.left!=null?component.left.left:null;
+        while(argument!=null){KrtModuleGenericSyntax(bytes,argument,method,module,source,depth+1);argument=argument.next;}return;
+    }
+    if(syntax.left!=null||syntax.right!=null){bytes.ok=false;return;}
+    KrtAstNode scalar=KrtAstMake(KrtAstKind.Type,syntax.start,0);scalar.native_scope=method.native_scope;scalar.native_context=method.native_context;scalar.native_using_scope=method.native_using_scope;
+    if(!KrtNativeAnnotateType(scalar,module,source,syntax.name_start,syntax.name_length)){bytes.ok=false;delete scalar;return;}
+    KrtModuleGenericActual(bytes,scalar,source,depth+1);delete scalar;
+}
+
+KrtAbiBytes KrtModuleGenericMethod(KrtAstNode method,KrtAstNode module,int64 source){
+    KrtAbiBytes bytes=KrtAbiNew();KrtAbiText(bytes,"KRTGENERICMETHOD3");
+    KrtLinkName name=KrtLinkNameNew();int64 character=0;
+    while(character<method.name_length){KrtLinkByte(name,(int32)KrtNameAt(source,method.name_start,method.name_length,character));character=character+1;}KrtAbiName(bytes,name);
+    KrtAbiByte(bytes,method.native_static?1:0);KrtAbiWord(bytes,KrtNativeAccessMode(method));KrtAbiByte(bytes,(method.syntax_modifiers&16)!=0?1:0);
+    KrtAstNode parameter=method.native_generic_parameters;int32 arity=0;while(parameter!=null){arity=arity+1;parameter=parameter.next;}KrtAbiWord(bytes,arity);
+    int32 index=method.native_static?0:1;KrtAbiWord(bytes,method.parameter_count-index);
+    while(index<method.parameter_count){KrtAbiByte(bytes,method.parameter_refs[index]?1:0);KrtModuleGenericSyntax(bytes,KrtNativeInferenceFormal(method,index,source),method,module,source,0);index=index+1;}
+    if(method.type_length==0||KrtNativeSpanWord(source,method.type_start,method.type_length,"void")){KrtAbiByte(bytes,86);}
+    else{KrtAstNode result=method.syntax_type!=null?method.syntax_type:KrtNativeTypeSyntax(source,method.type_start,method.type_length);KrtModuleGenericSyntax(bytes,result,method,module,source,0);}
+    KrtModuleAbiMember constraints=null;KrtAstNode constraint=method.native_constraints;
+    while(constraint!=null){
+        KrtAbiBytes contract=KrtAbiNew();int32 position=KrtModuleGenericParameter(method,source,constraint.name_start,constraint.name_length);
+        if(position<0){bytes.ok=false;return bytes;}KrtAbiWord(contract,position);KrtAbiWord(contract,constraint.op);
+        if(constraint.op==6){KrtAstNode type=constraint.syntax_type!=null?constraint.syntax_type:KrtNativeTypeSyntax(source,constraint.type_start,constraint.type_length);KrtModuleGenericSyntax(contract,type,method,module,source,0);}
+        bool duplicate=false;KrtModuleAbiMember item=constraints;while(item!=null){if(KrtAbiCompare(item.contract,contract)==0){duplicate=true;break;}item=item.next;}
+        if(!duplicate){constraints=KrtModuleAbiMemberInsert(constraints,contract);}constraint=constraint.next;
+    }
+    KrtModuleAbiMembers(bytes,constraints);return bytes;
+}
+
+void KrtModuleAbiLayoutPrefix(KrtAbiBytes bytes, KrtAstNode type, KrtAbiSignature signature, int64 source) {
+    KrtAbiText(bytes,"KRTLAYOUT3"); KrtAbiWord(bytes,(int32)type.value);
+    // Object descriptors are referenced through one pointer at offset zero.
+    // Concrete fields retain their resolved base-prefix offsets.
+    KrtAbiWord(bytes,type.value==1?8:0); KrtAbiByte(bytes,type.native_abstract?1:0);
+    KrtAbiByte(bytes,type.native_base!=null?1:0);
+    if (type.native_base != null) {
+        KrtAbiType parent = KrtAbiRegister(signature,type.native_base,source);
+        if (parent == null) { bytes.ok = false; return; }
+        KrtAbiWord(bytes,parent.identity.count); KrtAbiAppend(bytes,parent.identity);
+    }
+    KrtModuleAbiMember interfaces = null; KrtAstNode entry = type.native_interfaces;
+    while (entry != null) {
+        KrtAbiType contract = KrtAbiRegister(signature,entry.native_type,source);
+        if (contract == null) { bytes.ok = false; return; }
+        interfaces = KrtModuleAbiMemberInsert(interfaces,contract.identity); entry = entry.next;
+    }
+    KrtModuleAbiMembers(bytes,interfaces);
+    if (type.value == 4) {
+        int32 count = 0; KrtAstNode value = type.body;
+        while (value != null) { count = count + 1; value = value.next; }
+        KrtAbiWord(bytes,count); value = type.body;
+        while (value != null) {
+            KrtLinkName name = KrtLinkNameNew(); int64 character = 0;
+            while (character < value.name_length) { KrtLinkByte(name,(int32)KrtNameAt(source,value.name_start,value.name_length,character)); character = character + 1; }
+            KrtAbiName(bytes,name); KrtAbiLong(bytes,(uint64)value.value); value = value.next;
+        }
+    } else { KrtAbiWord(bytes,0); }
+    KrtModuleAbiMember methods = null; KrtAstNode method = KrtNativeTypeMemberFirst(type);
+    while (method != null && method.native_owner == type) {
+        if(method.native_generic_parameters!=null){methods=KrtModuleAbiMemberInsert(methods,KrtModuleGenericMethod(method,signature.module,source));}
+        else if (method.native_generic_origin == null) {
+            KrtAbiBytes contract = KrtAbiNew(); KrtAbiBytes identity = KrtModuleMethodIdentity(method,signature.module,source);
+            KrtAbiWord(contract,identity.count); KrtAbiAppend(contract,identity);
+            KrtAbiByte(contract,method.native_virtual?1:0); KrtAbiByte(contract,method.native_abstract?1:0);
+            KrtAbiByte(contract,(method.syntax_modifiers&16)!=0?1:0); KrtAbiWord(contract,KrtNativeAccessMode(method));
+            KrtAstNode result = KrtAstMake(KrtAstKind.Type,method.start,0);
+            if (!KrtNativeSignatureType(result,method,-1,signature.module,source)) { bytes.ok = false; signature.supported = false; return; }
+            bool result_void = method.type_length==0 || KrtNativeSpanWord(source,method.type_start,method.type_length,"void");
+            KrtAbiByte(contract,result_void?1:0); if (!result_void) { KrtAbiShape(contract,result,signature,source,0); }
+            int32 index = method.native_static?0:1;
+            while (index < method.parameter_count) {
+                KrtAstNode parameter = KrtAstMake(KrtAstKind.Type,method.start,0);
+                if (!KrtNativeSignatureType(parameter,method,index,signature.module,source)) { bytes.ok = false; signature.supported = false; return; }
+                parameter.native_ref = method.parameter_refs[index]; KrtAbiShape(contract,parameter,signature,source,0); index = index + 1;
+            }
+            methods = KrtModuleAbiMemberInsert(methods,contract);
+        }
+        method = KrtNativeTypeMemberNext(method);
+    }
+    KrtModuleAbiMembers(bytes,methods);
+    KrtModuleAbiMember statics = null; KrtAstNode field = type.body;
+    while (field != null) {
+        if (field.native_static) {
+            KrtAbiBytes contract = KrtAbiNew(); KrtLinkName name = KrtLinkNameNew(); int64 character = 0;
+            while (character < field.name_length) { KrtLinkByte(name,(int32)KrtNameAt(source,field.name_start,field.name_length,character)); character = character + 1; }
+            KrtAbiName(contract,name); KrtAbiWord(contract,KrtNativeAccessMode(field)); KrtAbiByte(contract,field.native_readonly?1:0);
+            KrtAbiShape(contract,field,signature,source,0); statics = KrtModuleAbiMemberInsert(statics,contract);
+        }
+        field = field.next;
+    }
+    KrtModuleAbiMembers(bytes,statics);
+}
+
+KrtAbiSignature KrtModuleTypeSignature(KrtAstNode type, KrtAstNode module, int64 source) {
+    KrtAbiSignature signature = new KrtAbiSignature(); signature.supported = true; signature.module = module; signature.uses_named = true;
+    KrtAbiBytes nominal = KrtAbiNew(); KrtAbiText(nominal,"_KRTT$");
+    KrtAbiBytes identity = KrtModuleTypeIdentity(type,source);
+    // The declaration name is the independent contract key. Changing a named
+    // declaration from class to interface, structure or enum conflicts even
+    // when no common function happens to expose that type. Runtime identities
+    // and the contract retain its actual kind.
+    int32 identity_index=0;
+    while(identity_index<identity.count){KrtAbiByte(nominal,identity_index>=8&&identity_index<12?0:(int32)identity.data[identity_index]);identity_index=identity_index+1;}
+    if(!identity.ok){nominal.ok=false;}
+    KrtAbiBytes layout = KrtAbiNew(); KrtAbiAppend(layout,identity);
+    KrtAbiWord(layout,type.native_storage_size); KrtAbiWord(layout,type.native_alignment);
+    KrtAstNode argument = type.native_type_arguments; int32 arguments = 0;
+    while (argument != null) { arguments = arguments + 1; argument = argument.next; }
+    KrtAbiWord(layout,arguments); argument = type.native_type_arguments;
+    while (argument != null) { KrtAbiShape(layout,argument,signature,source,0); argument = argument.next; }
+    KrtModuleAbiLayoutPrefix(layout,type,signature,source);
+    KrtAstNode field = type.body; int32 fields = 0;
+    while (field != null) { if (!field.native_static && type.value != 4) { fields = fields + 1; } field = field.next; }
+    KrtAbiWord(layout,fields); field = type.body;
+    while (field != null) {
+        if (!field.native_static && type.value != 4) {
+            KrtLinkName name = KrtLinkNameNew(); int64 character = 0;
+            while (character < field.name_length) { KrtLinkByte(name,(int32)KrtNameAt(source,field.name_start,field.name_length,character)); character = character + 1; }
+            KrtAbiName(layout,name); KrtAbiWord(layout,field.native_offset); KrtAbiWord(layout,KrtNativeValueStorage(field)); KrtAbiWord(layout,KrtNativeValueAlignment(field));
+            KrtAbiByte(layout,field.native_readonly?1:0); KrtAbiWord(layout,KrtNativeAccessMode(field)); KrtAbiShape(layout,field,signature,source,0);
+        }
+        field = field.next;
+    }
+    KrtAbiBytes contract = KrtAbiNew(); KrtAbiText(contract,"KRTTYPE3"); KrtAbiAppend(contract,nominal);
+    KrtAbiWord(contract,layout.count); KrtAbiAppend(contract,layout);
+    signature.nominal = nominal; signature.contract = contract; return signature;
+}

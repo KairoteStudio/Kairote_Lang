@@ -8,6 +8,40 @@ bool KrtNativeLowerGlobalValue(KrtAstNode node, KrtNativeModule module) {
         KrtNativeEmit(module, (int32)KrtNativeOp.Load, 0, KrtNativeValueWidth(node)) >= 0 && KrtNativeNormalizeWide(module,node);
 }
 
+bool KrtNativeLowerGlobalInitializerBody(KrtAstNode module_ast,KrtAstNode unit,KrtNativeModule module,int64 source,int32[] breaks,int32[] continues,ref int32 depth){
+    KrtNativeGlobalEntry entry=module_ast.native_globals.first;
+    while(entry!=null){
+        if(entry.assignment!=null){
+            if(KrtNativeEmit(module,44,entry.guard_slot,0)<0||KrtNativeEmit(module,75,0,0)<0){return false;}
+            int32 branch=KrtNativeEmit(module,(int32)KrtNativeOp.Branch,-1,-1);if(branch<0){return false;}module.args[branch]=module.count;
+            int32 handler=KrtNativeEmit(module,(int32)KrtNativeOp.TryEnter,-1,entry.exception_slot);if(handler<0){return false;}
+            if(!KrtNativeLowerStatement(entry.assignment,module_ast,unit,module,source,breaks,continues,ref depth)||
+               KrtNativeEmit(module,(int32)KrtNativeOp.TryLeave,entry.exception_slot,0)<0||
+               KrtNativeEmit(module,44,entry.guard_slot,0)<0||KrtNativeEmit(module,76,0,1)<0){return false;}
+            int32 done=KrtNativeEmit(module,(int32)KrtNativeOp.Jump,-1,0);if(done<0){return false;}
+            module.args[handler]=module.count;
+            if(KrtNativeEmit(module,44,entry.guard_slot,0)<0||KrtNativeEmit(module,76,0,0)<0||!KrtNativeLowerSavedThrow(module,entry.exception_slot)){return false;}
+            module.args[done]=module.count;module.extra[branch]=module.count;
+        }
+        entry=entry.next;
+    }
+    return true;
+}
+
+bool KrtNativeLowerGlobalInitializers(KrtAstNode ast,KrtAstNode unit,KrtNativeModule module,int64 source,int32 function_index){
+    int32 guard=module.initializer_guard_slot;int32 record=module.initializer_exception_slot;
+    if(guard<0||guard>=module.global_count||KrtNativeEmit(module,44,guard,0)<0||KrtNativeEmit(module,75,0,0)<0){return false;}
+    int32 branch=KrtNativeEmit(module,(int32)KrtNativeOp.Branch,-1,-1);if(branch<0){return false;}module.args[branch]=module.count;
+    int32 handler=KrtNativeEmit(module,(int32)KrtNativeOp.TryEnter,-1,record);if(handler<0){return false;}
+    int32[] breaks=new int32[64];int32[] continues=new int32[64];int32 depth=0;
+    bool valid=KrtNativeLowerGlobalInitializerBody(ast,unit,module,source,breaks,continues,ref depth);delete breaks;delete continues;
+    if(!valid||KrtNativeEmit(module,(int32)KrtNativeOp.TryLeave,record,0)<0||KrtNativeEmit(module,44,guard,0)<0||KrtNativeEmit(module,76,0,1)<0){return false;}
+    int32 done=KrtNativeEmit(module,(int32)KrtNativeOp.Jump,-1,0);if(done<0){return false;}module.args[handler]=module.count;
+    if(KrtNativeEmit(module,44,guard,0)<0||KrtNativeEmit(module,76,0,0)<0||!KrtNativeLowerSavedThrow(module,record)){return false;}
+    module.args[done]=module.count;module.extra[branch]=module.count;
+    return KrtNativeEmit(module,(int32)KrtNativeOp.Const,0,0)>=0&&KrtNativeEmit(module,(int32)KrtNativeOp.Return,0,1)>=0;
+}
+
 bool KrtNativeLowerFunctionAddress(KrtAstNode node, KrtNativeModule module) {
     return node.native_target != null && KrtNativeEmit(module, 45, node.native_target.value, 0) >= 0;
 }

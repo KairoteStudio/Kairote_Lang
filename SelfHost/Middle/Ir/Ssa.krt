@@ -6,7 +6,7 @@ class KrtSsaEscapeInfo { public bool[] values; }
 int32 KrtSsaInputs(KrtNativeModule module, int32 index) {
     int32 op = module.ops[index]; int32 arity = (int32)module.extra[index];
     if (op == 3 || op == 14 || op == 15 || op == 18 || op == 22 || op == 24 || op == 27 || op == 28 || op == 30 || op == 31 || op == 33 || op == 34 ||
-        op == 37 || op == 38 || op == 41 || op == 42 || op == 43 || op == 60 || op == 63 || op == 67 || op == 68 || op == 69 || op == 72) { return 1; }
+        op == 37 || op == 38 || op == 41 || op == 42 || op == 43 || op == 60 || op == 63 || op == 67 || op == 68 || op == 69 || op == 72 || op == 75 || op == 76) { return 1; }
     if ((op >= 4 && op <= 13) || op == 16 || op == 23 || op == 35 || op == 36 || op == 39 || op == 40 || op == 52 || op == 61 || op == 62 || op == 71) { return 2; }
     if (op == 19 || op == 26 || op == 20) { return arity; }
     if (op == 46) { return arity+1; }
@@ -16,7 +16,7 @@ int32 KrtSsaInputs(KrtNativeModule module, int32 index) {
 }
 
 bool KrtSsaHasResult(int32 op) {
-    return op != 0 && op != 3 && op != 17 && op != 18 && op != 20 && op != 23 && op != 27 && op != 34 && op != 50 && op != 51 && op != 52 && op != 71 && op != 72;
+    return op != 0 && op != 3 && op != 17 && op != 18 && op != 20 && op != 23 && op != 27 && op != 34 && op != 50 && op != 51 && op != 52 && op != 71 && op != 72 && op != 76;
 }
 
 KrtSsaEscapeInfo KrtSsaEscapes(KrtNativeModule module, int32 function_index, int32 first, int32 last, bool handler) {
@@ -44,10 +44,10 @@ void KrtSsaResultType(KrtSsaModule ssa, int32 value) {
     int32 inputs = ssa.operand_counts[value]; int32 input = -1;
     if (inputs > 0) { input = ssa.operands[ssa.operand_starts[value]]; width = ssa.widths[input]; kind = ssa.types[input]; }
     if (op == 1 || op == 2 || op == 19 || op == 26 || op == 46 || op == 53 || op == 54) { width = 8; kind = 1; }
-    if (op == 16 || op == 31 || op == 35 || op == 40 || op == 42 || op == 62) { width = 1; kind = 1; }
+    if (op == 16 || op == 31 || op == 35 || op == 40 || op == 42 || op == 62 || op == 75) { width = 1; kind = 1; }
     if (op == 28 && (ssa.args[value] != 8 && ssa.args[value] != -8)) { width = (int32)ssa.args[value]; kind = 1; }
     if (op == 22) { width = (int32)ssa.extra[value]; kind = (width == 16 || width == -16) ? 4 : 1; }
-    if (op == 21 || op == 24 || op == 25 || op == 29 || op == 30 || op == 36 || op == 44 || op == 45 || op == 69 || op == 73) { width = 8; kind = 3; }
+    if (op == 21 || op == 24 || op == 25 || op == 29 || op == 30 || op == 36 || op == 44 || op == 45 || op == 69 || op == 73 || op == 74) { width = 8; kind = 3; }
     if (op == 70) { width = (int32)ssa.extra[value]; kind = 5; }
     if (op == 37) { width = 4; kind = 1; }
     if (op == 39 || op == 41 || op == 43) { width = (int32)ssa.extra[value]; kind = 2; }
@@ -326,10 +326,13 @@ bool KrtSsaValidate(KrtSsaModule ssa) {
                     alignment <= 0 || alignment > 16 || (alignment & (alignment-1)) != 0) { return false; }
             } else if (op == 19 || op == 46) {
                 if (ssa.extra[value] < 0 || ssa.extra[value] > 129 || ssa.operand_counts[value] != ssa.extra[value]+(op == 46 ? 1 : 0)) { return false; }
-            } else if (op == 73) {
-                if (ssa.args[value] != 0 || ssa.extra[value] != 0 || ssa.operand_counts[value] != 0 || !ssa.results[value] ||
+            } else if (op == 73 || op == 74) {
+                if ((op == 73 && ssa.args[value] != 0) || (op == 74 && (ssa.args[value] < 0 || ssa.args[value] >= ssa.source.runtime_type_count)) || ssa.extra[value] != 0 || ssa.operand_counts[value] != 0 || !ssa.results[value] ||
                     ssa.types[value] != 1 || ssa.widths[value] != 64 || ssa.semantic_types == null || ssa.semantic_widths == null ||
                     ssa.semantic_types[value] != 3 || ssa.semantic_widths[value] != 8) { return false; }
+            } else if (op == 75 || op == 76) {
+                if (ssa.args[value] != 0 || ssa.operand_counts[value] != 1 || ssa.results[value] != (op == 75) ||
+                    (op == 75 && ssa.extra[value] != 0) || (op == 76 && ssa.extra[value] != 0 && ssa.extra[value] != 1)) { return false; }
             } else if (op == 101) {
                 if (phi_inputs < 0) {
                     int32 first_block = ssa.function_blocks[function_index]; int32 blocks = ssa.function_block_counts[function_index];

@@ -1,0 +1,135 @@
+// A relocatable module carries its compiler-generated declaration interface.
+// Consumers read these bytes through the native lexer and parser. Ordinary
+// exported bodies become extern declarations; binary generic templates retain
+// their source bodies and private implementation dependencies.
+class KrtModuleMetadataEdit {
+    public int64 start;
+    public int64 body;
+    public int64 end;
+    public KrtAbiBytes insertion;
+    public KrtModuleMetadataEdit next;
+}
+
+int64 KrtModuleMetadataClose(KrtAstNode type,int64 source){
+    KrtLexer lexer=new KrtLexer();KrtToken token=new KrtToken();
+    unsafe(using krt.mem;){if(!KrtLexerInit(lexer,(byte*)(source+type.start),type.length)){return -1;}}
+    int32 depth=0;bool entered=false;
+    while(true){
+        KrtLexerNext(lexer,token);
+        if(token.kind==KrtTokenKind.Eof){break;}
+        if(token.category==KrtTokenCategory.Punctuation&&token.length==1){
+            unsafe(using krt.mem;){byte value=((byte*)lexer.source)[token.start];
+                if(value==123){depth=depth+1;entered=true;}else if(value==125){depth=depth-1;if(entered&&depth==0){return type.start+token.start;}}}
+        }
+    }
+    return -1;
+}
+
+KrtModuleMetadataEdit KrtModuleMetadataEdits(KrtAstNode ast,int64 source) {
+    KrtModuleMetadataEdit list = null; KrtAstNode declaration = ast.left;
+    while (declaration != null) {
+        if (!declaration.native_closure_function && (declaration.native_generator==null||declaration.native_generator_role==1) && declaration.native_generic_origin == null &&
+            (declaration.native_owner==null||declaration.native_owner.native_generic_origin==null) && !KrtNativeIsTemplate(declaration) &&
+            declaration.op != 221 && declaration.op != 223 && declaration.op != 230 && declaration.op != 241 &&
+            KrtNativeAccessExported(declaration) && declaration.left != null && declaration.left.length > 0 &&
+            !(declaration.op==220&&declaration.native_owner!=null&&declaration.start==declaration.native_owner.start)) {
+            KrtModuleMetadataEdit edit = new KrtModuleMetadataEdit(); edit.start = declaration.start;
+            // Parser spans can include trivia up to the next token, including
+            // the driver separator between source files. Export only through
+            // the matching lexical brace; strings and comments are tokens.
+            int64 close=KrtModuleMetadataClose(declaration.left,source);
+            if(close<0){edit.start=-1;edit.next=list;return edit;}
+            edit.body = declaration.left.start; edit.end = close+1;
+            KrtModuleMetadataEdit item = list; KrtModuleMetadataEdit previous = null;
+            while (item != null && item.start < edit.start) { previous = item; item = item.next; }
+            if (item == null || item.start != edit.start) {
+                edit.next = item; if (previous == null) { list = edit; } else { previous.next = edit; }
+            } else { delete edit; }
+        }
+        declaration = declaration.next;
+    }
+    KrtAstNode type=ast.declarations;
+    while(type!=null){
+        if((type.value==1||type.value==2)&&type.native_generic_parameters==null&&type.native_generic_origin==null&&type.native_generator==null){
+            KrtAstNode method=KrtNativeTypeMemberFirst(type);
+            while(method!=null&&method.native_owner==type){
+                if(method.op==220&&method.start==type.start&&KrtNativeAccessExported(method)){
+                    int64 close=KrtModuleMetadataClose(type,source);
+                    if(close<0){KrtModuleMetadataEdit invalid=new KrtModuleMetadataEdit();invalid.start=-1;invalid.next=list;return invalid;}
+                    KrtModuleMetadataEdit edit=new KrtModuleMetadataEdit();edit.start=close;edit.body=close;edit.end=close;edit.insertion=KrtAbiNew();
+                    KrtAbiText(edit.insertion,"public extern ");int64 character=0;
+                    while(character<type.name_length){KrtAbiByte(edit.insertion,(int32)KrtNameAt(source,type.name_start,type.name_length,character));character=character+1;}
+                    KrtAbiText(edit.insertion,"();\n");KrtModuleMetadataEdit item=list;KrtModuleMetadataEdit previous=null;
+                    while(item!=null&&item.start<close){previous=item;item=item.next;}
+                    edit.next=item;if(previous==null){list=edit;}else{previous.next=edit;}
+                }
+                method=KrtNativeTypeMemberNext(method);
+            }
+        }
+        type=type.next;
+    }
+    return list;
+}
+
+KrtAbiBytes KrtModuleMetadataFile(int64 source, int64 start, int64 length, KrtModuleMetadataEdit edits) {
+    KrtAbiBytes bytes = KrtAbiNew(); int64 cursor = start; int64 end = start + length;
+    while (edits != null && edits.end <= start) { edits = edits.next; }
+    unsafe(using krt.mem;) {
+        byte* input = (byte*)source;
+        while (edits != null && edits.start < end) {
+            if (edits.start < cursor || edits.body < edits.start || edits.end < edits.body || edits.end > end) { bytes.ok = false; return bytes; }
+            while (cursor < edits.start) { KrtAbiByte(bytes,(int32)input[cursor]); cursor = cursor + 1; }
+            if(edits.insertion!=null){KrtAbiAppend(bytes,edits.insertion);edits=edits.next;continue;}
+            KrtAbiText(bytes,"extern ");
+            while (cursor < edits.body) { KrtAbiByte(bytes,(int32)input[cursor]); cursor = cursor + 1; }
+            KrtAbiText(bytes,";\n"); cursor = edits.end; edits = edits.next;
+        }
+        while (cursor < end) { KrtAbiByte(bytes,(int32)input[cursor]); cursor = cursor + 1; }
+    }
+    return bytes;
+}
+
+KrtAbiBytes KrtModuleMetadataBuild(KrtAstNode ast, int64 source) {
+    KrtAbiBytes bytes = KrtAbiNew(); KrtAbiWord(bytes,0x33444f4d); KrtAbiWord(bytes,3); KrtAbiWord(bytes,0); KrtAbiWord(bytes,0);
+    KrtModuleMetadataEdit edits = KrtModuleMetadataEdits(ast,source); KrtSourceFile file = KrtDriverActiveBundle != null ? KrtDriverActiveBundle.files : null;
+    if(edits!=null&&edits.start<0){bytes.ok=false;return bytes;}
+    int32 count = 0;
+    if (file == null) {
+        KrtAbiBytes body = KrtModuleMetadataFile(source,0,KrtDriverStringLength(source),edits);
+        KrtAbiWord(bytes,0); KrtAbiWord(bytes,body.count); KrtAbiAppend(bytes,body); count = 1;
+    }
+    while (file != null) {
+        if (!file.imported_metadata) {
+            KrtAbiBytes body = KrtModuleMetadataFile(source,file.start,file.length,edits);
+            int64 path_length = KrtDriverStringLength(file.path);
+            if (path_length > 4096 || !body.ok) { bytes.ok = false; return bytes; }
+            KrtAbiWord(bytes,(int32)path_length); KrtAbiWord(bytes,body.count);
+            unsafe(using krt.mem;) { byte* path = (byte*)file.path; int64 index = 0; while (index < path_length) { KrtAbiByte(bytes,(int32)path[index]); index = index + 1; } }
+            KrtAbiAppend(bytes,body); count = count + 1;
+        }
+        file = file.order_next;
+    }
+    KrtKroLibraryWord(bytes.data,8,count); KrtKroLibraryWord(bytes.data,12,bytes.count);
+    while (edits != null) { KrtModuleMetadataEdit next = edits.next; delete edits; edits = next; }
+    return bytes;
+}
+
+bool KrtKroModuleMetadata(KrtAstNode ast, int64 source, KrtKroObject output) {
+    KrtAbiBytes bytes = KrtModuleMetadataBuild(ast,source);
+    if (!bytes.ok || output.rodata_size > 16777216 - bytes.count) {
+        KrtDiagnosticMessage("E_MODULE_METADATA",17,ast.start,"cannot serialize the module declaration interface");return false;
+    }
+    int32 offset = output.rodata_size; byte[] rodata = new byte[offset + bytes.count]; int32 index = 0;
+    while (index < offset) { rodata[index] = output.rodata_bytes[index]; index = index + 1; }
+    index = 0; while (index < bytes.count) { rodata[offset+index] = bytes.data[index]; index = index + 1; }
+    output.rodata_bytes = rodata; output.rodata_size = offset + bytes.count;
+    int32 symbol = output.symbol_count; byte[] symbols = new byte[(symbol+1)*32+1]; index = 0;
+    while (index < symbol*32) { symbols[index] = output.symbol_bytes[index]; index = index + 1; }
+    output.symbol_bytes = symbols;
+    int32 name = output.strtab_size; byte[] names = new byte[name+32]; index = 0;
+    while (index < name) { names[index] = output.string_bytes[index]; index = index + 1; }
+    output.string_bytes = names; KrtKroLibrarySymbol(output,symbol,name,offset,bytes.count,2); KrtKroLibraryWord(output.symbol_bytes,symbol*32+16,0);
+    string marker = "_KRT_MODULE3_METADATA";
+    unsafe(using krt.mem;) { byte* text = (byte*)(int64)marker; index = 0; while (text[index] != 0) { names[name] = text[index]; name = name + 1; index = index + 1; } }
+    names[name] = 0; output.strtab_size = name + 1; output.symbol_count = symbol + 1; return true;
+}

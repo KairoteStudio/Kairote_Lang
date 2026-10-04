@@ -1,6 +1,7 @@
 #include "ArkLink/Resolver.h"
 #include "ArkLink/Context.h"
 #include "ArkLink/Backend.h"
+#include "ArkLink/NativeAbi.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -42,11 +43,16 @@ static int symbol_table_add(SymbolTable* table, const ArkResolverSymbol* sym) {
 
                 table->symbols[i] = *sym;
             } else if (table->symbols[i].defined && sym->defined) {
+                if (table->symbols[i].binding == ARK_BIND_WEAK && sym->binding == ARK_BIND_GLOBAL) {
+                    table->symbols[i] = *sym;
+                    return 1;
+                }
+                if (table->symbols[i].binding == ARK_BIND_WEAK || sym->binding == ARK_BIND_WEAK) return 1;
 
                 /* Native ABI definitions are strong: silently selecting one
                  * makes independently compiled calls depend on link order.
                  * Keep the legacy Re standard-library duplicate policy below. */
-                if ((strncmp(sym->name, "_KRT1$", 6) == 0 || strncmp(sym->name, "_KRT2$", 6) == 0) && table->symbols[i].binding == ARK_BIND_GLOBAL &&
+                if ((strncmp(sym->name, "_KRT1$", 6) == 0 || strncmp(sym->name, "_KRT2$", 6) == 0 || strncmp(sym->name,"_KRT3$",6)==0) && table->symbols[i].binding == ARK_BIND_GLOBAL &&
                     sym->binding == ARK_BIND_GLOBAL) {
                     return 0;
                 }
@@ -184,6 +190,8 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
     }
 
     memset(out_plan, 0, sizeof(ArkResolverPlan));
+    ArkLinkResult abi_result = ark_native_abi_validate(units,unit_count);
+    if (abi_result != ARK_LINK_OK) return abi_result;
 
     SymbolTable sym_table;
     if (!symbol_table_init(&sym_table, 64)) {
@@ -241,7 +249,7 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
             sym.visibility = sym_desc->visibility;
             sym.defined = sym_desc->section_index > 0;
 
-            if (sym_desc->section_index > 0 && sym_desc->binding != ARK_BIND_GLOBAL && sym.name &&
+            if (sym_desc->section_index > 0 && sym_desc->binding == ARK_BIND_LOCAL && sym.name &&
                 find_symbol(&sym_table, sym.name) && find_symbol(&sym_table, sym.name)->defined) {
                 char renamed[512];
                 snprintf(renamed, sizeof(renamed), "%s@u%zu", sym.name, i);

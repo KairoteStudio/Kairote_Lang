@@ -7,6 +7,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPILER = Path(os.environ.get('SELFHOST_COMPILER', ROOT / 'build/selfhost/stage2/program')).resolve()
+LINKER = Path(os.environ.get('ARKLINK', ROOT / 'build/ArkLink/ArkLink')).resolve()
 
 
 @unittest.skipUnless(COMPILER.is_file(), 'build the self-hosted compiler first')
@@ -17,7 +18,7 @@ class GlobalsAndFunctionPointers(unittest.TestCase):
             path = work / 'main.krt'
             path.write_text(source)
             binary = work / 'program'
-            command=[str(ROOT / 'SelfHost/krtc'), str(path), '--compiler', str(COMPILER),
+            command=[str(ROOT / 'SelfHost/krtc'), str(path), '--compiler', str(COMPILER), '--linker', str(LINKER),
                      f'-O{optimization}', '-o', str(binary)]
             if vm:
                 command+=['target','vm']

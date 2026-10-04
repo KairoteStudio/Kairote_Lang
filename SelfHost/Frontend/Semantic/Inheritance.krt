@@ -38,7 +38,8 @@ bool KrtNativeResolveInheritanceInner(KrtAstNode type, KrtAstNode module, int64 
     if (type.value == 4) { return type.left == null; }
     if (type.native_generic_parameters != null) { return true; }
     if (type.value == 2) {
-        if (type.left != null) { return KrtNativeLayoutError(module,type,null); }
+        type.native_inheritance_state=1;
+        if(!KrtNativeResolveTypeBases(type,module,source)){type.native_inheritance_state=3;return false;}
         bool valid = KrtNativeResolveLayout(type,module,source);
         type.native_inheritance_state = valid ? 2 : 3; return valid;
     }
@@ -48,8 +49,8 @@ bool KrtNativeResolveInheritanceInner(KrtAstNode type, KrtAstNode module, int64 
     if (!KrtNativeResolveLayout(type,module,source)) { type.native_inheritance_state = 3; return false; }
     KrtAstNode method = type.declarations;
     while (method != null && method.native_owner == type) {
-        if ((method.native_base_call != null && (method.op != 220 || type.native_base == null))) { type.native_inheritance_state = 3; return false; }
-        if (method.op == 220 && type.native_base != null) {
+        if ((method.native_base_call != null && ((method.op != 220 && !method.native_external_constructor) || type.native_base == null))) { type.native_inheritance_state = 3; return false; }
+        if (method.op == 220 && !method.native_external_constructor && type.native_base != null) {
             KrtAstNode call = method.native_base_call;
             if (call == null) { call = KrtAstMake(KrtAstKind.Call, method.start, 0); call.op = 222; method.native_base_call = call; }
             call.native_scope = method.native_scope; call.native_context = method.native_context;

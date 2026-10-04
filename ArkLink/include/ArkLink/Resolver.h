@@ -36,6 +36,9 @@ typedef struct ArkResolverReloc {
     int64_t addend;
     uint32_t target_rva;
     uint32_t symbol_rva;
+    /* PE RVAs stay 32 bit; resolved ELF virtual addresses are full width. */
+    uint64_t symbol_address;
+    int symbol_address_resolved;
 } ArkResolverReloc;
 
 typedef struct ArkImportModule {

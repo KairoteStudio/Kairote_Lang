@@ -1,0 +1,70 @@
+{
+  "compiler_sha256": "ae82f9273739955093d460e4f4bc48924d0279925920ca070506105fbb307cab",
+  "source_sha256": "388065225d4f58aa0d44bb4cbdf497a6aef92d0e709df34f287c809e38715b4b",
+  "objects": [
+    {
+      "level": 0,
+      "hex_path": "legacy-physical-o0.kro.hex",
+      "object_sha256": "13638757ea50780d4d52c7fbf983b93f31fa249e5017174ac7dc10ffdb0078b4",
+      "argv": [
+        "/home/mnsjtxy/Kairote_Lang/build/selfhost/stage2/program",
+        "--linker",
+        "/home/mnsjtxy/Kairote_Lang/build/selfhost-module-abi/arklink/ArkLink",
+        "/home/mnsjtxy/Kairote_Lang/Test/SelfHost/fixtures/module-abi-wide/LegacyPhysical.krt",
+        "-O0",
+        "-c",
+        "-o",
+        "/home/mnsjtxy/Kairote_Lang/build/selfhost-module-abi/legacy-wide/legacy-physical-o0.kro"
+      ],
+      "exit": 0
+    },
+    {
+      "level": 1,
+      "hex_path": "legacy-physical-o1.kro.hex",
+      "object_sha256": "11cb31d24715b22418ebe7dea5797555d1290b48899e9b410b4a4b3a37a3003a",
+      "argv": [
+        "/home/mnsjtxy/Kairote_Lang/build/selfhost/stage2/program",
+        "--linker",
+        "/home/mnsjtxy/Kairote_Lang/build/selfhost-module-abi/arklink/ArkLink",
+        "/home/mnsjtxy/Kairote_Lang/Test/SelfHost/fixtures/module-abi-wide/LegacyPhysical.krt",
+        "-O1",
+        "-c",
+        "-o",
+        "/home/mnsjtxy/Kairote_Lang/build/selfhost-module-abi/legacy-wide/legacy-physical-o1.kro"
+      ],
+      "exit": 0
+    },
+    {
+      "level": 2,
+      "hex_path": "legacy-physical-o2.kro.hex",
+      "object_sha256": "0b2c9e5e44f371d4515722798662336dc7087f0f9b3624a126bd8f59520c9520",
+      "argv": [
+        "/home/mnsjtxy/Kairote_Lang/build/selfhost/stage2/program",
+        "--linker",
+        "/home/mnsjtxy/Kairote_Lang/build/selfhost-module-abi/arklink/ArkLink",
+        "/home/mnsjtxy/Kairote_Lang/Test/SelfHost/fixtures/module-abi-wide/LegacyPhysical.krt",
+        "-O2",
+        "-c",
+        "-o",
+        "/home/mnsjtxy/Kairote_Lang/build/selfhost-module-abi/legacy-wide/legacy-physical-o2.kro"
+      ],
+      "exit": 0
+    },
+    {
+      "level": 3,
+      "hex_path": "legacy-physical-o3.kro.hex",
+      "object_sha256": "0b2c9e5e44f371d4515722798662336dc7087f0f9b3624a126bd8f59520c9520",
+      "argv": [
+        "/home/mnsjtxy/Kairote_Lang/build/selfhost/stage2/program",
+        "--linker",
+        "/home/mnsjtxy/Kairote_Lang/build/selfhost-module-abi/arklink/ArkLink",
+        "/home/mnsjtxy/Kairote_Lang/Test/SelfHost/fixtures/module-abi-wide/LegacyPhysical.krt",
+        "-O3",
+        "-c",
+        "-o",
+        "/home/mnsjtxy/Kairote_Lang/build/selfhost-module-abi/legacy-wide/legacy-physical-o3.kro"
+      ],
+      "exit": 0
+    }
+  ]
+}

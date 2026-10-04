@@ -113,8 +113,18 @@ KrtAstNode KrtParserLocalTypeAhead(KrtParser parser) {
     return type;
 }
 
-KrtAstNode KrtParserCastTypeAhead(KrtParser parser) {
-    if (!KrtParserTokenText(parser, 40)) { return null; }
+bool KrtParserStructuralCastType(KrtAstNode type) {
+    if (type.op == 1 || type.syntax_pointer_depth != 0 || type.syntax_array_rank != 0 || type.syntax_nullable) { return true; }
+    KrtAstNode component = type;
+    while (component != null) {
+        if (component.left != null) { return true; }
+        component = component == type ? type.right : component.next;
+    }
+    return false;
+}
+
+KrtAstNode KrtParserCastTypeAheadDepth(KrtParser parser, int32 depth) {
+    if (depth >= 64 || !KrtParserTokenText(parser, 40)) { return null; }
     KrtParser probe = KrtParserFork(parser); KrtLexerNext(probe.lexer, probe.token);
     bool builtin = KrtParserIsBuiltinType(probe);
     KrtAstNode type = KrtParserParseType(probe);
@@ -122,7 +132,7 @@ KrtAstNode KrtParserCastTypeAhead(KrtParser parser) {
     KrtLexerNext(probe.lexer, probe.token);
     // Plain names before +/-/*/& remain grouped expressions; structural type
     // suffixes and builtin type tokens resolve the cast ambiguity in syntax.
-    bool structural = type.left != null || type.right != null || type.syntax_pointer_depth != 0 || type.syntax_array_rank != 0;
+    bool structural = KrtParserStructuralCastType(type);
     if (!builtin && !structural && (KrtParserTokenText(probe, 43) || KrtParserTokenText(probe, 45) || KrtParserTokenText(probe, 42) || KrtParserTokenText(probe, 38))) { return null; }
     bool operand_start = probe.token.category == KrtTokenCategory.Integer || probe.token.category == KrtTokenCategory.Floating ||
         probe.token.category == KrtTokenCategory.Character || probe.token.category == KrtTokenCategory.String ||
@@ -131,8 +141,61 @@ KrtAstNode KrtParserCastTypeAhead(KrtParser parser) {
         KrtParserIsWord(probe, "new") || KrtParserIsWord(probe, "default") || KrtParserIsWord(probe, "sizeof") ||
         KrtParserTokenText(probe, 40) || KrtParserTokenText(probe, 43) || KrtParserTokenText(probe, 45) || KrtParserTokenText(probe, 33) ||
         KrtParserTokenText(probe, 126) || KrtParserTokenText(probe, 42) || KrtParserTokenText(probe, 38);
-    if (!operand_start || (!builtin && !structural && KrtParserTokenText(probe, 40))) { return null; }
+    if (!operand_start) { return null; }
+    if (!builtin && !structural && KrtParserTokenText(probe, 40)) {
+        // A cast chain ending in an unambiguous unary operand cannot be a
+        // sequence of calls. Parenthesized calls remain unresolved in syntax.
+        KrtParser operand_probe = KrtParserFork(probe);
+        if (KrtParserCastTypeAheadDepth(operand_probe, depth + 1) == null) { return null; }
+    }
     KrtParserCommit(parser, probe); return type;
+}
+
+KrtAstNode KrtParserCastTypeAhead(KrtParser parser) {
+    return KrtParserCastTypeAheadDepth(parser, 0);
+}
+
+// Keep the complete grouped-call interpretation. Type/value lookup later
+// resolves (Name)(operand), including qualified names and extra grouping.
+KrtAstNode KrtParserParenthesizedTypeAhead(KrtParser parser) {
+    KrtParser probe = KrtParserFork(parser); int32 parentheses = 0;
+    while (KrtParserTokenText(probe, 40) && parentheses < 64) {
+        parentheses++; KrtLexerNext(probe.lexer, probe.token);
+    }
+    KrtAstNode type = KrtParserParseType(probe);
+    if (type == null || probe.errors != 0) { return null; }
+    while (parentheses > 0) {
+        if (!KrtParserTokenText(probe, 41)) { return null; }
+        KrtLexerNext(probe.lexer, probe.token); parentheses--;
+    }
+    return KrtParserTokenText(probe, 40) ? type : null;
+}
+
+KrtAstNode KrtParserGroupedCallPrefix(KrtAstNode expression, KrtAstNode grouped) {
+    KrtAstNode node = expression;
+    while (node != null) {
+        if (node.kind == KrtAstKind.Call && node.left == grouped) { return node; }
+        if (node.kind != KrtAstKind.Call && node.kind != KrtAstKind.Member && node.kind != KrtAstKind.Index &&
+            node.kind != KrtAstKind.Unary && node.kind != KrtAstKind.NullConditional) { return null; }
+        node = node.left;
+    }
+    return null;
+}
+
+KrtAstNode KrtParserParenthesizedCastCandidate(KrtAstNode expression, KrtAstNode grouped, KrtAstNode type, int64 start) {
+    if (type == null) { return expression; }
+    KrtAstNode prefix = KrtParserGroupedCallPrefix(expression, grouped);
+    if (prefix == null || prefix.parameter_count != 1 || prefix.right == null || prefix.right.next != null ||
+        prefix.right.syntax_argument_name_length != 0 || (prefix.right.kind == KrtAstKind.Unary && prefix.right.op == 200)) { return expression; }
+    // One syntax tree retains both readings. The marked first call becomes
+    // the grouped operand if type binding selects a cast. Duplicating the
+    // operand would make scope traversal and generic cloning exponential.
+    prefix.op = 253;
+    KrtAstNode candidate = KrtAstMake(KrtAstKind.Call, start, expression.start + expression.length - start);
+    candidate.op = 252; candidate.left = expression; candidate.syntax_type = type;
+    candidate.type_start = type.type_start; candidate.type_length = type.type_length;
+    candidate.name_start = type.type_start; candidate.name_length = type.type_length;
+    candidate.child_count = 1; return candidate;
 }
 
 bool KrtParserTypeDeclarationAhead(KrtParser parser) {

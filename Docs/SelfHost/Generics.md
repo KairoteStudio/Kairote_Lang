@@ -18,18 +18,25 @@
 
 ## 原生 KRO 符号
 
-标量 `_KRT1$` 名称编码 namespace、声明 owner、完整参数与返回类型。泛型 owner 与函数自身的类型实参都参与编码，即使类型参数未出现在普通参数或返回类型中。每层指针使用一个 `P`，数组使用 `A`，字符使用 `c`，无符号字节使用 `u8`。函数指针参数的指针层数编码在签名内部。显式外层空值标记使用 `Q`，内部指针槽位空值位图使用 `M` 和完整 16 位十六进制数；原有无空值标记的标量签名保持原名。具体结构体签名使用 `_KRT2$` 与完整布局契约。
+标量 `_KRT1$` 名称编码 namespace、声明 owner、完整参数与返回类型。泛型 owner 与函数自身的类型实参都参与编码，即使类型参数未出现在普通参数或返回类型中。每层指针使用一个 `P`，数组使用 `A`，字符使用 `c`，无符号字节使用 `u8`。函数指针参数的指针层数编码在签名内部。显式外层空值标记使用 `Q`，内部指针槽位空值位图使用 `M` 和完整 16 位十六进制数；物理调用约定未改变的无空值标记标量签名保持原名。具体结构体签名使用 `_KRT2$` 与完整布局契约。
 
-泛型函数模板的具体实例保持模块局部符号；公有闭泛型结构体的普通方法可以按 ABI2 契约导出。当前跨 KRO 的类身份及泛型 extern 模板仍不支持；具体 ABI 边界见 [Projects.md](Projects.md)。数组和指针的类型描述递归保留元素、空值层及固定数组形状。嵌套动态数组字面量的构造仍受限制，动态或锯齿数组的全部构造与操作尚未完整支持。
+泛型函数模板的具体实例使用模块局部符号。KRO 元数据保留开放函数及类型模板的语法、模板体、声明作用域和私有依赖；消费者从对象读取这些内容，为此前未出现的类型实参生成实例，无需生产模块的原始文件。普通公开函数和构造函数以 `extern` 声明导入。
+
+公开闭泛型 struct、class、interface 和 enum 身份包含完整名义名称及类型实参。普通方法按具体 ABI 契约导出；导入的闭泛型 owner 方法使用弱符号，静态存储按完整类型参数共享。消费者产生的闭方法实例不改变原声明的成员契约。
+
+公开开放泛型方法的独立契约按位置编号类型参数，递归保留数组、指针、nullable、ref、函数签名及命名类型构造器。约束按参数位置和完整约束排序、去重。等价的参数重命名、`where` 顺序及命名空间别名产生相同契约；参数、返回值、ref、泛型元数和约束冲突在链接前被拒绝。
+
+直接 wide 参数、结果和 `ref wide` 使用 ABI3 的 `KRTWIDE3` 物理约定；含此边界的 typed callback 名称使用 `fn3`。普通 struct 及 `fn(Packet)->Packet` 的原 ABI2 保持兼容，包括其中的 wide 字段。数组和指针的类型描述递归保留元素、空值层及固定数组形状。完整模块契约见 [ModuleAbi.md](ModuleAbi.md)，工程命令见 [Projects.md](Projects.md)。
 
 ## 执行与符号证据
 
-`test_native_generics.py` 包含递归类型推断、ref 和多层指针、函数指针、扩展接收者、基类/接口投影、字符身份、162 个实例的注册表扩容及别名复用，以及超过 1024 个函数的实际执行测试。`test_native_linking.py` 检查真实 KRO 符号，并分别编译、链接和执行调用方与函数库。
+`test_native_generics.py` 包含递归类型推断、ref 和多层指针、函数指针、扩展接收者、基类/接口投影、字符身份、162 个实例的注册表扩容及别名复用，以及超过 1024 个函数的实际执行测试。`test_native_linking.py` 检查真实 KRO 符号，并分别编译、链接和执行调用方与函数库。`test_module_abi.py` 覆盖对象元数据独立实例化、闭泛型静态状态、开放方法签名的等价与冲突；`test_generator_modules.py` 覆盖跨模块开放生成器模板。
 
 ```sh
 SELFHOST_COMPILER=/absolute/path/to/native/compiler python3 -m unittest \
   Test.SelfHost.test_native_generics Test.SelfHost.test_generic_statics \
-  Test.SelfHost.test_native_linking Test.SelfHost.test_generic_constraints
+  Test.SelfHost.test_native_linking Test.SelfHost.test_generic_constraints \
+  Test.SelfHost.test_module_abi Test.SelfHost.test_generator_modules
 ```
 
 Python 仅执行测试输入和检查产物，不参与编译、泛型处理或驱动入口。

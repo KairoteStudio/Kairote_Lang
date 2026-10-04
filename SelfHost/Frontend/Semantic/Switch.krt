@@ -49,6 +49,7 @@ bool KrtNativeBindSwitch(KrtAstNode statement, KrtNativeBinding binding) {
     statement.local_slot = binding.slots; binding.slots = binding.slots + 1;
     KrtAstNode saved = KrtAstMake(KrtAstKind.Identifier, statement.left.start, statement.left.length);
     KrtNativeCopyType(saved, statement.left); saved.local_slot = statement.local_slot;
+    if (!KrtNativeBindAggregateFrame(saved, binding)) { return false; }
     statement.native_target = saved;
     bool has_default = false; KrtAstNode clause = statement.right;
     while (clause != null) {
@@ -79,7 +80,7 @@ bool KrtNativeBindSwitch(KrtAstNode statement, KrtNativeBinding binding) {
 // Loops may complete normally; their break/continue belong to that loop.
 int32 KrtNativeSwitchStatementFlow(KrtAstNode statement) {
     if (statement == null) { return 1; }
-    if (statement.kind == KrtAstKind.Return || statement.kind == KrtAstKind.Throw) { return 2; }
+    if (statement.kind == KrtAstKind.Return || statement.kind == KrtAstKind.Throw || statement.kind == KrtAstKind.YieldBreak) { return 2; }
     if (statement.kind == KrtAstKind.Break) { return 4; }
     if (statement.kind == KrtAstKind.Continue) { return 8; }
     if (statement.kind == KrtAstKind.Unsafe || statement.kind == KrtAstKind.Point) { return KrtNativeSwitchStatementFlow(statement.left); }

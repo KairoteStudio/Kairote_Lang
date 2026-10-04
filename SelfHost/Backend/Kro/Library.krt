@@ -27,7 +27,16 @@ void KrtKroLibraryName(KrtKroObject output, int64 source, int64 start, int32 len
 
 bool KrtKroLibraryNormalize(KrtAstNode node, ref int64 low, ref int64 high) {
     if (node.native_float != 0) { return false; }
-    if (KrtNativeWideKind(node)) { return true; }
+    if (KrtNativeWideKind(node)) {
+        int32 bits=node.native_bits>0?node.native_bits:128;
+        if(bits<=64||bits>128){return false;}
+        if(bits<128){
+            int32 shift=128-bits;
+            high=(high<<shift)>>shift;
+            if(node.native_unsigned){high=high&(((int64)1<<(bits-64))-1);}
+        }
+        return true;
+    }
     if (node.native_boolean) { low = low != 0 || high != 0 ? 1 : 0; }
     else {
         int32 bits = node.native_bits > 0 ? node.native_bits : node.native_width * 8;
@@ -101,6 +110,50 @@ bool KrtKroLibraryValue(KrtAstNode node, ref int64 low, ref int64 high) {
     return KrtKroLibraryNormalize(node, ref low, ref high);
 }
 
+// A unit containing only constant scalar storage needs no runtime assignment.
+// Probe the complete unit first: a dynamic initializer must retain its original
+// order, including reads of later globals and exception retry behavior.
+bool KrtKroLibraryStaticData(KrtNativeModule module,KrtAstNode ast) {
+    if(ast.declarations!=null||module.external_count!=0){return false;}
+    KrtAstNode declaration=module.function_ast;
+    while(declaration!=null){if(declaration.op!=230){return false;}declaration=declaration.next;}
+    KrtNativeGlobalEntry entry=ast.native_globals.first;
+    while(entry!=null){
+        declaration=entry.declaration;
+        if(!entry.module_guard&&!declaration.native_readonly&&!entry.imported){
+            if(declaration.native_type!=null||declaration.native_array||declaration.native_stride!=0||
+                declaration.native_string||declaration.native_float!=0||declaration.native_function_pointer!=null||
+                entry.storage_size<=0||entry.storage_size>16){return false;}
+            int64 low=0;int64 high=0;
+            if(!KrtKroLibraryValue(declaration.left,ref low,ref high)||!KrtKroLibraryNormalize(declaration,ref low,ref high)){return false;}
+        }
+        entry=entry.next;
+    }
+    entry=ast.native_globals.first;
+    while(entry!=null){
+        if(!entry.module_guard&&!entry.declaration.native_readonly&&!entry.imported){
+            int64 low=0;int64 high=0;
+            if(!KrtKroLibraryValue(entry.declaration.left,ref low,ref high)||!KrtKroLibraryNormalize(entry.declaration,ref low,ref high)){return false;}
+            entry.static_data=true;entry.static_low=low;entry.static_high=high;
+        }
+        entry=entry.next;
+    }
+    // FinishGlobals appends this local guard after allocating every field. No
+    // code in this data object references it, so retain only the field guards.
+    entry=ast.native_globals.first;
+    if(entry!=null&&entry.module_guard){
+        if(module.initializer_guard_slot!=module.global_count-2){return false;}
+        ast.native_globals.first=entry.next;module.global_count=module.global_count-2;
+    }
+    module.function_count=0;module.function_ast=null;module.initializer_index=-1;module.initializer_guard_slot=-1;
+    return true;
+}
+
+bool KrtKroEmitLibrarySections(KrtNativeModule module,KrtAstNode ast,int64 source,KrtKroObject output){
+    output.magic=5198411;output.version=2;output.architecture=34404;
+    return KrtKroLibraryFunctions(module,ast,source,output)&&KrtKroObjectIsValid(output);
+}
+
 bool KrtKroEmitLibraryData(KrtAstNode module, int64 source, KrtKroObject output) {
     int32 count = 0; int32 size = 0; int32 names = 1;
     KrtAstNode declaration = module.body;
@@ -158,16 +211,16 @@ bool KrtKroLibraryPublicSignature(KrtAstNode function_node, KrtAstNode ast, int6
 }
 
 bool KrtKroLibraryPublicDefinition(KrtAstNode declaration,KrtAbiSignature signature) {
-    return !declaration.native_closure_function&&KrtNativeAccessExported(declaration)&&declaration.op!=220&&declaration.op!=230&&declaration.op!=241&&declaration.native_generic_origin==null&&
+    return !declaration.native_closure_function&&!declaration.native_abstract&&KrtNativeAccessExported(declaration)&&declaration.op!=230&&declaration.op!=241&&declaration.native_generic_origin==null&&
         signature.supported&&signature.contract.ok&&
         (declaration.native_owner==null||(declaration.native_owner.native_generic_parameters==null&&
-            (declaration.native_owner.native_generic_origin==null||declaration.native_owner.value==2)));
+            (declaration.native_owner.native_generic_origin==null||declaration.native_owner.value==2||declaration.native_owner.value==1)));
 }
 
 bool KrtKroLibraryNeedsAbi(KrtNativeModule module,KrtAstNode ast,int64 source) {
     // Scalar-only objects retain the existing compact symbol-table contract.
     KrtAstNode type=ast.declarations;bool has_struct=false;
-    while(type!=null){if(type.value==2){has_struct=true;break;}type=type.next;}
+    while(type!=null){if(type.value>=1&&type.value<=5){has_struct=true;break;}type=type.next;}
     if(!has_struct){return false;}
     KrtAstNode declaration=module.function_ast;
     while(declaration!=null){
@@ -199,7 +252,7 @@ bool KrtKroLibraryFunctions(KrtNativeModule module, KrtAstNode ast, int64 source
         if(local){KrtLinkText(link_name,"$local");KrtLinkNumber(link_name,index);}
         if (!link_name.valid) { return false; }
         KrtKroLibrarySymbol(output, symbol_index, name, offsets[index], sizes[index], 1);
-        KrtKroLibraryWord(symbols, symbol_index * 32 + 16, local ? 0 : 1);
+        KrtKroLibraryWord(symbols, symbol_index * 32 + 16, local ? 0 : (signature.weak?2:1));
         byte[] bytes = link_name.bytes; int32 character = 0;
         while (character < link_name.length) { string_bytes[name] = bytes[character]; name = name + 1; character = character + 1; }
         string_bytes[name] = 0; name = name + 1;
@@ -226,6 +279,9 @@ bool KrtKroLibraryFunctions(KrtNativeModule module, KrtAstNode ast, int64 source
         index = index + 1; external_node = external_node.native_external_next;
     }
     if(!KrtKroAbiFinish(output,manifest,abi_records,ref name)){return false;}
+    KrtAbiBytes types_manifest=KrtAbiNew();KrtAbiWord(types_manifest,0x32494241);KrtAbiWord(types_manifest,3);KrtAbiWord(types_manifest,0);KrtAbiWord(types_manifest,0);
+    int32 type_records=0;
+    if(!KrtKroAbiTypes(types_manifest,ast,source,ref type_records)||!KrtKroAbiFinishNamed(output,types_manifest,type_records,ref name,"_KRT_ABI3_TYPES")){return false;}
     output.strtab_size = name;
     output.text_reloc_count = module.external_reloc_count; output.total_reloc_count = module.external_reloc_count; output.relocation_count = module.external_reloc_count;
     output.text_relocation_bytes = new byte[module.external_reloc_count * 16 + 1];
@@ -240,5 +296,5 @@ bool KrtKroLibraryFunctions(KrtNativeModule module, KrtAstNode ast, int64 source
         KrtKroLibraryWord(relocations, index * 16 + 12, 0);
         index = index + 1;
     }
-    return true;
+    return KrtKroGlobalSymbols(module,ast,source,output)&&KrtKroRuntimeDescriptors(module,ast,source,output);
 }

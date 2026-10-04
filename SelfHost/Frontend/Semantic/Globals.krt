@@ -107,14 +107,20 @@ bool KrtNativeRegisterGlobal(KrtAstNode declaration, KrtAstNode owner, KrtAstNod
         if (!KrtNativeAnnotateType(declaration, module, source, declaration.type_start, declaration.type_length)) {
             state.output.error_start = declaration.type_start; return false;
         }
-        declaration.native_global = state.output.global_count + 1;
-        if (KrtNativeInlineValue(declaration)) {
-            int32 offset = KrtNativeAlignStorage(state.output.global_count * 8,declaration.native_alignment);
-            if (offset < 0 || declaration.native_storage_size > 16777216 - offset) { state.output.error_start = declaration.start; return false; }
-            declaration.native_global = offset / 8 + 1;
-            state.output.global_count = (offset + declaration.native_storage_size + 7) / 8;
-        } else { state.output.global_count = state.output.global_count + (KrtNativeWideKind(declaration) ? 2 : 1); }
-        if (state.output.global_count > 65536) { state.output.error_start = declaration.start; return false; }
+        entry.storage_size=KrtNativeInlineValue(declaration)?declaration.native_storage_size:(KrtNativeWideKind(declaration)?16:declaration.native_width);
+        if(entry.storage_size<=0||entry.storage_size>16777216){state.output.error_start=declaration.start;return false;}
+        int32 offset=KrtNativeAlignStorage(state.output.global_count*8,KrtNativeValueAlignment(declaration));
+        if(offset<0||entry.storage_size>16777216-offset){state.output.error_start=declaration.start;return false;}
+        declaration.native_global=offset/8+1;state.output.global_count=(offset+entry.storage_size+7)/8;
+        if(state.output.global_count>65536){state.output.error_start=declaration.start;return false;}
+        entry.symbol_name=KrtModuleGlobalName(declaration,owner,source,71);entry.guard_name=KrtModuleGlobalName(declaration,owner,source,74);
+        entry.initializer_name=KrtModuleGlobalName(declaration,owner,source,76);
+        if(!entry.symbol_name.valid||!entry.guard_name.valid||!entry.initializer_name.valid){state.output.error_start=declaration.start;return false;}
+        entry.imported=declaration.native_imported||(owner!=null&&owner.native_imported)||(declaration.syntax_modifiers&1024)!=0;
+        entry.weak=owner!=null&&owner.native_generic_origin!=null&&(declaration.syntax_modifiers&1024)==0;
+        entry.guard_slot=state.output.global_count;
+        state.output.global_count=state.output.global_count+2;
+        if(state.output.global_count>65536){state.output.error_start=declaration.start;return false;}
     }
     return true;
 }
@@ -137,6 +143,7 @@ bool KrtNativeCollectGlobals(KrtAstNode module, int64 source) {
 
 bool KrtNativePrepareGlobals(KrtAstNode module, int64 source, KrtNativeModule output) {
     KrtNativeGlobalState state = new KrtNativeGlobalState(); state.output = output; module.native_globals = state;
+    output.initializer_guard_slot=-1;
     KrtAstNode initializer = KrtAstMake(KrtAstKind.Function, 0, 0);
     initializer.op = 230; initializer.native_static = true; initializer.native_bound = true;
     initializer.left = KrtAstMake(KrtAstKind.Block, 0, 0); state.initializer = initializer;
@@ -173,6 +180,7 @@ bool KrtNativeBindGlobalInitializers(KrtAstNode module, int64 source) {
                 if (!KrtNativeBindGlobal(target, declaration, binding)) { state.output.error_start = declaration.start; return false; }
                 KrtAstNode assignment = KrtAstMake(KrtAstKind.Assign, declaration.start, declaration.length);
                 assignment.left = target; assignment.right = declaration.left; entry.assignment = assignment;
+                entry.exception_slot=initializer.native_locals;initializer.native_locals=initializer.native_locals+24;
             }
         }
         entry = entry.next;
@@ -190,6 +198,15 @@ bool KrtNativeFinishGlobals(KrtAstNode module) {
         }
         entry = entry.next;
     }
-    if (last != null) { KrtParserAppendDeclaration(module, state.initializer); }
+    if (last != null) {
+        KrtNativeModule output=state.output;KrtNativeGlobalEntry guard=new KrtNativeGlobalEntry();guard.module_guard=true;guard.storage_size=16;guard.bound=true;
+        guard.declaration=KrtAstMake(KrtAstKind.Variable,0,0);guard.declaration.native_width=8;guard.declaration.native_global=output.global_count+1;
+        guard.guard_slot=output.global_count;guard.symbol_name=KrtLinkNameNew();KrtLinkText(guard.symbol_name,"_KRT_MODULE_INIT_GUARD");guard.guard_name=guard.symbol_name;
+        guard.next=state.first;state.first=guard;output.initializer_guard_slot=output.global_count;output.global_count=output.global_count+2;
+        output.initializer_exception_slot=state.initializer.native_locals;state.initializer.native_locals=state.initializer.native_locals+24;
+        if(output.global_count>65536){return false;}KrtParserAppendDeclaration(module, state.initializer);
+    }
+    KrtNativeModule output=state.output;output.global_entries=new KrtNativeGlobalEntry[output.global_count];entry=state.first;
+    while(entry!=null){if(!entry.declaration.native_readonly){output.global_entries[entry.declaration.native_global-1]=entry;output.global_entries[entry.guard_slot]=entry;}entry=entry.next;}
     return true;
 }

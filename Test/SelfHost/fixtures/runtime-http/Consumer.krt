@@ -1,0 +1,50 @@
+using RuntimeRoutes;
+using System.Collections.Generic;
+
+HttpResponse Reply(Audit audit, string path) {
+    Request request = default(Request);
+    request.method = 1; request.path = path;
+    request.id = ((uint128)1 << 100) + 19;
+    request.tag[0] = 31; request.tag[4] = 37;
+    var routes = Routes(audit);
+    try {
+        foreach (var item in routes) {
+            object erased = item;
+            Route selected = (Route)erased;
+            try {
+                if (selected.Matches(request)) {
+                    Response result = selected.Handle(request);
+                    object boxed = result;
+                    Response snapshot = (Response)boxed;
+                    Response independent = (Response)boxed;
+                    independent.tag[4] = 99; independent.id = 0;
+                    delete boxed;
+                    if (request.tag[4] != 37 || snapshot.tag[0] != 31 || snapshot.tag[4] != 38 ||
+                        snapshot.id != ((uint128)1 << 100) + 20) { throw 92; }
+                    HttpResponse response = default(HttpResponse);
+                    response.status = snapshot.status; response.body = snapshot.body;
+                    return response;
+                }
+            } finally {
+                selected.Dispose(); delete erased;
+            }
+        }
+        HttpResponse missing = default(HttpResponse);
+        missing.status = 404; missing.body = "No route\n";
+        return missing;
+    } finally {
+        delete routes;
+    }
+}
+
+int32 main() {
+    Audit audit = new Audit();
+    fn(string)->HttpResponse handler = function(string path)=>Reply(audit, path);
+    int32 status = HttpServer.Run(0, 8, handler);
+    delete handler;
+    if (status != 0) { delete audit; return status; }
+    bool valid = audit.enumerated == 6 && audit.disposed == 9 &&
+                 audit.handled == 6 && audit.resources == 0;
+    delete audit;
+    return valid ? 0 : 93;
+}

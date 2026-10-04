@@ -1,20 +1,55 @@
 // ABI2 metadata is a normal local read-only KRO object symbol.
 bool KrtKroAbiRecord(KrtAbiBytes manifest,int32 symbol,bool defined,KrtAbiSignature signature){
     if(!signature.supported||!signature.contract.ok||!signature.nominal.ok){return false;}
-    KrtAbiWord(manifest,symbol);KrtAbiWord(manifest,defined?1:0);
+    if(signature.uses_named||signature.weak){KrtKroLibraryWord(manifest.data,4,3);}
+    KrtAbiWord(manifest,symbol);KrtAbiWord(manifest,defined?(signature.weak?5:1):0);
     KrtAbiWord(manifest,signature.nominal.count);KrtAbiWord(manifest,signature.contract.count);
     KrtAbiAppend(manifest,signature.nominal);KrtAbiAppend(manifest,signature.contract);return manifest.ok;
 }
-bool KrtKroAbiFinish(KrtKroObject output,KrtAbiBytes manifest,int32 count,ref int32 name){
+bool KrtKroAbiTypes(KrtAbiBytes manifest,KrtAstNode ast,int64 source,ref int32 count){
+    KrtAstNode type=ast.declarations;
+    while(type!=null){
+        if(type.native_generic_parameters==null){
+            KrtAbiSignature signature=KrtModuleTypeSignature(type,ast,source);
+            if(!signature.supported||!signature.contract.ok||!signature.nominal.ok){return false;}
+            KrtKroLibraryWord(manifest.data,4,3);
+            // Type contracts have no strong symbol and may be repeated by
+            // several modules. Exact layouts must agree independently of the
+            // functions through which either module happens to use them.
+            KrtAbiWord(manifest,-1);KrtAbiWord(manifest,2);
+            KrtAbiWord(manifest,signature.nominal.count);KrtAbiWord(manifest,signature.contract.count);
+            KrtAbiAppend(manifest,signature.nominal);KrtAbiAppend(manifest,signature.contract);count=count+1;
+        }
+        type=type.next;
+    }
+    if(ast.native_globals!=null){
+        KrtNativeGlobalEntry entry=ast.native_globals.first;
+        while(entry!=null){
+            if(!entry.module_guard&&!entry.declaration.native_readonly){
+                KrtAbiSignature signature=KrtModuleGlobalSignature(entry,ast,source);
+                if(!signature.supported||!signature.nominal.ok||!signature.contract.ok){return false;}
+                KrtAbiWord(manifest,-1);KrtAbiWord(manifest,2);KrtAbiWord(manifest,signature.nominal.count);KrtAbiWord(manifest,signature.contract.count);
+                KrtAbiAppend(manifest,signature.nominal);KrtAbiAppend(manifest,signature.contract);count=count+1;
+            }
+            entry=entry.next;
+        }
+    }
+    return manifest.ok;
+}
+bool KrtKroAbiFinishNamed(KrtKroObject output,KrtAbiBytes manifest,int32 count,ref int32 name,string marker){
     if(count==0){return true;}if(!manifest.ok||output.rodata_size>16777216-manifest.count){return false;}
     KrtKroLibraryWord(manifest.data,8,count);KrtKroLibraryWord(manifest.data,12,manifest.count);
     int32 offset=output.rodata_size;byte[] rodata=new byte[offset+manifest.count];int32 index=0;
     while(index<offset){rodata[index]=output.rodata_bytes[index];index=index+1;}
     index=0;while(index<manifest.count){rodata[offset+index]=manifest.data[index];index=index+1;}
     output.rodata_bytes=rodata;output.rodata_size=offset+manifest.count;
-    int32 symbol=output.symbol_count;KrtKroLibrarySymbol(output,symbol,name,offset,manifest.count,2);
+    int32 symbol=output.symbol_count;
+    byte[] symbols=new byte[(symbol+1)*32+1];index=0;while(index<symbol*32){symbols[index]=output.symbol_bytes[index];index=index+1;}
+    output.symbol_bytes=symbols;KrtKroLibrarySymbol(output,symbol,name,offset,manifest.count,2);
     KrtKroLibraryWord(output.symbol_bytes,symbol*32+16,0);
-    string marker="_KRT_ABI2_MANIFEST";
     unsafe(using krt.mem;){byte* text=(byte*)(int64)marker;index=0;while(text[index]!=0){output.string_bytes[name]=text[index];name=name+1;index=index+1;}}
     output.string_bytes[name]=0;name=name+1;output.symbol_count=symbol+1;return true;
+}
+bool KrtKroAbiFinish(KrtKroObject output,KrtAbiBytes manifest,int32 count,ref int32 name){
+    return KrtKroAbiFinishNamed(output,manifest,count,ref name,manifest.data[4]==3?"_KRT_ABI3_MANIFEST":"_KRT_ABI2_MANIFEST");
 }

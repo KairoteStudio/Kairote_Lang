@@ -24,10 +24,10 @@ bool KrtNativeMethodSignatureEqual(KrtAstNode first, KrtAstNode second, KrtAstNo
 
 KrtAstNode KrtNativeFindVirtualImplementation(KrtAstNode actual, KrtAstNode slot) {
     while (actual != null) {
-        KrtAstNode method = actual.declarations;
+        KrtAstNode method = KrtNativeTypeMemberFirst(actual);
         while (method != null && method.native_owner == actual) {
             if (method.native_dispatch_slot == slot) { return method; }
-            method = method.next;
+            method = KrtNativeTypeMemberNext(method);
         }
         actual = actual.native_base;
     }
@@ -41,16 +41,16 @@ bool KrtNativePrepareDispatch(KrtAstNode type, KrtAstNode module, int64 source) 
     KrtNativeClosureProbeJournal(module,type);
     type.native_dispatch_state = 1;
     if (type.native_base != null && !KrtNativePrepareDispatch(type.native_base, module, source)) { type.native_dispatch_state = 3; return false; }
-    KrtAstNode method = type.declarations;
+    KrtAstNode method = KrtNativeTypeMemberFirst(type);
     while (method != null && method.native_owner == type) {
         KrtNativeClosureProbeJournal(module,method);
         if ((method.op == 223 && !method.native_abstract) || (method.native_abstract && !type.native_abstract) ||
-            (method.native_virtual && (method.native_static || method.op == 220 || method.op == 221 || method.native_generic_parameters != null))) { type.native_dispatch_state = 3; return false; }
+            (method.native_virtual && (method.native_static || method.op == 220 || method.native_external_constructor || method.native_generic_parameters != null))) { type.native_dispatch_state = 3; return false; }
         if (method.native_virtual) {
-            KrtAstNode previous = type.declarations;
+            KrtAstNode previous = KrtNativeTypeMemberFirst(type);
             while (previous != method) {
                 if (KrtNativeMethodSignatureEqual(method, previous, module, source, false)) { type.native_dispatch_state = 3; return false; }
-                previous = previous.next;
+                previous = KrtNativeTypeMemberNext(previous);
             }
             method.native_dispatch_slot = method;
         }
@@ -59,13 +59,13 @@ bool KrtNativePrepareDispatch(KrtAstNode type, KrtAstNode module, int64 source) 
             KrtNativeBinding access_binding = new KrtNativeBinding(); access_binding.module = module;
             access_binding.unit = method; access_binding.source = source; access_binding.error_start = -1;
             while (base_type != null && overridden == null) {
-                KrtAstNode candidate = base_type.declarations;
+                KrtAstNode candidate = KrtNativeTypeMemberFirst(base_type);
                 while (candidate != null && candidate.native_owner == base_type) {
                     if (KrtNativeMethodSignatureEqual(method, candidate, module, source, false)) {
                         if (KrtNativeAccessAllowed(candidate,access_binding,null,true)) { overridden = candidate; break; }
                         inaccessible = true;
                     }
-                    candidate = candidate.next;
+                    candidate = KrtNativeTypeMemberNext(candidate);
                 }
                 base_type = base_type.native_base;
             }
@@ -83,18 +83,18 @@ bool KrtNativePrepareDispatch(KrtAstNode type, KrtAstNode module, int64 source) 
                 method.native_dispatch_slot = overridden.native_dispatch_slot;
             }
         }
-        method = method.next;
+        method = KrtNativeTypeMemberNext(method);
     }
     if (!type.native_abstract) {
         KrtAstNode base_type = type;
         while (base_type != null) {
-            method = base_type.declarations;
+            method = KrtNativeTypeMemberFirst(base_type);
             while (method != null && method.native_owner == base_type) {
                 if (method.native_abstract) {
                     KrtAstNode implementation = KrtNativeFindVirtualImplementation(type, method.native_dispatch_slot);
                     if (implementation == null || implementation.native_abstract) { type.native_dispatch_state = 3; return false; }
                 }
-                method = method.next;
+                method = KrtNativeTypeMemberNext(method);
             }
             base_type = base_type.native_base;
         }

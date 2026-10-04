@@ -7,7 +7,12 @@ bool KrtNativeBindTypeTest(KrtAstNode node, KrtNativeBinding binding) {
     if (!KrtNativeAnnotateType(target,binding.module,binding.source,node.type_start,node.type_length)) { return KrtNativeBindingError(binding,node); }
     if (KrtNativeVoidValue(target)) { return KrtNativeBindingError(binding,target); }
     if (!KrtNativeCheckValueAccess(target,binding)) { return false; }
-    if (KrtNativePointerValue(node.left) || KrtNativePointerValue(target)) {
+    bool runtime_source = KrtNativeReferenceObjectValue(node.left);
+    bool static_box = KrtNativeObjectConversion(target,node.left) || KrtNativeBoxingConversion(target,node.left);
+    if (KrtNativePointerValue(target) && target.native_nullable) { binding.module.native_error = 5; return KrtNativeBindingError(binding,target); }
+    if (runtime_source && KrtNativePointerValue(target) &&
+        (target.native_function_pointer == null || target.native_pointer_depth != 0)) { return KrtNativeBindingError(binding,target); }
+    if (!runtime_source && !static_box && (KrtNativePointerValue(node.left) || KrtNativePointerValue(target))) {
         if (target.native_nullable) { binding.module.native_error = 5; return KrtNativeBindingError(binding,target); }
         if (!KrtNativePointerValue(target) || !KrtNativePointerEqualIgnoringOuter(node.left,target)) {
             return KrtNativeBindingError(binding,target);

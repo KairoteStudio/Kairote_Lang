@@ -114,19 +114,19 @@ are recorded for cache restore and protected cleanup.
 an executable. Sources with no `main` have no startup or process-exit stub.
 Scalar function libraries export stable `_KRT1$` names containing namespace, declaring
 type, parameter types, `ref` markers, and return type. Concrete struct signatures
-use `_KRT2$` plus an exact ABI2 manifest described below. Overloads can live in
-separate objects. Generic function specializations, generic class-owner methods, and functions
-whose signatures contain class/interface/enum types remain local with unique names;
-their source declarations must be available in the compiling module. Data-only units emit real data sections
-and symbols, including 128-bit scalar literals. Scalar integer constant
-expressions and casts are evaluated with their declared widths. Template-only
-units can produce valid empty objects.
+use `_KRT2$` plus an exact ABI2 manifest. Named class/interface/enum types,
+constructors, object references, and direct wide value/ref/callback boundaries
+use ABI3. Overloads can live in separate objects. KRO files carry public type and
+member declarations and open generic templates, so a consumer can compile from
+the object without the producer's original source. Data-only and template-only
+units also emit valid module objects. See [ModuleAbi.md](ModuleAbi.md) for the
+canonical contracts and runtime identities.
 
 An `extern` declaration supplies the type contract for a function in another
 native KRO object. Direct calls and function addresses produce real undefined
 symbols and PC-relative relocations. The linker resolves every input object;
-a missing or incompatible signature is a link error. Duplicate strong `_KRT1$`
-and `_KRT2$` definitions are link errors, independent of input order; ArkLink retains
+a missing or incompatible signature is a link error. Duplicate strong `_KRT1$`,
+`_KRT2$`, and `_KRT3$` definitions are link errors, independent of input order; ArkLink retains
 its legacy duplicate policy for older Re.KrtC symbols. Unused prototypes do not
 create a link dependency. Repeated matching prototypes, and a prototype with
 its matching source definition, are accepted.
@@ -151,10 +151,11 @@ SelfHost/krtc Main.krt Math.kro -o Program
 ## Struct objects and ABI2
 
 Ordinary public functions may pass and return public, concrete structs across
-independently compiled objects. Consumers import the same struct declarations
-and declare the library functions `extern`. Closed generic struct values, nested
+independently compiled objects. Consumers can read their declarations from KRO
+metadata or supply matching declarations and `extern` prototypes. Closed generic struct values, nested
 fixed arrays, wide fields, struct pointers, `ref` and typed callbacks use their
-concrete layouts. Generic function template bodies remain source-only.
+concrete layouts. Open generic template bodies are carried in native module
+metadata and instantiated by the consumer.
 
 Each ABI2 object carries a local read-only `_KRT_ABI2_MANIFEST` symbol. Contracts
 record canonical nominal types, complete reachable struct layouts, ordered field
@@ -172,17 +173,22 @@ is not a cryptographic digest. The exact comparison also handles collisions.
 The object mapping budget is 1 GiB per input; contract and graph generation have
 checked 16 MiB and 16,384-node limits.
 
-Nonnullable scalar-only objects retain their previous bytes and `_KRT1$` names.
+Nonnullable scalar signatures with unchanged physical conventions preserve their
+calling contract and `_KRT1$` names. Objects can also carry module metadata and
+additional symbol records. Direct wide values use ABI3: their complete
+16-byte payload is passed by value and wide results use caller-owned storage.
+Callbacks containing these boundaries use shape version 3. Pure struct
+signatures and callbacks such as `fn(Packet)->Packet` retain ABI2, including
+structs with wide fields.
 Explicit nullable types use distinct names; inner pointer-slot nullability is
 encoded with the complete 64-bit bitmap, including inside callback signatures.
 Raw data and function pointers are nonnullable by default; `?` marks the
 applicable type layer. A nullable callback must be narrowed to a nonnullable
 variable by an `is` type pattern before calling it. Casts cannot remove nullable
 flags from the outer type or an inner pointer slot.
-ArkLink can
-link valid ABI2 objects directly and rejects duplicate strong definitions, but
-bare ArkLink does not perform the driver's exact manifest validation. Use the
-native compiler driver for layout checks.
+ArkLink checks the same exact ABI2/3 manifests when invoked directly. The driver
+also performs these checks before output publication, including a `-c` command
+that imports native objects.
 
 Public ordinary methods on concrete struct owners, including closed generic
 owners, may be defined in a producer and declared `extern` in the consumer.
@@ -191,26 +197,28 @@ Type-qualified addresses are unbound callbacks with an explicit ref receiver:
 storage through `callback(ref value)`; it does not capture an instance.
 Methods returning a struct use the same hidden caller-owned result storage.
 
-Shared declaration files should contain layouts and consumer `extern` prototypes.
-If two objects both compile the same public method body, they contain duplicate
-strong definitions and linking fails. No weak/linkonce merging is implemented.
-External constructor declarations are not supported; public factory functions
-can return constructed values. VM bytecode cannot load native KRO libraries.
-Reachable named class, interface and enum types, including through fields,
-pointers, callbacks or generic arguments, report `E_ABI_UNSUPPORTED` in extern
-signatures. These restrictions also protect module-local runtime identities.
+Shared declaration files can contain layouts and consumer `extern` prototypes.
+Two ordinary strong definitions of a public function or mutable global are
+rejected. Imported closed generic owners and their shared static storage use
+exact nominal identities and weak merging; descriptor records also compare
+their bytes and relocations before merging. Public class and struct constructors
+can be imported through metadata or declared `extern`. VM bytecode executes
+source modules together and does not load native KRO libraries.
 
 The native ABI supports integer widths through 128 bits, floating-point values,
-`ref`, primitive arrays, strings, function pointers, and static methods with
-these signatures. Primitive exceptions unwind across linked calls, including
-`catch`, `finally`, catch-all, and rethrow. Integer exception matching preserves
-declared bit width, so `int30` does not match `int32`. Class/interface/enum-containing extern signatures,
-class/interface/enum throws and typed catches in library mode, generic extern templates,
-shared libraries, and library functions using mutable global storage are
-rejected. Class identities currently belong to their source module.
+`ref`, arrays, strings, function pointers, named types, constructors, virtual
+and interface dispatch, boxing, and closed generic types. Typed exceptions
+unwind across linked calls, including `catch`, `finally`, catch-all, and rethrow.
+Integer exception matching preserves declared bit width, so `int30` does not
+match `int32`. Runtime type identities contain the complete nominal bytes and
+generic arguments; declaration order and module-local IDs do not participate.
 
-Data objects with dynamic, floating-point, object, array, or string initializers
-are not supported. These objects use the native compiler's calling convention;
+Mutable global variables and static fields use stable native data symbols.
+Dynamic initializers run under shared guards, retry after exceptions, and also
+run before an explicit `extern static` access. Closed generic static state is
+shared for each exact type argument list. Native KRO is a relocatable static
+module format; dynamic shared-library publication is not provided by these
+project commands. These objects use the native compiler's calling convention;
 they are not compatible with C/foreign-function ABIs or Re.KrtC object symbols. Package downloads and arbitrary shell build hooks are not part of this
 configuration language.
 
@@ -218,7 +226,8 @@ configuration language.
 
 ```sh
 python3 -m unittest Test.SelfHost.test_project Test.SelfHost.test_driver \
-  Test.SelfHost.test_native_driver Test.SelfHost.test_native_linking
+  Test.SelfHost.test_native_driver Test.SelfHost.test_native_linking \
+  Test.SelfHost.test_module_abi Test.SelfHost.test_generator_modules
 python3 Test/SelfHost/RunStandardLibrary.py --compiler build/selfhost/stage2/program
 ```
 

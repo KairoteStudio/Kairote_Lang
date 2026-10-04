@@ -1,0 +1,182 @@
+// EBC5 carries address-free runtime records. Validate their complete structure
+// before replacing relocations with VM addresses or callable indices.
+class KrtVmRuntimeSchema {
+    public KrtNativeModule module;
+    public int64 data;
+    public int32 length;
+    public byte[] occupied;
+    public int32[] kinds;
+    public int32[] targets;
+    public int32[] bases;
+    public int32 consumed;
+}
+
+bool KrtVmRuntimeRange(KrtVmRuntimeSchema schema,int64 start,int64 length,int32 alignment) {
+    return start >= 0 && length >= 0 && start <= schema.length && length <= schema.length-start &&
+        (start & (alignment-1)) == 0;
+}
+bool KrtVmRuntimeClaim(KrtVmRuntimeSchema schema,int64 start,int64 length,int32 alignment,byte role) {
+    if (!KrtVmRuntimeRange(schema,start,length,alignment)) { return false; }
+    int32 index=(int32)start; int32 end=(int32)(start+length);
+    // Interned canonical keys may share precisely the same immutable range.
+    // Separate first-byte markers prohibit partial or differently sized aliases.
+    if(role==2&&length>0&&schema.occupied[index]==5){
+        index=index+1;while(index<end){if(schema.occupied[index]!=2){return false;}index=index+1;}
+        return end==schema.length||schema.occupied[end]!=2;
+    }
+    while(index<end){if(schema.occupied[index]!=0){return false;}schema.occupied[index]=role;index=index+1;}
+    if(role==2&&length>0){schema.occupied[(int32)start]=5;}
+    return true;
+}
+// A zero pointer has no relocation; every non-null pointer has exactly one
+// relocation of the required category. All relocation sites are consumed once.
+int32 KrtVmRuntimePointer(KrtVmRuntimeSchema schema,int32 offset,int32 kind,bool required) {
+    if(!KrtVmRuntimeRange(schema,offset,8,8)||KrtVmRead(schema.data,offset,8)!=0){return -2;}
+    int32 word=offset/8;int32 found=schema.kinds[word];
+    if(found==0){return required?-2:-1;}
+    if(found!=kind+1){return -2;}
+    schema.kinds[word]=-found;schema.consumed=schema.consumed+1;return schema.targets[word];
+}
+bool KrtVmRuntimeKey(KrtVmRuntimeSchema schema,int32 record) {
+    int64 length=KrtVmRead(schema.data,record+8,8);
+    int32 key=KrtVmRuntimePointer(schema,record+16,0,true);
+    if(key<0||length<=0||!KrtVmRuntimeClaim(schema,key,length,1,(byte)2)){return false;}
+    uint64 hash=14695981039346656037;int32 index=0;
+    while(index<length){hash=(hash^(uint64)KrtVmRead(schema.data,key+index,1))*1099511628211;index=index+1;}
+    return hash==(uint64)KrtVmRead(schema.data,record,8);
+}
+bool KrtVmRuntimeRecord(KrtVmRuntimeSchema schema,int32 type_index) {
+    KrtNativeModule module=schema.module;int32 offset=module.runtime_offsets[type_index];
+    int64 kind=KrtVmRead(schema.data,offset+24,8);int64 storage=KrtVmRead(schema.data,offset+32,8);
+    int64 alignment=KrtVmRead(schema.data,offset+40,8);int64 flags=KrtVmRead(schema.data,offset+88,8);
+    if(kind<0||kind>9||storage<0||storage>16777216||!KrtVmAlignment(alignment)||(flags & ~3)!=0){return false;}
+    if((kind==0&&storage!=0)||(kind!=0&&storage==0)){return false;}
+    if((kind==3||kind==4||kind==5||kind==7||kind==8)&&storage!=8){return false;}
+    if(kind==6&&storage!=1&&storage!=2&&storage!=4&&storage!=8&&storage!=16){return false;}
+    if((flags&1)!=0&&kind!=6&&kind!=7&&kind!=8){return false;}
+    if((flags&1)!=0&&storage!=8){return false;}
+    if((kind==7||kind==8)&&(flags&1)==0){return false;}
+    if(!KrtVmRuntimeKey(schema,offset)){return false;}
+    int32 parent_index=KrtVmRuntimePointer(schema,offset+48,1,false);
+    if(parent_index<-1||(parent_index>=0&&(kind!=1||parent_index==type_index||
+        KrtVmRead(schema.data,module.runtime_offsets[parent_index]+24,8)!=1))){return false;}
+    schema.bases[type_index]=parent_index;
+    int64 interfaces=KrtVmRead(schema.data,offset+56,8);
+    int32 table=KrtVmRuntimePointer(schema,offset+64,0,interfaces>0);
+    if(interfaces<0||interfaces>module.runtime_type_count||table<-1||
+        (interfaces==0&&table!=-1)||(interfaces>0&&kind!=1&&kind!=2&&kind!=3)){return false;}
+    if(interfaces>0){
+        if(!KrtVmRuntimeClaim(schema,table,interfaces*8,8,(byte)3)){return false;}
+        int32 index=0;
+        while(index<interfaces){int32 target=KrtVmRuntimePointer(schema,table+index*8,1,true);
+            if(target<0||target==type_index||KrtVmRead(schema.data,module.runtime_offsets[target]+24,8)!=3){return false;}
+            index=index+1;
+        }
+    }
+    int64 methods=KrtVmRead(schema.data,offset+72,8);
+    table=KrtVmRuntimePointer(schema,offset+80,0,methods>0);
+    if(methods<0||methods>schema.length/40||table<-1||(methods==0&&table!=-1)||
+        (methods>0&&kind!=1&&kind!=2)){return false;}
+    if(methods>0){
+        if(!KrtVmRuntimeClaim(schema,table,methods*40,8,(byte)4)){return false;}
+        int32 index=0;
+        while(index<methods){int32 method=table+index*40;
+            if(!KrtVmRuntimeKey(schema,method)||KrtVmRuntimePointer(schema,method+24,2,true)<0||
+                KrtVmRead(schema.data,method+32,8)!=(kind==2?16:0)){return false;}
+            index=index+1;
+        }
+    }
+    return true;
+}
+bool KrtVmRuntimeValidateData(KrtNativeModule module,int64 data) {
+    int32 length=module.runtime_length;int32 count=module.runtime_type_count;
+    if(length<0||length>16777216||count<0||count>65536||module.runtime_relocation_count<0||
+        module.runtime_relocation_count>length/8){return false;}
+    if(count==0){return length==0&&module.runtime_relocation_count==0&&module.runtime_relocations==null;}
+    if(data==0||module.runtime_offsets==null||length<(int64)count*96){return false;}
+    KrtVmRuntimeSchema schema=new KrtVmRuntimeSchema();schema.module=module;schema.data=data;schema.length=length;
+    schema.occupied=new byte[length];schema.kinds=new int32[(length+7)/8];schema.targets=new int32[(length+7)/8];
+    schema.bases=new int32[count];
+    int32 index=0;
+    while(index<count){int32 offset=module.runtime_offsets[index];
+        if(!KrtVmRuntimeClaim(schema,offset,96,16,(byte)1)){return false;}
+        index=index+1;
+    }
+    int32 relocations=0;KrtNativeRuntimeRelocation relocation=module.runtime_relocations;
+    while(relocation!=null){
+        if(relocations>=module.runtime_relocation_count||!KrtVmRuntimeRange(schema,relocation.offset,8,8)||
+            relocation.kind<0||relocation.kind>2||relocation.target<0||schema.kinds[relocation.offset/8]!=0||
+            KrtVmRead(data,relocation.offset,8)!=0){return false;}
+        if(relocation.kind==0&&relocation.target>=length){return false;}
+        if(relocation.kind==1&&relocation.target>=count){return false;}
+        if(relocation.kind==2&&relocation.target>=module.function_count){return false;}
+        schema.kinds[relocation.offset/8]=relocation.kind+1;schema.targets[relocation.offset/8]=relocation.target;
+        relocations=relocations+1;relocation=relocation.next;
+    }
+    if(relocations!=module.runtime_relocation_count){return false;}
+    index=0;while(index<count){if(!KrtVmRuntimeRecord(schema,index)){return false;}index=index+1;}
+    if(schema.consumed!=relocations){return false;}
+    // Padding is deterministic zero data, never an unvalidated record.
+    index=0;while(index<length){if(schema.occupied[index]==0&&KrtVmRead(data,index,1)!=0){return false;}index=index+1;}
+    byte[] visited=new byte[count];index=0;
+    while(index<count){int32 current=index;
+        while(current>=0&&visited[current]==0){visited[current]=1;current=schema.bases[current];}
+        if(current>=0&&visited[current]==1){return false;}
+        current=index;while(current>=0&&visited[current]==1){visited[current]=2;current=schema.bases[current];}
+        index=index+1;
+    }
+    delete visited;delete schema.occupied;delete schema.kinds;delete schema.targets;
+    delete schema.bases;delete schema;return true;
+}
+bool KrtVmRuntimeValidate(KrtNativeModule module) {
+    unsafe(using krt.mem;){return KrtVmRuntimeValidateData(module,(int64)module.runtime_bytes);}
+}
+
+int64 KrtVmRuntimeFooterSize(KrtNativeModule module) {
+    return 16+(int64)module.runtime_type_count*4+(int64)module.runtime_relocation_count*12+module.runtime_length;
+}
+bool KrtVmRuntimeEmit(KrtNativeModule module,int64 data,int64 position) {
+    KrtVmWrite(data,position,0x3554524b,4);KrtVmWrite(data,position+4,module.runtime_length,4);
+    KrtVmWrite(data,position+8,module.runtime_type_count,4);KrtVmWrite(data,position+12,module.runtime_relocation_count,4);
+    position=position+16;int32 index=0;
+    while(index<module.runtime_type_count){KrtVmWrite(data,position,module.runtime_offsets[index],4);position=position+4;index=index+1;}
+    KrtNativeRuntimeRelocation relocation=module.runtime_relocations;
+    while(relocation!=null){KrtVmWrite(data,position,relocation.offset,4);KrtVmWrite(data,position+4,relocation.kind,4);
+        KrtVmWrite(data,position+8,relocation.target,4);position=position+12;relocation=relocation.next;}
+    unsafe(using krt.mem;){byte* target=(byte*)data;index=0;
+        while(index<module.runtime_length){target[position+index]=module.runtime_bytes[index];index=index+1;}}
+    return true;
+}
+bool KrtVmRuntimeRead(KrtDriverBuffer artifact,KrtNativeModule module,int64 position) {
+    if(position<0||position>artifact.length-16||KrtVmRead(artifact.data,position,4)!=0x3554524b){return false;}
+    int64 length=KrtVmRead(artifact.data,position+4,4);int64 count=KrtVmRead(artifact.data,position+8,4);
+    int64 relocations=KrtVmRead(artifact.data,position+12,4);
+    if(length>16777216||count>65536||relocations>length/8||
+        (count==0&&(length!=0||relocations!=0))||count*96>length||
+        artifact.length-position!=16+count*4+relocations*12+length){return false;}
+    module.runtime_length=(int32)length;module.runtime_type_count=(int32)count;module.runtime_relocation_count=(int32)relocations;
+    module.runtime_offsets=new int32[(int32)count];position=position+16;int32 index=0;
+    while(index<count){module.runtime_offsets[index]=(int32)KrtVmRead(artifact.data,position,4);position=position+4;index=index+1;}
+    index=0;while(index<relocations){KrtNativeRuntimeRelocation item=new KrtNativeRuntimeRelocation();
+        item.offset=(int32)KrtVmRead(artifact.data,position,4);item.kind=(int32)KrtVmRead(artifact.data,position+4,4);
+        item.target=(int32)KrtVmRead(artifact.data,position+8,4);item.next=module.runtime_relocations;module.runtime_relocations=item;
+        position=position+12;index=index+1;
+    }
+    int64 serialized=length==0?0:artifact.data+position;
+    if(!KrtVmRuntimeValidateData(module,serialized)){return false;}
+    // Literal lengths and relocation records need not align the file's blob.
+    // Runtime exception tags reserve descriptor pointer bits, so descriptors
+    // must have absolute alignment as well as aligned offsets within the blob.
+    module.runtime_pointer=length==0?0:KrtDriverAlloc(length);
+    if(length>0&&module.runtime_pointer==0){return false;}
+    unsafe(using krt.mem;){byte* target=(byte*)module.runtime_pointer;byte* original=(byte*)serialized;
+        index=0;while(index<length){target[index]=original[index];index=index+1;}}
+    KrtNativeRuntimeRelocation relocation=module.runtime_relocations;
+    while(relocation!=null){int64 target=0;
+        if(relocation.kind==0){target=module.runtime_pointer+relocation.target;}
+        else if(relocation.kind==1){target=module.runtime_pointer+module.runtime_offsets[relocation.target];}
+        else{target=(int64)relocation.target+1;}
+        KrtVmWrite(module.runtime_pointer,relocation.offset,target,8);relocation=relocation.next;
+    }
+    return true;
+}

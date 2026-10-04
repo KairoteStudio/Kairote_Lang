@@ -1,5 +1,6 @@
 // Conversions operate on the top stack value; calls use the same bit-pattern ABI.
 bool KrtNativeConvertValue(KrtNativeModule module, KrtAstNode original, KrtAstNode target) {
+    if (original != null && KrtNativeBoxCastConversion(target,original)) { return KrtNativeLowerBoxConversion(module,original,target); }
     if (KrtNativeWideKind(original) || KrtNativeWideKind(target)) { return KrtNativeConvertWide(module, original, target); }
     int32 origin_format = KrtNativeFloatKind(original); int32 target_format = KrtNativeFloatKind(target);
     if (original == null) { origin_format = target_format; }

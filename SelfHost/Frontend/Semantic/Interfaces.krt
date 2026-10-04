@@ -1,5 +1,5 @@
-// Interfaces use the same object pointer as classes. The concrete class identity
-// in the object header selects an implementation when an interface is called.
+// Reference implementations preserve their object. Struct implementations
+// acquire an independent value box when converted to an interface reference.
 void KrtNativeAddInterface(KrtAstNode type, KrtAstNode interface_type, int32 distance) {
     KrtAstNode entry = type.native_interfaces;
     while (entry != null) {
@@ -79,10 +79,10 @@ bool KrtNativeInterfaceMethodMatches(KrtAstNode implementation, KrtAstNode requi
 
 KrtAstNode KrtNativeFindMatchingInterfaceMethod(KrtAstNode actual, KrtAstNode requirement, KrtAstNode module, int64 source) {
     while (actual != null) {
-        KrtAstNode method = actual.declarations;
+        KrtAstNode method = KrtNativeTypeMemberFirst(actual);
         while (method != null && method.native_owner == actual) {
             if (KrtNativeInterfaceMethodMatches(method, requirement, module, source) && KrtNativeAccessMode(method) == 1) { return method; }
-            method = method.next;
+            method = KrtNativeTypeMemberNext(method);
         }
         actual = actual.native_base;
     }
@@ -113,10 +113,10 @@ KrtAstNode KrtNativeFindInterfaceImplementation(KrtAstNode actual, KrtAstNode re
     if (implementation == null) {
         KrtAstNode descendant = actual;
         while (descendant != null && descendant != owner) {
-            KrtAstNode method = descendant.declarations;
+            KrtAstNode method = KrtNativeTypeMemberFirst(descendant);
             while (method != null && method.native_owner == descendant) {
                 if (KrtNativeInterfaceMethodMatches(method, requirement, module, source) && KrtNativeAccessMode(method) == 1) { implementation = method; break; }
-                method = method.next;
+                method = KrtNativeTypeMemberNext(method);
             }
             descendant = descendant.native_base;
         }
@@ -135,10 +135,10 @@ bool KrtNativeMethodImplementsInterface(KrtAstNode method, KrtAstNode module, in
     while (interface_type != null) {
         if (interface_type.value == 3 && interface_type.native_generic_parameters == null &&
             KrtNativeImplements(method.native_owner, interface_type)) {
-            KrtAstNode requirement = interface_type.declarations;
+            KrtAstNode requirement = KrtNativeTypeMemberFirst(interface_type);
             while (requirement != null && requirement.native_owner == interface_type) {
                 if (KrtNativeInterfaceMethodMatches(method, requirement, module, source)) { return true; }
-                requirement = requirement.next;
+                requirement = KrtNativeTypeMemberNext(requirement);
             }
         }
         interface_type = interface_type.next;
@@ -151,43 +151,43 @@ bool KrtNativeValidateInterfaces(KrtAstNode type, KrtAstNode module, int64 sourc
     if (!KrtNativeCompatibleInterfaceContracts(type, module, source)) { return false; }
     if (type.value == 3) {
         if (type.body != null) { return false; }
-        KrtAstNode method = type.declarations;
+        KrtAstNode method = KrtNativeTypeMemberFirst(type);
         while (method != null && method.native_owner == type) {
             if (method.op != 223 || method.native_static || !method.native_abstract ||
                 method.native_generic_parameters != null || method.native_base_call != null ||
                 (method.left != null && method.left.left != null)) { return false; }
-            KrtAstNode previous = type.declarations;
+            KrtAstNode previous = KrtNativeTypeMemberFirst(type);
             while (previous != method) {
                 if (KrtSemanticSameName(source, method.name_start, method.name_length, previous.name_start, previous.name_length) &&
                     KrtNativeMethodSignatureEqual(method, previous, module, source, false)) { return false; }
-                previous = previous.next;
+                previous = KrtNativeTypeMemberNext(previous);
             }
-            method = method.next;
+            method = KrtNativeTypeMemberNext(method);
         }
         return true;
     }
-    if (type.value != 1) { return true; }
+    if (type.value != 1 && type.value != 2) { return true; }
     KrtAstNode interface_type = module.declarations;
     while (interface_type != null) {
         if (interface_type.value == 3 && interface_type.native_generic_parameters == null && KrtNativeImplements(type, interface_type)) {
-            KrtAstNode requirement = interface_type.declarations;
+            KrtAstNode requirement = KrtNativeTypeMemberFirst(interface_type);
             while (requirement != null && requirement.native_owner == interface_type) {
                 KrtAstNode implementation = KrtNativeFindInterfaceImplementation(type, requirement, module, source);
                 if ((implementation == null || implementation.native_abstract) && !type.native_abstract) {
                     KrtAstNode current_type = type;
                     while (current_type != null) {
-                        KrtAstNode candidate = current_type.declarations;
+                        KrtAstNode candidate = KrtNativeTypeMemberFirst(current_type);
                         while (candidate != null && candidate.native_owner == current_type) {
                             if (KrtNativeInterfaceMethodMatches(candidate,requirement,module,source) && KrtNativeAccessMode(candidate) != 1) {
                                 module.native_error = 11; KrtDiagnostic("E_MODIFIER",10,candidate.start); return false;
                             }
-                            candidate = candidate.next;
+                            candidate = KrtNativeTypeMemberNext(candidate);
                         }
                         current_type = current_type.native_base;
                     }
                     return false;
                 }
-                requirement = requirement.next;
+                requirement = KrtNativeTypeMemberNext(requirement);
             }
         }
         interface_type = interface_type.next;
@@ -208,16 +208,16 @@ bool KrtNativeCompatibleInterfaceContracts(KrtAstNode type, KrtAstNode module, i
     while (first != null) {
         KrtAstNode second = first.next;
         while (second != null) {
-            KrtAstNode a = first.native_type.declarations;
+            KrtAstNode a = KrtNativeTypeMemberFirst(first.native_type);
             while (a != null && a.native_owner == first.native_type) {
-                KrtAstNode b = second.native_type.declarations;
+                KrtAstNode b = KrtNativeTypeMemberFirst(second.native_type);
                 while (b != null && b.native_owner == second.native_type) {
                     if (KrtSemanticSameName(source, a.name_start, a.name_length, b.name_start, b.name_length) &&
                         KrtNativeMethodSignatureEqual(a, b, module, source, false) &&
                         !KrtNativeMethodSignatureEqual(a, b, module, source, true)) { return false; }
-                    b = b.next;
+                    b = KrtNativeTypeMemberNext(b);
                 }
-                a = a.next;
+                a = KrtNativeTypeMemberNext(a);
             }
             second = second.next;
         }

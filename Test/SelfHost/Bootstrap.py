@@ -14,6 +14,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 
 ROOT = Path(__file__).resolve().parents[2]
 SEED_DEFAULT = ROOT / "build/Re.KrtC/KrtC"
@@ -44,6 +45,15 @@ NATIVE_DRIVER_MODULES = (
     "Test.SelfHost.test_nested_callback_contracts",
     "Test.SelfHost.test_closures", "Test.SelfHost.test_closure_patterns",
     "Test.SelfHost.test_closure_inference",
+    "Test.SelfHost.test_iterators", "Test.SelfHost.test_generators",
+    "Test.SelfHost.test_generator_modules", "Test.SelfHost.test_iterator_boxing",
+    "Test.SelfHost.test_boxing", "Test.SelfHost.test_module_abi",
+    "Test.SelfHost.test_native_linking", "Test.SelfHost.test_linkage_boundaries",
+    "Test.SelfHost.test_runtime_types", "Test.SelfHost.test_vm_runtime_types",
+    "Test.SelfHost.test_parenthesized_casts", "Test.SelfHost.test_runtime_http",
+    "Test.SelfHost.test_wide_lifetimes",
+    "Test.SelfHost.test_vm", "Test.SelfHost.test_inheritance",
+    "Test.SelfHost.test_interfaces", "Test.SelfHost.test_native_exceptions",
 )
 
 
@@ -246,12 +256,12 @@ ERROR_CASES = {
     "generic_class_constraint": 'class H<T> where T:class{}int32 main(){H<int32> h=new H<int32>();return 0;}',
     "generic_constructor_constraint": 'class A{public A(int32 n){}}T create<T>() where T:new(){return new T();}int32 main(){create<A>();return 0;}',
     "inheritance_cycle": 'class A:B{}class B:A{}int32 main(){return 0;}',
-    "unchecked_downcast": 'class A{}class B:A{}int32 main(){A a=new A();B b=(B)a;return 0;}',
+    "implicit_downcast": 'class A{}class B:A{}int32 main(){A a=new A();B b=a;return 0;}',
     "abstract_instance": 'abstract class A{public abstract int32 Read();}int32 main(){A a=new A();return 0;}',
     "missing_abstract_override": 'abstract class A{public abstract int32 Read();}class B:A{}int32 main(){return 0;}',
     "missing_interface_method": 'interface I{int32 Read();}class A:I{}int32 main(){return 0;}',
     "interface_cycle": 'interface I:J{}interface J:I{}int32 main(){return 0;}',
-    "unchecked_interface_cast": 'interface I{}class A{}int32 main(){A a=new A();I i=(I)a;return 0;}',
+    "implicit_interface_conversion": 'interface I{}class A{}int32 main(){A a=new A();I i=a;return 0;}',
 
 }
 
@@ -314,7 +324,7 @@ class Bootstrap:
         inputs = {}
         for directory in (ROOT / "Test/SelfHost", ROOT / "libs", ROOT / "examples"):
             for path in sorted(directory.rglob("*")):
-                if path.is_file() and path.suffix in (".py", ".krt", ".kproj", ".json"):
+                if path.is_file() and path.suffix in (".py", ".krt", ".kproj", ".json", ".hex", ".txt"):
                     inputs[str(path.relative_to(ROOT))] = file_sha256(path)
         return {
             "source_file_sha256": self.source_hashes(),
@@ -552,8 +562,10 @@ class Bootstrap:
         env["ARKLINK"] = str(ARKLINK)
         env["PATH"] = str(self.work / "empty-path")
         argv = [sys.executable, "-m", "unittest", *NATIVE_DRIVER_MODULES]
+        started = time.perf_counter()
         result = subprocess.run(argv,
-                                cwd=ROOT, env=env, capture_output=True, text=True, timeout=180)
+                                cwd=ROOT, env=env, capture_output=True, text=True, timeout=900)
+        elapsed = time.perf_counter() - started
         after = self.evidence_snapshot()
         passed = result.returncode == 0 and before == after and re.search(r"\nOK\s*$", result.stderr) is not None
         count = re.search(r"Ran (\d+) tests in", result.stderr)
@@ -562,6 +574,7 @@ class Bootstrap:
                               "stdout": result.stdout, "stderr": result.stderr, "native_driver": label,
                               "env": {name: env[name] for name in ("SELFHOST_COMPILER", "ARKLINK", "PATH")},
                               "compiler_sha256": file_sha256(compiler), "runner_sha256": file_sha256(sys.executable),
+                              "elapsed_seconds": elapsed,
                               "evidence_before": before, "evidence_after": after,
                               "evidence_before_sha256": summary_sha256(before),
                               "evidence_after_sha256": summary_sha256(after),

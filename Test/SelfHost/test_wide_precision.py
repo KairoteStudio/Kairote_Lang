@@ -16,8 +16,8 @@ class WidePrecisionTests(unittest.TestCase):
         cls.bootstrap = Bootstrap(cls.work)
         cls.compiler = (Path(os.environ['SELFHOST_COMPILER']).resolve()
                         if 'SELFHOST_COMPILER' in os.environ else cls.bootstrap.seed())
-        cls.linker = ROOT / 'build/ArkLink/ArkLink'
-        cls.seed = ROOT / 'build/Re.KrtC/KrtC'
+        cls.linker = Path(os.environ.get('ARKLINK', ROOT / 'build/ArkLink/ArkLink')).resolve()
+        cls.seed = Path(os.environ.get('KRTC', ROOT / 'build/Re.KrtC/KrtC')).resolve()
 
     @classmethod
     def tearDownClass(cls):

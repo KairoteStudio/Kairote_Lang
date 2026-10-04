@@ -1,0 +1,41 @@
+// The binder prepares ordinary typed calls, locals, while and try/finally.
+// Reusing the normal statement lowerer preserves struct copies, virtual and
+// interface calls, exception edges and loop/closure owner cleanup.
+bool KrtNativeLowerIteratorBoxKind(KrtAstNode expression, KrtAstNode ast, KrtNativeModule module, int64 source) {
+    int32 pointer = KrtNativeBoxTemporary(module);
+    if (pointer < 0 || !KrtNativeLowerExpression(expression.left,ast,module,source) ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,pointer,0) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,pointer,0) < 0) { return false; }
+    int32 present = KrtNativeEmit(module,(int32)KrtNativeOp.Branch,-1,-1);
+    if (present < 0) { return false; } module.args[present] = module.count;
+    if (!KrtNativeRuntimeLoad(module,pointer,0) || KrtNativeEmit(module,(int32)KrtNativeOp.Address,0,24) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.Load,0,8) < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.Const,2,0) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.Compare,61,0) < 0) { return false; }
+    int32 done = KrtNativeEmit(module,(int32)KrtNativeOp.Jump,-1,0);
+    if (done < 0) { return false; } module.extra[present] = module.count;
+    if (KrtNativeEmit(module,(int32)KrtNativeOp.Const,0,0) < 0) { return false; }
+    module.args[done] = module.count; return true;
+}
+
+bool KrtNativeLowerIteratorBoxCleanup(KrtAstNode expression, KrtAstNode ast, KrtNativeModule module, int64 source) {
+    // The kind was saved before Dispose: a class can free itself there, so
+    // cleanup must never inspect its former object header afterward.
+    if (!KrtNativeLowerExpression(expression.right,ast,module,source)) { return false; }
+    int32 owned = KrtNativeEmit(module,(int32)KrtNativeOp.Branch,-1,-1);
+    if (owned < 0) { return false; } module.args[owned] = module.count;
+    if (!KrtNativeLowerExpression(expression.left,ast,module,source) ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.Free,0,0) < 0) { return false; }
+    module.extra[owned] = module.count;
+    return KrtNativeEmit(module,(int32)KrtNativeOp.Const,0,0) >= 0;
+}
+
+bool KrtNativeLowerIteratorForeach(KrtAstNode statement, KrtAstNode module_ast, KrtAstNode unit, KrtNativeModule module, int64 source, int32[] breaks, int32[] continues, ref int32 depth) {
+    if (statement.native_target == null || statement.native_target.left == null) { return false; }
+    KrtAstNode receiver = statement.native_target.left;
+    if (receiver.native_ref) {
+        return receiver.next != null && KrtNativeLowerLValue(receiver.left,module_ast,module,source) &&
+            KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,receiver.local_slot,0) >= 0 &&
+            KrtNativeLowerBlock(receiver.next,module_ast,unit,module,source,breaks,continues,ref depth);
+    }
+    return KrtNativeLowerBlock(statement.native_target,module_ast,unit,module,source,breaks,continues,ref depth);
+}

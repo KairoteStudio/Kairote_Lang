@@ -10,9 +10,10 @@ int64 KrtNativeExceptionType(KrtAstNode type, KrtAstNode module) {
         }
         return -1;
     }
-    if (type.native_wide) { return type.native_unsigned ? 57 : 56; }
+    if (type.native_wide && type.native_bits == 128) { return type.native_unsigned ? 57 : 56; }
     if (type.native_string) { return 48; }
     if (type.native_boolean) { return 49; }
+    if (type.native_character) { return 50; }
     if (type.native_float != 0) { return 32 + type.native_float; }
     // Storage slots and rounded byte widths do not identify integer types.
     // Keep the established scalar ABI, and put custom precision above the
@@ -29,7 +30,8 @@ bool KrtNativeBindThrow(KrtAstNode statement, KrtNativeBinding binding) {
         statement.native_target = binding.catch_target; return true;
     }
     if (!KrtNativeBindExpression(statement.left, binding)) { return false; }
-    if (KrtNativeVoidValue(statement.left) || statement.left.kind == KrtAstKind.Null || KrtNativeExceptionType(statement.left, binding.module) < 0) { return KrtNativeBindingError(binding, statement); }
+    if (KrtNativeVoidValue(statement.left) || statement.left.kind == KrtAstKind.Null ||
+        (!KrtNativeReferenceObjectValue(statement.left) && !KrtNativeBoxableValue(statement.left))) { return KrtNativeBindingError(binding, statement); }
     return true;
 }
 
@@ -46,9 +48,10 @@ bool KrtNativeBindTry(KrtAstNode statement, KrtNativeBinding binding) {
             KrtAstNode variable = clause.left;
             variable.native_lexical_block = clause.right; variable.native_cell_initial_parameter = true;
             if (!KrtNativeAnnotateType(variable, binding.module, binding.source, variable.type_start, variable.type_length) ||
-                KrtNativeExceptionType(variable, binding.module) < 0) { return KrtNativeBindingError(binding, variable); }
+                (!KrtNativeReferenceObjectValue(variable) && !KrtNativeBoxableValue(variable)) || variable.native_ref) { return KrtNativeBindingError(binding, variable); }
             if (variable.name_length > 0) {
                 variable.local_slot = binding.slots; binding.slots = binding.slots + 1;
+                if (!KrtNativeBindAggregateFrame(variable,binding)) { return false; }
                 if (!KrtNativeAddName(binding, variable, variable.local_slot, false)) { return false; }
             }
         }

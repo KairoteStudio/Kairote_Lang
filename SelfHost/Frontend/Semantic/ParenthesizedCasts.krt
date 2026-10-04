@@ -1,0 +1,78 @@
+// The parser retains both interpretations of (Name)(expression). Resolve with
+// the same lexical values, using scopes and closed generic context as binding.
+bool KrtNativeParenthesizedValueName(KrtAstNode expression, KrtNativeBinding binding) {
+    KrtAstNode first = expression;
+    while (first != null && first.kind == KrtAstKind.Member) { first = first.left; }
+    if (first == null || first.kind != KrtAstKind.Identifier) { return true; }
+    if (KrtNativeFindName(binding, first.start, first.length) != null ||
+        KrtNativeFindGlobal(binding, first.start, first.length) != null ||
+        KrtNativeFindGlobalExpression(expression, binding) != null) { return true; }
+    if (binding.unit.native_owner != null &&
+        KrtNativeFieldOwner(binding.unit.native_owner, binding.source, first.start, first.length) != null) { return true; }
+    return false;
+}
+
+KrtAstNode KrtNativeParenthesizedOperandCandidate(KrtAstNode expression, KrtAstNode grouped,
+    KrtAstNode context, KrtNativeBinding binding) {
+    if (grouped.kind != KrtAstKind.Identifier && grouped.kind != KrtAstKind.Member) { return expression; }
+    KrtAstNode first = grouped;
+    while (first.kind == KrtAstKind.Member) { first = first.left; }
+    if (first.kind != KrtAstKind.Identifier) { return expression; }
+    KrtAstNode prefix = KrtParserGroupedCallPrefix(expression, grouped);
+    if (prefix == null) { return expression; }
+    int64 length = grouped.kind == KrtAstKind.Member ? grouped.name_start + grouped.name_length - first.start : grouped.length;
+    KrtAstNode syntax = KrtNativeTypeSyntax(binding.source, first.start, length);
+    if (syntax == null) { return expression; }
+    KrtNativeClosureProbeJournal(binding.module, prefix);
+    KrtAstNode candidate = KrtParserParenthesizedCastCandidate(expression, grouped, syntax, first.start);
+    if (candidate != expression) {
+        candidate.native_scope = context.native_scope; candidate.native_context = context.native_context;
+        candidate.native_using_scope = context.native_using_scope;
+    }
+    return candidate;
+}
+
+bool KrtNativeBindParenthesizedCast(KrtAstNode node, KrtNativeBinding binding) {
+    KrtAstNode expression = node.left; KrtAstNode prefix = expression; KrtAstNode parent = null;
+    while (prefix != null && !(prefix.kind == KrtAstKind.Call && prefix.op == 253)) {
+        parent = prefix; prefix = prefix.left;
+    }
+    if (prefix == null) { return KrtNativeBindingError(binding, node); }
+    KrtAstNode syntax = node.syntax_type;
+    KrtAstNode component = syntax;
+    if (syntax.right != null) { component = syntax.right; while (component.next != null) { component = component.next; } }
+    int64 length = component.name_start + component.name_length - syntax.name_start;
+    bool type_name = false;
+    if (!KrtNativeParenthesizedValueName(prefix.left, binding)) {
+        KrtAstNode context = node.native_context;
+        if (context == null) { context = binding.unit.native_context; }
+        if (syntax.right == null && KrtNativeTypeParameter(context, binding.source, syntax.name_start, length) != null) {
+            type_name = true;
+        } else {
+            type_name = KrtNativeFindUsingType(binding.module, binding.source, syntax.name_start, length,
+                binding.unit.native_scope, binding.using_scope) != null;
+        }
+    }
+    KrtNativeClosureProbeJournal(binding.module, node);
+    if (type_name) {
+        if (parent == null) { expression = prefix.right; }
+        else {
+            KrtNativeClosureProbeJournal(binding.module, parent);
+            parent.left = prefix.right;
+            // Removing (Outer) exposes a grouped operand that may itself be
+            // another cast target: (Outer)(Inner)(value). Restore the same
+            // deferred ambiguity without reparsing or duplicating its tree.
+            expression = KrtNativeParenthesizedOperandCandidate(expression, prefix.right, node, binding);
+        }
+        node.kind = KrtAstKind.Cast; node.op = 0; node.left = expression; node.child_count = 1;
+    } else {
+        KrtNativeClosureProbeJournal(binding.module, prefix); prefix.op = 0;
+        KrtAstNode sibling = node.next;
+        int64 argument_start = node.syntax_argument_name_start; int64 argument_length = node.syntax_argument_name_length;
+        bool grouped = node.grouped;
+        KrtNativeClosureProbeCopyNode(node, expression);
+        node.next = sibling; node.syntax_argument_name_start = argument_start; node.syntax_argument_name_length = argument_length;
+        node.grouped = grouped || node.grouped;
+    }
+    return KrtNativeBindExpression(node, binding);
+}

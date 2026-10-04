@@ -45,13 +45,15 @@ bool KrtNativeAccessSameFile(KrtAstNode declaration, KrtAstNode caller) {
     return false;
 }
 
-// File-private declarations do not conflict with declarations in another
-// original source file. Unknown source positions never grant this exception.
+// File-private declarations and declarations internal to another module
+// have separate declaration identities. Unknown source positions never
+// grant this exception.
 bool KrtNativeAccessSeparateFiles(KrtAstNode first, KrtAstNode second) {
     if (first == null || second == null || KrtDriverActiveBundle == null) { return false; }
     bool file_private = KrtNativeAccessMode(first) == 2 && KrtNativeAccessOwner(first) == null;
     file_private = file_private || (KrtNativeAccessMode(second) == 2 && KrtNativeAccessOwner(second) == null);
-    if (!file_private) { return false; }
+    bool module_internal = KrtNativeAccessMode(first) == 8192 || KrtNativeAccessMode(second) == 8192;
+    if (!file_private && !module_internal) { return false; }
     first = KrtNativeAccessOrigin(first); second = KrtNativeAccessOrigin(second);
     KrtSourceFile first_file = null; KrtSourceFile second_file = null;
     KrtSourceFile file = KrtDriverActiveBundle.files;
@@ -60,7 +62,9 @@ bool KrtNativeAccessSeparateFiles(KrtAstNode first, KrtAstNode second) {
         if (second.start >= file.start && second.start < file.start + file.length) { second_file = file; }
         file = file.order_next;
     }
-    return first_file != null && second_file != null && first_file != second_file;
+    if (first_file == null || second_file == null) { return false; }
+    if (module_internal && !KrtModulesSameModule(first.start,second.start)) { return true; }
+    return file_private && first_file != second_file;
 }
 
 bool KrtNativeAccessAllowedDepth(KrtAstNode declaration, KrtNativeBinding binding, KrtAstNode receiver_type, bool base_receiver, int32 depth) {
@@ -68,14 +72,16 @@ bool KrtNativeAccessAllowedDepth(KrtAstNode declaration, KrtNativeBinding bindin
     KrtAstNode owner = KrtNativeAccessOwner(declaration);
     if (owner != null && !KrtNativeAccessAllowedDepth(owner,binding,null,false,depth + 1)) { return false; }
     int32 access = KrtNativeAccessMode(declaration);
-    // Every source root and import in this compilation belongs to one module.
-    // Object-file exports enforce the boundary to another compiled module.
-    if (access == 1 || access == 8192 || access == 8196) { return true; }
+    KrtAstNode origin=KrtNativeAccessOrigin(declaration);KrtAstNode caller_origin=KrtNativeAccessOrigin(binding.unit);
+    bool same_module=KrtModulesSameModule(origin.start,caller_origin.start);
+    if (access == 1 || ((access == 8192 || access == 8196)&&same_module)) { return true; }
+    if(access==8192){return false;}if(access==8196){access=4;}
     if (owner == null) { return access == 2 && KrtNativeAccessSameFile(declaration,binding.unit); }
     KrtAstNode caller = KrtNativeAccessOwner(binding.unit);
     if (KrtNativeAccessSameOwner(owner,caller)) { return true; }
     if (access == 2 || caller == null || !KrtNativeDerivesFrom(caller,owner)) { return false; }
     if (access != 4 && access != 6) { return false; }
+    if(access==6&&!same_module){return false;}
     // A derived class may use a protected instance member through its own
     // static receiver type (or a descendant), and through this/base. Merely
     // holding an unrelated Base or sibling instance grants no access.

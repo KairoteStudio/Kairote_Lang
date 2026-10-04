@@ -1,0 +1,349 @@
+// Generator activations live in ordinary heap storage. Existing SSA operations
+// provide every load, store, address, branch, call and exception edge.
+int32 KrtNativeGeneratorRaw(KrtNativeModule module, int32 op, int64 arg, int64 extra) {
+    bool previous = module.generator_raw_emit; module.generator_raw_emit = true;
+    int32 result = KrtNativeEmit(module,op,arg,extra);
+    module.generator_raw_emit = previous; return result;
+}
+
+bool KrtNativeGeneratorAddress(KrtNativeModule module, int32 offset) {
+    KrtNativeGeneratorPlan plan = module.generator;
+    return plan != null && KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.LoadLocal,plan.receiver_slot,0) >= 0 &&
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Address,0,offset) >= 0;
+}
+
+int32 KrtNativeGeneratorEmit(KrtNativeModule module, int32 op, int64 arg, int64 extra) {
+    KrtNativeGeneratorPlan plan = module.generator; int32 first = module.count;
+    if (plan == null || module.generator_raw_emit) { return KrtNativeGeneratorRaw(module,op,arg,extra); }
+    if ((op == (int32)KrtNativeOp.LoadLocal || op == (int32)KrtNativeOp.StoreLocal || op == (int32)KrtNativeOp.Ref) &&
+        arg >= 0 && arg < plan.body_locals) {
+        int32 offset = plan.slots_offset + (int32)arg*8;
+        if (op == (int32)KrtNativeOp.StoreLocal &&
+            KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.StoreLocal,plan.scratch_slot,0) < 0) { return -1; }
+        if (!KrtNativeGeneratorAddress(module,offset)) { return -1; }
+        if (op == (int32)KrtNativeOp.LoadLocal && KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Load,0,8) < 0) { return -1; }
+        if (op == (int32)KrtNativeOp.StoreLocal &&
+            (KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.LoadLocal,plan.scratch_slot,0) < 0 ||
+             KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Store,0,8) < 0)) { return -1; }
+        return first;
+    }
+    if (op == (int32)KrtNativeOp.AggregateFrameAddress) {
+        if (arg < 0 || extra <= 0 || arg > plan.body_frame_bytes-extra ||
+            !KrtNativeGeneratorAddress(module,plan.aggregate_offset+(int32)arg)) { return -1; }
+        return first;
+    }
+    return KrtNativeGeneratorRaw(module,op,arg,extra);
+}
+
+bool KrtNativeGeneratorWrite(KrtNativeModule module, int32 offset, int64 value) {
+    return KrtNativeGeneratorAddress(module,offset) &&
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Const,value,0) >= 0 &&
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Store,0,8) >= 0;
+}
+
+bool KrtNativeGeneratorRead(KrtNativeModule module, int32 offset) {
+    return KrtNativeGeneratorAddress(module,offset) && KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Load,0,8) >= 0;
+}
+
+bool KrtNativeGeneratorError(KrtNativeModule module, int32 value) {
+    return KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Const,value,0) >= 0 &&
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Const,4,0) >= 0 &&
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Throw,0,0) >= 0;
+}
+
+bool KrtNativeGeneratorGuardBusy(KrtNativeModule module) {
+    if (!KrtNativeGeneratorRead(module,24)) { return false; }
+    int32 guard = KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Branch,-1,-1);
+    if (guard < 0 || !KrtNativeGeneratorError(module,-2147483602)) { return false; }
+    module.args[guard] = guard+1; module.extra[guard] = module.count;
+    return true;
+}
+
+KrtNativeExceptionFrame KrtNativeGeneratorCopyFrames(KrtNativeExceptionFrame original) {
+    KrtNativeExceptionFrame first = null; KrtNativeExceptionFrame tail = null;
+    while (original != null) {
+        KrtNativeExceptionFrame frame = new KrtNativeExceptionFrame();
+        frame.finally_body = original.finally_body; frame.record_slot = original.record_slot;
+        frame.loop_depth = original.loop_depth; frame.active_handler = original.active_handler;
+        frame.handler_enter = original.handler_enter;
+        frame.owns_packet = original.owns_packet; frame.packet_slot = original.packet_slot;
+        if (tail == null) { first = frame; } else { tail.previous = frame; }
+        tail = frame; original = original.previous;
+    }
+    return first;
+}
+
+bool KrtNativeGeneratorLeaveHandlers(KrtNativeExceptionFrame frame, KrtNativeModule module) {
+    while (frame != null) {
+        if (frame.active_handler && KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.TryLeave,frame.record_slot,0) < 0) { return false; }
+        frame = frame.previous;
+    }
+    return true;
+}
+
+bool KrtNativeGeneratorRestoreHandlers(KrtNativeExceptionFrame frame, KrtNativeModule module) {
+    if (frame == null) { return true; }
+    if (!KrtNativeGeneratorRestoreHandlers(frame.previous,module)) { return false; }
+    return !frame.active_handler || (frame.handler_enter >= 0 && frame.handler_enter < module.count &&
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.TryEnter,module.args[frame.handler_enter],frame.record_slot) >= 0);
+}
+
+bool KrtNativeLowerYield(KrtAstNode statement, KrtAstNode ast, KrtAstNode unit, KrtNativeModule module, int64 source, int32[] breaks, int32[] continues, ref int32 depth) {
+    KrtNativeGeneratorPlan plan = module.generator;
+    if (plan == null || unit.native_generator_role != 3) { return false; }
+    if (statement.kind == KrtAstKind.YieldBreak) {
+        return KrtNativeLowerCleanup(ast,unit,module,source,breaks,continues,ref depth,true) &&
+            KrtNativeGeneratorWrite(module,8,-1) && KrtNativeGeneratorWrite(module,16,0) && KrtNativeGeneratorWrite(module,24,0) &&
+            KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Const,0,0) >= 0 &&
+            KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Return,0,1) >= 0;
+    }
+    if (!KrtNativeGeneratorAddress(module,plan.current_offset) ||
+        !KrtNativeLowerExpression(statement.left,ast,module,source)) { return false; }
+    if (KrtNativeInlineValue(plan.element_type)) {
+        if (KrtNativeWideKind(plan.element_type) && !KrtNativeConvertValue(module,statement.left,plan.element_type)) { return false; }
+        if (!KrtNativeLowerAggregateCopy(plan.element_type,module)) { return false; }
+    } else {
+        if (!KrtNativeConvertValue(module,statement.left,plan.element_type) ||
+            KrtNativeEmit(module,(int32)KrtNativeOp.Store,0,KrtNativeWidth(plan.element_type)) < 0) { return false; }
+    }
+    KrtNativeGeneratorResume resume = new KrtNativeGeneratorResume();
+    plan.state_count = plan.state_count+1; resume.state = plan.state_count;
+    resume.frames = KrtNativeGeneratorCopyFrames(module.exception_frame);
+    resume.next = plan.resumes; plan.resumes = resume;
+    if (!KrtNativeGeneratorWrite(module,8,resume.state) || !KrtNativeGeneratorWrite(module,16,1) ||
+        !KrtNativeGeneratorWrite(module,24,0) || !KrtNativeGeneratorLeaveHandlers(resume.frames,module) ||
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Const,1,0) < 0 ||
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Return,0,1) < 0) { return false; }
+    resume.target = module.count;
+    return true;
+}
+
+bool KrtNativeGeneratorAllocate(KrtAstNode type, int32 slot, KrtAstNode ast, KrtNativeModule module, int64 source) {
+    KrtAstNode allocation = KrtAstMake(KrtAstKind.New,type.start,0);
+    allocation.native_type = type; allocation.native_width = 8; allocation.native_size = type.native_size;
+    allocation.local_slot = slot;
+    return KrtNativeLowerNew(allocation,ast,module,source);
+}
+
+bool KrtNativeGeneratorAllocationGuard(KrtNativeModule module, int32 slot) {
+    if (KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.LoadLocal,slot,0) < 0) { return false; }
+    int32 allocated = KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Branch,-1,-1);
+    if (allocated < 0 || KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Const,0,0) < 0 ||
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Return,0,1) < 0) { return false; }
+    module.extra[allocated] = allocated+1; module.args[allocated] = module.count;
+    return true;
+}
+
+bool KrtNativeGeneratorStoreParameter(KrtNativeGeneratorPlan plan, KrtAstNode parameter, int32 index, int32 object_slot, KrtNativeModule module) {
+    if (KrtNativeInlineValue(parameter) || KrtNativeWideKind(parameter)) {
+        int32 offset = plan.aggregate_offset+parameter.native_frame_offset;
+        if (KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.LoadLocal,object_slot,0) < 0 ||
+            KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Address,0,offset) < 0 ||
+            KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.LoadLocal,index,0) < 0 ||
+            KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.AggregateCopy,KrtNativeValueStorage(parameter),KrtNativeValueAlignment(parameter)) < 0) { return false; }
+        if (!KrtNativeWideKind(parameter)) { return true; }
+        return KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.LoadLocal,object_slot,0) >= 0 &&
+            KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Address,0,plan.slots_offset+index*8) >= 0 &&
+            KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.LoadLocal,object_slot,0) >= 0 &&
+            KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Address,0,offset) >= 0 &&
+            KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Store,0,8) >= 0;
+    }
+    return KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.LoadLocal,object_slot,0) >= 0 &&
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Address,0,plan.slots_offset+index*8) >= 0 &&
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.LoadLocal,index,0) >= 0 &&
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Store,0,8) >= 0;
+}
+
+bool KrtNativeLowerGeneratorFactory(KrtAstNode ast, KrtAstNode unit, KrtNativeModule module, int64 source) {
+    KrtNativeGeneratorPlan plan = unit.native_generator;
+    if (module.initializer_index >= 0 && module.lower_function_index != module.initializer_index &&
+        (KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Call,module.initializer_index,0) < 0 ||
+         KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Drop,0,0) < 0)) { return false; }
+    KrtAstNode type = plan.sequence_type == null ? plan.cursor_type : plan.sequence_type;
+    if (!KrtNativeGeneratorAllocate(type,plan.factory_slot,ast,module,source) ||
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Drop,0,0) < 0 ||
+        !KrtNativeGeneratorAllocationGuard(module,plan.factory_slot)) { return false; }
+    KrtAstNode parameter = plan.parameters; int32 index = 0;
+    while (parameter != null && index < unit.parameter_count) {
+        if (!KrtNativeGeneratorStoreParameter(plan,parameter,index,plan.factory_slot,module)) { return false; }
+        parameter = parameter.next; index = index+1;
+    }
+    return index == unit.parameter_count && KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.LoadLocal,plan.factory_slot,0) >= 0 &&
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Return,0,1) >= 0;
+}
+
+bool KrtNativeLowerGeneratorGet(KrtAstNode ast, KrtAstNode unit, KrtNativeModule module, int64 source) {
+    KrtNativeGeneratorPlan plan = unit.native_generator;
+    if (!KrtNativeGeneratorAllocate(plan.cursor_type,1,ast,module,source) ||
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Drop,0,0) < 0 ||
+        !KrtNativeGeneratorAllocationGuard(module,1) ||
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.LoadLocal,1,0) < 0 ||
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Address,0,8) < 0 ||
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.LoadLocal,0,0) < 0 ||
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Address,0,8) < 0 ||
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.AggregateCopy,plan.object_size-8,8) < 0) { return false; }
+    KrtAstNode parameter = plan.parameters; int32 index = 0;
+    while (parameter != null) {
+        if (KrtNativeWideKind(parameter) &&
+            (KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.LoadLocal,1,0) < 0 ||
+             KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Address,0,plan.slots_offset+index*8) < 0 ||
+             KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.LoadLocal,1,0) < 0 ||
+             KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Address,0,plan.aggregate_offset+parameter.native_frame_offset) < 0 ||
+             KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Store,0,8) < 0)) { return false; }
+        parameter = parameter.next; index = index+1;
+    }
+    return KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.LoadLocal,1,0) >= 0 &&
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Return,0,1) >= 0;
+}
+
+bool KrtNativeLowerGeneratorCurrent(KrtAstNode unit, KrtNativeModule module) {
+    KrtNativeGeneratorPlan plan = unit.native_generator;
+    if (KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.LoadLocal,0,0) < 0 ||
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Address,0,16) < 0 ||
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Load,0,8) < 0) { return false; }
+    int32 valid = KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Branch,-1,-1);
+    if (valid < 0 || !KrtNativeGeneratorError(module,-2147483601)) { return false; }
+    module.extra[valid] = valid+1; module.args[valid] = module.count;
+    if (KrtNativeInlineValue(plan.element_type)) {
+        if (KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.LoadLocal,1,0) < 0 ||
+            KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.LoadLocal,0,0) < 0 ||
+            KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Address,0,plan.current_offset) < 0 ||
+            KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.AggregateCopy,KrtNativeValueStorage(plan.element_type),KrtNativeValueAlignment(plan.element_type)) < 0 ||
+            KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.LoadLocal,1,0) < 0) { return false; }
+    } else {
+        if (KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.LoadLocal,0,0) < 0 ||
+            KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Address,0,plan.current_offset) < 0 ||
+            KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Load,0,KrtNativeWidth(plan.element_type)) < 0) { return false; }
+        if (KrtNativeWideKind(plan.element_type) &&
+            (KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.WideConvert,5,0) < 0 || !KrtNativeNormalizeWide(module,plan.element_type))) { return false; }
+    }
+    return KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Return,0,1) >= 0;
+}
+
+bool KrtNativeLowerGeneratorMove(KrtAstNode ast, KrtAstNode unit, KrtNativeModule module, int64 source) {
+    KrtNativeGeneratorPlan plan = unit.native_generator; module.generator = plan;
+    if (KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.LoadLocal,0,0) < 0 ||
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.StoreLocal,plan.receiver_slot,0) < 0 ||
+        !KrtNativeGeneratorGuardBusy(module) || !KrtNativeGeneratorRead(module,8) ||
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Const,0,0) < 0 ||
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Compare,60,0) < 0) { return false; }
+    int32 completed = KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Branch,-1,-1);
+    if (completed < 0 || KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Const,0,0) < 0 ||
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Return,0,1) < 0) { return false; }
+    module.args[completed] = completed+1; module.extra[completed] = module.count;
+    if (!KrtNativeGeneratorWrite(module,24,1) || !KrtNativeGeneratorWrite(module,16,0)) { return false; }
+    int32 dispatch = KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Jump,-1,0);
+    if (dispatch < 0) { return false; }
+    int32 initial = module.count;
+    int32 enter = KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.TryEnter,-1,plan.handler_slot);
+    if (enter < 0) { return false; }
+    KrtNativeExceptionFrame frame = new KrtNativeExceptionFrame(); frame.active_handler = true;
+    frame.record_slot = plan.handler_slot; frame.handler_enter = enter; frame.loop_depth = -1;
+    module.exception_frame = frame;
+    int32[] breaks = new int32[64]; int32[] continues = new int32[64]; int32 depth = 0;
+    if (!KrtNativeLowerBlock(plan.body,ast,unit,module,source,breaks,continues,ref depth) ||
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.TryLeave,plan.handler_slot,0) < 0 ||
+        !KrtNativeGeneratorWrite(module,8,-1) || !KrtNativeGeneratorWrite(module,16,0) || !KrtNativeGeneratorWrite(module,24,0) ||
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Const,0,0) < 0 ||
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Return,0,1) < 0) { return false; }
+    module.exception_frame = null; module.args[enter] = module.count;
+    if (!KrtNativeGeneratorWrite(module,8,-1) || !KrtNativeGeneratorWrite(module,16,0) || !KrtNativeGeneratorWrite(module,24,0) ||
+        !KrtNativeLowerSavedThrow(module,plan.handler_slot)) { return false; }
+    module.args[dispatch] = module.count;
+    if (!KrtNativeGeneratorRead(module,8) || KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Const,0,0) < 0 ||
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Compare,61,0) < 0) { return false; }
+    int32 first = KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Branch,initial,-1);
+    if (first < 0) { return false; } module.extra[first] = module.count;
+    KrtNativeGeneratorResume resume = plan.resumes;
+    while (resume != null) {
+        if (!KrtNativeGeneratorRead(module,8) || KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Const,resume.state,0) < 0 ||
+            KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Compare,61,0) < 0) { return false; }
+        int32 selected = KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Branch,-1,-1);
+        if (selected < 0) { return false; } module.args[selected] = module.count;
+        if (!KrtNativeGeneratorRestoreHandlers(resume.frames,module) ||
+            KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Jump,resume.target,0) < 0) { return false; }
+        module.extra[selected] = module.count; resume = resume.next;
+    }
+    if (!KrtNativeGeneratorWrite(module,8,-1) || !KrtNativeGeneratorWrite(module,24,0) ||
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Const,0,0) < 0 ||
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Return,0,1) < 0) { return false; }
+    delete breaks; delete continues; module.generator = null;
+    return true;
+}
+
+bool KrtNativeGeneratorFree(KrtNativeModule module) {
+    return KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.LoadLocal,module.generator.receiver_slot,0) >= 0 &&
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Free,0,0) >= 0;
+}
+
+KrtAstNode KrtNativeGeneratorCleanupTree(KrtNativeExceptionFrame frame, KrtAstNode site) {
+    KrtAstNode active = null;
+    while (frame != null) {
+        if (frame.finally_body != null) {
+            if (active == null) { active = KrtNativeIteratorBlock(frame.finally_body,site); }
+            else {
+                KrtAstNode guarded = KrtAstMake(KrtAstKind.Try,site.start,0);
+                guarded.left = active; guarded.alternate = frame.finally_body; guarded.local_slot = frame.record_slot;
+                active = KrtNativeIteratorBlock(guarded,site);
+            }
+        }
+        frame = frame.previous;
+    }
+    return active;
+}
+
+bool KrtNativeLowerGeneratorDispose(KrtAstNode ast, KrtAstNode unit, KrtNativeModule module, int64 source) {
+    KrtNativeGeneratorPlan plan = unit.native_generator; module.generator = plan;
+    if (KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.LoadLocal,0,0) < 0 ||
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.StoreLocal,plan.receiver_slot,0) < 0 ||
+        !KrtNativeGeneratorGuardBusy(module) || !KrtNativeGeneratorRead(module,8) ||
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.StoreLocal,plan.scratch_slot,0) < 0 ||
+        !KrtNativeGeneratorWrite(module,24,1) || !KrtNativeGeneratorWrite(module,8,-1) ||
+        !KrtNativeGeneratorWrite(module,16,0)) { return false; }
+    int32 enter = KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.TryEnter,-1,plan.handler_slot);
+    if (enter < 0) { return false; }
+    KrtNativeExceptionFrame frame = new KrtNativeExceptionFrame(); frame.active_handler = true;
+    frame.record_slot = plan.handler_slot; frame.handler_enter = enter; frame.loop_depth = -1;
+    module.exception_frame = frame;
+    int32[] breaks = new int32[64]; int32[] continues = new int32[64]; int32 depth = 0; int32 exits = -1;
+    KrtNativeGeneratorResume resume = plan.resumes;
+    while (resume != null) {
+        if (KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.LoadLocal,plan.scratch_slot,0) < 0 ||
+            KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Const,resume.state,0) < 0 ||
+            KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Compare,61,0) < 0) { return false; }
+        int32 selected = KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Branch,-1,-1);
+        if (selected < 0) { return false; } module.args[selected] = module.count;
+        KrtAstNode cleanup = KrtNativeGeneratorCleanupTree(resume.frames,unit);
+        if (cleanup != null && !KrtNativeLowerBlock(cleanup,ast,unit,module,source,breaks,continues,ref depth)) { return false; }
+        int32 exit = KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Jump,-1,exits);
+        if (exit < 0) { return false; } exits = exit;
+        module.extra[selected] = module.count; resume = resume.next;
+    }
+    if (!KrtNativePatchLoop(module,exits,module.count) ||
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.TryLeave,plan.handler_slot,0) < 0 ||
+        !KrtNativeGeneratorFree(module) || KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Const,0,0) < 0 ||
+        KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.Return,0,1) < 0) { return false; }
+    module.exception_frame = null; module.args[enter] = module.count;
+    if (!KrtNativeGeneratorFree(module) || !KrtNativeLowerSavedThrow(module,plan.handler_slot)) { return false; }
+    delete breaks; delete continues; module.generator = null;
+    return true;
+}
+
+bool KrtNativeLowerGeneratorFunction(KrtAstNode ast, KrtAstNode unit, KrtNativeModule module, int64 source, int32 index) {
+    KrtNativeGeneratorPlan plan = unit.native_generator;
+    if (plan == null || unit.native_generator_role <= 0) { return false; }
+    module.lower_function_index = index; module.starts[index] = module.count;
+    module.parameter_counts[index] = unit.parameter_count; module.local_counts[index] = unit.native_locals;
+    module.function_frame_bytes[index] = 0; module.exception_frame = null; module.generator = null;
+    if (KrtNativeInlineValue(unit)) {
+        module.aggregate_return_sizes[index] = KrtNativeValueStorage(unit);
+        module.aggregate_return_alignments[index] = KrtNativeValueAlignment(unit);
+        module.hidden_result_slots[index] = unit.native_hidden_result_slot;
+    }
+    if (unit.native_generator_role == 1) { return KrtNativeLowerGeneratorFactory(ast,unit,module,source); }
+    if (unit.native_generator_role == 2) { return KrtNativeLowerGeneratorGet(ast,unit,module,source); }
+    if (unit.native_generator_role == 3) { return KrtNativeLowerGeneratorMove(ast,unit,module,source); }
+    if (unit.native_generator_role == 4) { return KrtNativeLowerGeneratorCurrent(unit,module); }
+    if (unit.native_generator_role == 5) { return KrtNativeLowerGeneratorDispose(ast,unit,module,source); }
+    return false;
+}

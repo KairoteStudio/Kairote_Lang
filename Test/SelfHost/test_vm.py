@@ -45,7 +45,7 @@ class NativeVmTests(unittest.TestCase):
                     + bytes(24) + struct.pack('<IId', 1, 2, 17.0))
         self.assertEqual(output.read_bytes(), expected)
         self.command('run-vm', output, expected=17)
-        seed = ROOT / 'build/Re.KrtC/KrtC'
+        seed = Path(os.environ.get('KRTC', ROOT / 'build/Re.KrtC/KrtC')).resolve()
         if seed.is_file():
             source = self.work / 'program.krt'
             artifact = self.work / 'seed'

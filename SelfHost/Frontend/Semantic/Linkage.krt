@@ -52,7 +52,7 @@ void KrtLinkType(KrtLinkName name, KrtAstNode type, int64 source, int32 depth) {
     if (!type.native_array && type.native_stride != 0 && !type.native_string && pointer_depth == 0) { pointer_depth = 1; }
     while (pointer_depth > 0) { KrtLinkByte(name, 80); pointer_depth = pointer_depth - 1; }
     if (type.native_function_pointer != null) {
-        KrtLinkText(name, "fn2("); KrtAstNode signature = type.native_function_pointer;
+        KrtAstNode signature = type.native_function_pointer;KrtLinkText(name,KrtAbiWideFunctionShape(signature,0)?"fn3(":"fn2(");
         KrtAstNode parameter = signature.declarations;
         while (parameter != null) { KrtLinkType(name, parameter, source, depth + 1); KrtLinkByte(name, 59); parameter = parameter.next; }
         KrtLinkText(name, ")>");
@@ -62,6 +62,11 @@ void KrtLinkType(KrtLinkName name, KrtAstNode type, int64 source, int32 depth) {
     if (type.native_string || type.native_element_string) { KrtLinkByte(name, 83); return; }
     if (type.native_void_pointer) { KrtLinkByte(name, 118); return; }
     if (type.native_type != null) {
+        if(type.native_type.value==5){KrtLinkByte(name,79);return;}
+        if(type.native_type.native_generator!=null){
+            KrtAbiBytes identity=KrtModuleGeneratorIdentity(type.native_type,source);KrtLinkName key=KrtModuleDescriptorName(identity);
+            if(!key.valid){name.valid=false;return;}int32 character=0;while(character<key.length){KrtLinkByte(name,key.bytes[character]);character=character+1;}return;
+        }
         KrtLinkByte(name, 67); KrtLinkDeclaration(name, type.native_type, source);
         if (type.native_type.native_type_arguments != null) {
             KrtLinkText(name,"<"); KrtAstNode argument = type.native_type.native_type_arguments;
@@ -139,7 +144,7 @@ bool KrtLinkNamesEqual(KrtLinkName first, KrtLinkName second) {
 
 bool KrtNativeAbiDeferredOwner(KrtAstNode declaration) {
     return declaration.native_generic_parameters==null&&declaration.native_owner!=null&&
-        declaration.native_owner.value==2&&declaration.native_owner.native_generic_parameters!=null;
+        declaration.native_owner.native_generic_parameters!=null;
 }
 
 // Repeated prototypes and a matching definition share one semantic function.
@@ -199,4 +204,32 @@ bool KrtNativePrepareExternals(KrtAstNode module, int64 source, KrtNativeModule 
         candidate = candidate.next;
     }
     return true;
+}
+
+// Methods initially share the module's executable-function chain. Removing
+// prototypes and templates must not erase the owning type's ABI and dispatch
+// inventory. A separate chain keeps both lists complete with linear work.
+void KrtNativeSnapshotTypeMembers(KrtAstNode module){
+    KrtAstNode type=module.declarations;
+    while(type!=null){type.native_member_first=null;type.native_members_saved=true;type=type.next;}
+    KrtAstNode method=module.left;
+    while(method!=null){
+        KrtAstNode owner=method.native_owner;
+        if(owner!=null){method.native_member_next=owner.native_member_first;owner.native_member_first=method;}
+        method=method.next;
+    }
+    type=module.declarations;
+    while(type!=null){
+        KrtAstNode previous=null;method=type.native_member_first;
+        while(method!=null){KrtAstNode next=method.native_member_next;method.native_member_next=previous;previous=method;method=next;}
+        type.native_member_first=previous;type=type.next;
+    }
+}
+
+KrtAstNode KrtNativeTypeMemberFirst(KrtAstNode owner){
+    return owner.native_members_saved?owner.native_member_first:owner.declarations;
+}
+
+KrtAstNode KrtNativeTypeMemberNext(KrtAstNode method){
+    return method.native_owner!=null&&method.native_owner.native_members_saved?method.native_member_next:method.next;
 }

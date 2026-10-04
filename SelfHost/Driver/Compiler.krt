@@ -123,6 +123,7 @@ bool KrtCompileNativeSourceModeCore(string source, int32 source_length, KrtKroOb
         }
         return false;
     }
+    if(!KrtModulesMarkImportedAst(unit)||!KrtModulesMergeImportedAst(unit,lexer.source)){return false;}
     KrtCurrentDiagnostics.stage = KrtDiagnosticStage.Names;
     if (!KrtNativeValidateAccess(unit,lexer.source,native_module)) { return false; }
     if (!KrtNativeResolvePrototypes(unit, lexer.source)) { KrtDiagnostic("E_LINKAGE", 9, 0); return false; }
@@ -132,9 +133,9 @@ bool KrtCompileNativeSourceModeCore(string source, int32 source_length, KrtKroOb
     if (!KrtSemanticValidateFunctionNames(unit, lexer.source) || (!library_mode && !KrtSemanticValidateEntryPoint(unit, lexer.source))) {
         KrtDiagnostic("E_MODULE", 8, 0); return false;
     }
-    if (library_mode && unit.left == null && unit.declarations == null) {
+    if (library_mode && unit.left == null && unit.declarations == null && unit.body==null) {
         if (!KrtKroEmitLibraryData(unit, lexer.source, output)) { KrtDiagnostic("E_LIBRARY_DATA", 14, unit.start); return false; }
-        return true;
+        return KrtKroModuleMetadata(unit,lexer.source,output);
     }
     if (library_mode) { unit.op = 240; }
     KrtCurrentDiagnostics.stage = KrtDiagnosticStage.Types;
@@ -154,12 +155,15 @@ bool KrtCompileNativeSourceModeCore(string source, int32 source_length, KrtKroOb
         else if (unit.native_error == 12) { KrtDiagnostic("E_LAYOUT", 8, native_module.error_start); }
         else if (unit.native_error == 13) { KrtDiagnostic("E_ABI_UNSUPPORTED", 17, native_module.error_start); }
         else if (unit.native_error == 14) { KrtDiagnostic("E_CAPTURE_BORROW", 16, native_module.error_start); }
+        else if (unit.native_error == 15) { KrtDiagnostic("E_BOXING", 8, native_module.error_start); }
+        else if (unit.native_error == 16) { KrtDiagnostic("E_ITERATOR", 10, native_module.error_start); }
         else { KrtDiagnostic("E_LOWER", 7, native_module.error_start); }
         return false;
     }
-    if (library_mode && native_module.function_count == 0) {
-        if (!KrtKroEmitLibraryData(unit, lexer.source, output)) { KrtDiagnostic("E_LIBRARY_DATA", 14, unit.start); return false; }
-        return true;
+    if (library_mode && KrtDriverArtifactTarget != 2 && KrtDriverArtifactTarget != 4 &&
+        (KrtKroLibraryStaticData(native_module,unit)||native_module.function_count==0)) {
+        if(!KrtKroEmitLibrarySections(native_module,unit,lexer.source,output)){KrtDiagnostic("E_LIBRARY_DATA",14,unit.start);return false;}
+        return KrtKroModuleMetadata(unit,lexer.source,output);
     }
     KrtCurrentDiagnostics.stage = KrtDiagnosticStage.Optimization;
     if (!KrtNativeOptimize(native_module, KrtDriverOptimization)) { KrtDiagnostic("E_OPTIMIZE", 10, 0); return false; }
@@ -174,8 +178,8 @@ bool KrtCompileNativeSourceModeCore(string source, int32 source_length, KrtKroOb
     }
     KrtCurrentDiagnostics.stage = KrtDiagnosticStage.Backend;
     if (!KrtKroEmitNativeModule(native_module, output)) { KrtDiagnostic("E_EMIT", 6, 0); return false; }
-    if ((library_mode || native_module.external_reloc_count > 0 || KrtKroLibraryNeedsAbi(native_module,unit,lexer.source)) && !KrtKroLibraryFunctions(native_module, unit, lexer.source, output)) { KrtDiagnostic("E_LIBRARY_SYMBOL", 16, 0); return false; }
-    return true;
+    if (!KrtKroLibraryFunctions(native_module, unit, lexer.source, output)) { KrtDiagnostic("E_LIBRARY_SYMBOL", 16, 0); return false; }
+    return KrtKroModuleMetadata(unit,lexer.source,output);
 }
 
 void KrtDiagnostic(string code, int32 code_length, int64 position) {

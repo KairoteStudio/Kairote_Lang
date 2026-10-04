@@ -107,7 +107,7 @@ if(n!=7){return 3;}try{Base empty=null;throw empty;}catch(Base wrong){return 4;}
             'base-on-ordinary-method': 'class A{public int32 f():base(){return 0;}}int32 main(){return 0;}',
             'base-on-root': 'class A{public function A():base(){}}int32 main(){return 0;}',
             'override': 'class A{public int32 f(){return 1;}}class B:A{public override int32 f(){return 2;}}int32 main(){return 0;}',
-            'downcast': 'class A{}class B:A{}int32 main(){A a=new A();B b=(B)a;return 0;}',
+            'implicit-downcast': 'class A{}class B:A{}int32 main(){A a=new A();B b=a;return 0;}',
             'array-covariance': 'class A{}class B:A{}int32 main(){B[] b=new B[1];A[] a=b;return 0;}',
             'ref-covariance': 'class A{}class B:A{}void f(ref A a){}int32 main(){B b=new B();f(ref b);return 0;}',
         }

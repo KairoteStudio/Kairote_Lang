@@ -453,30 +453,34 @@ return value.first==7&&value.second==11&&result.first==17&&result.second==31?0:1
                 damaged.write_bytes(self.replace_manifest_payload(library, replaced))
                 self.reject_objects(damaged, consumer, level, 'E_ABI_MANIFEST')
 
-    def test_nested_named_reference_classes_and_interfaces_stay_unsupported(self):
-        sources = (
-            'class Reference{}struct Value{Reference item;}',
-            'interface Contract{int32 Read();}struct Value{Contract item;}',
-            'class Reference{}struct Inner{Reference item;}struct Value{Inner nested;}',
-            'class Reference{}struct Box<T>{T item;}struct Value{Box<Reference> nested;}',
+    def test_nested_named_reference_classes_and_interfaces_use_exact_abi3(self):
+        reference = 'public class Reference{public int32 amount;public extern Reference(int32 value);}'
+        cases = (
+            (reference + 'public struct Value{public Reference item;public int32 tag;}',
+             'item', 'new Reference(19)', 'value.item.amount+=7;', 'result.item.amount==26', ''),
+            ('public interface Contract{int32 Read();}public struct Value{public Contract item;public int32 tag;}',
+             'item', 'Create()', 'if(value.item.Read()!=19){throw 1;}', 'result.item.Read()==19',
+             'private class Concrete:Contract{public int32 Read(){return 19;}}Contract Create(){return new Concrete();}'),
+            (reference + 'public struct Inner{public Reference item;}public struct Value{public Inner nested;public int32 tag;}',
+             'nested.item', 'new Reference(19)', 'value.nested.item.amount+=7;', 'result.nested.item.amount==26', ''),
+            (reference + 'public struct Box<T>{public T item;}public struct Value{public Box<Reference> nested;public int32 tag;}',
+             'nested.item', 'new Reference(19)', 'value.nested.item.amount+=7;', 'result.nested.item.amount==26', ''),
         )
-        for index, prefix in enumerate(sources):
-            path = self.work / f'unsupported-{index}.krt'
-            path.write_text(prefix + 'extern void Consume(Value value);int32 main(){Value value=default(Value);Consume(value);return 0;}')
+        for index, (declarations, field, create, action, check, extra) in enumerate(cases):
+            provider = declarations.replace('public extern Reference(int32 value);',
+                                            'public Reference(int32 value){amount=value;}') + extra
+            provider += 'Value Echo(Value value){' + action + 'value.tag=41;return value;}'
+            consumer = declarations + ('extern Contract Create();' if extra else '')
+            consumer += 'extern Value Echo(Value value);int32 main(){Value value=default(Value);value.tag=31;value.' + field + '=' + create + ';'
+            consumer += 'Value result=Echo(value);bool correct=' + check + '&&result.tag==41&&value.tag==31;delete value.' + field + ';return correct?0:1;}'
             for level in range(4):
-                for previous in (None, b'previous object\x00must survive'):
-                    with self.subTest(source=index, optimization=level, previous_artifact=previous is not None):
-                        output = self.work / f'unsupported-{index}-o{level}-{previous is not None}.kro'
-                        if previous is not None:
-                            output.write_bytes(previous)
-                        result = self.invoke(path, f'-O{level}', '-c', '-o', output)
-                        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-                        self.assertIn('E_ABI_UNSUPPORTED', result.stderr)
-                        self.assertNotIn('E_PARSE', result.stderr)
-                        if previous is None:
-                            self.assertFalse(output.exists())
-                        else:
-                            self.assertEqual(output.read_bytes(), previous)
+                with self.subTest(source=index, optimization=level):
+                    library = self.object(f'named-nested-{index}-provider', provider, level)
+                    client = self.object(f'named-nested-{index}-consumer', consumer, level)
+                    names = {name for name, _ in read_object(library)[1]}
+                    self.assertIn('_KRT_ABI3_MANIFEST', names)
+                    self.assertTrue(any(name.startswith('_KRT3$Echo$') for name in names))
+                    self.execute_objects(library, client, level)
 
     def test_scalar_libraries_keep_the_existing_krt1_symbol_contract(self):
         for level in range(4):

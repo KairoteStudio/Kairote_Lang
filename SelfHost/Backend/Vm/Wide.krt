@@ -1,7 +1,44 @@
-// Match the native ABI: scalar wide integers use immutable boxes, while array
-// elements and references use packed 16-byte storage.
+// EBC6 wide values use persistent inline storage for language values and a
+// separate fixed scratch address for every producing instruction. Earlier
+// bytecode retains its original immutable pointer-wide local ABI.
+class KrtVmWideLayout {
+    public int32[] offsets;
+    public int32[] sizes;
+}
+int32 KrtVmWideScratchBytes(int32 op,int64 argument,int64 extra) {
+    if(op==67){return 32;}
+    if((op==22&&KrtVmStorage(extra)==16)||(op==60&&argument!=2)||op==61||
+        (op==63&&argument!=33)||op==66||(op==68&&argument>=3)){return 16;}
+    return 0;
+}
+KrtVmWideLayout KrtVmMakeWideLayout(KrtNativeModule module) {
+    KrtVmWideLayout layout=new KrtVmWideLayout();
+    layout.offsets=new int32[module.count];layout.sizes=new int32[module.function_count];
+    int32 function_index=0;
+    while(function_index<module.function_count){
+        int32 first=module.starts[function_index];int32 last=module.count;
+        if(function_index+1<module.function_count){last=module.starts[function_index+1];}
+        int32 size=0;int32 index=first;
+        while(index<last){
+            int32 bytes=KrtVmWideScratchBytes(module.ops[index],module.args[index],module.extra[index]);
+            layout.offsets[index]=-1;
+            if(bytes>0){
+                if(size>67108864-bytes){delete layout.offsets;delete layout.sizes;delete layout;return null;}
+                layout.offsets[index]=size;size=size+bytes;
+            }
+            index=index+1;
+        }
+        layout.sizes[function_index]=size;function_index=function_index+1;
+    }
+    return layout;
+}
 int64 KrtVmWideBox(KrtVmState state, int128 value) {
-    int64 pointer = KrtVmAllocate(state,16,0,false);
+    int64 pointer=0;
+    if(state.wide_inline){
+        KrtVmFrame frame=state.frame;
+        if(frame==null||frame.wide_cursor<0||frame.wide_cursor>frame.wide_limit-16){state.failed=true;return 0;}
+        pointer=frame.wide_base+frame.wide_cursor;frame.wide_cursor=frame.wide_cursor+16;
+    }else{pointer=KrtVmAllocate(state,16,0,false);}
     if (pointer != 0) { unsafe(using krt.mem;) { *(int128*)pointer = value; } }
     return pointer;
 }

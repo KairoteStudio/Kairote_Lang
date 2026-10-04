@@ -1,0 +1,274 @@
+// Runtime records use exact semantic keys. Digests only shorten searches.
+// The same immutable bytes and relocations feed the native and VM backends.
+class KrtNativeRuntimeMethod {
+    public KrtAbiBytes identity;
+    public KrtAstNode target;
+    public int32 receiver_adjust;
+    public int32 key_offset;
+    public KrtNativeRuntimeMethod next;
+}
+class KrtNativeRuntimeType {
+    public KrtAstNode shape;
+    public KrtAbiBytes identity;
+    public int32 index;
+    public int32 offset;
+    public int32 key_offset;
+    public int32 interfaces_offset;
+    public int32 methods_offset;
+    public int32 kind;
+    public int32 flags;
+    public uint64 hash;
+    public bool prepared;
+    public KrtNativeRuntimeMethod methods;
+    public KrtNativeRuntimeType next;
+    public KrtNativeRuntimeType hash_next;
+}
+class KrtNativeRuntimeRelocation {
+    public int32 offset;
+    // 0: address inside the runtime blob; 1: descriptor; 2: function.
+    public int32 kind;
+    public int32 target;
+    public KrtNativeRuntimeRelocation next;
+}
+class KrtNativeRuntimeKey {
+    public KrtAbiBytes identity;
+    public uint64 hash;
+    public int32 offset;
+    public KrtNativeRuntimeKey next;
+}
+int32 KrtNativeRuntimeIntern(KrtAbiBytes bytes,KrtAbiBytes identity,KrtNativeRuntimeKey[] buckets) {
+    uint64 hash = KrtAbiHash(identity); int32 slot = (int32)(hash & 4095);
+    KrtNativeRuntimeKey key = buckets[slot];
+    while (key != null) { if (key.hash == hash && KrtAbiCompare(key.identity,identity) == 0) { return key.offset; } key = key.next; }
+    key = new KrtNativeRuntimeKey(); key.identity = identity; key.hash = hash; key.offset = bytes.count;
+    KrtAbiAppend(bytes,identity); key.next = buckets[slot]; buckets[slot] = key;
+    return bytes.ok ? key.offset : -1;
+}
+
+KrtAstNode KrtNativeRuntimeDeclaredShape(KrtAstNode declaration) {
+    KrtAstNode shape = KrtAstMake(KrtAstKind.Type,declaration.start,0);
+    shape.native_type = declaration; shape.native_width = 8; shape.native_base_width = 8;
+    shape.native_storage_size = declaration.native_storage_size;
+    shape.native_alignment = declaration.native_alignment;
+    return shape;
+}
+
+KrtNativeRuntimeType KrtNativeRuntimeFind(KrtNativeModule module,KrtAbiBytes identity,bool method_key) {
+    if (module.runtime_bucket_count == 0) { return null; }
+    uint64 hash = KrtAbiHash(identity); int32 slot = (int32)(hash & (uint64)(module.runtime_bucket_count-1));
+    KrtNativeRuntimeType item = module.runtime_buckets[slot];
+    while (item != null) {
+        if (item.hash == hash && (item.kind == 0) == method_key && KrtAbiCompare(item.identity,identity) == 0) { return item; }
+        item = item.hash_next;
+    }
+    return null;
+}
+bool KrtNativeRuntimeIndex(KrtNativeModule module,KrtNativeRuntimeType item) {
+    if (module.runtime_bucket_count == 0 || module.runtime_type_count*4 >= module.runtime_bucket_count*3) {
+        int32 capacity = module.runtime_bucket_count == 0 ? 1024 : module.runtime_bucket_count*2;
+        if (capacity > 131072) { return false; }
+        KrtNativeRuntimeType[] buckets = new KrtNativeRuntimeType[capacity]; KrtNativeRuntimeType current = module.runtime_types;
+        while (current != null) {
+            int32 slot = (int32)(current.hash & (uint64)(capacity-1)); current.hash_next = buckets[slot]; buckets[slot] = current; current = current.next;
+        }
+        delete module.runtime_buckets; module.runtime_buckets = buckets; module.runtime_bucket_count = capacity;
+        return true;
+    }
+    int32 slot = (int32)(item.hash & (uint64)(module.runtime_bucket_count-1));
+    item.hash_next = module.runtime_buckets[slot]; module.runtime_buckets[slot] = item; return true;
+}
+
+KrtNativeRuntimeType KrtNativeRuntimeRegisterKey(KrtNativeModule module,KrtAbiBytes identity) {
+    if (identity == null || !identity.ok) { return null; }
+    KrtNativeRuntimeType item = KrtNativeRuntimeFind(module,identity,true);
+    if (item != null) { delete identity.data; delete identity; return item; }
+    if (module.runtime_type_count >= 65536) { return null; }
+    item = new KrtNativeRuntimeType(); item.identity = identity; item.shape = KrtAstMake(KrtAstKind.Type,0,0);
+    item.kind = 0; item.hash = KrtAbiHash(identity); item.index = module.runtime_type_count; module.runtime_type_count = item.index+1;
+    if (module.runtime_types == null) { module.runtime_types = item; } else { module.runtime_type_tail.next = item; }
+    module.runtime_type_tail = item; return KrtNativeRuntimeIndex(module,item) ? item : null;
+}
+
+KrtNativeRuntimeType KrtNativeRuntimeRegister(KrtNativeModule module,KrtAstNode shape) {
+    if (module == null || shape == null || module.ast == null) { return null; }
+    KrtAstNode canonical = KrtAstMake(KrtAstKind.Type,shape.start,0); KrtNativeCopyType(canonical,shape);
+    canonical.native_ref = false; canonical.native_nullable = false;
+    KrtAbiBytes identity = KrtModuleValueIdentity(canonical,module.source);
+    if (!identity.ok || identity.count <= 0) { return null; }
+    KrtNativeRuntimeType item = KrtNativeRuntimeFind(module,identity,false);
+    if (item != null) { delete canonical; delete identity.data; delete identity; return item; }
+    if (module.runtime_type_count >= 65536) { return null; }
+    item = new KrtNativeRuntimeType(); item.shape = canonical; item.identity = identity; item.hash = KrtAbiHash(identity);
+    item.index = module.runtime_type_count; module.runtime_type_count = item.index + 1; item.offset = -1;
+    item.kind = canonical.native_type != null ? (int32)canonical.native_type.value : 6;
+    if (canonical.native_string) { item.kind = 7; }
+    if (canonical.native_array) { item.kind = 8; }
+    if (canonical.native_fixed_length > 0) { item.kind = 9; }
+    if ((!KrtNativeInlineValue(canonical) && (canonical.native_string || canonical.native_array)) ||
+        (canonical.native_function_pointer != null && !canonical.native_array)) { item.flags = item.flags | 1; }
+    if (canonical.native_type != null && canonical.native_type.value != 5 && !KrtNativeAccessExported(canonical.native_type)) {
+        item.flags = item.flags | 2;
+    }
+    if (module.runtime_types == null) { module.runtime_types = item; }
+    else { module.runtime_type_tail.next = item; }
+    module.runtime_type_tail = item; return KrtNativeRuntimeIndex(module,item) ? item : null;
+}
+
+bool KrtNativeRuntimeMethodAdd(KrtNativeRuntimeType record,KrtAstNode requirement,KrtAstNode target,KrtNativeModule module) {
+    if (target == null || target.native_abstract) { return false; }
+    KrtAbiBytes identity = KrtModuleMethodIdentity(requirement,module.ast,module.source);
+    if (!identity.ok) { return false; }
+    KrtNativeRuntimeMethod item = record.methods; KrtNativeRuntimeMethod previous = null;
+    while (item != null) {
+        int32 order = KrtAbiCompare(identity,item.identity);
+        if (order == 0) { delete identity.data; delete identity; return item.target == target; }
+        if (order < 0) { break; } previous = item; item = item.next;
+    }
+    KrtNativeRuntimeMethod inserted = new KrtNativeRuntimeMethod(); inserted.identity = identity;
+    inserted.target = target; inserted.receiver_adjust = record.kind == 2 ? 16 : 0; inserted.next = item;
+    if (previous == null) { record.methods = inserted; } else { previous.next = inserted; }
+    if (target.value < 0) {
+        int64 external = -1-target.value;
+        if (external < 0 || external >= module.external_count) { return false; }
+        module.external_used[(int32)external] = true;
+    }
+    return true;
+}
+
+bool KrtNativeRuntimePrepareType(KrtNativeModule module,KrtNativeRuntimeType record) {
+    if (record.prepared) { return true; } record.prepared = true;
+    KrtAstNode type = record.shape.native_type;
+    if (type == null || record.kind == 7 || record.kind == 8 || record.kind == 9) { return true; }
+    if (type.native_base != null && KrtNativeRuntimeRegister(module,KrtNativeRuntimeDeclaredShape(type.native_base)) == null) { return false; }
+    KrtAstNode contract = type.native_interfaces;
+    while (contract != null) {
+        if (KrtNativeRuntimeRegister(module,KrtNativeRuntimeDeclaredShape(contract.native_type)) == null) { return false; }
+        contract = contract.next;
+    }
+    if ((record.kind != 1 && record.kind != 2) || type.native_abstract) { return true; }
+    KrtAstNode current = type;
+    while (current != null) {
+        KrtAstNode method = KrtNativeTypeMemberFirst(current);
+        while (method != null && method.native_owner == current) {
+            if (method.native_virtual && method.native_dispatch_slot != null) {
+                KrtAstNode implementation = KrtNativeFindVirtualImplementation(type,method.native_dispatch_slot);
+                if (!KrtNativeRuntimeMethodAdd(record,method.native_dispatch_slot,implementation,module)) { return false; }
+            }
+            method = KrtNativeTypeMemberNext(method);
+        }
+        current = current.native_base;
+    }
+    contract = type.native_interfaces;
+    while (contract != null) {
+        KrtAstNode requirement = KrtNativeTypeMemberFirst(contract.native_type);
+        while (requirement != null && requirement.native_owner == contract.native_type) {
+            KrtAstNode implementation = KrtNativeFindInterfaceImplementation(type,requirement,module.ast,module.source);
+            if (!KrtNativeRuntimeMethodAdd(record,requirement,implementation,module)) { return false; }
+            requirement = KrtNativeTypeMemberNext(requirement);
+        }
+        contract = contract.next;
+    }
+    return true;
+}
+
+int32 KrtNativeRuntimeReserve(KrtAbiBytes bytes,int32 length,int32 alignment) {
+    if (length < 0 || length > 16777216 || alignment <= 0 || alignment > 16) { bytes.ok = false; return -1; }
+    while ((bytes.count & (alignment-1)) != 0) { KrtAbiByte(bytes,0); }
+    int32 offset = bytes.count; int32 index = 0;
+    while (index < length) { KrtAbiByte(bytes,0); index = index + 1; }
+    return bytes.ok ? offset : -1;
+}
+void KrtNativeRuntimeWrite(KrtAbiBytes bytes,int32 offset,uint64 value) {
+    if (offset < 0 || offset > bytes.count-8) { bytes.ok = false; return; }
+    int32 index = 0;
+    while (index < 8) { bytes.data[offset+index] = (byte)(value>>(index*8)); index = index + 1; }
+}
+uint64 KrtNativeRuntimeRead(byte[] bytes,int32 offset) {
+    uint64 value = 0; int32 index = 0;
+    while (index < 8) { value = value | ((uint64)bytes[offset+index]<<(index*8)); index = index+1; }
+    return value;
+}
+bool KrtNativeRuntimeRelocate(KrtNativeModule module,int32 offset,int32 kind,int32 target) {
+    if (offset < 0 || target < 0 && kind != 2) { return false; }
+    KrtNativeRuntimeRelocation item = new KrtNativeRuntimeRelocation();
+    item.offset = offset; item.kind = kind; item.target = target;
+    item.next = module.runtime_relocations; module.runtime_relocations = item;
+    module.runtime_relocation_count = module.runtime_relocation_count + 1; return true;
+}
+
+bool KrtNativeRuntimeBuild(KrtNativeModule module) {
+    // Export concrete descriptors even when the defining module does not itself
+    // allocate that type. Consumers need only the object and its metadata.
+    KrtAstNode type = module.ast.declarations;
+    while (type != null) {
+        if (type.native_generic_parameters == null && KrtNativeAccessExported(type) &&
+            (type.value == 1 || type.value == 2 || type.value == 3 || type.value == 4) &&
+            KrtNativeRuntimeRegister(module,KrtNativeRuntimeDeclaredShape(type)) == null) { return false; }
+        type = type.next;
+    }
+    KrtNativeRuntimeType record = module.runtime_types;
+    while (record != null) {
+        if (!KrtNativeRuntimePrepareType(module,record)) { return false; }
+        record = record.next;
+    }
+    module.runtime_offsets = new int32[module.runtime_type_count]; KrtAbiBytes bytes = KrtAbiNew();
+    KrtNativeRuntimeKey[] keys = new KrtNativeRuntimeKey[4096];
+    record = module.runtime_types;
+    while (record != null) {
+        record.offset = KrtNativeRuntimeReserve(bytes,96,16); module.runtime_offsets[record.index] = record.offset;
+        record = record.next;
+    }
+    record = module.runtime_types;
+    while (record != null) {
+        int32 position = record.offset; record.key_offset = KrtNativeRuntimeIntern(bytes,record.identity,keys);
+        KrtNativeRuntimeWrite(bytes,position,record.hash);
+        KrtNativeRuntimeWrite(bytes,position+8,(uint64)record.identity.count);
+        if (!KrtNativeRuntimeRelocate(module,position+16,0,record.key_offset)) { return false; }
+        KrtNativeRuntimeWrite(bytes,position+24,(uint64)record.kind);
+        int32 storage = record.kind == 0 ? 0 : (record.kind == 1 ? record.shape.native_type.native_size : KrtNativeBoxStorage(record.shape));
+        int32 alignment = KrtNativeInlineValue(record.shape) ? KrtNativeValueAlignment(record.shape) : storage;
+        if (record.kind == 1 || alignment > 16) { alignment = 8; } if (alignment < 1) { alignment = 1; }
+        KrtNativeRuntimeWrite(bytes,position+32,(uint64)storage); KrtNativeRuntimeWrite(bytes,position+40,(uint64)alignment);
+        KrtNativeRuntimeWrite(bytes,position+88,(uint64)record.flags);
+        KrtAstNode declaration = record.shape.native_type;
+        if (declaration != null && record.kind != 7 && record.kind != 8 && record.kind != 9) {
+            if (declaration.native_base != null) {
+                KrtNativeRuntimeType base_record = KrtNativeRuntimeRegister(module,KrtNativeRuntimeDeclaredShape(declaration.native_base));
+                if (base_record == null || !KrtNativeRuntimeRelocate(module,position+48,1,base_record.index)) { return false; }
+            }
+            int32 interfaces = 0; KrtAstNode contract = declaration.native_interfaces;
+            while (contract != null) { interfaces = interfaces + 1; contract = contract.next; }
+            int32 table = KrtNativeRuntimeReserve(bytes,interfaces*8,8);
+            record.interfaces_offset = table;
+            KrtNativeRuntimeWrite(bytes,position+56,(uint64)interfaces);
+            if (interfaces > 0 && !KrtNativeRuntimeRelocate(module,position+64,0,table)) { return false; }
+            contract = declaration.native_interfaces; int32 index = 0;
+            while (contract != null) {
+                KrtNativeRuntimeType target = KrtNativeRuntimeRegister(module,KrtNativeRuntimeDeclaredShape(contract.native_type));
+                if (target == null || !KrtNativeRuntimeRelocate(module,table+index*8,1,target.index)) { return false; }
+                contract = contract.next; index = index + 1;
+            }
+        }
+        int32 methods = 0; KrtNativeRuntimeMethod method = record.methods;
+        while (method != null) { methods = methods + 1; method = method.next; }
+        int32 table = KrtNativeRuntimeReserve(bytes,methods*40,8);
+        record.methods_offset = table;
+        KrtNativeRuntimeWrite(bytes,position+72,(uint64)methods);
+        if (methods > 0 && !KrtNativeRuntimeRelocate(module,position+80,0,table)) { return false; }
+        method = record.methods; int32 index = 0;
+        while (method != null) {
+            int32 key = KrtNativeRuntimeIntern(bytes,method.identity,keys); method.key_offset = key;
+            KrtNativeRuntimeWrite(bytes,table+index*40,KrtAbiHash(method.identity));
+            KrtNativeRuntimeWrite(bytes,table+index*40+8,(uint64)method.identity.count);
+            KrtNativeRuntimeWrite(bytes,table+index*40+32,(uint64)method.receiver_adjust);
+            if (!KrtNativeRuntimeRelocate(module,table+index*40+16,0,key) ||
+                !KrtNativeRuntimeRelocate(module,table+index*40+24,2,(int32)method.target.value)) { return false; }
+            method = method.next; index = index + 1;
+        }
+        record = record.next;
+    }
+    if (!bytes.ok) { return false; }
+    int32 bucket = 0;
+    while (bucket < 4096) { KrtNativeRuntimeKey key = keys[bucket]; while (key != null) { KrtNativeRuntimeKey following = key.next; delete key; key = following; } bucket = bucket+1; }
+    delete keys; module.runtime_bytes = bytes.data; module.runtime_length = bytes.count; delete bytes; return true;
+}

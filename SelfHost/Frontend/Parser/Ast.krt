@@ -13,6 +13,9 @@ class KrtAstNode {
     // Loop bodies must not share the sibling-list link.
     public KrtAstNode body;
     public KrtAstNode declarations;
+    public KrtAstNode native_member_first;
+    public KrtAstNode native_member_next;
+    public bool native_members_saved;
     public int32 op;
     public bool grouped;
     public int32 parameter_count;
@@ -71,6 +74,12 @@ class KrtAstNode {
     public int32 native_hidden_result_slot;
     public int32 native_locals;
     public bool native_bound;
+    public bool native_imported;
+    public bool native_external_constructor;
+    public KrtAstNode native_object_type;
+    public KrtNativeGeneratorPlan native_generator;
+    public int32 native_generator_role;
+    public int32 native_generated_type_id;
     public bool native_unsigned;
     public bool native_element_unsigned;
     public bool native_element_string;

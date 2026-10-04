@@ -1,0 +1,231 @@
+// A generator owns a persistent activation and a finite set of resume edges.
+// Its source body is bound once, using the same locals, captures and types as
+// an ordinary function. Generated methods expose the ordinary iterator ABI.
+class KrtNativeGeneratorPlan {
+    public KrtAstNode factory;
+    public KrtAstNode body;
+    public KrtAstNode sequence_type;
+    public KrtAstNode cursor_type;
+    public KrtAstNode enumerable_type;
+    public KrtAstNode enumerator_type;
+    public KrtAstNode element_type;
+    public KrtAstNode get_method;
+    public KrtAstNode move_method;
+    public KrtAstNode current_method;
+    public KrtAstNode dispose_method;
+    public KrtAstNode get_requirement;
+    public KrtAstNode move_requirement;
+    public KrtAstNode current_requirement;
+    public KrtAstNode dispose_requirement;
+    public KrtAstNode parameters;
+    public int32 body_locals;
+    public int32 body_frame_bytes;
+    public int32 slots_offset;
+    public int32 aggregate_offset;
+    public int32 current_offset;
+    public int32 object_size;
+    public int32 receiver_slot;
+    public int32 scratch_slot;
+    public int32 state_count;
+    public int32 factory_slot;
+    public int32 handler_slot;
+    public KrtNativeGeneratorResume resumes;
+}
+
+class KrtNativeGeneratorResume {
+    public int32 state;
+    public int32 target;
+    public KrtNativeExceptionFrame frames;
+    public KrtNativeGeneratorResume next;
+}
+
+bool KrtNativeGeneratorContainsYield(KrtAstNode node) {
+    while (node != null) {
+        if (node.kind == KrtAstKind.YieldReturn || node.kind == KrtAstKind.YieldBreak) { return true; }
+        if (node.kind != KrtAstKind.Lambda &&
+            (KrtNativeGeneratorContainsYield(node.left) || KrtNativeGeneratorContainsYield(node.right) ||
+             KrtNativeGeneratorContainsYield(node.alternate) || KrtNativeGeneratorContainsYield(node.body))) { return true; }
+        node = node.next;
+    }
+    return false;
+}
+
+// Catch/finally bodies cannot suspend. A try/finally protects suspended
+// execution, whereas the body of a try with catches cannot yield a value.
+bool KrtNativeGeneratorValidateSource(KrtAstNode node, KrtNativeBinding binding, bool suspended, bool cleanup) {
+    while (node != null) {
+        if (node.kind == KrtAstKind.Lambda) { node = node.next; continue; }
+        if (node.kind == KrtAstKind.Return || node.kind == KrtAstKind.StackAlloc ||
+            (node.kind == KrtAstKind.YieldReturn && !suspended) ||
+            (node.kind == KrtAstKind.YieldBreak && cleanup)) {
+            return KrtNativeIteratorError(binding,node);
+        }
+        if (node.kind == KrtAstKind.Try) {
+            if (!KrtNativeGeneratorValidateSource(node.left,binding,suspended && node.right == null,cleanup) ||
+                !KrtNativeGeneratorValidateSource(node.right,binding,false,cleanup) ||
+                !KrtNativeGeneratorValidateSource(node.alternate,binding,false,true)) { return false; }
+        } else if (!KrtNativeGeneratorValidateSource(node.left,binding,suspended,cleanup) ||
+            !KrtNativeGeneratorValidateSource(node.right,binding,suspended,cleanup) ||
+            !KrtNativeGeneratorValidateSource(node.alternate,binding,suspended,cleanup) ||
+            !KrtNativeGeneratorValidateSource(node.body,binding,suspended,cleanup)) { return false; }
+        node = node.next;
+    }
+    return true;
+}
+
+KrtAstNode KrtNativeGeneratorContract(KrtAstNode owner, string name, KrtNativeBinding binding) {
+    KrtAstNode result = null; KrtAstNode method = binding.module.left;
+    while (method != null) {
+        if (method.native_owner != null && KrtNativeDerivesFrom(owner,method.native_owner) &&
+            KrtNativeSpanWord(binding.source,method.name_start,method.name_length,name)) {
+            if (method.native_static || method.parameter_count != 1 || method.native_generic_parameters != null ||
+                KrtNativeAccessMode(method) != 1) { KrtNativeIteratorError(binding,binding.unit); return null; }
+            if (result != null && !KrtNativeMethodSignatureEqual(result,method,binding.module,binding.source,true)) {
+                KrtNativeIteratorError(binding,binding.unit); return null;
+            }
+            result = method;
+        }
+        method = method.next;
+    }
+    return result;
+}
+
+bool KrtNativePrepareGenerator(KrtAstNode unit, KrtNativeBinding binding) {
+    if (unit.native_abstract || unit.op == 220 || unit.op == 221 || unit.native_closure_function ||
+        unit.native_type == null || unit.native_type.value != 3 || unit.native_array || unit.native_pointer_depth != 0) {
+        return KrtNativeIteratorError(binding,unit);
+    }
+    if (unit.native_owner != null && unit.native_owner.value == 2 && !unit.native_static) {
+        return KrtNativeIteratorError(binding,unit);
+    }
+    int32 parameter = 0;
+    while (parameter < unit.parameter_count) {
+        if (unit.parameter_refs[parameter]) { return KrtNativeIteratorError(binding,KrtAstMake(KrtAstKind.Identifier,unit.parameter_starts[parameter],0)); }
+        parameter = parameter + 1;
+    }
+    KrtNativeGeneratorPlan plan = new KrtNativeGeneratorPlan(); plan.factory = unit; plan.body = unit.left;
+    KrtAstNode result = KrtAstMake(KrtAstKind.Type,unit.start,0);
+    plan.get_requirement = KrtNativeGeneratorContract(unit.native_type,"GetEnumerator",binding);
+    if (binding.error_start >= 0) { return false; }
+    if (plan.get_requirement != null) {
+        plan.enumerable_type = unit.native_type;
+        if (!KrtNativeSignatureType(result,plan.get_requirement,-1,binding.module,binding.source) ||
+            result.native_type == null || result.native_type.value != 3 || result.native_array || result.native_pointer_depth != 0) {
+            return KrtNativeIteratorError(binding,unit);
+        }
+        plan.enumerator_type = result.native_type;
+    } else { plan.enumerator_type = unit.native_type; }
+    plan.move_requirement = KrtNativeGeneratorContract(plan.enumerator_type,"MoveNext",binding);
+    plan.current_requirement = KrtNativeGeneratorContract(plan.enumerator_type,"Current",binding);
+    plan.dispose_requirement = KrtNativeGeneratorContract(plan.enumerator_type,"Dispose",binding);
+    if (plan.move_requirement == null || plan.current_requirement == null || plan.dispose_requirement == null) {
+        return KrtNativeIteratorError(binding,unit);
+    }
+    if (!KrtNativeSignatureType(result,plan.move_requirement,-1,binding.module,binding.source) ||
+        !result.native_boolean || result.native_array || result.native_pointer_depth != 0) { return KrtNativeIteratorError(binding,unit); }
+    if (!KrtNativeSignatureType(result,plan.dispose_requirement,-1,binding.module,binding.source) || !KrtNativeVoidValue(result)) {
+        return KrtNativeIteratorError(binding,unit);
+    }
+    plan.element_type = KrtAstMake(KrtAstKind.Type,unit.start,0);
+    if (!KrtNativeSignatureType(plan.element_type,plan.current_requirement,-1,binding.module,binding.source) ||
+        KrtNativeVoidValue(plan.element_type) || plan.element_type.native_fixed_length > 0) { return KrtNativeIteratorError(binding,unit); }
+    if (!KrtNativeGeneratorValidateSource(unit.left,binding,true,false)) { return false; }
+    binding.generator = plan; unit.native_generator = plan; unit.native_generator_role = 1;
+    return true;
+}
+
+bool KrtNativeBindYield(KrtAstNode statement, KrtNativeBinding binding) {
+    if (binding.generator == null || binding.unit.native_closure_function) { return KrtNativeIteratorError(binding,statement); }
+    if (statement.kind == KrtAstKind.YieldBreak) { return statement.left == null || KrtNativeIteratorError(binding,statement); }
+    KrtAstNode element = binding.generator.element_type;
+    if (!KrtNativeBindContextExpression(statement.left,element,binding)) { return false; }
+    if (statement.left == null || !KrtNativeCompatibleValue(element,statement.left) || statement.left.native_stack_borrow) {
+        return KrtNativeIteratorError(binding,statement);
+    }
+    statement.native_target = element;
+    return true;
+}
+
+KrtAstNode KrtNativeGeneratorClass(KrtAstNode requirement, KrtNativeGeneratorPlan plan, KrtNativeBinding binding, int32 kind) {
+    KrtAstNode type = KrtAstMake(KrtAstKind.TypeDeclaration,plan.factory.start,0);
+    type.name_start = plan.factory.name_start; type.name_length = plan.factory.name_length;
+    type.value = 1; type.syntax_modifiers = 1; type.native_generated_type_id = binding.module.native_locals + 1;
+    binding.module.native_locals = binding.module.native_locals + 1;
+    type.native_scope = plan.factory.native_scope; type.native_using_scope = plan.factory.native_using_scope;
+    type.native_context = plan.factory.native_context;
+    type.native_size = plan.object_size; type.native_storage_size = plan.object_size; type.native_alignment = 8;
+    type.native_layout_state = 2; type.native_inheritance_state = 2; type.native_dispatch_state = 2;
+    type.native_generator = plan; type.native_generator_role = kind;
+    KrtAstNode reference = KrtAstMake(KrtAstKind.Type,requirement.start,0); reference.native_type = requirement;
+    type.left = reference; KrtNativeAddInterface(type,requirement,1);
+    KrtAstNode inherited = requirement.native_interfaces;
+    while (inherited != null) { KrtNativeAddInterface(type,inherited.native_type,inherited.native_offset+1); inherited = inherited.next; }
+    KrtParserAppendDeclaration(binding.module,type);
+    return type;
+}
+
+KrtAstNode KrtNativeGeneratorMethod(KrtAstNode owner, KrtAstNode requirement, KrtNativeGeneratorPlan plan, KrtNativeBinding binding, int32 role) {
+    KrtAstNode method = KrtAstMake(KrtAstKind.Function,plan.factory.start,0);
+    method.name_start = requirement.name_start; method.name_length = requirement.name_length;
+    method.type_start = requirement.type_start; method.type_length = requirement.type_length;
+    method.native_owner = owner; method.native_scope = requirement.native_scope;
+    method.native_context = requirement.native_context; method.native_using_scope = requirement.native_using_scope;
+    method.syntax_modifiers = 1; method.parameter_count = 1;
+    method.parameter_starts = new int64[128]; method.parameter_lengths = new int64[128];
+    method.parameter_type_starts = new int64[128]; method.parameter_type_lengths = new int64[128]; method.parameter_refs = new bool[128];
+    method.parameter_starts[0] = owner.name_start; method.parameter_type_starts[0] = owner.name_start; method.parameter_type_lengths[0] = owner.name_length;
+    method.native_generator = plan; method.native_generator_role = role;
+    method.native_bound = true; method.native_locals = 2;
+    method.left = role == 3 ? plan.body : KrtAstMake(KrtAstKind.Block,plan.factory.start,0);
+    KrtAstNode signature = KrtAstMake(KrtAstKind.Function,method.start,0);
+    signature.native_closure_shape = true; signature.parameter_count = 1;
+    signature.native_type = KrtAstMake(KrtAstKind.Type,method.start,0);
+    if (!KrtNativeSignatureType(signature.native_type,requirement,-1,binding.module,binding.source)) { return null; }
+    signature.native_readonly = KrtNativeVoidValue(signature.native_type);
+    KrtAstNode receiver = KrtAstMake(KrtAstKind.Type,method.start,0);
+    receiver.native_type = owner; receiver.native_width = 8; receiver.native_size = owner.native_size;
+    receiver.native_storage_size = 8; receiver.native_alignment = 8; signature.declarations = receiver;
+    method.native_closure_signature = signature; KrtNativeCopyType(method,signature.native_type);
+    if (KrtNativeInlineValue(method)) { method.native_hidden_result_slot = 1; }
+    if (role == 3 || role == 5) { method.native_locals = plan.body_locals + 2; }
+    if (owner.declarations == null) { owner.declarations = method; }
+    KrtParserAppendDeclaration(binding.module,method);
+    return method;
+}
+
+bool KrtNativeFinishGenerator(KrtAstNode unit, KrtNativeBinding binding) {
+    KrtNativeGeneratorPlan plan = binding.generator;
+    if (plan == null) { return true; }
+    plan.parameters = unit.declarations;
+    KrtAstNode parameter = plan.parameters;
+    while (parameter != null) {
+        if (KrtNativeWideKind(parameter) && parameter.native_frame_offset < 0) {
+            parameter.native_frame_offset = KrtNativeReserveFrame(binding,parameter);
+            if (parameter.native_frame_offset < 0) { return KrtNativeIteratorError(binding,parameter); }
+        }
+        parameter = parameter.next;
+    }
+    plan.handler_slot = binding.slots; binding.slots = binding.slots + 6;
+    plan.body_locals = binding.slots; plan.body_frame_bytes = unit.native_frame_bytes;
+    plan.current_offset = 32;
+    int32 current_size = KrtNativeValueStorage(plan.element_type);
+    plan.slots_offset = KrtNativeAlignStorage(plan.current_offset + current_size,16);
+    plan.aggregate_offset = KrtNativeAlignStorage(plan.slots_offset + plan.body_locals*8,16);
+    plan.object_size = KrtNativeAlignStorage(plan.aggregate_offset + plan.body_frame_bytes,16);
+    if (plan.slots_offset < 0 || plan.aggregate_offset < 0 || plan.object_size < 0 || plan.body_locals > 131060) {
+        return KrtNativeIteratorError(binding,unit);
+    }
+    plan.receiver_slot = plan.body_locals; plan.scratch_slot = plan.body_locals + 1;
+    plan.factory_slot = binding.slots; binding.slots = binding.slots + 2;
+    if (plan.enumerable_type != null) {
+        plan.sequence_type = KrtNativeGeneratorClass(plan.enumerable_type,plan,binding,1);
+        plan.get_method = KrtNativeGeneratorMethod(plan.sequence_type,plan.get_requirement,plan,binding,2);
+        if (plan.get_method == null) { return false; }
+    }
+    plan.cursor_type = KrtNativeGeneratorClass(plan.enumerator_type,plan,binding,2);
+    plan.move_method = KrtNativeGeneratorMethod(plan.cursor_type,plan.move_requirement,plan,binding,3);
+    plan.current_method = KrtNativeGeneratorMethod(plan.cursor_type,plan.current_requirement,plan,binding,4);
+    plan.dispose_method = KrtNativeGeneratorMethod(plan.cursor_type,plan.dispose_requirement,plan,binding,5);
+    if (plan.move_method == null || plan.current_method == null || plan.dispose_method == null) { return false; }
+    return true;
+}

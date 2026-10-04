@@ -17,13 +17,17 @@
 | Parser 结构和恢复 | 独立 typed AST 探针、类型子节点、源码顺序 namespace/using 节点、块作用域；多条诊断、语句/声明同步和错误后的合法 AST。 | `test_parser.py`，详见 [Parser.md](Parser.md) |
 | 类与构造 | 字段、方法、重载、隐式 this、构造参数/ref、字段初始化、默认初始化；对象方法和字段参与原生生成。 | `test_native_collections.py`、`test_native_binding.py` |
 | 单类继承 | 基类字段前缀布局、构造链与初始化顺序、base 成员访问、向上转换、限定/泛型基类，以及保留实际派生类型的异常捕获。 | `test_inheritance.py` |
-| 虚方法与接口 | virtual/override/abstract、抽象实现检查、base 直接调用、泛型类虚方法；多接口实现、接口继承/泛型接口/约束、签名检查、接口数组和异常引用。 | `test_virtual_dispatch.py`、`test_interfaces.py`、`test_language_project.py` |
+| 虚方法与接口 | virtual/override/abstract、抽象实现检查、base 直接调用、泛型类虚方法；类和装箱结构体的多接口实现、接口继承/泛型接口/约束、签名检查、接口数组和异常引用。运行时描述符支持不同编译模块的派发。 | `test_virtual_dispatch.py`、`test_interfaces.py`、`test_boxing.py`、`test_module_abi.py` |
 | 数组字面量与 foreach | `[...]`、初始化表达式中的 `{...}`、上下文类型和推断、空数组、对象/字符串元素；直接/间接调用、构造与重载逐元素匹配字面量，保留元素完整类型和源码求值顺序；数组/字符串遍历、一次求值、作用域、嵌套与循环跳转。 | `test_native_collections.py`、`test_contextual_arguments.py` |
+| 通用迭代器 | 普通成员绑定的 GetEnumerator、MoveNext、Current 和可选 Dispose；类、结构体、接口、泛型、扩展方法及可变状态；完整值复制、闭包循环变量、所有出口清理和装箱游标释放。 | `test_iterators.py`、`test_iterator_boxing.py`，见 [Iterators.md](Iterators.md) |
+| 惰性生成器 | yield return/yield break、独立游标、局部状态、嵌套循环/switch、try/finally、提前 Dispose、异常与闭包；声明接口支持标准 IEnumerable/IEnumerator 和用户协议；跨模块闭泛型实例及提供方静态初始化。 | `test_generators.py`、`test_generator_modules.py`、`test_runtime_http.py` |
+| 装箱和运行时转换 | object 的值箱与引用包装、结构体接口载荷派发、精确类型拆箱、独立结构体副本、is 模式；类/接口显式转换检查实际继承和实现关系，失败通过普通异常展开。 | `test_boxing.py`、`test_runtime_types.py`、`test_vm_runtime_types.py`，见 [Boxing.md](Boxing.md) |
+| 分组调用与类型转换 | 名称绑定后消歧 (Type)(operand) 与 (callback)(argument)，保留完整后缀求值优先级；嵌套转换、using、类型参数、重载探测恢复和线性语法树。 | `test_parenthesized_casts.py` |
 | 命名空间 | 文件级、块级、嵌套作用域、限定类型和自由函数名称、using、类型/命名空间别名，以及重复和歧义诊断。 | `test_namespaces.py`、`test_driver.py` |
 | 泛型 | 类、函数及方法的具体实例生成；显式参数与已有推断规则、嵌套实例、构造、静态调用、ref、数组、每个具体类型独立的静态字段、where 类型及无参构造约束。 | `test_native_generics.py`、`test_generic_statics.py`、`test_generic_constraints.py` |
 | 异常 | 跨函数 throw、类/基类匹配及标量精确匹配的 catch、多个 catch、catch-all、rethrow、finally；覆盖正常出口、未匹配异常、catch 内抛出及 return/break/continue。 | `test_native_exceptions.py` |
 | switch | 选择器一次求值、表达式标签按顺序比较、default、分组标签与顺序贯穿、嵌套循环的 break/continue、finally 清理；整数、字符串/null、字符、浮点和 128 位数值。 | `test_native_switch.py` |
-| 数值 | 2–128 偶数整数位宽及符号规则，含 66–126 位的精度截断、符号扩展和自增；float32/float64 的字面量、运算、比较、转换与存储。 | `test_native_numeric.py`、`test_native_floating.py`、`test_wide_precision.py` |
+| 数值 | 2–128 偶数整数位宽及符号规则，含 66–126 位的精度截断、符号扩展和自增；float32/float64 的字面量、运算、比较、转换与存储。宽整数采用完整 16 字节值存储、调用者提供的返回缓冲区及函数帧内表达式快照，保留求值顺序和递归调用的独立结果。 | `test_native_numeric.py`、`test_native_floating.py`、`test_wide_precision.py`、`test_wide_lifetimes.py` |
 | 二进制字面量 | `0b`/`0B`、64/128 位整数、枚举与运算，缺少数字、非法数字/后缀和 128 位溢出诊断。 | `test_binary_literals.py`、`test_lexer.krt` |
 | 全局状态与回调 | 可变全局量/静态字段、初始化顺序、函数与静态方法取址、类型化函数指针、间接调用和 ref。 | `test_globals_functions.py` |
 | 闭包与 lambda | function/func/fn 的表达式与块体、上下文参数、完整返回类型；共享词法 cell、嵌套与逃逸捕获、循环/模式/catch 作用域、结构体与宽整数布局、所有退出清理及手动 delete；原生 SSA/r10、独立 KRO fn2 契约和 EBC v4。 | `test_closures.py`、`test_closure_patterns.py`、`test_closure_inference.py`、`test_http_server.py`；语义及验收范围见 [Closures.md](Closures.md) |
@@ -34,6 +38,7 @@
 | 内联值与字符串更新 | 结构体、嵌套固定数组、固定数组泛型值的复制与隐藏返回槽；无隐式布尔转换的值不能作为控制条件。字符串 `+=` 保留左值一次求值和原值捕获，支持局部量、字段、数组元素、ref、null。 | `test_struct_values.py`、`test_fixed_generic_values.py`、`test_aggregate_conditions.py`、`test_string_compound.py` |
 | 恢复的语义路径 | 块级 using 隔离和模块别名、继承循环路径、多函数诊断、命名数组、auto/var/let、只读局部量、point、前后自增、is 类型模式和原生 print。 | `test_semantic_restoration.py` |
 | 驱动与库 | 原生 CLI、多文件、源码导入、文件边界、位置诊断、工程构建/缓存；真实仓库标准库使用原有契约测试验收。 | `test_native_driver.py`、`test_driver.py`、`test_project.py`、`RunStandardLibrary.py` |
+| 独立模块 ABI | KRO 声明与开放泛型导入、稳定的 class/struct/interface/enum 身份与布局契约、方法和构造函数、类型化异常、静态存储和独立模块初始化；消费者无须提供方原始源码。 | `test_module_abi.py`、`test_generator_modules.py`、`test_runtime_http.py`，见 [ModuleAbi.md](ModuleAbi.md) |
 
 表中测试位于 `Test/SelfHost/`。它们证明所断言的行为，不证明整行能力已经覆盖原版的所有变体。字符串索引、Length 和 foreach 使用 UTF-8 字节语义。
 
@@ -41,13 +46,13 @@
 
 ## 尚未通过完整一致性验收
 
-- 已实现单类继承、虚派发、接口及[内联结构体值语义](Structs.md)。公有具体结构体（含闭泛型结构体）的跨对象调用使用 [ABI2 布局契约](Projects.md#struct-objects-and-abi2)。多个类基类、结构体接口和装箱尚未支持。派发以当前模块的实际类身份选择目标，跨模块类/接口/枚举 ABI、方法级泛型虚派发、接口默认实现和显式接口实现尚未支持。未经检查的类/接口向下转换会拒绝；非虚方法隐藏按静态接收者类型选择，已存储数组与 ref 参数不允许协变。数组字面量可以按选定参数的元素类型构造。
+- 已实现单类继承、虚派发、接口、结构体接口和[内联结构体值语义](Structs.md)。跨模块对象、闭泛型实例、装箱值和生成器使用 [ABI3 契约](ModuleAbi.md)，原有普通结构体 ABI2 契约保持兼容。多个类基类、方法级泛型虚派发、接口默认实现和显式接口实现尚未支持。非虚方法隐藏按静态接收者类型选择，已存储数组与 ref 参数不允许协变。数组字面量可以按选定参数的元素类型构造。
 - 已支持 class/struct/unmanaged/new()、基类/接口和类型参数间的 where 约束，以及[访问控制](AccessControl.md)中的文件私有、成员和继承规则；全部类型推断及其他完整类型系统规则尚未覆盖。struct 约束涵盖标量、枚举与结构体，unmanaged 检查嵌套内联字段；具体实例数量有限。
-- foreach 当前面向数组和字符串，没有完整迭代器协议；锯齿数组尚未实现。SelfHost 保留 fixed/lock/yield/await 的解析节点，但节点存在不代表运行语义。此前对 Re.KrtC 的只读审计发现其 lambda 可达却没有正确可调用值，其余多项只有 Token/枚举或恢复时丢失语法；这份历史审计不能替代本次 SelfHost 闭包执行验收。实际差分和完整源码引用见 [FrontendParityAudit.md](FrontendParityAudit.md)。switch 对静态重复标签/default 和不兼容标签进行诊断；表达式标签仍允许运行时计算。
-- 类异常可按实际对象类型捕获本类或基类，标量异常按类型精确匹配。`throw null` 字面量、catch 外 rethrow 等会拒绝；运行时为空的类引用不匹配类型 catch，但可被 catch-all 捕获。未捕获异常以状态 70 退出。
-- 原生 extern 调用通过稳定签名符号和 KRO 重定位支持分别编译的函数库。通用 C/系统 ABI、共享库、跨模块类身份和独立库的动态全局初始化尚未完成；具体边界见 [Projects.md](Projects.md)。
+- foreach 支持数组、字符串和通用迭代协议；生成器执行真实暂停和恢复。生成器的 ref 参数、栈借用、匿名函数形式，以及 catch/finally 中 yield return 的边界见 [Iterators.md](Iterators.md)。锯齿数组尚未实现。SelfHost 保留 fixed/lock/await 的解析节点，尚未提供其运行语义。此前对 Re.KrtC 的只读审计不能替代本次 SelfHost 闭包和生成器执行验收；历史差分与源码引用见 [FrontendParityAudit.md](FrontendParityAudit.md)。switch 对静态重复标签/default 和不兼容标签进行诊断；表达式标签仍允许运行时计算。
+- 类和接口异常按实际继承及实现关系匹配，标量、枚举和结构体保留精确名义身份；结构体和宽数值 catch 保存独立副本。运行时对象描述符支持跨模块匹配。`throw null` 字面量、catch 外 rethrow 等会拒绝；运行时为空的类引用不匹配类型 catch，但可被 catch-all 捕获。未捕获异常以状态 70 退出。
+- 原生 extern 调用通过稳定签名符号和 KRO 重定位支持分别编译的函数库。通用 C/系统 ABI 和共享库尚未完成；Kairote 模块的类型身份、声明导入及动态全局初始化已经实现，具体契约见 [ModuleAbi.md](ModuleAbi.md)。
 - 原生优化支持 `-O0` 到 `-O3`，默认 `-O2`，包括整数常量与转换折叠、常量分支简化、SSA 死值消除、安全的直接自身尾调用消除和受限小函数内联。原生 KRO 后端直接消费带值编号和 phi 的 SSA，通过活跃性分析分配寄存器及溢出栈槽。工程命令的具体工程类型以 [Projects.md](Projects.md) 为准；不提供任意构建脚本或包下载。
-- 数组缺少边界检查；字符串拼接和 128 位数值内部盒装分配尚无 GC 或完整生命周期回收。语法和数值结果正确，不代表具有与 Re.KrtC 相同的性能和内存成本。
+- 数组缺少边界检查；字符串拼接等堆对象仍采用手动所有权，没有 GC。装箱引用、闭包、序列与游标的释放规则分别见 [Boxing.md](Boxing.md)、[Closures.md](Closures.md) 和 [Iterators.md](Iterators.md)。宽整数表达式快照随函数帧退出回收。语法和数值结果正确，不代表具有与 Re.KrtC 相同的性能和内存成本。
 
 ## 运行证据
 

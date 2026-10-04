@@ -44,7 +44,7 @@ bool KrtSsaFoldConstants(KrtSsaModule ssa) {
 
 bool KrtSsaRemovable(int32 op) {
     // Preserve memory reads and trapping division even when their value is unused.
-    return op == 1 || op == 2 || (op >= 4 && op <= 6) || (op >= 9 && op <= 16) || op == 25 || op == 28 || op == 29 || op == 31 || op == 44 || op == 45 || op == 70 || op == 101;
+    return op == 1 || op == 2 || (op >= 4 && op <= 6) || (op >= 9 && op <= 16) || op == 25 || op == 28 || op == 29 || op == 31 || op == 44 || op == 45 || op == 70 || op == 74 || op == 101;
 }
 
 bool KrtSsaRemoveDeadValues(KrtSsaModule ssa) {

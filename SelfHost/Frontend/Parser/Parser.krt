@@ -236,11 +236,13 @@ KrtAstNode KrtParserParsePrimary(KrtParser parser) {
             cast.left = operand; cast.child_count = 1; cast.element_width = cast_type.syntax_pointer_depth > 0 ? 1 : 0;
             return cast;
         }
+        KrtAstNode candidate_type = KrtParserParenthesizedTypeAhead(parser);
         KrtLexerNext(parser.lexer, parser.token);
         KrtAstNode grouped = KrtParserParseExpression(parser, 1);
         if (!KrtParserExpect(parser, KrtTokenKind.RightParen)) { return grouped; }
         grouped.grouped = true;
-        return KrtParserParsePostfix(parser, grouped);
+        KrtAstNode expression = KrtParserParsePostfix(parser, grouped);
+        return KrtParserParenthesizedCastCandidate(expression, grouped, candidate_type, start);
     }
     if (token.category == KrtTokenCategory.Floating) { kind = KrtAstKind.Floating; }
     else if (token.category == KrtTokenCategory.Integer) { kind = KrtAstKind.Integer; }
@@ -797,11 +799,12 @@ KrtAstNode KrtParserParseTypeDeclaration(KrtParser parser) {
             if (KrtParserTokenText(parser, 40)) {
                 KrtAstNode method = null;
                 if (constructor) {
-                    if (is_static || virtual_member || abstract_member || external_start >= 0 || !KrtParserSameSourceName(parser, field_start, field_length, result.name_start, result.name_length)) { KrtParserRecordError(parser); KrtParserSynchronize(parser, member_recovery_start, true); continue; }
+                    if (is_static || virtual_member || abstract_member || !KrtParserSameSourceName(parser, field_start, field_length, result.name_start, result.name_length)) { KrtParserRecordError(parser); KrtParserSynchronize(parser, member_recovery_start, true); continue; }
                     method = KrtAstMake(KrtAstKind.Function, field_start, 0);
                     method.name_start = field_start; method.name_length = field_length; method.op = 220;
                     KrtLexerNext(parser.lexer, parser.token);
-                    method = KrtParserParseFunctionTail(parser, method, false);
+                    method = KrtParserParseFunctionTail(parser, method, external_start>=0);
+                    method.native_external_constructor=external_start>=0;
                 } else {
                     method = KrtAstMake(KrtAstKind.Function, field_start, 0);
                     method.syntax_type = member_type; method.type_start = field_start; method.type_length = keyword_member?0:member_type.type_length;
@@ -814,7 +817,7 @@ KrtAstNode KrtParserParseTypeDeclaration(KrtParser parser) {
                 if (method.kind != KrtAstKind.Function) { KrtParserRecordError(parser); KrtParserSynchronize(parser, member_recovery_start, true); continue; }
                 if (method.type_length == 0 && KrtParserSameSourceName(parser, method.name_start, method.name_length, result.name_start, result.name_length)) {
                     if (is_static) { KrtParserRecordError(parser); KrtParserSynchronize(parser, member_recovery_start, true); continue; }
-                    method.op = 220;
+                    if(!method.native_external_constructor){method.op = 220;}
                 }
                 method.syntax_modifiers=member_modifiers;method.native_owner = result; method.native_static = is_static; method.native_virtual = virtual_member || abstract_member; method.native_override = override_member; method.native_abstract = abstract_member;
                 if (!is_static) {
@@ -992,13 +995,16 @@ KrtAstNode KrtParserParseStatement(KrtParser parser) {
         int64 start = parser.token.start;
         KrtLexerNext(parser.lexer, parser.token);
         bool yielding_value = KrtParserIsWord(parser, "return");
+        bool yielding_break = KrtParserIsWord(parser, "break");
         if (yielding_value) { KrtLexerNext(parser.lexer, parser.token); }
-        else if (KrtParserIsWord(parser, "break")) { KrtLexerNext(parser.lexer, parser.token); }
+        else if (yielding_break) { KrtLexerNext(parser.lexer, parser.token); }
+        else { KrtParserRecordExpected(parser,KrtTokenKind.Identifier,"expected return or break after yield"); }
         KrtAstNode value = null;
         if (yielding_value) { value = KrtParserParseExpression(parser, 1); }
         if (!KrtParserTokenText(parser, 59)) { KrtParserRecordError(parser); }
         else { KrtLexerNext(parser.lexer, parser.token); }
-        KrtAstNode result = KrtAstMake(yielding_value ? KrtAstKind.YieldReturn : KrtAstKind.YieldBreak, start, parser.token.start - start);
+        KrtAstKind kind = yielding_value ? KrtAstKind.YieldReturn : yielding_break ? KrtAstKind.YieldBreak : KrtAstKind.Invalid;
+        KrtAstNode result = KrtAstMake(kind, start, parser.token.start - start);
         result.left = value; result.child_count = value == null ? 0 : 1; return result;
     }
     if (KrtParserIsWord(parser, "lock") || KrtParserIsWord(parser, "fixed")) {
@@ -1291,7 +1297,7 @@ void KrtParserInitializeConstructors(KrtAstNode declaration) {
     if (!initialized && declaration.left == null) { return; }
     KrtAstNode method = declaration.declarations;
     while (method != null) {
-        if (method.op == 220) {
+        if (method.op == 220 || method.native_external_constructor) {
             has_constructor = true;
             if (method.parameter_count == 1) { has_default_constructor = true; }
         }
@@ -1310,7 +1316,7 @@ void KrtParserInitializeConstructors(KrtAstNode declaration) {
     }
     method = declaration.declarations;
     while (method != null) {
-        if (method.op == 220) {
+        if (method.op == 220 && !method.native_external_constructor) {
             KrtAstNode first = null; KrtAstNode tail = null; field = declaration.body;
             while (field != null) {
                 if (!field.native_static && field.left != null) {

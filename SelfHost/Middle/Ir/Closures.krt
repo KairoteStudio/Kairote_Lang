@@ -24,7 +24,7 @@ bool KrtNativeLowerCellAddress(KrtAstNode declaration, KrtNativeModule module) {
 
 bool KrtNativeLowerCellValue(KrtAstNode expression, KrtNativeModule module) {
     if (!KrtNativeLowerCellAddress(expression.native_variable,module)) { return false; }
-    if (KrtNativeInlineValue(expression)) { return true; }
+    if (KrtNativeInlineValue(expression) && !KrtNativeWideKind(expression)) { return true; }
     return KrtNativeEmit(module,(int32)KrtNativeOp.Load,0,KrtNativeValueWidth(expression)) >= 0 &&
         KrtNativeNormalizeWide(module,expression);
 }
@@ -58,7 +58,8 @@ bool KrtNativeLowerCellInitialize(KrtAstNode declaration, KrtAstNode ast, KrtNat
     }
     if (KrtNativeInlineValue(declaration)) {
         if (declaration.left == null) { return KrtNativeLowerAggregateZero(declaration,module); }
-        return KrtNativeLowerExpression(declaration.left,ast,module,source) && KrtNativeLowerAggregateCopy(declaration,module);
+        return KrtNativeLowerExpression(declaration.left,ast,module,source) &&
+            KrtNativeConvertInlineValue(module,declaration.left,declaration) && KrtNativeLowerAggregateCopy(declaration,module);
     }
     if (declaration.left == null) {
         if (KrtNativeEmit(module,(int32)KrtNativeOp.Const,0,0) < 0) { return false; }

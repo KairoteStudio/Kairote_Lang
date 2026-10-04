@@ -1,0 +1,172 @@
+// Object values are references. A value conversion owns a separate typed heap
+// allocation; reference class/interface conversions retain their original
+// object. Canonical type descriptions never depend on a use's source spelling.
+KrtAstNode KrtNativeObjectType(KrtAstNode module) {
+    if (module.native_object_type == null) {
+        KrtAstNode type = KrtAstMake(KrtAstKind.TypeDeclaration,0,0);
+        if (type == null) { return null; }
+        type.value = 5; type.native_size = 8;
+        type.native_storage_size = 8; type.native_alignment = 8;
+        type.native_layout_state = 2; type.native_inheritance_state = 2;
+        type.native_dispatch_state = 2;
+        module.native_object_type = type;
+    }
+    return module.native_object_type;
+}
+
+bool KrtNativeAnnotateObjectType(KrtAstNode node, KrtAstNode module, int64 source, int64 start, int64 length) {
+    node.native_type = KrtNativeObjectType(module);
+    if (node.native_type == null) { return false; }
+    node.native_width = 8; node.native_base_width = 8; node.native_size = 8;
+    node.native_storage_size = 8; node.native_alignment = 8;
+    KrtAstNode syntax = KrtNativeTypeSyntax(source,start,length);
+    return syntax != null && KrtNativeApplySourceTypeSuffix(node,syntax);
+}
+
+bool KrtNativeObjectValue(KrtAstNode type) {
+    return type != null && type.native_type != null && type.native_type.value == 5 &&
+        !type.native_array && type.native_pointer_depth == 0 && type.native_fixed_length == 0;
+}
+
+bool KrtNativeReferenceObjectValue(KrtAstNode type) {
+    return type != null && type.native_type != null &&
+        (type.native_type.value == 1 || type.native_type.value == 3 || type.native_type.value == 5) &&
+        !type.native_array && type.native_pointer_depth == 0 && type.native_fixed_length == 0;
+}
+
+bool KrtNativeBoxableValue(KrtAstNode type) {
+    if (type == null || type.kind == KrtAstKind.Null || KrtNativeVoidValue(type) ||
+        KrtNativeReferenceObjectValue(type)) { return false; }
+    // Unsafe addresses cannot acquire a managed type or longer lifetime by
+    // boxing. Callable wrappers retain their complete fn2 signature instead.
+    if (type.native_pointer_depth > 0 && !type.native_array) { return false; }
+    return KrtNativeValueStorage(type) > 0 && KrtNativeValueAlignment(type) > 0;
+}
+
+bool KrtNativeBoxReferenceWrapper(KrtAstNode type) {
+    return type != null && !KrtNativeInlineValue(type) &&
+        (type.native_string || type.native_array || type.native_function_pointer != null);
+}
+
+bool KrtNativeObjectEquality(KrtAstNode expression) {
+    if (expression == null || expression.kind != KrtAstKind.Binary ||
+        (expression.op != 61 && expression.op != 101) || expression.left == null || expression.right == null) { return false; }
+    if (!KrtNativeReferenceObjectValue(expression.left) && !KrtNativeReferenceObjectValue(expression.right)) { return false; }
+    bool left = expression.left.kind == KrtAstKind.Null || KrtNativeReferenceObjectValue(expression.left) ||
+        KrtNativeBoxReferenceWrapper(expression.left);
+    bool right = expression.right.kind == KrtAstKind.Null || KrtNativeReferenceObjectValue(expression.right) ||
+        KrtNativeBoxReferenceWrapper(expression.right);
+    return left && right;
+}
+
+int32 KrtNativeBoxStorage(KrtAstNode type) {
+    if (KrtNativeInlineValue(type)) { return KrtNativeValueStorage(type); }
+    if (type.native_array || type.native_string || type.native_type != null ||
+        type.native_pointer_depth > 0 || type.native_function_pointer != null) { return 8; }
+    if (KrtNativeWideKind(type)) { return 16; }
+    int32 floating = KrtNativeFloatKind(type);
+    if (floating != 0) { return floating; }
+    // A class field occupies a word, but its declared scalar precision is
+    // unchanged. The box layout is a type layout, not that field's placement.
+    if (type.native_bits > 0) {
+        int32 storage = 1;
+        while (storage * 8 < type.native_bits && storage < 16) { storage = storage * 2; }
+        return storage;
+    }
+    return type.native_width;
+}
+
+bool KrtNativeBoxingConversion(KrtAstNode target, KrtAstNode value) {
+    if (!KrtNativeBoxableValue(value)) { return false; }
+    if (KrtNativeObjectValue(target)) { return true; }
+    return KrtNativeReferenceObjectValue(target) && target.native_type.value == 3 &&
+        KrtNativeAggregateKind(value) && KrtNativeImplements(value.native_type,target.native_type);
+}
+
+bool KrtNativeObjectConversion(KrtAstNode target, KrtAstNode value) {
+    if (!KrtNativeObjectValue(target) || value == null) { return false; }
+    return value.kind == KrtAstKind.Null || KrtNativeReferenceObjectValue(value) || KrtNativeBoxableValue(value);
+}
+
+bool KrtNativeUnboxingConversion(KrtAstNode target, KrtAstNode value) {
+    if (!KrtNativeReferenceObjectValue(value)) { return false; }
+    if (KrtNativeReferenceObjectValue(target) && KrtNativeDerivesFrom(value.native_type,target.native_type)) { return false; }
+    if (KrtNativeBoxableValue(target)) {
+        return KrtNativeObjectValue(value) || (KrtNativeAggregateKind(target) &&
+            KrtNativeImplements(target.native_type,value.native_type));
+    }
+    return KrtNativeReferenceObjectValue(target) && !KrtNativeObjectValue(target) &&
+        (KrtNativeObjectValue(value) || value.native_type.value == 3 ||
+            (value.native_type.value == 1 && target.native_type.value == 3) ||
+            (value.native_type.value == 1 && target.native_type.value == 1 && target.native_type != value.native_type &&
+                KrtNativeDerivesFrom(target.native_type,value.native_type)));
+}
+
+bool KrtNativeBoxCastConversion(KrtAstNode target, KrtAstNode value) {
+    return KrtNativeObjectConversion(target,value) || KrtNativeBoxingConversion(target,value) ||
+        KrtNativeUnboxingConversion(target,value);
+}
+
+int64 KrtNativeBoxArgumentScore(KrtAstNode expected, KrtAstNode actual, bool reference) {
+    if (reference) { return -1; }
+    if (KrtNativeObjectValue(expected) && !KrtNativeObjectValue(actual) &&
+        KrtNativeObjectConversion(expected,actual)) { return KrtNativeRankingUnit; }
+    if (KrtNativeBoxingConversion(expected,actual)) {
+        return 2 * KrtNativeRankingUnit - KrtNativeInterfaceDistance(actual.native_type,expected.native_type);
+    }
+    return -1;
+}
+
+bool KrtNativeBindBoxCast(KrtAstNode node, KrtNativeBinding binding) {
+    if (!KrtNativeBoxCastConversion(node,node.left)) { return KrtNativeBindingError(binding,node); }
+    // An unboxed struct/fixed value receives its own activation storage. A
+    // later mutation cannot affect the source box or another unboxed copy.
+    if (KrtNativeUnboxingConversion(node,node.left) && KrtNativeInlineValue(node)) {
+        return KrtNativeBindAggregateFrame(node,binding);
+    }
+    return true;
+}
+
+bool KrtNativeBoxContextNeedsType(KrtAstNode node) {
+    return node!=null&&!node.native_bound&&(node.kind==KrtAstKind.Ternary||
+        (node.kind==KrtAstKind.Binary&&node.op==113));
+}
+int64 KrtNativeBoxContextValueScore(KrtAstNode node,KrtAstNode expected,KrtNativeBinding binding) {
+    // Rank all conditional conversions, preserving ordinary typed overloads'
+    // advantage over erasure. Binding an object conditional must not turn its
+    // constituent boxing conversions into an apparent exact object argument.
+    if(KrtNativeReferenceObjectValue(expected)&&node.kind==KrtAstKind.Ternary){
+        int64 first=KrtNativeBoxContextValueScore(node.right,expected,binding);
+        int64 second=KrtNativeBoxContextValueScore(node.alternate,expected,binding);
+        return first<0||second<0?-1:(first<second?first:second);
+    }
+    if(KrtNativeReferenceObjectValue(expected)&&node.kind==KrtAstKind.Binary&&node.op==113){
+        int64 first=KrtNativeBoxContextValueScore(node.left,expected,binding);
+        int64 second=KrtNativeBoxContextValueScore(node.right,expected,binding);
+        return first<0||second<0?-1:(first<second?first:second);
+    }
+    return KrtNativeArgumentTypeScore(node,expected,false,binding);
+}
+int64 KrtNativeBoxContextArgumentScore(KrtAstNode node,KrtAstNode expected,KrtNativeBinding binding) {
+    int32 saved_error=binding.module.native_error;int64 saved_start=binding.error_start;
+    KrtNativeClosureProbeState transaction=KrtNativeClosureProbeBegin(binding.module);
+    if(transaction==null){return -1;}
+    KrtNativeBinding probe=new KrtNativeBinding();probe.module=binding.module;
+    probe.unit=KrtAstMake(KrtAstKind.Function,binding.unit.start,0);
+    probe.unit.native_owner=binding.unit.native_owner;probe.unit.native_scope=binding.unit.native_scope;
+    probe.unit.native_context=binding.unit.native_context;probe.unit.native_using_scope=binding.unit.native_using_scope;
+    probe.unit.native_static=binding.unit.native_static;probe.unit.native_closure_function=binding.unit.native_closure_function;
+    probe.unit.native_closure_signature=binding.unit.native_closure_signature;probe.unit.declarations=binding.unit.declarations;
+    probe.unit.native_frame_bytes=binding.unit.native_frame_bytes;probe.source=binding.source;probe.parent=binding.parent;
+    probe.names=binding.names;probe.slots=binding.slots;probe.depth=binding.depth;probe.using_scope=binding.using_scope;
+    probe.lexical_block=binding.lexical_block;probe.closure_probe=true;probe.error_start=-1;
+    KrtAstNode copy=KrtNativeCloneAst(node,binding.unit.native_context,false);
+    bool valid=KrtNativeBindContextExpression(copy,expected,probe)&&!KrtNativeVoidValue(copy)&&
+        (expected==null||KrtNativeCompatibleValue(expected,copy));
+    int64 score=valid?(expected==null?0:KrtNativeBoxContextValueScore(copy,expected,probe)):-1;
+    int32 error=binding.module.native_error;
+    KrtNativeClosureProbeEnd(binding.module,transaction);
+    binding.module.native_error=saved_error;binding.error_start=saved_start;
+    if(score<0&&error>0){binding.candidate_error=error;}
+    return score;
+}

@@ -11,10 +11,12 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
+from Test.SelfHost.test_native_linking import read_object
+
 ROOT = Path(__file__).resolve().parents[2]
 COMPILER = Path(os.environ.get('SELFHOST_COMPILER', ROOT / 'build/selfhost/stage2/program')).resolve()
-LINKER = ROOT / 'build/ArkLink/ArkLink'
-if not LINKER.is_file():
+LINKER = Path(os.environ.get('ARKLINK', ROOT / 'build/ArkLink/ArkLink')).resolve()
+if 'ARKLINK' not in os.environ and not LINKER.is_file():
     LINKER = ROOT / 'ArkLink/build/ArkLink'
 
 
@@ -185,6 +187,15 @@ class ProjectIntegrationTests(unittest.TestCase):
     def executes(self, status):
         self.assertEqual(subprocess.run([str(self.output)], timeout=10).returncode, status)
 
+    def data_symbol(self, path, field):
+        header, symbols, _ = read_object(path)
+        name, record = next((name, record) for name, record in symbols
+                            if name.startswith('_KRTG3$') and field.encode().hex() in name)
+        self.assertEqual(record[3], 3)
+        raw = path.read_bytes();start = 64 + header[4] + header[5] + record[1]
+        self.assertLessEqual(record[1] + record[2], header[6])
+        return name, record, raw[start:start + record[2]]
+
     def test_data_only_compilation_unit_has_real_data_and_symbols(self):
         (self.work / 'Data.krt').write_text('static int64 retained_data = 123456789; static uint128 retained_wide = (uint128)18446744073709551623;')
         self.path.write_text('function Configure(){Sources("main.krt", "Data.krt");Output("bin/demo");}')
@@ -192,12 +203,27 @@ class ProjectIntegrationTests(unittest.TestCase):
         self.executes(17)
         path = self.work / 'obj/Data.kro'
         data = path.read_bytes()
-        header = struct.unpack('<16I', data[:64])
-        self.assertEqual((header[0], header[4], header[6], header[12]), (0x004f524b, 0, 24, 2))
-        self.assertEqual(int.from_bytes(data[64:72], 'little'), 123456789)
-        self.assertEqual(int.from_bytes(data[72:88], 'little'), 18446744073709551623)
-        self.assertIn(b'retained_data\0', data)
-        self.assertIn(b'retained_wide\0', data)
+        header, symbols, relocations = read_object(path)
+        self.assertEqual(header[0], 0x004f524b)
+        self.assertEqual(header[4], 3);self.assertEqual(data[64:67], b'\x31\xc0\xc3')
+        self.assertEqual(relocations, [])
+        self.assertNotIn('main', [name for name, _ in symbols])
+        self.assertNotIn('_start', [name for name, _ in symbols])
+        self.assertNotIn('_KRT_MODULE_INIT_GUARD', [name for name, _ in symbols])
+        code = [(name, record) for name, record in symbols if record[3] == 1]
+        self.assertEqual(len(code), 2)
+        self.assertTrue(all(name.startswith('_KRTL3$') and record[1:3] == (0, 3)
+                            for name, record in code))
+        for field, width, value in (('retained_data', 8, 123456789),
+                                    ('retained_wide', 16, 18446744073709551623)):
+            name, record, payload = self.data_symbol(path, field)
+            self.assertEqual(record[2], width);self.assertEqual(record[1] % width, 0)
+            self.assertEqual(payload, value.to_bytes(width, 'little'))
+            guard = next(record for guard_name, record in symbols
+                         if guard_name == name.replace('_KRTG3$', '_KRTJ3$', 1))
+            self.assertEqual(guard[2:4], (16, 3))
+            start = 64 + header[4] + header[5] + guard[1]
+            self.assertEqual(data[start:start + 16], (2).to_bytes(8, 'little') + bytes(8))
         path.unlink()
         self.ok(self.command('build'), 'up-to-date:')
         self.assertEqual(path.read_bytes(), data)
@@ -209,16 +235,18 @@ class ProjectIntegrationTests(unittest.TestCase):
         self.path.write_text('function Configure(){Type("library");Sources("main.krt");Output("bin/math");}')
         self.ok(self.command('check'))
         self.ok(self.command('build', linker=self.work / 'unused-linker'))
-        data = (self.work / 'bin/math.kro').read_bytes()
-        header = struct.unpack('<16I', data[:64])
-        self.assertEqual(header[12], 2)
+        path = self.work / 'bin/math.kro';data = path.read_bytes()
+        header, symbols, _ = read_object(path)
+        metadata = next(record for name, record in symbols if name == '_KRT_MODULE3_METADATA')
+        self.assertEqual(metadata[3], 2)
+        self.assertEqual(struct.unpack_from('<2I', data, 64 + header[4] + metadata[1]), (0x33444f4d, 3))
+        self.assertIn(b'extern int64 add(', data)
+        self.assertIn(b'extern int64 twice(', data)
         self.assertEqual(data[64], 0x55)  # Function prologue, no executable startup.
-        symbols = 64 + sum(header[4:7])
-        names = data[symbols + header[12] * 32:]
         entries = {}
-        for index in range(header[12]):
-            symbol = struct.unpack_from('<8I', data, symbols + index * 32)
-            name = names[symbol[0]:].split(b'\0', 1)[0].decode()
+        for name, symbol in symbols:
+            if symbol[3] != 1:
+                continue
             entries[name] = symbol[1]
             self.assertGreater(symbol[2], 0)
             self.assertEqual(symbol[3:6], (1, 1, 1))
@@ -228,15 +256,31 @@ class ProjectIntegrationTests(unittest.TestCase):
         result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_library_data_cast_normalization_and_runtime_globals_rejection(self):
+    def test_library_data_cast_normalization_and_runtime_globals_initialization(self):
         self.source.write_text('static int64 x=(int8)255;')
         self.path.write_text('function Configure(){Type("library");Sources("main.krt");Output("bin/math");}')
         self.ok(self.command('build'))
-        data = (self.work / 'bin/math.kro').read_bytes()
-        self.assertEqual(int.from_bytes(data[64:72], 'little', signed=True), -1)
-        self.source.write_text('int64 x=1; int64 read(){return x;}')
-        self.assertNotEqual(self.command('build').returncode, 0)
-        self.assertEqual((self.work / 'bin/math.kro').read_bytes(), data)
+        library = self.work / 'bin/math.kro'
+        self.assertEqual(int.from_bytes(self.data_symbol(library, 'x')[2], 'little', signed=True), -1)
+        self.source.write_text('''private static int32 calls=0;
+private int64 Seed(){calls++;return 37;}
+public static int64 x=Seed();
+int64 Read(){return x;}int32 Calls(){return calls;}void Write(int64 value){x=value;}''')
+        self.ok(self.command('build'))
+        data = library.read_bytes()
+        client = self.work / 'Consumer.krt'
+        client.write_text('''int32 main(){if(Read()!=37||Read()!=37||Calls()!=1){return 1;}
+Write(42);return Read()==42&&Calls()==1?0:2;}''')
+        binary = self.work / 'consumer'
+        result = subprocess.run([str(COMPILER), '--linker', str(LINKER), str(client), str(library), '-o', str(binary)],
+                                cwd=self.work, env=dict(os.environ, PATH=''), capture_output=True, text=True, timeout=60)
+        self.ok(result)
+        self.assertEqual(subprocess.run([str(binary)], timeout=10).returncode, 0)
+        self.source.write_text('int64 x=Missing();')
+        rejected = self.command('build')
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn('E_UNDEFINED_METHOD', rejected.stderr)
+        self.assertEqual(library.read_bytes(), data)
 
     def test_library_integer_constants_keep_expression_and_storage_types(self):
         self.path.write_text('function Configure(){Type("library");Sources("main.krt");Output("bin/math");}')
@@ -252,9 +296,8 @@ class ProjectIntegrationTests(unittest.TestCase):
             with self.subTest(source=source):
                 self.source.write_text(source)
                 self.ok(self.command('build'))
-                data = (self.work / 'bin/math.kro').read_bytes()
-                header = struct.unpack('<16I', data[:64])
-                self.assertEqual(int.from_bytes(data[64:64 + header[6]], 'little', signed=signed), expected)
+                payload = self.data_symbol(self.work / 'bin/math.kro', 'value')[2]
+                self.assertEqual(int.from_bytes(payload, 'little', signed=signed), expected)
         self.source.write_text('int32 value=1; int32 value=2;')
         self.assertNotEqual(self.command('build').returncode, 0)
 

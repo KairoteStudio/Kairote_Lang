@@ -61,6 +61,19 @@ class KrtNativeGlobalEntry {
     public KrtNativeGlobalEntry next;
     public KrtAstNode assignment;
     public bool bound;
+    public int32 guard_slot;
+    public int32 exception_slot;
+    public int32 storage_size;
+    public int32 data_offset;
+    public KrtLinkName symbol_name;
+    public KrtLinkName guard_name;
+    public KrtLinkName initializer_name;
+    public bool imported;
+    public bool weak;
+    public bool module_guard;
+    public bool static_data;
+    public int64 static_low;
+    public int64 static_high;
 }
 
 // The program registry stays live while binding discovers concrete generic classes.
@@ -118,6 +131,24 @@ class KrtInheritanceStack {
 // deliberately flat: starts[f] is the first instruction of function f and
 // the next start (or count) is its end.
 class KrtNativeModule {
+    public KrtAstNode ast;
+    public int64 source;
+    public KrtNativeRuntimeType runtime_types;
+    public KrtNativeRuntimeType runtime_type_tail;
+    public int32 runtime_type_count;
+    public KrtNativeRuntimeType[] runtime_buckets;
+    public int32 runtime_bucket_count;
+    public byte[] runtime_bytes;
+    public int32 runtime_length;
+    public int64 runtime_pointer;
+    public int32[] runtime_offsets;
+    public KrtNativeRuntimeRelocation runtime_relocations;
+    public int32 runtime_relocation_count;
+    public int32 runtime_code_count;
+    public int32[] runtime_code_offsets;
+    public int32[] runtime_code_targets;
+    public KrtNativeGeneratorPlan generator;
+    public bool generator_raw_emit;
     public KrtSsaModule ssa;
     public int32 capacity;
     public int32 count;
@@ -136,7 +167,13 @@ class KrtNativeModule {
     public int32[] hidden_result_slots;
     public int32[] function_frame_bytes;
     public int32 global_count;
+    public KrtNativeGlobalEntry[] global_entries;
+    public int32 global_reloc_count;
+    public int32[] global_reloc_offsets;
+    public int32[] global_reloc_slots;
     public int32 initializer_index;
+    public int32 initializer_guard_slot;
+    public int32 initializer_exception_slot;
     public bool library_mode;
     public int32[] function_offsets;
     public int32[] function_sizes;
@@ -187,4 +224,7 @@ class KrtNativeExceptionFrame {
     public int32 record_slot;
     public int32 loop_depth;
     public bool active_handler;
+    public int32 handler_enter;
+    public bool owns_packet;
+    public int32 packet_slot;
 }

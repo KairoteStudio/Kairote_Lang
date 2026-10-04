@@ -121,7 +121,38 @@ static void check_case(const char* name, ArkBackendInput* input, const char* dir
     printf("ELF %s allocation failures checked: %zu\n", name, count);
 }
 
+static void check_full_width_relocation_addresses(void) {
+    uint8_t code[16]={0};uint8_t rodata[16]={0};
+    ArkSectionBuffer sections[]={
+        {.data=code,.size=sizeof(code),.kind=ARK_SECTION_CODE,.alignment=16},
+        {.data=rodata,.size=sizeof(rodata),.kind=ARK_SECTION_RODATA,.alignment=8},
+    };
+    ArkResolverSymbol symbols[]={
+        {.section_index=0,.value=8,.defined=1},
+        {.section_index=1,.value=8,.defined=1},
+    };
+    ArkResolverReloc relocations[]={
+        {.symbol=&symbols[0],.section_index=1,.offset=0,.type=ARK_RELOC_ABS64,.addend=17},
+        {.symbol=&symbols[1],.section_index=0,.offset=0,.type=ARK_RELOC_PC32,.addend=-5},
+    };
+    ArkBackendInput input={.sections=sections,.section_count=2,.output_type=ARK_OUTPUT_EXECUTABLE,
+        .image_base=UINT64_C(0x140000000),.relocs=relocations,.reloc_count=2};
+    ArkBackendOutput output={0};failure_index=0;
+    assert(ark_backend_elf_link(NULL,&input,&output)==ARK_LINK_OK);
+    uint64_t absolute;int32_t relative;
+    memcpy(&absolute,output.data+output.section_maps[1].file_offset,8);
+    memcpy(&relative,output.data+output.section_maps[0].file_offset,4);
+    uint64_t code_address=output.image_base+output.section_maps[0].rva;
+    uint64_t data_address=output.image_base+output.section_maps[1].rva;
+    assert(code_address>UINT32_MAX&&data_address>UINT32_MAX);
+    assert(absolute==code_address+8+17);
+    assert(relative==(int64_t)(data_address+8-5)-(int64_t)(code_address+4));
+    assert(relocations[0].symbol_address_resolved&&relocations[0].symbol_address==code_address+8);
+    tracked_free(output.data);tracked_free(output.section_maps);assert(live_allocations==0);
+}
+
 int main(int argc, char** argv) {
+    check_full_width_relocation_addresses();
     const char* directory = argc > 1 ? argv[1] : NULL;
     uint8_t code[32] = {0x31, 0xc0, 0xc3};
     uint8_t data[16] = {1, 2, 3, 4};

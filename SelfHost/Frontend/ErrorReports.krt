@@ -42,5 +42,7 @@ void KrtNativeBindingDiagnostic(KrtAstNode module, int64 position) {
     else if (module.native_error == 12) { KrtDiagnostic("E_LAYOUT",8,position); }
     else if (module.native_error == 13) { KrtDiagnostic("E_ABI_UNSUPPORTED",17,position); }
     else if (module.native_error == 14) { KrtDiagnostic("E_CAPTURE_BORROW",16,position); }
+    else if (module.native_error == 15) { KrtDiagnostic("E_BOXING",8,position); }
+    else if (module.native_error == 16) { KrtDiagnostic("E_ITERATOR",10,position); }
     else { KrtDiagnostic("E_LOWER",7,position); }
 }

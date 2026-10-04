@@ -8,7 +8,7 @@ bool KrtNativeAggregateKind(KrtAstNode node) {
 }
 
 bool KrtNativeInlineValue(KrtAstNode node) {
-    return node != null && (KrtNativeAggregateKind(node) || node.native_fixed_length > 0);
+    return node != null && (KrtNativeAggregateKind(node) || node.native_fixed_length > 0 || KrtNativeWideKind(node));
 }
 
 int32 KrtNativeAlignStorage(int32 size, int32 alignment) {
@@ -26,6 +26,7 @@ bool KrtNativeLayoutError(KrtAstNode module, KrtAstNode type, KrtAstNode field) 
 int32 KrtNativeValueStorage(KrtAstNode node) {
     if (node.native_fixed_length > 0) { return node.native_storage_size; }
     if (KrtNativeAggregateKind(node)) { return node.native_type.native_storage_size; }
+    if (KrtNativeWideKind(node)) { return 16; }
     if (node.native_array || node.native_pointer_depth > 0 || node.native_type != null || node.native_string || node.native_function_pointer != null) { return 8; }
     return node.kind == KrtAstKind.Member && node.element_width > 0 ? node.element_width : node.native_width;
 }
@@ -37,6 +38,9 @@ int32 KrtNativeValueAlignment(KrtAstNode node) {
 }
 
 void KrtNativeDescribeAggregate(KrtAstNode node) {
+    if (KrtNativeWideKind(node)) {
+        node.native_storage_size = 16; node.native_alignment = 16; return;
+    }
     if (!KrtNativeAggregateKind(node)) { return; }
     node.native_aggregate = true; node.native_storage_size = node.native_type.native_storage_size;
     node.native_alignment = node.native_type.native_alignment; node.native_size = node.native_storage_size;

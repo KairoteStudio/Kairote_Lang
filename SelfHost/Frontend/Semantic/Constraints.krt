@@ -7,16 +7,16 @@ bool KrtNativeConstraintValueType(KrtAstNode type) {
 bool KrtNativeConstraintDefaultConstructor(KrtAstNode type, KrtAstNode module) {
     if (KrtNativeConstraintValueType(type) && !KrtNativeAggregateKind(type)) { return true; }
     if (type.native_type == null || type.native_array || type.native_string || type.native_stride > 0 ||
-        (type.native_type.value != 1 && type.native_type.value != 2) || type.native_type.native_abstract) { return false; }
-    KrtAstNode method = module.left;
+        (type.native_type.value != 1 && type.native_type.value != 2 && type.native_type.value != 5) || type.native_type.native_abstract) { return false; }
+    KrtAstNode method = KrtNativeTypeMemberFirst(type.native_type);
     bool declared = false; bool default_declared = false;
-    while (method != null) {
-        if (method.native_owner == type.native_type && method.op == 220) {
+    while (method != null && method.native_owner == type.native_type) {
+        if (method.native_owner == type.native_type && (method.op == 220 || method.native_external_constructor)) {
             declared = true;
             if (method.parameter_count == 1 && KrtNativeAccessMode(method) == 1) { return true; }
             if (method.parameter_count == 1) { default_declared = true; }
         }
-        method = method.next;
+        method = KrtNativeTypeMemberNext(method);
     }
     return !declared || (KrtNativeAggregateKind(type) && !default_declared);
 }
@@ -81,8 +81,7 @@ bool KrtNativeEvaluateConstraints(KrtAstNode declaration, KrtAstNode arguments, 
         if (argument == null || KrtNativeSpanWord(source, argument.type_start, argument.type_length, "void")) { return false; }
         bool valid = false;
         if (constraint.op == 1) {
-            valid = argument.native_array || argument.native_string ||
-                (argument.native_type != null && (argument.native_type.value == 1 || argument.native_type.value == 3) && argument.native_stride == 0);
+            valid = argument.native_array || argument.native_string || KrtNativeReferenceObjectValue(argument);
         } else if (constraint.op == 2) { valid = KrtNativeConstraintValueType(argument); }
         else if (constraint.op == 3) { valid = KrtNativeConstraintDefaultConstructor(argument, module); }
         else if (constraint.op == 4) {

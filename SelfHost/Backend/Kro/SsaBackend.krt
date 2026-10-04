@@ -2,6 +2,7 @@
 bool KrtKroEmitSsaModule(KrtSsaModule ssa, KrtKroObject output) {
     if (!KrtSsaValidate(ssa)) { return false; }
     KrtNativeModule module = ssa.source;
+    module.runtime_code_count = 0;
     KrtSsaAllocation allocation = KrtSsaAllocate(ssa);
     if (allocation == null) { return false; }
     if (module == null || output == null || module.count <= 0 || module.count > 16777216 || module.function_count <= 0 ||
@@ -20,6 +21,7 @@ bool KrtKroEmitSsaModule(KrtSsaModule ssa, KrtKroObject output) {
             if (operation == 24) { estimated = estimated+128; }
             if (operation >= 35 && operation <= 54) { estimated = estimated+512; }
             if (operation >= 60 && operation <= 69) { estimated = estimated+1024; }
+            if (operation == 75) { estimated=estimated+160; }
             if (operation == 22 && (ssa.extra[estimate_index] == 16 || ssa.extra[estimate_index] == -16)) { estimated = estimated+256; }
         }
         estimate_index = estimate_index+1;
@@ -77,9 +79,21 @@ bool KrtKroEmitSsaModule(KrtSsaModule ssa, KrtKroObject output) {
         // and 127..128 are reserved for wide operations.
         int32 arena_bytes = module.function_frame_bytes == null ? 0 : module.function_frame_bytes[function_index];
         if (arena_bytes < 0 || arena_bytes > 16777216) { return false; }
-        int64 frame_size = (int64)(frame_slots+129)*8+arena_bytes;
+        int64 wide_bytes = 0; int32 wide_block = first_block;
+        while (wide_block < last_block) {
+            int32 wide_index = ssa.block_starts[wide_block];
+            while (wide_index < ssa.block_ends[wide_block]) {
+                wide_bytes = wide_bytes + KrtKroWideScratchBytes(ssa.ops[wide_index],ssa.args[wide_index],ssa.extra[wide_index]);
+                wide_index++;
+            }
+            wide_block++;
+        }
+        int32 wide_arena = (arena_bytes+15)&-16;
+        int64 frame_size = (int64)(frame_slots+129)*8+wide_arena+wide_bytes;
         if (frame_size > 16777216) { return false; }
         int32 frame = (int32)((frame_size+15)&(int64)-16);
+        output.native_wide_base = frame-wide_arena;
+        output.native_wide_cursor = 0; output.native_wide_limit = (int32)wide_bytes;
         bool aggregate_return = module.aggregate_return_sizes != null && module.aggregate_return_sizes[function_index] > 0;
         int32 hidden_result_slot = aggregate_return && module.hidden_result_slots != null ? module.hidden_result_slots[function_index] : -1;
         if (aggregate_return && (hidden_result_slot < module.parameter_counts[function_index] || hidden_result_slot >= module.local_counts[function_index])) { return false; }
@@ -161,7 +175,11 @@ bool KrtKroEmitSsaModule(KrtSsaModule ssa, KrtKroObject output) {
                 patch_offsets[patch_count] = pc; patch_targets[patch_count] = no; patch_kinds[patch_count] = 1; patch_count = patch_count+1;
                 if (!KrtKroNativeU32(output,ref pc,0)) { return false; }
             } else if (op == 44) {
-                if (!KrtKroNativeGlobalAddress(output, ref pc, (int32)ssa.args[index], module.global_count)) { return false; }
+                if (!KrtKroNativeGlobalAddress(module,output,ref pc,(int32)ssa.args[index])) { return false; }
+            } else if (op == 75) {
+                if(!KrtKroNativeGuardEnter(output,ref pc)){return false;}
+            } else if (op == 76) {
+                if(!KrtKroNativeGuardFinish(output,ref pc,(int32)ssa.extra[index])){return false;}
             } else if (op == 45) {
                 if (patch_count >= patch_capacity || ssa.args[index] < -module.external_count || ssa.args[index] >= module.function_count || !KrtKroNativeCode(output, ref pc, 0x058d48, 3)) { return false; }
                 patch_offsets[patch_count] = pc; patch_targets[patch_count] = (int32)ssa.args[index]; patch_kinds[patch_count] = 2; patch_count = patch_count + 1;
@@ -170,6 +188,8 @@ bool KrtKroEmitSsaModule(KrtSsaModule ssa, KrtKroObject output) {
                 if (!KrtKroNativeIndirectCall(output, ref pc, arity, frame_slots)) { return false; }
             } else if (op == 73) {
                 if (ssa.args[index] != 0 || ssa.extra[index] != 0 || !KrtKroNativeClosureEnvironment(output, ref pc)) { return false; }
+            } else if (op == 74) {
+                if (ssa.extra[index] != 0 || !KrtKroRuntimeAddress(module,output,ref pc,(int32)ssa.args[index])) { return false; }
             } else if (op == (int32)KrtNativeOp.Call) {
                 if (arity < 0 || arity > 129 || patch_count >= patch_capacity) { return false; }
                 int32 scratch_base = frame_slots;

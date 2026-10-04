@@ -11,7 +11,7 @@ class FixedGenericValueTests(NativeCompilerFixture):
         path.write_text(source)
         output = self.work / 'fixed-generic.ebc'
         self.command(path, 'target', 'vm', '-O2', '-o', output)
-        self.assertEqual(int.from_bytes(output.read_bytes()[4:6], 'little'), 3)
+        self.assertEqual(int.from_bytes(output.read_bytes()[4:6], 'little'), 6)
         result = subprocess.run([str(COMPILER), 'run-vm', str(output)], cwd=self.work,
                                 env=self.env, capture_output=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

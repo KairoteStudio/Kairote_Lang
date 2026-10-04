@@ -1,31 +1,55 @@
-bool KrtKroNativeGlobalAddress(KrtKroObject output, ref int32 pc, int32 slot, int32 slots) {
-    if (slot < 0 || slot >= slots) { return false; }
-    // lea rax,[r14 + slot*8]; push rax
-    return KrtKroNativeCode(output, ref pc, 0x868d49, 3) &&
-        KrtKroNativeU32(output, ref pc, slot * 8) && KrtKroNativeByte(output, ref pc, 80);
+bool KrtKroNativeGlobalAddress(KrtNativeModule module,KrtKroObject output,ref int32 pc,int32 slot) {
+    if(slot<0||slot>=module.global_count||module.global_entries==null||module.global_entries[slot]==null||module.global_reloc_count>=module.count*2){return false;}
+    if(module.global_reloc_offsets==null){module.global_reloc_offsets=new int32[module.count*2];module.global_reloc_slots=new int32[module.count*2];}
+    KrtNativeGlobalEntry entry=module.global_entries[slot];
+    if(!entry.module_guard&&slot==entry.declaration.native_global-1&&(entry.declaration.syntax_modifiers&1024)!=0){
+        // An explicit extern field carries no initializer syntax. Its defining
+        // module supplies a stable initialization alias. Preserve every volatile
+        // register, the callable environment and the live expression stack;
+        // the alias can call arbitrary code or unwind through the current frame.
+        if(!KrtKroNativeCode(output,ref pc,0x5756525150,5)){return false;}
+        if(!KrtKroNativeCode(output,ref pc,0x51415041,4)||!KrtKroNativeCode(output,ref pc,0x53415241,4)||
+           !KrtKroNativeCode(output,ref pc,0xe08948,3)||!KrtKroNativeCode(output,ref pc,0xf0e48348,4)||
+           !KrtKroNativeCode(output,ref pc,0x10ec8348,4)||!KrtKroNativeCode(output,ref pc,0x0824448948,5)||!KrtKroNativeByte(output,ref pc,232)){return false;}
+        int32 call=module.global_reloc_count;module.global_reloc_offsets[call]=pc;module.global_reloc_slots[call]=-slot-1;module.global_reloc_count=call+1;
+        if(!KrtKroNativeU32(output,ref pc,0)||!KrtKroNativeCode(output,ref pc,0x0824648b48,5)||
+           !KrtKroNativeCode(output,ref pc,0x5a415b41,4)||!KrtKroNativeCode(output,ref pc,0x58415941,4)||
+           !KrtKroNativeCode(output,ref pc,0x58595a5e5f,5)){return false;}
+    }
+    if(!KrtKroNativeCode(output,ref pc,0x058d48,3)){return false;}
+    int32 index=module.global_reloc_count;module.global_reloc_offsets[index]=pc;module.global_reloc_slots[index]=slot;module.global_reloc_count=index+1;
+    return KrtKroNativeU32(output,ref pc,0)&&KrtKroNativeByte(output,ref pc,80);
 }
 
 bool KrtKroNativeGlobalsStart(KrtKroObject output, ref int32 pc, int32 slots) {
-    if (slots <= 0) { return true; }
-    if (slots > 65536) { return false; }
-    // mmap anonymous writable storage; r14 is the process-wide global base.
-    if (!KrtKroNativeCode(output, ref pc, 0xff31, 2) ||
-        !KrtKroNativeByte(output, ref pc, 190) || !KrtKroNativeU32(output, ref pc, slots * 8) ||
-        !KrtKroNativeByte(output, ref pc, 186) || !KrtKroNativeU32(output, ref pc, 3) ||
-        !KrtKroNativeCode(output, ref pc, 0xba41, 2) || !KrtKroNativeU32(output, ref pc, 34) ||
-        !KrtKroNativeCode(output, ref pc, 0xb849, 2) || !KrtKroNativeU64(output, ref pc, -1) ||
-        !KrtKroNativeCode(output, ref pc, 0xc93145, 3) ||
-        !KrtKroNativeByte(output, ref pc, 184) || !KrtKroNativeU32(output, ref pc, 9) ||
-        !KrtKroNativeCode(output, ref pc, 0x050f, 2) ||
-        !KrtKroNativeCode(output, ref pc, 0xc08548, 3) ||
-        !KrtKroNativeCode(output, ref pc, 0x890f, 2)) { return false; }
-    int32 success = pc;
-    if (!KrtKroNativeU32(output, ref pc, 0) ||
-        !KrtKroNativeByte(output, ref pc, 191) || !KrtKroNativeU32(output, ref pc, 127) ||
-        !KrtKroNativeByte(output, ref pc, 184) || !KrtKroNativeU32(output, ref pc, 60) ||
-        !KrtKroNativeCode(output, ref pc, 0x050f, 2) ||
-        !KrtKroEmitTextU32(output, success, pc - success - 4)) { return false; }
-    return KrtKroNativeCode(output, ref pc, 0xc68949, 3);
+    return slots>=0&&slots<=65536;
+}
+
+bool KrtKroNativeGuardEnter(KrtKroObject output,ref int32 pc){
+    // The owner allows recursive reads in the initializing thread. Contending
+    // threads wait until the release store publishes initialized storage.
+    if(!KrtKroNativeByte(output,ref pc,95)||!KrtKroNativeCode(output,ref pc,0x023f8348,4)||!KrtKroNativeCode(output,ref pc,0x840f,2)){return false;}
+    int32 cached=pc;
+    if(!KrtKroNativeU32(output,ref pc,0)||!KrtKroNativeByte(output,ref pc,184)||!KrtKroNativeU32(output,ref pc,186)||
+       !KrtKroNativeCode(output,ref pc,0x050f,2)||!KrtKroNativeCode(output,ref pc,0xc08949,3)){return false;}
+    int32 loop=pc;
+    if(!KrtKroNativeCode(output,ref pc,0xc031,2)||!KrtKroNativeByte(output,ref pc,186)||!KrtKroNativeU32(output,ref pc,1)||
+       !KrtKroNativeCode(output,ref pc,0x17b10f48f0,5)||!KrtKroNativeCode(output,ref pc,0x840f,2)){return false;}
+    int32 claimed=pc;if(!KrtKroNativeU32(output,ref pc,0)||!KrtKroNativeCode(output,ref pc,0x02f88348,4)||!KrtKroNativeCode(output,ref pc,0x840f,2)){return false;}
+    int32 complete=pc;if(!KrtKroNativeU32(output,ref pc,0)||!KrtKroNativeCode(output,ref pc,0x0847394c,4)||!KrtKroNativeCode(output,ref pc,0x840f,2)){return false;}
+    int32 recursive=pc;
+    if(!KrtKroNativeU32(output,ref pc,0)||!KrtKroNativeCode(output,ref pc,0x90f3,2)||!KrtKroNativeByte(output,ref pc,233)||!KrtKroNativeU32(output,ref pc,loop-pc-4)){return false;}
+    if(!KrtKroEmitTextU32(output,claimed,pc-claimed-4)||!KrtKroNativeCode(output,ref pc,0x0847894c,4)||
+       !KrtKroNativeByte(output,ref pc,184)||!KrtKroNativeU32(output,ref pc,1)||!KrtKroNativeByte(output,ref pc,80)||!KrtKroNativeByte(output,ref pc,233)){return false;}
+    int32 done=pc;if(!KrtKroNativeU32(output,ref pc,0)||!KrtKroEmitTextU32(output,cached,pc-cached-4)||!KrtKroEmitTextU32(output,complete,pc-complete-4)||!KrtKroEmitTextU32(output,recursive,pc-recursive-4)||
+       !KrtKroNativeCode(output,ref pc,0xc031,2)||!KrtKroNativeByte(output,ref pc,80)){return false;}
+    return KrtKroEmitTextU32(output,done,pc-done-4);
+}
+
+bool KrtKroNativeGuardFinish(KrtKroObject output,ref int32 pc,int32 success){
+    return (success==0||success==1)&&KrtKroNativeByte(output,ref pc,95)&&
+        KrtKroNativeCode(output,ref pc,0x0847c748,4)&&KrtKroNativeU32(output,ref pc,0)&&
+        KrtKroNativeCode(output,ref pc,0x07c748,3)&&KrtKroNativeU32(output,ref pc,success==1?2:0);
 }
 
 bool KrtKroNativeIndirectCall(KrtKroObject output, ref int32 pc, int32 arity, int32 scratch) {

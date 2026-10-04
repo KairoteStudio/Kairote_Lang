@@ -11,7 +11,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 COMPILER = Path(os.environ.get("SELFHOST_COMPILER", ROOT / "build/selfhost/stage2/program")).resolve()
 LINKER = Path(os.environ.get("ARKLINK", ROOT / "build/ArkLink/ArkLink")).resolve()
-if not LINKER.is_file():
+if 'ARKLINK' not in os.environ and not LINKER.is_file():
     LINKER = ROOT / "ArkLink/build/ArkLink"
 
 
@@ -169,6 +169,29 @@ int32 main(){
             self.command(path, f"-O{level}", "target", "ir", "-o", output)
             outputs.append(output.read_text())
         self.assertLess(outputs[1].count(" = call "), outputs[0].count(" = call "))
+
+    def test_inlined_helpers_preserve_dynamic_initialization_and_later_writes(self):
+        source = """
+static int32 initializations=0;
+int32 choose(int32 value){if(value<0){return -value;}return value+1;}
+int32 seed(){initializations+=1;return choose(40);}
+static int32 retained=seed();
+int32 main(){
+    if(retained!=41 || initializations!=1){return 1;}
+    retained=99;
+    if(choose(-7)!=7 || choose(8)!=9){return 2;}
+    return retained==99 && initializations==1 ? 0 : 3;
+}
+"""
+        self.execute(source)
+        path = self.work / "initialization.krt"; path.write_text(source)
+        for level in (2, 3):
+            with self.subTest(vm_level=level):
+                output = self.work / f"initialization-o{level}.ebc"
+                self.command(path, f"-O{level}", "target", "vm", "-o", output)
+                result = subprocess.run([str(COMPILER), "run-vm", str(output)], cwd=self.work,
+                                        env=self.env, capture_output=True, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

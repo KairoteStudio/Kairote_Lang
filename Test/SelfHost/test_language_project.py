@@ -8,6 +8,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPILER = Path(os.environ.get('SELFHOST_COMPILER', ROOT / 'build/selfhost/stage2/program')).resolve()
+LINKER = Path(os.environ.get('ARKLINK', ROOT / 'build/ArkLink/ArkLink')).resolve()
 
 
 @unittest.skipUnless(COMPILER.is_file(), 'build the self-hosted compiler first')
@@ -19,7 +20,7 @@ class LanguageProjectTest(unittest.TestCase):
                             ignore=shutil.ignore_patterns('bin', 'obj', '.krtcache'))
             compiled = subprocess.run([
                 str(ROOT / 'SelfHost/krtc'), 'build', str(project),
-                '--compiler', str(COMPILER)], capture_output=True, text=True, timeout=60)
+                '--compiler', str(COMPILER), '--linker', str(LINKER)], capture_output=True, text=True, timeout=60)
             self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
             executed = subprocess.run([str(project / 'bin/release/DispatchDemo')],
                                       capture_output=True, text=True, timeout=10)
@@ -33,7 +34,7 @@ class LanguageProjectTest(unittest.TestCase):
                             ignore=shutil.ignore_patterns('bin', 'obj', '.krtcache'))
             compiled = subprocess.run([
                 str(ROOT / 'SelfHost/krtc'), 'build', str(project),
-                '--compiler', str(COMPILER)], capture_output=True, text=True, timeout=60)
+                '--compiler', str(COMPILER), '--linker', str(LINKER)], capture_output=True, text=True, timeout=60)
             self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
             executed = subprocess.run([str(project / 'bin/release/LanguageDemo')],
                                       capture_output=True, text=True, timeout=10)

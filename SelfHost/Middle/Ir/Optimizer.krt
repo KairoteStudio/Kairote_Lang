@@ -173,16 +173,27 @@ bool KrtNativeTailCalls(KrtNativeModule module) {
     return true;
 }
 
+bool KrtNativeInitializerPrologue(KrtNativeModule module, int32 function_index) {
+    if (module.initializer_index < 0 || function_index < 0 || function_index >= module.function_count) { return false; }
+    int32 first = module.starts[function_index]; int32 last = module.count;
+    if (function_index + 1 < module.function_count) { last = module.starts[function_index + 1]; }
+    return first + 1 < last && module.ops[first] == (int32)KrtNativeOp.Call && module.args[first] == module.initializer_index &&
+        module.extra[first] == 0 && module.ops[first + 1] == (int32)KrtNativeOp.Drop;
+}
+
 bool KrtNativeInlineCandidate(KrtNativeModule module, int32 callee) {
     if (module.function_frame_bytes[callee] > 0 || module.aggregate_return_sizes[callee] > 0) { return false; }
     if (callee < 0 || callee >= module.function_count || callee == module.entry || callee == module.initializer_index) { return false; }
     int32 first = module.starts[callee]; int32 last = module.count;
     if (callee + 1 < module.function_count) { last = module.starts[callee + 1]; }
     if (last - first > 64 || module.local_counts[callee] > 32) { return false; }
+    bool initialization = KrtNativeInitializerPrologue(module,callee);
     int32 index = first; bool returns = false;
     while (index < last) {
         int32 op = module.ops[index];
-        if (op == 20) { if (module.extra[index] != 1) { return false; } returns = true; }
+        if (initialization && index == first) {
+            // A guarded module initializer has no arguments or borrowed frame.
+        } else if (op == 20) { if (module.extra[index] != 1) { return false; } returns = true; }
         else if (op == 17 || op == 18) {
             if (module.args[index] < first || module.args[index] >= last ||
                 (op == 18 && (module.extra[index] < first || module.extra[index] >= last))) { return false; }
@@ -210,12 +221,14 @@ bool KrtNativeInlineHelpers(KrtNativeModule module) {
     while (function_index < module.function_count) {
         int32 first = old_starts[function_index]; int32 last = old_count;
         if (function_index + 1 < module.function_count) { last = old_starts[function_index + 1]; }
+        bool initialized_entry = KrtNativeInitializerPrologue(module,function_index);
         starts[function_index] = count; int32 index = first;
         while (index < last) {
             mapping[index] = count; int32 callee = -1;
             if (old_ops[index] == 19 && old_args[index] >= 0 && old_args[index] < module.function_count) { callee = (int32)old_args[index]; }
             bool inline_call = callee >= 0 && callee != function_index;
             if (inline_call) { inline_call = candidates[callee] && old_extra[index] == module.parameter_counts[callee]; }
+            if (inline_call && KrtNativeInitializerPrologue(module,callee) && !initialized_entry) { inline_call = false; }
             int32 callee_first = 0; int32 callee_last = 0; int32 slot_base = module.local_counts[function_index];
             if (inline_call) {
                 callee_first = old_starts[callee]; callee_last = old_count;
@@ -230,9 +243,15 @@ bool KrtNativeInlineHelpers(KrtNativeModule module) {
                 }
                 int32 clone_start = count; int32 clone_length = callee_last - callee_first;
                 int32 clone_end = clone_start + clone_length; int32 source_index = callee_first;
+                bool initialized_callee = KrtNativeInitializerPrologue(module,callee);
                 while (source_index < callee_last) {
                     int32 op = old_ops[source_index]; int64 arg = old_args[source_index]; int64 value = old_extra[source_index];
-                    if (op == 2 || op == 3) { arg = slot_base + arg; }
+                    if (initialized_callee && source_index < callee_first + 2) {
+                        // The caller's successful entry guard dominates this
+                        // call. Retain offsets while removing the duplicate
+                        // initializer call and its dropped scalar result.
+                        op = 0; arg = 0; value = 0;
+                    } else if (op == 2 || op == 3) { arg = slot_base + arg; }
                     else if (op == 20) { op = 17; arg = clone_end; value = 0; }
                     else if (op == 17 || op == 18) {
                         arg = clone_start + (int32)arg - callee_first;

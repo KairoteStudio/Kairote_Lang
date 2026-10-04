@@ -382,7 +382,7 @@ int32 KrtProjectBuild(KrtProject project, KrtDriverOptions original) {
     options.includes = null; KrtDriverPath include = project.includes;
     while (include != null) { options.includes = KrtProjectAppend(options.includes,include.value,true); include = include.next; }
     include = original.includes; while (include != null) { options.includes = KrtProjectAppend(options.includes,KrtDriverAbsolutePath(include.value),true); include = include.next; }
-    KrtSourceBundle bundle = new KrtSourceBundle(); if (!KrtSourcesCollect(options.sources,options.includes,options.library_root,bundle)) { return 1; }
+    KrtSourceBundle bundle = new KrtSourceBundle(); if (!KrtSourcesCollectModules(options.sources,options.includes,options.library_root,bundle,options.objects)) { return 1; }
     int64 cache = KrtProjectCache(project); if (!KrtProjectOutputSafe(project,options,bundle,options.output,cache)) { return 1; }
     int64 retained = KrtDriverRetainedObject(options,bundle);
     int64 vm_sidecar = 0; if (options.target == 4) { vm_sidecar = KrtProjectCat(options.output,(int64)".ebc"); }

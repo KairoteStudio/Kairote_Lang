@@ -13,7 +13,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 COMPILER = Path(os.environ.get("SELFHOST_COMPILER", ROOT / "build/selfhost/stage2/program")).resolve()
 LINKER = Path(os.environ.get("ARKLINK", ROOT / "build/ArkLink/ArkLink")).resolve()
-if not LINKER.is_file():
+if 'ARKLINK' not in os.environ and not LINKER.is_file():
     LINKER = ROOT / "ArkLink/build/ArkLink"
 
 

@@ -244,6 +244,10 @@ KrtAstNode KrtNativeCloneAst(KrtAstNode node, KrtAstNode context, bool siblings)
     copy.native_base_call = KrtNativeCloneAst(node.native_base_call, context, false);
     copy.native_static = node.native_static;
     copy.native_readonly = node.native_readonly;
+    copy.native_imported = node.native_imported;
+    copy.native_external_constructor = node.native_external_constructor;
+    // Bound generator plans contain specialization-owned locals, frames and
+    // generated methods. Fresh syntax is rebound into its own activation.
     copy.native_scope = node.native_scope;
     copy.native_using_scope = node.native_using_scope;
     copy.native_generic_registry = node.native_generic_registry;
@@ -274,6 +278,8 @@ KrtAstNode KrtNativeInstantiateClass(KrtAstNode declaration, KrtAstNode argument
     instance.syntax_declarations = declaration.syntax_declarations; instance.syntax_type = declaration.syntax_type;
     instance.syntax_modifiers = declaration.syntax_modifiers;
     instance.native_static = declaration.native_static; instance.native_readonly = declaration.native_readonly;
+    instance.native_imported = declaration.native_imported;
+    instance.native_external_constructor = declaration.native_external_constructor;
     instance.native_generic_origin = declaration; instance.native_type_arguments = arguments;
     instance.native_instances = declaration.native_instances; declaration.native_instances = instance;
     if (!KrtGenericRegistryAdd(module,declaration,arguments,instance)) { return null; }
@@ -452,6 +458,14 @@ KrtAstNode KrtNativeInferTypeArguments(KrtAstNode function_node, KrtAstNode argu
     return result;
 }
 
+KrtAstNode KrtNativeExtensionReceiverArgument(KrtAstNode receiver, KrtAstNode function_node) {
+    if (!function_node.parameter_refs[0]) { return receiver; }
+    if (!KrtNativeIsLvalue(receiver)) { return null; }
+    KrtAstNode reference = KrtAstMake(KrtAstKind.Unary,receiver.start,receiver.length);
+    reference.op = 200; reference.left = receiver; KrtNativeCopyType(reference,receiver);
+    return reference;
+}
+
 KrtAstNode KrtNativeSpecializeCall(KrtAstNode candidate, KrtAstNode node, int32 extra, KrtNativeBinding binding) {
     if (candidate.native_generic_parameters == null) {
         if (node.left.native_type_arguments != null && candidate.native_generic_origin == null) { return null; }
@@ -520,6 +534,7 @@ bool KrtNativePrepareModule(KrtAstNode module, int64 source, KrtNativeModule out
     }
     if (changed || !KrtNativeFinishGlobals(module)) { return false; }
     if(!KrtNativePrepareExternals(module,source,output)){return false;}
+    KrtNativeSnapshotTypeMembers(module);
     KrtAstNode previous = null; KrtAstNode function_node = module.left;
     while (function_node != null) {
         KrtAstNode next = function_node.next;
@@ -546,6 +561,9 @@ void KrtNativeClosureProbeCopyNode(KrtAstNode target,KrtAstNode original) {
     target.alternate = original.alternate;
     target.body = original.body;
     target.declarations = original.declarations;
+    target.native_member_first = original.native_member_first;
+    target.native_member_next = original.native_member_next;
+    target.native_members_saved = original.native_members_saved;
     target.op = original.op;
     target.grouped = original.grouped;
     target.parameter_count = original.parameter_count;
@@ -620,6 +638,11 @@ void KrtNativeClosureProbeCopyNode(KrtAstNode target,KrtAstNode original) {
     target.native_function_pointer = original.native_function_pointer;
     target.native_static = original.native_static;
     target.native_readonly = original.native_readonly;
+    target.native_imported = original.native_imported;
+    target.native_external_constructor = original.native_external_constructor;
+    target.native_generator = original.native_generator;
+    target.native_generator_role = original.native_generator_role;
+    target.native_generated_type_id = original.native_generated_type_id;
     target.native_scope = original.native_scope;
     target.native_using_scope = original.native_using_scope;
     target.native_generic_registry = original.native_generic_registry;

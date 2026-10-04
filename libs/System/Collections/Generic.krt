@@ -1,0 +1,13 @@
+namespace System.Collections.Generic;
+
+/** A mutable cursor. Current() is valid after a successful MoveNext(). */
+public interface IEnumerator<T> {
+    bool MoveNext();
+    T Current();
+    void Dispose();
+}
+
+/** Each GetEnumerator() creates an independent traversal. */
+public interface IEnumerable<T> {
+    IEnumerator<T> GetEnumerator();
+}

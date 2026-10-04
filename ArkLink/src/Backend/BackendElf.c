@@ -663,7 +663,11 @@ static ArkLinkResult elf_plan_layout(ElfLinkState* state) {
                 ark_layout_get_section(state->layout, reloc->symbol->section_index)
                     ? ark_layout_get_section(state->layout, reloc->symbol->section_index)->virtual_address
                     : 0;
-            reloc->symbol_rva = (uint32_t)(sec_vaddr + reloc->symbol->value);
+            if (reloc->symbol->value > UINT64_MAX - sec_vaddr) {
+                return ARK_LINK_ERR_FORMAT;
+            }
+            reloc->symbol_address = sec_vaddr + reloc->symbol->value;
+            reloc->symbol_address_resolved = 1;
         }
     }
 

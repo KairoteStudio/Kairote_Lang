@@ -23,6 +23,7 @@ bool KrtNativeLowerNullConditional(KrtAstNode expression, KrtAstNode ast, KrtNat
         // result cannot retain a writable alias into the original receiver.
         if (!KrtNativeLowerAggregateFrame(expression,module) ||
             !KrtNativeLowerExpression(expression.right,ast,module,source) ||
+            !KrtNativeConvertInlineValue(module,expression.right,expression) ||
             !KrtNativeLowerAggregateCopy(expression,module) || !KrtNativeLowerAggregateFrame(expression,module)) { return false; }
     } else if (!KrtNativeLowerExpression(expression.right,ast,module,source) ||
                !KrtNativeConvertValue(module,expression.right,expression)) { return false; }

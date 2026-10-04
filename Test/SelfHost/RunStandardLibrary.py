@@ -1,8 +1,8 @@
-"""Run the existing real standard-library contract suite using SelfHost at -O0.
+"""Run the existing real standard-library contract suite using SelfHost.
 
 The tests import repository library sources through the normal driver. They are
 the same tests used for Re.KrtC, with independently asserted runtime behavior.
-This run uses -O0 to isolate language and library behavior from optimization.
+The default run uses -O0; --levels can exercise all optimization levels.
 """
 import argparse
 import hashlib
@@ -59,19 +59,33 @@ class RecordedResult(unittest.TextTestResult):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--compiler', type=Path, default=ROOT / 'build/selfhost/stage2/program')
+    parser.add_argument('--linker', type=Path, help='explicit native linker used by the selected compiler')
     parser.add_argument('--work', type=Path, default=ROOT / 'build/selfhost-standard-library')
     parser.add_argument('--pattern', default='test_*.py')
+    parser.add_argument('--levels', default='0', help='comma-separated optimization levels (0,1,2,3)')
     parser.add_argument('--failfast', action='store_true')
     args = parser.parse_args()
+    try:
+        levels = [int(level) for level in args.levels.split(',')]
+    except ValueError:
+        parser.error('--levels requires comma-separated integers from 0 through 3')
+    if not levels or len(set(levels)) != len(levels) or any(level not in range(4) for level in levels):
+        parser.error('--levels requires distinct optimization levels from 0 through 3')
     compiler = args.compiler.resolve()
     if not compiler.is_file():
         parser.error(f'compiler not found: {compiler}')
     args.work.mkdir(parents=True, exist_ok=True)
     os.environ['SELFHOST_COMPILER'] = str(compiler)
     os.environ['KRTC'] = str(ROOT / 'SelfHost/krtc')
-    os.environ['KRT_STDLIB_TEST_LEVELS'] = '0'
+    os.environ['KRT_STDLIB_TEST_LEVELS'] = ','.join(str(level) for level in levels)
+    if args.linker is not None:
+        if not args.linker.resolve().is_file():
+            parser.error(f'linker not found: {args.linker}')
+        os.environ['KRT_STDLIB_LINKER'] = str(args.linker.resolve())
     tracked = [compiler, ROOT / 'SelfHost/krtc', *sorted((ROOT / 'SelfHost').rglob('*.krt')),
                *sorted((ROOT / 'libs').rglob('*.krt'))]
+    if os.environ.get('KRT_STDLIB_LINKER'):
+        tracked.append(Path(os.environ['KRT_STDLIB_LINKER']).resolve())
     before = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in tracked}
     suite = unittest.defaultTestLoader.discover(str(ROOT / 'Test/StandardLibrary'), pattern=args.pattern)
     with (args.work / 'tests.log').open('w') as stream:
@@ -83,7 +97,8 @@ def main():
         'launcher_sha256': hashlib.sha256((ROOT / 'SelfHost/krtc').read_bytes()).hexdigest(),
         'compiler_sources': {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
                              for path in sorted((ROOT / 'SelfHost').rglob('*.krt'))},
-        'optimization_levels': [0], 'tests_run': result.testsRun,
+        'optimization_levels': levels, 'tests_run': result.testsRun,
+        'linker': os.environ.get('KRT_STDLIB_LINKER'),
         'library_sources': {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
                             for path in sorted((ROOT / 'libs').rglob('*.krt'))},
         'passed': result.wasSuccessful(), 'cases': result.records,
