@@ -7,7 +7,7 @@ Kairote Programming Language
 # **Kairote Programming Language**
 
 ### *系统级编程语言 | 编译速度比你想的快亿点点*
-[![Official](https://img.shields.io/badge/project-official-green.svg?colorA=303033&colorB=ff8a2c&label=KairoteStudio&style=plastic)
+[![Official](https://img.shields.io/badge/project-official-green.svg?colorA=303033&colorB=ff8a2c&label=KairoteStudio&style=for-the-badge)]
 [![License: MPL](https://img.shields.io/badge/License-MPL-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MPL)
 [![Stars](https://img.shields.io/github/stars/KairoteStudio/Kairote_Lang?style=for-the-badge&logo=github&color=blue)](https://github.com/KairoteStudio/Kairote_Lang/stargazers)
 [![Forks](https://img.shields.io/github/forks/KairoteStudio/Kairote_Lang?style=for-the-badge&logo=github&color=orange)](https://github.com/KairoteStudio/Kairote_Lang/network/members)
