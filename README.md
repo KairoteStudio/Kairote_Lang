@@ -90,7 +90,7 @@ zig build
 > cd ../ArkLink && cmake -S . -B build && cmake --build build
 > ```
 
-### 编写你的第一个 KairoteLang 程序 或 [学习文档](./docs/KrtC/doc/README.md)
+### 编写你的第一个 KairoteLang 程序 或 [学习文档](./Docs/KrtC/Doc/README.md)
 
 创建 `hello.krt` 文件：
 
@@ -138,7 +138,7 @@ KrtC build hello.krt
 
 ```
 Kairote_Lang/
-├── Re.KrtC/                # 编译器核心 (KrtC → Re.KrtC)
+├── Re.KrtC/                # 编译器核心
 │   ├── src/
 │   │   ├── Core/           # 基础库（内存、平台、工具）
 │   │   ├── compiler/       # 编译器前端、中端、后端
@@ -150,7 +150,7 @@ Kairote_Lang/
 ├── ArkLink/                # 链接器
 │   ├── src/                # 核心链接逻辑与后端
 │   └── include/            # 头文件
-├── libs/                   # 标准库 (.krt)
+├── libs/                   # 标准库
 └── docs/                   # 文档
 ```
 
@@ -162,14 +162,13 @@ Kairote_Lang/
 
 - **前端**: 递归下降语法分析器，支持完整的 C# 语法子集
 - **中端**: SSA 形式的中间表示，支持多种优化 passes
-- **后端**: 多目标代码生成（x86, x64, ARM）
+- **后端**: ObjectFile生成
 
 ### 链接器 (ArkLink)
 
 - 支持 COFF、ELF、PE 格式
 - 增量链接支持
 - 符号版本控制
-- 死代码消除
 
 ---
 
@@ -179,9 +178,10 @@ Kairote_Lang/
 - [x] 链接器实现
 - [x] SSA IR 中端
 - [x] x86 / Kro 后端
-- [ ] 标准库完善
+- [x] 标准库完善
+- [ ] IDE(Coming and soon~)
 - [ ] 包管理器
-- [ ] IDE 插件
+- [ ] IDE 插件(后续可能推出
 - [ ] JIT 编译支持
 - [ ] 跨平台优化
 
@@ -189,7 +189,7 @@ Kairote_Lang/
 
 ## 参与贡献
 
-我们欢迎所有形式的贡献！无论是提交 Bug 报告、功能建议，还是代码贡献。
+我们欢迎所有形式的贡献！无论是提交 Bug 报告，功能建议，还是代码贡献。
 
 ### 如何贡献
 
@@ -221,7 +221,9 @@ Kairote_Lang/
 ---
 
 ## 相关项目
-- None
+- [Kortina](https://github.com/KairoteStudio/Kortina)
+- [Korterm](https://github.com/KairoteStudio/Korterm)
+- [LitaToolbox](https://github.com/KairoteStudio/litatoolbox)
 
 ---
 
@@ -242,10 +244,9 @@ Kairote_Lang/
 
 ### 技术参考
 
-- [LLVM](https://llvm.org/) - SSA 设计理念
-- [C# Language Specification](https://docs.microsoft.com/en-us/dotnet/csharp/) - 语法基础
-- [GCC](https://gcc.gnu.org/) - 代码生成参考
-- [Rust](https://www.rust-lang.org/) - 类型系统灵感
+- [LLVM](https://llvm.org/) SSA 设计理念
+- [C# Language Specification](https://docs.microsoft.com/en-us/dotnet/csharp/) 语法基础
+- [GCC](https://gcc.gnu.org/) 代码生成参考
 
 ### 贡献者
 
