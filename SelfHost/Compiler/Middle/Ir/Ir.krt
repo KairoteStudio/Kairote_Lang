@@ -546,6 +546,13 @@ int32 KrtNativeBinaryOp(int32 op) {
     return -1;
 }
 
+int64 KrtNativeHexDigit(byte value) {
+    if (value >= 48 && value <= 57) { return value - 48; }
+    if (value >= 65 && value <= 70) { return value - 55; }
+    if (value >= 97 && value <= 102) { return value - 87; }
+    return -1;
+}
+
 int32 KrtNativeTypeWidth(int64 source, int64 start, int64 length) {
     unsafe(using krt.mem;) {
         byte* bytes = (byte*)source;
@@ -568,7 +575,7 @@ bool KrtNativeAppendData(KrtNativeModule module, int64 source, int64 start, int6
     unsafe(using krt.mem;) {
         byte* bytes = (byte*)source;
         // String and character literals arrive with their quote delimiters.
-        // Decode the small escape set used by the bootstrap sources.
+        // Decode the byte escapes supported by the native literal path.
         int64 begin = start;
         int64 end = start + length;
         if (length >= 2 && (bytes[start] == 34 || bytes[start] == 39)) { begin = start + 1; end = end - 1; }
@@ -577,10 +584,25 @@ bool KrtNativeAppendData(KrtNativeModule module, int64 source, int64 start, int6
             byte value = bytes[i];
             if (value == 92 && i + 1 < end) {
                 i = i + 1; value = bytes[i];
-                if (value == 110) { value = 10; }
-                else if (value == 114) { value = 13; }
-                else if (value == 116) { value = 9; }
-                else if (value == 48) { value = 0; }
+                bool known = value == 92 || value == 34 || value == 39;
+                if (value == 110) { value = 10; known = true; }
+                else if (value == 114) { value = 13; known = true; }
+                else if (value == 116) { value = 9; known = true; }
+                else if (value == 48) { value = 0; known = true; }
+                else if (value == 97) { value = 7; known = true; }
+                else if (value == 98) { value = 8; known = true; }
+                else if (value == 102) { value = 12; known = true; }
+                else if (value == 120 || value == 88) {
+                    int64 parsed = 0; int32 digits = 0; i = i + 1;
+                    while (i < end && digits < 2) {
+                        int64 digit = KrtNativeHexDigit(bytes[i]);
+                        if (digit < 0) { break; }
+                        parsed = parsed * 16 + digit; i = i + 1; digits = digits + 1;
+                    }
+                    module.data_storage[write] = (byte)parsed; write = write + 1;
+                    continue;
+                }
+                if (!known) { module.data_storage[write] = 92; write = write + 1; }
             }
             module.data_storage[write] = value; write = write + 1; i = i + 1;
         }
