@@ -208,15 +208,23 @@ static void lexer_skip_whitespace(Lexer* lexer) {
                 lexer_advance(lexer);
             }
         } else if (lexer->source[lexer->position] == '/' && lexer->source[lexer->position + 1] == '*') {
+            int comment_line = lexer->line;
             lexer_advance(lexer);
             lexer_advance(lexer);
+            bool terminated = false;
             while (lexer->source[lexer->position] != '\0') {
                 if (lexer->source[lexer->position] == '*' && lexer->source[lexer->position + 1] == '/') {
                     lexer_advance(lexer);
                     lexer_advance(lexer);
+                    terminated = true;
                     break;
                 }
                 lexer_advance(lexer);
+            }
+            if (!terminated) {
+                lexer->error_count++;
+                lexer->error_line = comment_line;
+                return;
             }
         } else {
             break;

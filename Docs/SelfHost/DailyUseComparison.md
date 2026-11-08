@@ -50,11 +50,11 @@ ArkLink 也修复了两处实际链接问题：命令行曾只保留最后一个
 
 ## 差分验收方法
 
-`CompareDaily.py` 仍使用原来的 62 项固定用例，包含合法和非法程序。期望输出与退出码独立定义，Re.KrtC 只是比较对象。SelfHost 和 Re 均使用 `-O2`，两者的优化实现不同。报告保留命令、stdout/stderr、超时、产物、编译器/启动器/库源码哈希；测试期间工具或源码变化会令 `complete` 为 false。SelfHost 计时直接调用原生编译器。
+`CompareDaily.py` 现在使用 69 项固定用例，包含合法和非法程序。期望输出与退出码独立定义，Re.KrtC 只是比较对象。SelfHost 和 Re 均使用 `-O2`，两者的优化实现不同。报告保留命令、stdout/stderr、超时、产物、编译器/启动器/库源码哈希；测试期间工具或源码变化会令 `complete` 为 false。SelfHost 计时直接调用原生编译器。
 
 `--fail-on-wrong` 检查错算、崩溃、超时、错误产物和非法接受。明确拒绝的合法用例另行统计，不能算作能力已支持。`.Length` 属性与 `.Length()` 方法分别测试；目前两种编译器都拒绝这两个 Length 方法形式。
 
-早期版本的证据仍保存在 `build/selfhost-comparison/baseline/report.json`（旧编译器）和 `build/selfhost-comparison/final/report.json`（本轮语言扩展前）。固定集合中的正确执行项分别为 10 和 34；这些是历史数据，不能用作当前版本通过率。
+早期版本的证据仍保存在 `build/selfhost-comparison/baseline/report.json`（旧编译器）和 `build/selfhost-comparison/final/report.json`（本轮语言扩展前）。固定集合中的正确执行项分别为 10 和 34；这些是历史数据，不能用作当前版本通过率。历史对比表描述的是当时 62 项口径。
 
 2026-10-01 的 Stage2 曾重新运行固定集合；当次报告为 `complete: true`，其编译器和源码哈希在当次运行前后保持一致。原 `current` 输出目录会被后续运行覆盖，下表保留当次历史计数：
 

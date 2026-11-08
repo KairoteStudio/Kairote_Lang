@@ -642,6 +642,9 @@ static KrtTokenType semantic_array_element_type(SemanticAnalyzer* analyzer, ASTN
     if (expr->type == AST_NEW_ARRAY_EXPRESSION) {
         return expr->data.new_array_expr.type_token;
     }
+    if (expr->type == AST_MEMBER_ACCESS && expr->data.member_access.resolved_is_array) {
+        return expr->resolved_type.token;
+    }
     if (expr->type == AST_TERNARY_OPERATION) {
         KrtTokenType left = semantic_array_element_type(analyzer, expr->data.ternary_op.true_value);
         KrtTokenType right = semantic_array_element_type(analyzer, expr->data.ternary_op.false_value);
@@ -1030,7 +1033,16 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
 
     switch (expr->type) {
     case AST_NUMBER:
+        expr->resolved_type.token = semantic_analyzer_infer_expression_type(analyzer, expr);
+        return true;
     case AST_BOOLEAN:
+        expr->resolved_type.token = TOKEN_BOOL;
+        return true;
+    case AST_STRING:
+        expr->resolved_type.token = TOKEN_STRING;
+        return true;
+    case AST_CHAR_LITERAL:
+        expr->resolved_type.token = TOKEN_CHAR;
         return true;
 
     case AST_IDENTIFIER: {
@@ -1068,6 +1080,27 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
             return pointer_error(analyzer, expr, "Assignment requires a writable lvalue");
         }
         bool left_ok = semantic_analyzer_analyze_expression(analyzer, expr->data.binary_op.left);
+        KrtTokenType left_type = semantic_analyzer_infer_expression_type(analyzer, left);
+        KrtTokenType right_type = semantic_analyzer_infer_expression_type(analyzer, expr->data.binary_op.right);
+        bool left_string = left_type == TOKEN_STRING || left_type == TOKEN_TYPE_STRING;
+        bool right_string = right_type == TOKEN_STRING || right_type == TOKEN_TYPE_STRING;
+        KrtTokenType op = expr->data.binary_op.operator;
+        bool arithmetic_op = op == TOKEN_PLUS || op == TOKEN_MINUS || op == TOKEN_MULTIPLY ||
+                             op == TOKEN_DIVIDE || op == TOKEN_MODULO;
+        if (left_ok && arithmetic_op && (left_string || right_string) &&
+            (op != TOKEN_PLUS || !(left_string && right_string))) {
+            semantic_analyzer_add_error_at(analyzer, expr,
+                                           "String values only support concatenation with another string");
+            return false;
+        }
+        if (left_ok && expr->data.binary_op.operator == TOKEN_ASSIGN &&
+            left->type == AST_MEMBER_ACCESS &&
+            left->data.member_access.resolved_builtin_member != KRT_BUILTIN_MEMBER_NONE) {
+            semantic_analyzer_add_error_at(analyzer, expr,
+                                           "Cannot assign to read-only member '%s'",
+                                           left->data.member_access.member_name);
+            return false;
+        }
         bool right_ok = semantic_analyzer_analyze_expression(analyzer, expr->data.binary_op.right);
         return left_ok && right_ok;
     }
@@ -1405,6 +1438,23 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
                 if (mangled_name) {
                     KRT_FREE(mangled_name);
                 }
+            }
+        }
+
+        /* Resolve built-in Length properties here, leaving code generation an
+         * explicit semantic tag instead of inferring behavior from the name. */
+        if (member_name && strcmp(member_name, "Length") == 0) {
+            KrtTokenType element_type = semantic_array_element_type(analyzer, object);
+            if (element_type != TOKEN_EOF) {
+                expr->data.member_access.resolved_builtin_member = KRT_BUILTIN_MEMBER_ARRAY_LENGTH;
+                expr->resolved_type = (KrtSourceType){.token = TOKEN_INT32};
+                return true;
+            }
+            KrtTokenType object_type = semantic_analyzer_infer_expression_type(analyzer, object);
+            if (object_type == TOKEN_TYPE_STRING || object_type == TOKEN_STRING) {
+                expr->data.member_access.resolved_builtin_member = KRT_BUILTIN_MEMBER_STRING_LENGTH;
+                expr->resolved_type = (KrtSourceType){.token = TOKEN_INT32};
+                return true;
             }
         }
 
@@ -1926,8 +1976,22 @@ bool semantic_analyzer_analyze_variable_decl(SemanticAnalyzer* analyzer, ASTNode
         }
         if (type.token == TOKEN_AUTO) {
             type = value->resolved_type;
-        } else if (!pointer_assignable(analyzer, var_decl, type, value->resolved_type)) {
-            return false;
+        } else {
+            int bits = KrtTokenIntegerBits(type.token);
+            if (value->type == AST_NUMBER && value->is_integer_literal && bits > 0) {
+                KrtUInt128 max_value = KrtIntegerMask(bits);
+                if (!KrtTokenIsUnsigned(type.token)) {
+                    max_value >>= 1;
+                }
+                if (value->integer_value > max_value) {
+                    semantic_analyzer_add_error_at(analyzer, value,
+                                                   "Integer literal is outside the range of the declared type");
+                    return false;
+                }
+            }
+            if (!pointer_assignable(analyzer, var_decl, type, value->resolved_type)) {
+                return false;
+            }
         }
     } else if (KrtSourceIsPointer(type) && !type.nullable) {
         return pointer_error(analyzer, var_decl, "Non-nullable pointer requires an initializer");
@@ -2059,12 +2123,44 @@ static bool semantic_analyze_stmt_array_compound_assignment(SemanticAnalyzer* an
                                      stmt->data.array_compound_assignment.operator);
 }
 static bool semantic_analyze_stmt_return_statement(SemanticAnalyzer* analyzer, ASTNode* stmt) {
+    bool returns_void = analyzer->current_return_type.token == TOKEN_VOID &&
+                        analyzer->current_return_type.pointer_depth == 0;
     if (stmt->data.return_stmt.value) {
         ASTNode* value = stmt->data.return_stmt.value;
+        if (returns_void) {
+            semantic_analyzer_add_error_at(analyzer, stmt, "Void function cannot return a value");
+            return false;
+        }
         return semantic_analyzer_analyze_expression(analyzer, value) &&
                pointer_assignable(analyzer, stmt, analyzer->current_return_type, value->resolved_type);
     }
-    return true;
+    return returns_void || pointer_error(analyzer, stmt, "Non-void function must return a value");
+}
+static bool semantic_statement_guarantees_return(ASTNode* stmt) {
+    if (!stmt) {
+        return false;
+    }
+    if (stmt->type == AST_RETURN_STATEMENT) {
+        return true;
+    }
+    if (stmt->type == AST_UNSAFE_CALL) {
+        return semantic_statement_guarantees_return(stmt->data.unsafe_call.expression);
+    }
+    if (stmt->type == AST_POINT_BLOCK) {
+        return semantic_statement_guarantees_return(stmt->data.point_block.body);
+    }
+    if (stmt->type == AST_BLOCK) {
+        for (int i = 0; i < stmt->data.block.statement_count; ++i) {
+            if (semantic_statement_guarantees_return(stmt->data.block.statements[i])) {
+                return true;
+            }
+        }
+    }
+    if (stmt->type == AST_IF_STATEMENT && stmt->data.if_stmt.else_branch) {
+        return semantic_statement_guarantees_return(stmt->data.if_stmt.then_branch) &&
+               semantic_statement_guarantees_return(stmt->data.if_stmt.else_branch);
+    }
+    return false;
 }
 static bool semantic_analyze_stmt_if_statement(SemanticAnalyzer* analyzer, ASTNode* stmt) {
     bool cond_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.if_stmt.condition);
@@ -2091,7 +2187,11 @@ static bool semantic_analyze_stmt_if_statement(SemanticAnalyzer* analyzer, ASTNo
 static bool semantic_analyze_stmt_while_statement(SemanticAnalyzer* analyzer, ASTNode* stmt) {
     bool cond_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.while_stmt.condition);
     symbol_table_push_scope(analyzer->symbol_table);
+    analyzer->breakable_depth++;
+    analyzer->loop_depth++;
     bool body_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.while_stmt.body);
+    analyzer->loop_depth--;
+    analyzer->breakable_depth--;
     symbol_table_pop_scope(analyzer->symbol_table);
     return cond_ok && body_ok;
 }
@@ -2117,7 +2217,11 @@ static bool semantic_analyze_stmt_for_statement(SemanticAnalyzer* analyzer, ASTN
             increment_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.for_stmt.increment);
         }
     }
+    analyzer->breakable_depth++;
+    analyzer->loop_depth++;
     bool body_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.for_stmt.body);
+    analyzer->loop_depth--;
+    analyzer->breakable_depth--;
     symbol_table_pop_scope(analyzer->symbol_table);
     return init_ok && cond_ok && increment_ok && body_ok;
 }
@@ -2132,7 +2236,11 @@ static bool semantic_analyze_stmt_foreach_statement(SemanticAnalyzer* analyzer, 
         return false;
     }
     bool iterable_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.foreach_stmt.iterable);
+    analyzer->breakable_depth++;
+    analyzer->loop_depth++;
     bool body_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.foreach_stmt.body);
+    analyzer->loop_depth--;
+    analyzer->breakable_depth--;
     symbol_table_pop_scope(analyzer->symbol_table);
     return iterable_ok && body_ok;
 }
@@ -2378,6 +2486,7 @@ static bool semantic_analyze_stmt_class_declaration(SemanticAnalyzer* analyzer, 
 static bool semantic_analyze_stmt_switch_statement(SemanticAnalyzer* analyzer, ASTNode* stmt) {
     bool cond_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.switch_stmt.expression);
     bool cases_ok = true;
+    analyzer->breakable_depth++;
 
     for (int i = 0; i < stmt->data.switch_stmt.case_count && cases_ok; i++) {
         cases_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.switch_stmt.cases[i]);
@@ -2387,6 +2496,7 @@ static bool semantic_analyze_stmt_switch_statement(SemanticAnalyzer* analyzer, A
     if (stmt->data.switch_stmt.default_case) {
         default_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.switch_stmt.default_case);
     }
+    analyzer->breakable_depth--;
 
     return cond_ok && cases_ok && default_ok;
 }
@@ -2508,6 +2618,12 @@ static bool semantic_analyze_stmt_function_declaration(SemanticAnalyzer* analyze
                                             ? stmt->function_type->result
                                             : (KrtSourceType){.token = stmt->data.function_decl.return_type};
         bool body_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.function_decl.body);
+        if (body_ok && !(analyzer->current_return_type.token == TOKEN_VOID &&
+                         analyzer->current_return_type.pointer_depth == 0) &&
+            !semantic_statement_guarantees_return(stmt->data.function_decl.body)) {
+            semantic_analyzer_add_error_at(analyzer, stmt, "Not all control paths return a value");
+            body_ok = false;
+        }
         analyzer->current_return_type = saved_return;
         symbol_table_pop_scope(analyzer->symbol_table);
         KRT_FREE(mangled_name);
@@ -2581,6 +2697,12 @@ static bool semantic_analyze_stmt_static_function_declaration(SemanticAnalyzer* 
                                         ? stmt->function_type->result
                                         : (KrtSourceType){.token = stmt->data.static_function_decl.return_type};
     bool body_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.static_function_decl.body);
+    if (body_ok && !(analyzer->current_return_type.token == TOKEN_VOID &&
+                     analyzer->current_return_type.pointer_depth == 0) &&
+        !semantic_statement_guarantees_return(stmt->data.static_function_decl.body)) {
+        semantic_analyzer_add_error_at(analyzer, stmt, "Not all control paths return a value");
+        body_ok = false;
+    }
     analyzer->current_return_type = saved_return;
 
     symbol_table_pop_scope(analyzer->symbol_table);
@@ -2690,7 +2812,11 @@ bool semantic_analyzer_analyze_statement(SemanticAnalyzer* analyzer, ASTNode* st
         return semantic_analyze_stmt_if_statement(analyzer, stmt);
         break;
     case AST_DO_WHILE_STATEMENT: {
+        analyzer->breakable_depth++;
+        analyzer->loop_depth++;
         bool body_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.do_while_stmt.body);
+        analyzer->loop_depth--;
+        analyzer->breakable_depth--;
         bool condition_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.do_while_stmt.condition);
         return body_ok && condition_ok;
     }
@@ -2726,7 +2852,16 @@ bool semantic_analyzer_analyze_statement(SemanticAnalyzer* analyzer, ASTNode* st
         return semantic_analyze_stmt_default_clause(analyzer, stmt);
         break;
     case AST_BREAK_STATEMENT:
+        if (!analyzer->breakable_depth) {
+            semantic_analyzer_add_error_at(analyzer, stmt, "break is only valid inside a loop or switch");
+            return false;
+        }
+        return true;
     case AST_CONTINUE_STATEMENT:
+        if (!analyzer->loop_depth) {
+            semantic_analyzer_add_error_at(analyzer, stmt, "continue is only valid inside a loop");
+            return false;
+        }
         return true;
 
     case AST_PRINT_STATEMENT:
@@ -2859,6 +2994,12 @@ FunctionAnalysisResult semantic_analyzer_analyze_function(SemanticAnalyzer* anal
                                         ? function_node->function_type->result
                                         : (KrtSourceType){.token = function_node->data.function_decl.return_type};
     bool body_ok = semantic_analyzer_analyze_statement(analyzer, body);
+    if (body_ok && !(analyzer->current_return_type.token == TOKEN_VOID &&
+                     analyzer->current_return_type.pointer_depth == 0) &&
+        !semantic_statement_guarantees_return(body)) {
+        semantic_analyzer_add_error_at(analyzer, function_node, "Not all control paths return a value");
+        body_ok = false;
+    }
     analyzer->current_return_type = saved_return;
 
     symbol_table_pop_scope(analyzer->symbol_table);

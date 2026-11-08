@@ -353,7 +353,24 @@ int KrtCompilePipelineParse(KrtCompilePipeline* pipeline) {
     }
 
     pipeline->parser->source_name = pipeline->input_file ? pipeline->input_file : NULL;
+    if (pipeline->lexer->error_count > 0) {
+        snprintf(pipeline->error_message, sizeof(pipeline->error_message),
+                 "unterminated block comment or literal near line %d", pipeline->lexer->error_line);
+        pipeline->success = 0;
+        record_stage_result(pipeline, KRT_STAGE_PARSE, KRT_RESULT_FAILED, (double)(clock() - start) / CLOCKS_PER_SEC,
+                            pipeline->input_file);
+        return 0;
+    }
     pipeline->ast = parser_parse(pipeline->parser);
+
+    if (pipeline->lexer->error_count > 0) {
+        snprintf(pipeline->error_message, sizeof(pipeline->error_message),
+                 "unterminated block comment or literal near line %d", pipeline->lexer->error_line);
+        pipeline->success = 0;
+        record_stage_result(pipeline, KRT_STAGE_PARSE, KRT_RESULT_FAILED, (double)(clock() - start) / CLOCKS_PER_SEC,
+                            pipeline->input_file);
+        return 0;
+    }
 
     if (pipeline->ast && pipeline->parser->error_count > 0) {
         snprintf(pipeline->error_message, sizeof(pipeline->error_message), "语法错误 %d 处: %s",

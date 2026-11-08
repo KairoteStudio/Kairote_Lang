@@ -40,6 +40,20 @@ static bool require_memory_permission(SemanticAnalyzer* analyzer, ASTNode* node)
 static bool pointer_assignable(SemanticAnalyzer* analyzer, ASTNode* node, KrtSourceType target, KrtSourceType value) {
     target.is_ref = value.is_ref = false;
     if (!KrtSourceIsPointer(target) && !KrtSourceIsPointer(value)) {
+        bool target_string = target.token == TOKEN_STRING || target.token == TOKEN_TYPE_STRING;
+        bool value_string = value.token == TOKEN_STRING || value.token == TOKEN_TYPE_STRING;
+        bool null_to_string = value.token == TOKEN_NULL && target_string;
+        if (target_string != value_string && !null_to_string) {
+            return pointer_error(analyzer, node, "Cannot convert between string and non-string values implicitly");
+        }
+        if ((target.token == TOKEN_IDENTIFIER || value.token == TOKEN_IDENTIFIER) &&
+            (target.token != value.token || (target.type_name && value.type_name &&
+                                              strcmp(target.type_name, value.type_name)))) {
+            return pointer_error(analyzer, node, "Incompatible value types");
+        }
+        if (target.token == TOKEN_VOID || value.token == TOKEN_VOID) {
+            return target.token == value.token || pointer_error(analyzer, node, "Incompatible void value type");
+        }
         if (target.type_name && value.type_name && (strchr(target.type_name, '<') || strchr(value.type_name, '<')) &&
             strcmp(target.type_name, value.type_name)) {
             return pointer_error(analyzer, node, "Incompatible generic instance types");

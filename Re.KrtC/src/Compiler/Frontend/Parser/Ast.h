@@ -123,6 +123,11 @@ typedef enum {
 #include "../../../Core/Utils/Integer.h"
 
 typedef struct KrtFunctionType KrtFunctionType;
+typedef enum {
+    KRT_BUILTIN_MEMBER_NONE,
+    KRT_BUILTIN_MEMBER_ARRAY_LENGTH,
+    KRT_BUILTIN_MEMBER_STRING_LENGTH
+} KrtBuiltinMember;
 typedef struct {
     KrtTokenType token;
     unsigned pointer_depth;
@@ -346,6 +351,7 @@ typedef struct ASTNode {
             char* resolved_class_name;
             char* resolved_mangled_name;
             bool resolved_is_array;
+            KrtBuiltinMember resolved_builtin_member;
         } member_access;
         struct {
             KrtTokenType access_modifier;

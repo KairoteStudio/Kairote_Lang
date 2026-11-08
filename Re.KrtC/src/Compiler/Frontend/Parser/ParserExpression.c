@@ -400,13 +400,15 @@ ASTNode* parser_parse_primary(Parser* parser) {
         parser_advance(parser);
         return expr;
     }
-    case TOKEN_LEFT_BRACKET: {
+    case TOKEN_LEFT_BRACKET:
+    case TOKEN_LEFT_BRACE: {
+        KrtTokenType closing = token.type == TOKEN_LEFT_BRACE ? TOKEN_RIGHT_BRACE : TOKEN_RIGHT_BRACKET;
         parser_advance(parser);
         ASTNode** elements = NULL;
         int element_count = 0;
         int capacity = 8;
 
-        if (parser->current_token.type != TOKEN_RIGHT_BRACKET) {
+        if (parser->current_token.type != closing) {
             elements = (ASTNode**)KRT_PARSER_ALLOC_FROM_ARENA(parser, capacity * sizeof(ASTNode*));
             if (!elements) {
                 return NULL;
@@ -430,7 +432,7 @@ ASTNode* parser_parse_primary(Parser* parser) {
                 }
                 elements[element_count++] = elem;
 
-                if (parser->current_token.type == TOKEN_RIGHT_BRACKET) {
+                if (parser->current_token.type == closing) {
                     break;
                 }
                 if (parser->current_token.type != TOKEN_COMMA) {
@@ -440,7 +442,7 @@ ASTNode* parser_parse_primary(Parser* parser) {
             }
         }
 
-        if (parser->current_token.type != TOKEN_RIGHT_BRACKET) {
+        if (parser->current_token.type != closing) {
             goto array_cleanup;
         }
         parser_advance(parser);

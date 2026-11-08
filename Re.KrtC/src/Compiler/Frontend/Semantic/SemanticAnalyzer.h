@@ -33,6 +33,8 @@ typedef struct SemanticAnalyzer {
     KrtArena* type_arena;
     KrtSourceType current_return_type;
     int point_depth;
+    int breakable_depth;
+    int loop_depth;
     UsingDirective** using_directives;
     int using_count;
     int using_capacity;

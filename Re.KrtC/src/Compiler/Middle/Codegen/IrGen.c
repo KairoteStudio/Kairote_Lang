@@ -239,6 +239,7 @@ static KrtIRValue irgen_call_builtin_4args(KrtIRBuilder* builder, IrGenBuiltinFu
 }
 
 static KrtIRValue irgen_allocate_memory(KrtIRBuilder* builder, KrtIRValue size_val);
+static KrtIRValue irgen_mark_array_length(KrtIRBuilder* builder, KrtIRValue array, KrtIRValue length);
 
 static KrtIRValue irgen_expr_new_array_expression(KrtIRBuilder* builder, ASTNode* expr) {
     if (!expr || !expr->data.new_array_expr.size) {
@@ -248,7 +249,7 @@ static KrtIRValue irgen_expr_new_array_expression(KrtIRBuilder* builder, ASTNode
     int element_size = irgen_size_from_token(expr->data.new_array_expr.type_token);
 
     KrtIRValue total = (element_size == 1) ? count : KrtIrMul(builder, count, KrtIrImm(builder, element_size));
-    return irgen_allocate_memory(builder, total);
+    return irgen_mark_array_length(builder, irgen_allocate_memory(builder, total), count);
 }
 
 static KrtIRValue irgen_allocate_memory(KrtIRBuilder* builder, KrtIRValue size_val) {
@@ -288,6 +289,21 @@ static KrtIRValue irgen_allocate_memory(KrtIRBuilder* builder, KrtIRValue size_v
 
     KrtIrBlockSetCurrent(builder, end_block);
     return KrtIrLoad(builder, result_name);
+}
+
+static KrtIRValue irgen_mark_array_length(KrtIRBuilder* builder, KrtIRValue array, KrtIRValue length) {
+    char valid_label[64], end_label[64];
+    int id = builder->label_counter++;
+    snprintf(valid_label, sizeof(valid_label), "array_length_store_%d", id);
+    snprintf(end_label, sizeof(end_label), "array_length_end_%d", id);
+    KrtIRBasicBlock* valid = KrtIrBlockCreate(builder, valid_label);
+    KrtIRBasicBlock* end = KrtIrBlockCreate(builder, end_label);
+    KrtIrBranch(builder, KrtIrCompare(builder, KRT_IR_EQ, array, KRT_IMM_ZERO(builder)), end, valid);
+    KrtIrBlockSetCurrent(builder, valid);
+    KrtIrStorePtr(builder, array, -KRT_IRGEN_HEAP_HEADER_SIZE, length);
+    KrtIrJump(builder, end);
+    KrtIrBlockSetCurrent(builder, end);
+    return array;
 }
 
 static void irgen_free_memory(KrtIRBuilder* builder, KrtIRValue ptr_val) {
@@ -753,17 +769,18 @@ static bool is_string_expression(KrtIRBuilder* builder, ASTNode* expr) {
 }
 
 static KrtIRValue irgen_synth_strlen(KrtIRBuilder* builder, KrtIRValue s) {
-    char nname[64], llabel[64], elabel[64];
+    char nname[64], llabel[64], blabel[64], elabel[64];
     int id = builder->label_counter++;
     snprintf(nname, sizeof(nname), "__slen_%d", id);
     snprintf(llabel, sizeof(llabel), "strlen_check_%d", id);
+    snprintf(blabel, sizeof(blabel), "strlen_body_%d", id);
     snprintf(elabel, sizeof(elabel), "strlen_end_%d", id);
 
     KrtIrAlloc(builder, nname);
     KrtIrStore(builder, nname, KRT_IMM_ZERO(builder));
 
     KrtIRBasicBlock* check = KrtIrBlockCreate(builder, llabel);
-    KrtIRBasicBlock* body = KrtIrBlockCreate(builder, "strlen_body_x");
+    KrtIRBasicBlock* body = KrtIrBlockCreate(builder, blabel);
     KrtIRBasicBlock* end = KrtIrBlockCreate(builder, elabel);
     KrtIrJump(builder, check);
 
@@ -1509,6 +1526,15 @@ static KrtIRValue irgen_expr_unary_operation(KrtIRBuilder* builder, ASTNode* exp
     }
 }
 static KrtIRValue irgen_expr_member_access(KrtIRBuilder* builder, ASTNode* expr) {
+    if (expr->data.member_access.resolved_builtin_member == KRT_BUILTIN_MEMBER_STRING_LENGTH) {
+        KrtIRValue string = krt_ir_generate_expression(builder, expr->data.member_access.object);
+        return KrtIrTyped(builder, irgen_synth_strlen(builder, string), TOKEN_INT32);
+    }
+    if (expr->data.member_access.resolved_builtin_member == KRT_BUILTIN_MEMBER_ARRAY_LENGTH) {
+        KrtIRValue array = krt_ir_generate_expression(builder, expr->data.member_access.object);
+        KrtIRValue length = KrtIrLoadPtr(builder, array, -KRT_IRGEN_HEAP_HEADER_SIZE);
+        return KrtIrTyped(builder, KrtIrCast(builder, length, TOKEN_INT32), TOKEN_INT32);
+    }
     if (expr->data.member_access.object && expr->data.member_access.object->type == AST_IDENTIFIER) {
         const char* class_name = expr->data.member_access.object->data.identifier_name;
         const char* member_name = expr->data.member_access.member_name;
@@ -1771,7 +1797,8 @@ static KrtIRValue irgen_expr_ternary_operation(KrtIRBuilder* builder, ASTNode* e
 static KrtIRValue irgen_expr_array_literal(KrtIRBuilder* builder, ASTNode* expr) {
     int element_count = expr->data.array_literal.element_count;
     if (element_count == 0) {
-        return irgen_allocate_memory(builder, KRT_IMM_PTR_SIZE(builder));
+        return irgen_mark_array_length(builder, irgen_allocate_memory(builder, KRT_IMM_ZERO(builder)),
+                                       KrtIrImm(builder, 0));
     }
 
     KrtIRValue total_size = KrtIrMul(builder, KrtIrImm(builder, element_count), KRT_IMM_PTR_SIZE(builder));
@@ -1781,7 +1808,7 @@ static KrtIRValue irgen_expr_array_literal(KrtIRBuilder* builder, ASTNode* expr)
         KrtIRValue elem_val = krt_ir_generate_expression(builder, expr->data.array_literal.elements[i]);
         KrtIrArrayStore(builder, array_ptr, KrtIrImm(builder, i), elem_val);
     }
-    return array_ptr;
+    return irgen_mark_array_length(builder, array_ptr, KrtIrImm(builder, element_count));
 }
 static KrtIRValue irgen_expr_array_access(KrtIRBuilder* builder, ASTNode* expr) {
     int element_size = irgen_array_element_size(builder, expr->data.array_access.array);
@@ -2673,8 +2700,9 @@ static void irgen_stmt_variable_declaration(KrtIRBuilder* builder, ASTNode* stmt
         ASTNode* array = stmt->data.variable_decl.value;
         KrtTokenType type = stmt->data.variable_decl.type;
         int size = irgen_size_from_token(type);
-        KrtIRValue pointer =
-            irgen_allocate_memory(builder, KrtIrImm(builder, array->data.array_literal.element_count * size));
+        KrtIRValue pointer = irgen_mark_array_length(
+            builder, irgen_allocate_memory(builder, KrtIrImm(builder, array->data.array_literal.element_count * size)),
+            KrtIrImm(builder, array->data.array_literal.element_count));
         KrtIrStore(builder, ir_slot, pointer);
         for (int i = 0; i < array->data.array_literal.element_count; i++) {
             KrtIRValue item = krt_ir_generate_expression(builder, array->data.array_literal.elements[i]);
@@ -2696,7 +2724,9 @@ static void irgen_stmt_variable_declaration(KrtIRBuilder* builder, ASTNode* stmt
         int element_size = irgen_size_from_token(stmt->data.variable_decl.type);
         int total_bytes = array_size * element_size;
         KrtIrAlloc(builder, ir_slot);
-        KrtIRValue ptr = irgen_allocate_memory(builder, KrtIrImm(builder, total_bytes));
+        KrtIRValue ptr =
+            irgen_mark_array_length(builder, irgen_allocate_memory(builder, KrtIrImm(builder, total_bytes)),
+                                    KrtIrImm(builder, array_size));
         KrtIrStore(builder, ir_slot, ptr);
     } else {
         KrtIrAlloc(builder, ir_slot);
