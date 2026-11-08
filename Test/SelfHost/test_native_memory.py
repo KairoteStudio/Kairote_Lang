@@ -189,8 +189,8 @@ int32 main() {
         work = self.build.work / "string-runtime"
         work.mkdir()
         data = b"abc\0abc\0def\0abcdef\0"
-        parts = [p.read_text() for p in sorted((ROOT / "SelfHost").rglob("*.krt"))
-                 if p.name != "Main.krt"]
+        parts = [p.read_text() for p in sorted(p for p in (ROOT / "SelfHost").rglob("*.krt") if p.name != "project.krt")
+                 if p.name not in {"Main.krt", "project.krt"}]
         body = ["int32 main() {", "KrtNativeModule m=new KrtNativeModule(); KrtKroObject o=new KrtKroObject();"]
         for name, (ops, _) in cases.items():
             body += ["if (!KrtNativeInit(m)) { return 1; }",

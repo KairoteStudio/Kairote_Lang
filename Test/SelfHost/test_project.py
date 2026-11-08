@@ -175,7 +175,7 @@ class ProjectIntegrationTests(unittest.TestCase):
         self.output = self.work / 'bin/demo'
 
     def command(self, action, *arguments, compiler=COMPILER, linker=LINKER):
-        return subprocess.run([str(ROOT / 'SelfHost/krtc'), action,
+        return subprocess.run([str(ROOT / 'SelfHost/RunNativeCompiler'), action,
                                str(self.path), '--compiler', str(compiler), '--linker', str(linker),
                                *map(str, arguments)], cwd=self.work, capture_output=True, text=True, timeout=60)
 
@@ -388,17 +388,17 @@ Write(42);return Read()==42&&Calls()==1?0:2;}''')
 
     def test_new_project_build_and_default_discovery(self):
         destination = self.work / 'My First App'
-        result = subprocess.run([str(ROOT / 'SelfHost/krtc'), 'new', 'console', str(destination)],
+        result = subprocess.run([str(ROOT / 'SelfHost/RunNativeCompiler'), 'new', 'console', str(destination)],
                                 capture_output=True, text=True, timeout=10)
         self.ok(result, 'created:')
-        result = subprocess.run([str(ROOT / 'SelfHost/krtc'), 'build', '--compiler', str(COMPILER),
+        result = subprocess.run([str(ROOT / 'SelfHost/RunNativeCompiler'), 'build', '--compiler', str(COMPILER),
                                  '--linker', str(LINKER)], cwd=destination, capture_output=True, text=True, timeout=60)
         self.ok(result, 'built:')
         output = destination / 'bin/release/My First App'
         executed = subprocess.run([str(output)], capture_output=True, text=True, timeout=10)
         self.assertEqual(executed.returncode, 0)
         self.assertEqual(executed.stdout, 'Hello, Kairote!\n')
-        result = subprocess.run([str(ROOT / 'SelfHost/krtc'), 'new', 'console', str(destination)],
+        result = subprocess.run([str(ROOT / 'SelfHost/RunNativeCompiler'), 'new', 'console', str(destination)],
                                 capture_output=True, text=True, timeout=10)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('not empty', result.stderr)

@@ -1,3 +1,400 @@
+// ===== Floating point encoding =====
+// Encode a short instruction sequence from its little-endian bytes.
+bool KrtKroNativeCode(KrtKroObject output, ref int32 pc, int64 bytes, int32 count) {
+    int32 i = 0;
+    while (i < count) {
+        if (!KrtKroNativeByte(output, ref pc, (int32)(bytes & 255))) { return false; }
+        bytes = bytes >> 8; i = i + 1;
+    }
+    return true;
+}
+
+bool KrtKroNativeFloatConvert(KrtKroObject output, ref int32 pc, int32 origin_format, int32 target_format) {
+    if ((origin_format != 0 && origin_format != -8 && origin_format != 4 && origin_format != 8) || (target_format != 0 && target_format != -8 && target_format != 4 && target_format != 8)) { return false; }
+    if (origin_format == target_format) { return true; }
+    if (!(KrtKroNativeCode(output, ref pc, 88, 1))) { return false; }
+    if (origin_format == 4) {
+    if (!(KrtKroNativeCode(output, ref pc, 25350287483866982, 7) &&
+        KrtKroNativeCode(output, ref pc, 192, 1))) { return false; }
+    } else if (origin_format == 8) {
+    if (!(KrtKroNativeCode(output, ref pc, 826480216166, 5))) { return false; }
+    } else if (origin_format == -8) {
+    if (!(KrtKroNativeCode(output, ref pc, 38641337473467720, 7) &&
+        KrtKroNativeCode(output, ref pc, 65813776772924353, 7) &&
+        KrtKroNativeCode(output, ref pc, 11838755007105352, 7) &&
+        KrtKroNativeCode(output, ref pc, 1666586227241664, 7) &&
+        KrtKroNativeCode(output, ref pc, 825339365618, 5))) { return false; }
+    } else {
+    if (!(KrtKroNativeCode(output, ref pc, 825339365618, 5))) { return false; }
+    }
+    if (target_format == 4) {
+    if (!(KrtKroNativeCode(output, ref pc, 35482781053751282, 7) &&
+        KrtKroNativeCode(output, ref pc, 192, 1))) { return false; }
+    } else if (target_format == 8) {
+    if (!(KrtKroNativeCode(output, ref pc, 826748651622, 5))) { return false; }
+    } else if (target_format == -8) {
+    if (!(KrtKroNativeCode(output, ref pc, 47432, 7) &&
+        KrtKroNativeCode(output, ref pc, 30979051065958400, 7) &&
+        KrtKroNativeCode(output, ref pc, 4911248631097033, 7) &&
+        KrtKroNativeCode(output, ref pc, 4302332113981426, 7) &&
+        KrtKroNativeCode(output, ref pc, 18006401536802860, 7) &&
+        KrtKroNativeCode(output, ref pc, 54091639688398315, 7))) { return false; }
+    } else {
+    if (!(KrtKroNativeCode(output, ref pc, 825372920050, 5))) { return false; }
+    }
+    return KrtKroNativeCode(output, ref pc, 80, 1);
+}
+
+bool KrtKroNativeFloatBinary(KrtKroObject output, ref int32 pc, int32 operation, int32 width) {
+    if (width != 4 && width != 8) { return false; }
+    if (operation == 37) {
+        // x87 FPREM computes remainder without overflowing the quotient.
+        if (!KrtKroNativeCode(output, ref pc, width == 4 ? 36 * 65536 + 4 * 256 + 217 : 36 * 65536 + 4 * 256 + 221, 3) ||
+            !KrtKroNativeByte(output, ref pc, width == 4 ? 217 : 221) ||
+            !KrtKroNativeCode(output, ref pc, 8 * 65536 + 36 * 256 + 68, 3)) { return false; }
+    if (!(KrtKroNativeCode(output, ref pc, 1342464520616153, 7) &&
+        KrtKroNativeCode(output, ref pc, 63349, 2))) { return false; }
+        if (!KrtKroNativeByte(output, ref pc, width == 4 ? 217 : 221)) { return false; }
+    if (!(KrtKroNativeCode(output, ref pc, 36953318207530076, 7) &&
+        KrtKroNativeCode(output, ref pc, 2244, 2))) { return false; }
+        return true;
+    }
+    int32 opcode = operation == 43 ? 88 : operation == 45 ? 92 : operation == 42 ? 89 : operation == 47 ? 94 : -1;
+    if (opcode < 0) { return false; }
+    if (!(KrtKroNativeCode(output, ref pc, 54164207446677593, 7) &&
+        KrtKroNativeCode(output, ref pc, 865134921830, 5))) { return false; }
+    if (!KrtKroNativeByte(output, ref pc, width == 4 ? 243 : 242) || !KrtKroNativeByte(output, ref pc, 15) || !KrtKroNativeByte(output, ref pc, opcode) || !KrtKroNativeByte(output, ref pc, 193)) { return false; }
+    if (width == 4) {
+    if (!(KrtKroNativeCode(output, ref pc, 3229486950, 4))) { return false; }
+    } else {
+    if (!(KrtKroNativeCode(output, ref pc, 826748651622, 5))) { return false; }
+    }
+    return KrtKroNativeCode(output, ref pc, 80, 1);
+}
+
+bool KrtKroNativeFloatCompare(KrtKroObject output, ref int32 pc, int32 operation, int32 width) {
+    if (width != 4 && width != 8) { return false; }
+    int32 condition = operation == 61 ? 148 : operation == 101 ? 149 : operation == 60 ? 146 : operation == 102 ? 150 : operation == 62 ? 151 : operation == 103 ? 147 : -1;
+    if (condition < 0) { return false; }
+    if (!(KrtKroNativeCode(output, ref pc, 54164207446677593, 7) &&
+        KrtKroNativeCode(output, ref pc, 865134921830, 5))) { return false; }
+    if (width == 8 && !KrtKroNativeByte(output, ref pc, 102)) { return false; }
+    if (!(KrtKroNativeCode(output, ref pc, 12660239, 3))) { return false; }
+    if (!KrtKroNativeByte(output, ref pc, 15) || !KrtKroNativeByte(output, ref pc, condition) || !KrtKroNativeByte(output, ref pc, 192)) { return false; }
+    if (operation == 101) {
+    if (!(KrtKroNativeCode(output, ref pc, 893500168719, 5))) { return false; }
+    } else {
+    if (!(KrtKroNativeCode(output, ref pc, 893902822159, 5))) { return false; }
+    }
+    return KrtKroNativeCode(output, ref pc, 1354806799, 4);
+}
+
+bool KrtKroNativeFloatUnary(KrtKroObject output, ref int32 pc, int32 operation, int32 width, int32 increment) {
+    if (width != 4 && width != 8) { return false; }
+    if (operation == 43) {
+    if (!(KrtKroNativeCode(output, ref pc, 3632875611, 4))) { return false; }
+        if (!KrtKroNativeMemoryLoad(output, ref pc, width == 4 ? -4 : 8)) { return false; }
+    if (!(KrtKroNativeCode(output, ref pc, 20560, 2))) { return false; }
+        if (!KrtKroNativeCode(output, ref pc, 184 * 256 + 72, 2) || !KrtKroNativeU64(output, ref pc, increment)) { return false; }
+    if (!(KrtKroNativeCode(output, ref pc, 80, 1))) { return false; }
+        if (!KrtKroNativeFloatConvert(output, ref pc, 0, width) || !KrtKroNativeFloatBinary(output, ref pc, 43, width)) { return false; }
+    if (!(KrtKroNativeCode(output, ref pc, 88, 1))) { return false; }
+        return KrtKroNativeMemoryStore(output, ref pc, width);
+    }
+    if (!(KrtKroNativeCode(output, ref pc, 88, 1))) { return false; }
+    if (operation == 41) {
+        if (!KrtKroNativeCode(output, ref pc, 185 * 256 + 72, 2) || !KrtKroNativeU64(output, ref pc, width == 4 ? 2147483648 : -9223372036854775807 - 1)) { return false; }
+    if (!(KrtKroNativeCode(output, ref pc, 13119816, 3))) { return false; }
+    } else if (operation == 42) {
+        if (width == 4) {
+    if (!(KrtKroNativeCode(output, ref pc, 57553, 2))) { return false; }
+        } else {
+    if (!(KrtKroNativeCode(output, ref pc, 14733640, 3))) { return false; }
+        }
+    if (!(KrtKroNativeCode(output, ref pc, 211888180860175, 6))) { return false; }
+    } else { return false; }
+    return KrtKroNativeCode(output, ref pc, 80, 1);
+}
+
+// ===== Global data and symbols =====
+bool KrtKroNativeGlobalAddress(KrtNativeModule module,KrtKroObject output,ref int32 pc,int32 slot) {
+    if(slot<0||slot>=module.global_count||module.global_entries==null||module.global_entries[slot]==null||module.global_reloc_count>=module.count*2){return false;}
+    if(module.global_reloc_offsets==null){module.global_reloc_offsets=new int32[module.count*2];module.global_reloc_slots=new int32[module.count*2];}
+    KrtNativeGlobalEntry entry=module.global_entries[slot];
+    if(!entry.module_guard&&slot==entry.declaration.native_global-1&&(entry.declaration.syntax_modifiers&1024)!=0){
+        // An explicit extern field carries no initializer syntax. Its defining
+        // module supplies a stable initialization alias. Preserve every volatile
+        // register, the callable environment and the live expression stack;
+        // the alias can call arbitrary code or unwind through the current frame.
+        if(!KrtKroNativeCode(output,ref pc,0x5756525150,5)){return false;}
+        if(!KrtKroNativeCode(output,ref pc,0x51415041,4)||!KrtKroNativeCode(output,ref pc,0x53415241,4)||
+           !KrtKroNativeCode(output,ref pc,0xe08948,3)||!KrtKroNativeCode(output,ref pc,0xf0e48348,4)||
+           !KrtKroNativeCode(output,ref pc,0x10ec8348,4)||!KrtKroNativeCode(output,ref pc,0x0824448948,5)||!KrtKroNativeByte(output,ref pc,232)){return false;}
+        int32 call=module.global_reloc_count;module.global_reloc_offsets[call]=pc;module.global_reloc_slots[call]=-slot-1;module.global_reloc_count=call+1;
+        if(!KrtKroNativeU32(output,ref pc,0)||!KrtKroNativeCode(output,ref pc,0x0824648b48,5)||
+           !KrtKroNativeCode(output,ref pc,0x5a415b41,4)||!KrtKroNativeCode(output,ref pc,0x58415941,4)||
+           !KrtKroNativeCode(output,ref pc,0x58595a5e5f,5)){return false;}
+    }
+    if(!KrtKroNativeCode(output,ref pc,0x058d48,3)){return false;}
+    int32 index=module.global_reloc_count;module.global_reloc_offsets[index]=pc;module.global_reloc_slots[index]=slot;module.global_reloc_count=index+1;
+    return KrtKroNativeU32(output,ref pc,0)&&KrtKroNativeByte(output,ref pc,80);
+}
+
+bool KrtKroNativeGlobalsStart(KrtKroObject output, ref int32 pc, int32 slots) {
+    return slots>=0&&slots<=65536;
+}
+
+bool KrtKroNativeGuardEnter(KrtKroObject output,ref int32 pc){
+    // The owner allows recursive reads in the initializing thread. Contending
+    // threads wait until the release store publishes initialized storage.
+    if(!KrtKroNativeByte(output,ref pc,95)||!KrtKroNativeCode(output,ref pc,0x023f8348,4)||!KrtKroNativeCode(output,ref pc,0x840f,2)){return false;}
+    int32 cached=pc;
+    if(!KrtKroNativeU32(output,ref pc,0)||!KrtKroNativeByte(output,ref pc,184)||!KrtKroNativeU32(output,ref pc,186)||
+       !KrtKroNativeCode(output,ref pc,0x050f,2)||!KrtKroNativeCode(output,ref pc,0xc08949,3)){return false;}
+    int32 loop=pc;
+    if(!KrtKroNativeCode(output,ref pc,0xc031,2)||!KrtKroNativeByte(output,ref pc,186)||!KrtKroNativeU32(output,ref pc,1)||
+       !KrtKroNativeCode(output,ref pc,0x17b10f48f0,5)||!KrtKroNativeCode(output,ref pc,0x840f,2)){return false;}
+    int32 claimed=pc;if(!KrtKroNativeU32(output,ref pc,0)||!KrtKroNativeCode(output,ref pc,0x02f88348,4)||!KrtKroNativeCode(output,ref pc,0x840f,2)){return false;}
+    int32 complete=pc;if(!KrtKroNativeU32(output,ref pc,0)||!KrtKroNativeCode(output,ref pc,0x0847394c,4)||!KrtKroNativeCode(output,ref pc,0x840f,2)){return false;}
+    int32 recursive=pc;
+    if(!KrtKroNativeU32(output,ref pc,0)||!KrtKroNativeCode(output,ref pc,0x90f3,2)||!KrtKroNativeByte(output,ref pc,233)||!KrtKroNativeU32(output,ref pc,loop-pc-4)){return false;}
+    if(!KrtKroEmitTextU32(output,claimed,pc-claimed-4)||!KrtKroNativeCode(output,ref pc,0x0847894c,4)||
+       !KrtKroNativeByte(output,ref pc,184)||!KrtKroNativeU32(output,ref pc,1)||!KrtKroNativeByte(output,ref pc,80)||!KrtKroNativeByte(output,ref pc,233)){return false;}
+    int32 done=pc;if(!KrtKroNativeU32(output,ref pc,0)||!KrtKroEmitTextU32(output,cached,pc-cached-4)||!KrtKroEmitTextU32(output,complete,pc-complete-4)||!KrtKroEmitTextU32(output,recursive,pc-recursive-4)||
+       !KrtKroNativeCode(output,ref pc,0xc031,2)||!KrtKroNativeByte(output,ref pc,80)){return false;}
+    return KrtKroEmitTextU32(output,done,pc-done-4);
+}
+
+bool KrtKroNativeGuardFinish(KrtKroObject output,ref int32 pc,int32 success){
+    return (success==0||success==1)&&KrtKroNativeByte(output,ref pc,95)&&
+        KrtKroNativeCode(output,ref pc,0x0847c748,4)&&KrtKroNativeU32(output,ref pc,0)&&
+        KrtKroNativeCode(output,ref pc,0x07c748,3)&&KrtKroNativeU32(output,ref pc,success==1?2:0);
+}
+
+bool KrtKroNativeIndirectCall(KrtKroObject output, ref int32 pc, int32 arity, int32 scratch) {
+    if (arity < 0 || arity > 129) { return false; }
+    int32 argument = arity - 1;
+    while (argument >= 6) {
+        if (!KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeFrameStore(output, ref pc, scratch + argument - 6)) { return false; }
+        argument = argument - 1;
+    }
+    while (argument >= 0) {
+        if (!KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeMoveArg(output, ref pc, argument)) { return false; }
+        argument = argument - 1;
+    }
+    if (!KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeFrameStore(output, ref pc, scratch + 124) ||
+        !KrtKroNativeCode(output, ref pc, 0xe08948, 3) || !KrtKroNativeFrameStore(output, ref pc, scratch + 123) ||
+        !KrtKroNativeCode(output, ref pc, 0xf0e48348, 4)) { return false; }
+    int32 stacked = arity > 6 ? arity - 6 : 0;
+    if ((stacked & 1) != 0 && !KrtKroNativeCode(output, ref pc, 0x08ec8348, 4)) { return false; }
+    argument = stacked - 1;
+    while (argument >= 0) {
+        if (!KrtKroNativeFrameLoad(output, ref pc, scratch + argument)) { return false; }
+        argument = argument - 1;
+    }
+    // Raw code addresses remain unchanged. A negative callable tags a heap
+    // descriptor containing the code address and its shared environment.
+    // r10 carries the environment without shifting any source or sret argument.
+    if (!KrtKroNativeCode(output, ref pc, 0x858b48, 3) || !KrtKroNativeU32(output, ref pc, -8 * (scratch + 125)) ||
+        !KrtKroNativeCode(output, ref pc, 0xc08548, 3) || !KrtKroNativeCode(output, ref pc, 0x850f, 2)) { return false; }
+    int32 nonnull = pc;
+    if (!KrtKroNativeU32(output, ref pc, 0) ||
+        !KrtKroNativeByte(output, ref pc, 191) || !KrtKroNativeU32(output, ref pc, 127) ||
+        !KrtKroNativeByte(output, ref pc, 184) || !KrtKroNativeU32(output, ref pc, 60) ||
+        !KrtKroNativeCode(output, ref pc, 0x0b0f050f, 4) ||
+        !KrtKroEmitTextU32(output, nonnull, pc - nonnull - 4) ||
+        !KrtKroNativeCode(output, ref pc, 0xd23145, 3) ||
+        !KrtKroNativeCode(output, ref pc, 0xc08548, 3) || !KrtKroNativeCode(output, ref pc, 0x890f, 2)) { return false; }
+    int32 raw = pc;
+    if (!KrtKroNativeU32(output, ref pc, 0) ||
+        !KrtKroNativeCode(output, ref pc, 0x3ff0ba0f48, 5) ||
+        !KrtKroNativeCode(output, ref pc, 0x08508b4c, 4) ||
+        !KrtKroNativeCode(output, ref pc, 0x008b48, 3) ||
+        !KrtKroEmitTextU32(output, raw, pc - raw - 4) ||
+        !KrtKroNativeCode(output, ref pc, 0xd0ff, 2) ||
+        !KrtKroNativeCode(output, ref pc, 0xa58b48, 3) || !KrtKroNativeU32(output, ref pc, -8 * (scratch + 124))) { return false; }
+    return KrtKroNativeByte(output, ref pc, 80);
+}
+
+bool KrtKroNativeClosureEnvironment(KrtKroObject output, ref int32 pc) {
+    return KrtKroNativeCode(output, ref pc, 0x5241, 2);
+}
+
+// Global symbol emission.
+// Every mutable declaration has an exact stable data identity. IR retains VM
+// slots; native references use relocations and survive independent compilation.
+bool KrtKroGlobalSymbols(KrtNativeModule module,KrtAstNode ast,int64 source,KrtKroObject output){
+    if(module.global_count==0){return module.global_reloc_count==0;}
+    KrtNativeGlobalEntry entry=ast.native_globals.first;int32 count=0;int64 names=0;
+    while(entry!=null){
+        if(!entry.declaration.native_readonly){
+            count=count+(entry.module_guard?1:3);names=names+entry.symbol_name.length+1;
+            if(!entry.module_guard){names=names+entry.guard_name.length+entry.initializer_name.length+2;}
+        }
+        entry=entry.next;
+    }
+    if(count>1048576-output.symbol_count||names>67108864-output.strtab_size||module.global_count>65536){return false;}
+    int32 old_symbols=output.symbol_count;int32 old_names=output.strtab_size;
+    byte[] symbols=new byte[(old_symbols+count)*32+1];byte[] strings=new byte[old_names+(int32)names+1];int32 index=0;
+    while(index<old_symbols*32){symbols[index]=output.symbol_bytes[index];index=index+1;}
+    index=0;while(index<old_names){strings[index]=output.string_bytes[index];index=index+1;}
+    delete output.symbol_bytes;delete output.string_bytes;output.symbol_bytes=symbols;output.string_bytes=strings;
+    // Slot offsets also provide naturally aligned storage for wide values and
+    // inline structures. Imported entries occupy no defined symbol in it.
+    byte[] data=new byte[module.global_count*8];delete output.data_bytes;output.data_bytes=data;output.data_size=module.global_count*8;
+    int32[] slot_symbols=new int32[module.global_count];int32[] initializer_symbols=new int32[module.global_count];index=0;
+    while(index<module.global_count){slot_symbols[index]=-1;initializer_symbols[index]=-1;index=index+1;}
+    int32 initializer_offset=-1;int32 initializer_size=0;
+    if(module.initializer_index>=0){
+        if(module.initializer_index>=module.function_count||module.function_offsets==null||module.function_sizes==null){return false;}
+        initializer_offset=module.function_offsets[module.initializer_index];initializer_size=module.function_sizes[module.initializer_index];
+    }
+    int32 position=old_names;entry=ast.native_globals.first;
+    while(entry!=null){
+        if(!entry.declaration.native_readonly){
+            bool defined=!entry.imported||entry.weak;int32 binding=entry.module_guard?0:(defined&&entry.weak?2:1);int32 section=defined?3:0;
+            int32 slot=entry.declaration.native_global-1;int32 offset=defined?slot*8:0;
+            int32 symbol=KrtKroRuntimeAddSymbol(output,entry.symbol_name,offset,defined?entry.storage_size:0,section,binding,ref position);
+            if(symbol<0){return false;}KrtKroLibraryWord(output.symbol_bytes,symbol*32+20,2);slot_symbols[slot]=symbol;
+            if(!entry.module_guard){
+                symbol=KrtKroRuntimeAddSymbol(output,entry.guard_name,defined?entry.guard_slot*8:0,defined?16:0,section,binding,ref position);
+                if(symbol<0){return false;}KrtKroLibraryWord(output.symbol_bytes,symbol*32+20,2);slot_symbols[entry.guard_slot]=symbol;
+                if(defined&&entry.static_data){
+                    int32 part=0;
+                    while(part<entry.storage_size){
+                        data[offset+part]=(byte)(((part<8?entry.static_low:entry.static_high)>>((part%8)*8))&255);part=part+1;
+                    }
+                    KrtKroLibraryWord(data,entry.guard_slot*8,2);
+                }
+                if(defined&&initializer_offset<0){
+                    initializer_offset=output.text_size;int32 pc=initializer_offset;
+                    if(output.text_words==null&&!KrtKroBeginText(output,1)){return false;}
+                    if(!KrtKroNativeCode(output,ref pc,0xc3c031,3)){return false;}initializer_size=3;
+                }
+                symbol=KrtKroRuntimeAddSymbol(output,entry.initializer_name,defined?initializer_offset:0,defined?initializer_size:0,defined?1:0,binding,ref position);
+                if(symbol<0){return false;}KrtKroLibraryWord(output.symbol_bytes,symbol*32+20,1);initializer_symbols[slot]=symbol;
+            }
+        }
+        entry=entry.next;
+    }
+    output.strtab_size=position;int32 old_relocs=output.text_reloc_count;
+    if(module.global_reloc_count>4194304-old_relocs){return false;}
+    byte[] relocations=new byte[(old_relocs+module.global_reloc_count)*16+1];index=0;
+    while(index<old_relocs*16){relocations[index]=output.text_relocation_bytes[index];index=index+1;}
+    delete output.text_relocation_bytes;output.text_relocation_bytes=relocations;index=0;
+    while(index<module.global_reloc_count){
+        int32 slot=module.global_reloc_slots[index];bool initializer=slot<0;if(initializer){slot=-slot-1;}
+        if(slot<0||slot>=module.global_count||(initializer?initializer_symbols[slot]:slot_symbols[slot])<0){return false;}
+        int32 record=(old_relocs+index)*16;KrtKroLibraryWord(relocations,record,module.global_reloc_offsets[index]);
+        KrtKroLibraryWord(relocations,record+4,initializer?initializer_symbols[slot]:slot_symbols[slot]);KrtKroLibraryWord(relocations,record+8,3);KrtKroLibraryWord(relocations,record+12,0);index=index+1;
+    }
+    output.text_reloc_count=old_relocs+module.global_reloc_count;
+    output.total_reloc_count=output.text_reloc_count+output.rodata_reloc_count+output.data_reloc_count;output.relocation_count=output.total_reloc_count;
+    delete slot_symbols;delete initializer_symbols;return true;
+}
+
+// ===== KRO backend =====
+// Native object ABI record emission.
+// ABI2 metadata is a normal local read-only KRO object symbol.
+bool KrtKroAbiRecord(KrtAbiBytes manifest,int32 symbol,bool defined,KrtAbiSignature signature){
+    if(!signature.supported||!signature.contract.ok||!signature.nominal.ok){return false;}
+    if(signature.uses_named||signature.weak){KrtKroLibraryWord(manifest.data,4,3);}
+    KrtAbiWord(manifest,symbol);KrtAbiWord(manifest,defined?(signature.weak?5:1):0);
+    KrtAbiWord(manifest,signature.nominal.count);KrtAbiWord(manifest,signature.contract.count);
+    KrtAbiAppend(manifest,signature.nominal);KrtAbiAppend(manifest,signature.contract);return manifest.ok;
+}
+bool KrtKroAbiTypes(KrtAbiBytes manifest,KrtAstNode ast,int64 source,ref int32 count){
+    KrtAstNode type=ast.declarations;
+    while(type!=null){
+        if(type.native_generic_parameters==null){
+            KrtAbiSignature signature=KrtModuleTypeSignature(type,ast,source);
+            if(!signature.supported||!signature.contract.ok||!signature.nominal.ok){return false;}
+            KrtKroLibraryWord(manifest.data,4,3);
+            // Type contracts have no strong symbol and may be repeated by
+            // several modules. Exact layouts must agree independently of the
+            // functions through which either module happens to use them.
+            KrtAbiWord(manifest,-1);KrtAbiWord(manifest,2);
+            KrtAbiWord(manifest,signature.nominal.count);KrtAbiWord(manifest,signature.contract.count);
+            KrtAbiAppend(manifest,signature.nominal);KrtAbiAppend(manifest,signature.contract);count=count+1;
+        }
+        type=type.next;
+    }
+    if(ast.native_globals!=null){
+        KrtNativeGlobalEntry entry=ast.native_globals.first;
+        while(entry!=null){
+            if(!entry.module_guard&&!entry.declaration.native_readonly){
+                KrtAbiSignature signature=KrtModuleGlobalSignature(entry,ast,source);
+                if(!signature.supported||!signature.nominal.ok||!signature.contract.ok){return false;}
+                KrtAbiWord(manifest,-1);KrtAbiWord(manifest,2);KrtAbiWord(manifest,signature.nominal.count);KrtAbiWord(manifest,signature.contract.count);
+                KrtAbiAppend(manifest,signature.nominal);KrtAbiAppend(manifest,signature.contract);count=count+1;
+            }
+            entry=entry.next;
+        }
+    }
+    return manifest.ok;
+}
+bool KrtKroAbiFinishNamed(KrtKroObject output,KrtAbiBytes manifest,int32 count,ref int32 name,string marker){
+    if(count==0){return true;}if(!manifest.ok||output.rodata_size>16777216-manifest.count){return false;}
+    KrtKroLibraryWord(manifest.data,8,count);KrtKroLibraryWord(manifest.data,12,manifest.count);
+    int32 offset=output.rodata_size;byte[] rodata=new byte[offset+manifest.count];int32 index=0;
+    while(index<offset){rodata[index]=output.rodata_bytes[index];index=index+1;}
+    index=0;while(index<manifest.count){rodata[offset+index]=manifest.data[index];index=index+1;}
+    output.rodata_bytes=rodata;output.rodata_size=offset+manifest.count;
+    int32 symbol=output.symbol_count;
+    byte[] symbols=new byte[(symbol+1)*32+1];index=0;while(index<symbol*32){symbols[index]=output.symbol_bytes[index];index=index+1;}
+    output.symbol_bytes=symbols;KrtKroLibrarySymbol(output,symbol,name,offset,manifest.count,2);
+    KrtKroLibraryWord(output.symbol_bytes,symbol*32+16,0);
+    unsafe(using krt.mem;){byte* text=(byte*)(int64)marker;index=0;while(text[index]!=0){output.string_bytes[name]=text[index];name=name+1;index=index+1;}}
+    output.string_bytes[name]=0;name=name+1;output.symbol_count=symbol+1;return true;
+}
+bool KrtKroAbiFinish(KrtKroObject output,KrtAbiBytes manifest,int32 count,ref int32 name){
+    return KrtKroAbiFinishNamed(output,manifest,count,ref name,manifest.data[4]==3?"_KRT_ABI3_MANIFEST":"_KRT_ABI2_MANIFEST");
+}
+
+// Exception frame and throw emission.
+// Exception records occupy six frame slots. r15 links active records across calls.
+// Layout at the lowest address: previous, saved rsp, saved rbp, value, type, handler.
+bool KrtKroNativeTryEnter(KrtKroObject output, ref int32 pc, int32 slot) {
+    return KrtKroNativeCode(output, ref pc, 9276744, 3) && KrtKroNativeU32(output, ref pc, -8 * (slot + 6)) &&
+        KrtKroNativeCode(output, ref pc, 2359042063829324, 7) &&
+        KrtKroNativeCode(output, ref pc, 1562715536066888, 7);
+}
+
+bool KrtKroNativeTryFinish(KrtKroObject output, ref int32 pc) {
+    return KrtKroNativeCode(output, ref pc, 58416267480107336, 7);
+}
+
+bool KrtKroNativeTryLeave(KrtKroObject output, ref int32 pc, int32 slot) {
+    return KrtKroNativeCode(output, ref pc, 12421964, 3) && KrtKroNativeU32(output, ref pc, -8 * (slot + 6));
+}
+
+bool KrtKroNativeThrow(KrtKroObject output, ref int32 pc) {
+    return KrtKroNativeCode(output, ref pc, 3507440034076762, 7) &&
+        KrtKroNativeCode(output, ref pc, 19913255090666680, 7) &&
+        KrtKroNativeCode(output, ref pc, 38642357884682240, 7) &&
+        KrtKroNativeCode(output, ref pc, 20583233637390407, 7) &&
+        KrtKroNativeCode(output, ref pc, 2365647737614219, 7) &&
+        KrtKroNativeCode(output, ref pc, 17886087037291337, 7) &&
+        KrtKroNativeCode(output, ref pc, 57599, 2);
+}
+
+// Integer storage normalization.
+// Nonstandard even integer widths use rounded byte storage plus exact normalization.
+bool KrtKroNativeIntegerNormalize(KrtKroObject output, ref int32 pc, int32 code) {
+    int32 bits = (code < 0 ? -code : code) - 1000;
+    if (bits < 2 || bits > 64 || bits % 2 != 0) { return false; }
+    if (bits == 64) { return true; }
+    return KrtKroNativeCode(output, ref pc, 14729544, 3) && KrtKroNativeByte(output, ref pc, 64 - bits) &&
+        KrtKroNativeByte(output, ref pc, 72) && KrtKroNativeByte(output, ref pc, 193) &&
+        KrtKroNativeByte(output, ref pc, code < 0 ? 232 : 248) && KrtKroNativeByte(output, ref pc, 64 - bits);
+}
+
+int32 KrtKroNativeIntegerStorage(int32 code) {
+    int32 bits = (code < 0 ? -code : code) - 1000; int32 bytes = 1;
+    while (bytes * 8 < bits && bytes < 8) { bytes = bytes * 2; }
+    return bytes;
+}
+
 enum KrtKroSection { Text = 1, ReadOnlyData = 2, Data = 3, Bss = 4 }
 enum KrtKroRelocation { Absolute64 = 1, Address32 = 2, PcRelative32 = 3 }
 
@@ -1175,4 +1572,1898 @@ bool KrtKroWriteBytes(byte[] bytes, int32 count, int64 descriptor) {
         }
     }
     return true;
+}
+
+// String runtime helper emission.
+// Null-terminated UTF-8 strings retain their raw byte-pointer representation.
+// Length counts bytes. Null compares equal only to null, while concatenation
+// and Length treat null as empty. Concatenation creates a zero-terminated heap
+// allocation using the same checked allocator as new.
+
+bool KrtKroNativeStringCode(KrtKroObject output, ref int32 pc, int64 bytes, int32 count) {
+    while (count > 0) {
+        if (!KrtKroNativeByte(output, ref pc, (int32)(bytes & 255))) { return false; }
+        bytes = bytes >> 8;
+        count = count - 1;
+    }
+    return true;
+}
+
+bool KrtKroNativeStringEqual(KrtKroObject output, ref int32 pc) {
+    // Pop rhs into rdx and lhs into rcx; compare bytes until mismatch or NUL.
+    return KrtKroNativeStringCode(output, ref pc, 8009741305928026, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 37515471843067208, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 626728239789266, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 20275495862277237, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 67250267196277247, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 66234580457226680, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 1354772739, 4);
+}
+
+bool KrtKroNativeStringLength(KrtKroObject output, ref int32 pc) {
+    // Pop address into rax; count bytes in rcx until NUL, or zero for null.
+    return KrtKroNativeStringCode(output, ref pc, 32862775982764376, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 1534918370557963, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 90116664196936, 6);
+}
+
+bool KrtKroNativeStringConcat(KrtKroObject output, ref int32 pc) {
+    // Count into r8/r9, then save both inputs and counts on the operand stack.
+    // The allocator consumes len(lhs)+len(rhs)+1 and returns payload or null.
+    if (!(KrtKroNativeStringCode(output, ref pc, 37516162200066394, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 347996538303689, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 66358822201291776, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 59256292768826868, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 11254966127732, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 68939112761591156, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 21481439191192145, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 36953245801562249, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 5243328, 3))) { return false; }
+    if (!KrtKroNativeAllocate(output, ref pc, 0)) { return false; }
+    // Restore inputs and counts; copy each span with rep movsb, append NUL,
+    // and leave the new pointer. On allocation failure leave null untouched.
+    return KrtKroNativeStringCode(output, ref pc, 25150608027238744, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 20354268586345800, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 38646521759582089, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 60386590114184385, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 2188736603982156, 7) &&
+        KrtKroNativeStringCode(output, ref pc, 5265408, 3);
+}
+
+// Aggregate frame and parameter layout.
+// Aggregate storage occupies an aligned arena below scalar slots and call
+// scratch storage. Field offsets grow forward from this address.
+bool KrtKroNativeAggregateAddress(KrtKroObject output, ref int32 pc, int32 frame, int64 offset, int64 size, int32 arena_bytes) {
+    if (offset < 0 || size <= 0 || offset > arena_bytes || size > arena_bytes-offset) { return false; }
+    return KrtKroNativeCode(output,ref pc,0x858d48,3) &&
+        KrtKroNativeU32(output,ref pc,(int32)offset-frame) && KrtKroNativeByte(output,ref pc,80);
+}
+
+bool KrtKroNativeAggregateZero(KrtKroObject output, ref int32 pc, int64 size, int64 alignment) {
+    if (size < 0 || size > 16777216 || alignment <= 0 || alignment > 16 || (alignment & (alignment-1)) != 0) { return false; }
+    // pop rdi; mov ecx,size; xor eax,eax; cld; rep stosb
+    return KrtKroNativeByte(output,ref pc,95) && KrtKroNativeByte(output,ref pc,185) &&
+        KrtKroNativeU32(output,ref pc,(int32)size) && KrtKroNativeCode(output,ref pc,0xaaf3fcc031,5);
+}
+
+bool KrtKroNativeAggregateCopy(KrtKroObject output, ref int32 pc, int64 size, int64 alignment) {
+    if (size < 0 || size > 16777216 || alignment <= 0 || alignment > 16 || (alignment & (alignment-1)) != 0) { return false; }
+    // Explicit memmove semantics also cover overlapping pointer lvalues.
+    if (!KrtKroNativeCode(output,ref pc,0x5f5e,2)) { return false; }
+    if (size == 0) { return true; }
+    if (!KrtKroNativeByte(output,ref pc,185) || !KrtKroNativeU32(output,ref pc,(int32)size) ||
+        !KrtKroNativeCode(output,ref pc,0xf73948,3) || !KrtKroNativeCode(output,ref pc,0x860f,2)) { return false; }
+    int32 before_source = pc;
+    if (!KrtKroNativeU32(output,ref pc,0) || !KrtKroNativeCode(output,ref pc,0x868d48,3) ||
+        !KrtKroNativeU32(output,ref pc,(int32)size) || !KrtKroNativeCode(output,ref pc,0xc73948,3) ||
+        !KrtKroNativeCode(output,ref pc,0x830f,2)) { return false; }
+    int32 after_source = pc;
+    if (!KrtKroNativeU32(output,ref pc,0) || !KrtKroNativeCode(output,ref pc,0xc68148,3) ||
+        !KrtKroNativeU32(output,ref pc,(int32)size-1) || !KrtKroNativeCode(output,ref pc,0xc78148,3) ||
+        !KrtKroNativeU32(output,ref pc,(int32)size-1) || !KrtKroNativeCode(output,ref pc,0xfca4f3fd,4) ||
+        !KrtKroNativeByte(output,ref pc,233)) { return false; }
+    int32 completed = pc;
+    if (!KrtKroNativeU32(output,ref pc,0) || !KrtKroEmitTextU32(output,before_source,pc-before_source-4) ||
+        !KrtKroEmitTextU32(output,after_source,pc-after_source-4) || !KrtKroNativeCode(output,ref pc,0xa4f3fc,3)) { return false; }
+    return KrtKroEmitTextU32(output,completed,pc-completed-4);
+}
+
+bool KrtKroNativeIncomingParameter(KrtKroObject output, ref int32 pc, int32 physical) {
+    if (physical < 0 || physical > 128) { return false; }
+    if (physical < 6) {
+        int32 move = physical == 0 ? 0xf88948 : physical == 1 ? 0xf08948 : physical == 2 ? 0xd08948 :
+            physical == 3 ? 0xc88948 : physical == 4 ? 0xc0894c : 0xc8894c;
+        return KrtKroNativeCode(output,ref pc,move,3);
+    }
+    return KrtKroNativeCode(output,ref pc,0x858b48,3) && KrtKroNativeU32(output,ref pc,16+(physical-6)*8);
+}
+
+// Wide-float bit conversion helpers.
+// Integer magnitude -> IEEE bits: retain p bits and separate guard/sticky,
+// round nearest/even once, including fraction carry and binary32 overflow.
+bool KrtKroNativeWideFloat4Bits(KrtKroObject output, ref int32 pc) {
+    return KrtKroNativeCode(output, ref pc, 4451962456213832, 7) &&
+        KrtKroNativeCode(output, ref pc, 37515336739750020, 7) &&
+        KrtKroNativeCode(output, ref pc, 57065818626290898, 7) &&
+        KrtKroNativeCode(output, ref pc, 4301310614618499, 7) &&
+        KrtKroNativeCode(output, ref pc, 35492138763536573, 7) &&
+        KrtKroNativeCode(output, ref pc, 32873197727728993, 7) &&
+        KrtKroNativeCode(output, ref pc, 61028706076936206, 7) &&
+        KrtKroNativeCode(output, ref pc, 33154669342720833, 7) &&
+        KrtKroNativeCode(output, ref pc, 61028706076936434, 7) &&
+        KrtKroNativeCode(output, ref pc, 1255408291613811, 7) &&
+        KrtKroNativeCode(output, ref pc, 54323880289108392, 7) &&
+        KrtKroNativeCode(output, ref pc, 281474989475656, 7) &&
+        KrtKroNativeCode(output, ref pc, 58907467011078472, 7) &&
+        KrtKroNativeCode(output, ref pc, 36971233186629864, 7) &&
+        KrtKroNativeCode(output, ref pc, 1099402674113, 7) &&
+        KrtKroNativeCode(output, ref pc, 10440832512392448, 7) &&
+        KrtKroNativeCode(output, ref pc, 19360239404974079, 7) &&
+        KrtKroNativeCode(output, ref pc, 790608199689, 7) &&
+        KrtKroNativeCode(output, ref pc, 2792484812128128, 7) &&
+        KrtKroNativeCode(output, ref pc, 59932045912627703, 7) &&
+        KrtKroNativeCode(output, ref pc, 49201, 2);
+}
+
+bool KrtKroNativeWideFloat8Bits(KrtKroObject output, ref int32 pc) {
+    return KrtKroNativeCode(output, ref pc, 32880935103990088, 7) &&
+        KrtKroNativeCode(output, ref pc, 20276595675973758, 7) &&
+        KrtKroNativeCode(output, ref pc, 66217819410971919, 7) &&
+        KrtKroNativeCode(output, ref pc, 36963144556300292, 7) &&
+        KrtKroNativeCode(output, ref pc, 56630644343452905, 7) &&
+        KrtKroNativeCode(output, ref pc, 66095251960678911, 7) &&
+        KrtKroNativeCode(output, ref pc, 230361675649352, 7) &&
+        KrtKroNativeCode(output, ref pc, 66095255785949695, 7) &&
+        KrtKroNativeCode(output, ref pc, 37512091688030536, 7) &&
+        KrtKroNativeCode(output, ref pc, 971975392785865, 7) &&
+        KrtKroNativeCode(output, ref pc, 800084524872, 7) &&
+        KrtKroNativeCode(output, ref pc, 20266335762120704, 7) &&
+        KrtKroNativeCode(output, ref pc, 65532301889884217, 7) &&
+        KrtKroNativeCode(output, ref pc, 54466890361536328, 7) &&
+        KrtKroNativeCode(output, ref pc, 63544384741704703, 7) &&
+        KrtKroNativeCode(output, ref pc, 72057594033358900, 7) &&
+        KrtKroNativeCode(output, ref pc, 58583388278226943, 7) &&
+        KrtKroNativeCode(output, ref pc, 66357765702420808, 7) &&
+        KrtKroNativeCode(output, ref pc, 66393817591969545, 7) &&
+        KrtKroNativeCode(output, ref pc, 12595673, 3);
+}
+
+bool KrtKroNativeWideFloatToBits(KrtKroObject output, ref int32 pc, int32 mode, int32 width) {
+    if (width != 4 && width != 8) { return false; }
+    // Pop and unbox, accepting the all-zero default wide value.
+    if (!(KrtKroNativeCode(output, ref pc, 20276595373983832, 7) &&
+        KrtKroNativeCode(output, ref pc, 66147217735962763, 7) &&
+        KrtKroNativeCode(output, ref pc, 13869042938949892, 7) &&
+        KrtKroNativeCode(output, ref pc, 192, 1))) { return false; }
+    if (mode == 1) {
+        if (!KrtKroNativeCode(output,ref pc,0xd28548,3) || !KrtKroNativeCode(output,ref pc,0x890f,2)) { return false; }
+        int32 positive = pc;
+        if (!KrtKroNativeU32(output,ref pc,0) || !KrtKroNativeCode(output,ref pc,0xb849,2) ||
+            !KrtKroNativeU64(output,ref pc,width == 4 ? 2147483648 : -9223372036854775807 - 1) ||
+            !(KrtKroNativeCode(output, ref pc, 231461304727368, 7) &&
+        KrtKroNativeCode(output, ref pc, 14350152, 3)) ||
+            !KrtKroEmitTextU32(output,positive,pc-positive-4)) { return false; }
+    }
+    if (width == 4) { if (!KrtKroNativeWideFloat4Bits(output,ref pc)) { return false; } }
+    else { if (!KrtKroNativeWideFloat8Bits(output,ref pc)) { return false; } }
+    return KrtKroNativeByte(output,ref pc,80);
+}
+
+// ===== Library metadata =====
+// Relocatable object sections are generated by the native compiler itself.
+
+void KrtKroLibraryWord(byte[] bytes, int32 offset, int32 value) {
+    int32 index = 0; while (index < 4) { bytes[offset + index] = (byte)((value >> (index * 8)) & 255); index = index + 1; }
+}
+
+void KrtKroLibrarySymbol(KrtKroObject output, int32 index, int32 name, int32 offset, int32 size, int32 section) {
+    byte[] symbols = output.symbol_bytes;
+    int32 position = index * 32;
+    KrtKroLibraryWord(symbols, position, name);
+    KrtKroLibraryWord(symbols, position + 4, offset);
+    KrtKroLibraryWord(symbols, position + 8, size);
+    KrtKroLibraryWord(symbols, position + 12, section);
+    KrtKroLibraryWord(symbols, position + 16, 1);
+    KrtKroLibraryWord(symbols, position + 20, section == 1 ? 1 : 2);
+}
+
+void KrtKroLibraryName(KrtKroObject output, int64 source, int64 start, int32 length, ref int32 position) {
+    byte[] names = output.string_bytes;
+    int32 index = 0;
+    unsafe(using krt.mem;) {
+        byte* text = (byte*)source;
+        while (index < length) { names[position] = text[start + index]; position = position + 1; index = index + 1; }
+    }
+    names[position] = 0; position = position + 1;
+}
+
+bool KrtKroLibraryNormalize(KrtAstNode node, ref int64 low, ref int64 high) {
+    if (node.native_float != 0) { return false; }
+    if (KrtNativeWideKind(node)) {
+        int32 bits=node.native_bits>0?node.native_bits:128;
+        if(bits<=64||bits>128){return false;}
+        if(bits<128){
+            int32 shift=128-bits;
+            high=(high<<shift)>>shift;
+            if(node.native_unsigned){high=high&(((int64)1<<(bits-64))-1);}
+        }
+        return true;
+    }
+    if (node.native_boolean) { low = low != 0 || high != 0 ? 1 : 0; }
+    else {
+        int32 bits = node.native_bits > 0 ? node.native_bits : node.native_width * 8;
+        if (bits <= 0 || bits > 64) { return false; }
+        if (bits < 64) {
+            low = (low << (64 - bits)) >> (64 - bits);
+            if (node.native_unsigned) { low = low & (((int64)1 << bits) - 1); }
+        }
+    }
+    high = low < 0 && !node.native_unsigned ? -1 : 0; return true;
+}
+
+bool KrtKroLibraryValue(KrtAstNode node, ref int64 low, ref int64 high) {
+    low = 0; high = 0;
+    if (node == null || node.kind == KrtAstKind.Null) { return true; }
+    if (node.kind == KrtAstKind.Integer || node.kind == KrtAstKind.Boolean) {
+        low = node.value; high = node.native_wide ? node.native_high : (low < 0 && !node.native_unsigned ? -1 : 0); return true;
+    }
+    if (node.kind == KrtAstKind.Cast) {
+        return KrtKroLibraryValue(node.left, ref low, ref high) && KrtKroLibraryNormalize(node, ref low, ref high);
+    }
+    if (node.kind == KrtAstKind.Unary) {
+        if (!KrtKroLibraryValue(node.left, ref low, ref high)) { return false; }
+        if (node.op == 45) { high = ~high + (low == 0 ? 1 : 0); low = -low; }
+        else if (node.op == 126) { low = ~low; high = ~high; }
+        else if (node.op == 33) { low = low == 0 && high == 0 ? 1 : 0; high = 0; }
+        else if (node.op != 43) { return false; }
+        return KrtKroLibraryNormalize(node, ref low, ref high);
+    }
+    if (node.kind == KrtAstKind.Ternary) {
+        int64 condition = 0; int64 condition_high = 0;
+        if (!KrtKroLibraryValue(node.left, ref condition, ref condition_high)) { return false; }
+        KrtAstNode selected = node.alternate;
+        if (condition != 0 || condition_high != 0) { selected = node.right; }
+        if (!KrtKroLibraryValue(selected, ref low, ref high)) { return false; }
+        return KrtKroLibraryNormalize(node, ref low, ref high);
+    }
+    if (node.kind != KrtAstKind.Binary || KrtNativeWideKind(node.left) || KrtNativeWideKind(node.right)) { return false; }
+    int64 left = 0; int64 right = 0; int64 ignored = 0;
+    if (!KrtKroLibraryValue(node.left, ref left, ref ignored)) { return false; }
+    if (node.op == 104 && left == 0) { return true; }
+    if (node.op == 105 && left != 0) { low = 1; return true; }
+    if (!KrtKroLibraryValue(node.right, ref right, ref ignored)) { return false; }
+    bool unsigned_value = node.native_unsigned;
+    if (node.op == 61 || node.op == 101 || node.op == 60 || node.op == 62 || node.op == 102 || node.op == 103) {
+        KrtAstNode promoted = KrtAstMake(KrtAstKind.Type, 0, 0); KrtNativePromoteNumber(promoted, node.left, node.right, false); unsigned_value = promoted.native_unsigned;
+    }
+    if (node.op == 43) { low = left + right; }
+    else if (node.op == 45) { low = left - right; }
+    else if (node.op == 42) { low = left * right; }
+    else if (node.op == 47 || node.op == 37) {
+        if (right == 0) { return false; }
+        if (unsigned_value) { low = node.op == 47 ? (int64)((uint64)left / (uint64)right) : (int64)((uint64)left % (uint64)right); }
+        else if (left == (-9223372036854775807 - 1) && right == -1) { low = node.op == 47 ? left : 0; }
+        else { low = node.op == 47 ? left / right : left % right; }
+    }
+    else if (node.op == 38) { low = left & right; }
+    else if (node.op == 124) { low = left | right; }
+    else if (node.op == 94) { low = left ^ right; }
+    else if (node.op == 106) { low = left << right; }
+    else if (node.op == 107) { low = unsigned_value ? (int64)((uint64)left >> right) : left >> right; }
+    else if (node.op == 61) { low = left == right ? 1 : 0; }
+    else if (node.op == 101) { low = left != right ? 1 : 0; }
+    else if (node.op == 60) { low = (unsigned_value ? (uint64)left < (uint64)right : left < right) ? 1 : 0; }
+    else if (node.op == 62) { low = (unsigned_value ? (uint64)left > (uint64)right : left > right) ? 1 : 0; }
+    else if (node.op == 102) { low = (unsigned_value ? (uint64)left <= (uint64)right : left <= right) ? 1 : 0; }
+    else if (node.op == 103) { low = (unsigned_value ? (uint64)left >= (uint64)right : left >= right) ? 1 : 0; }
+    else if (node.op == 104) { low = left != 0 && right != 0 ? 1 : 0; }
+    else if (node.op == 105) { low = left != 0 || right != 0 ? 1 : 0; }
+    else { return false; }
+    return KrtKroLibraryNormalize(node, ref low, ref high);
+}
+
+// A unit containing only constant scalar storage needs no runtime assignment.
+// Probe the complete unit first: a dynamic initializer must retain its original
+// order, including reads of later globals and exception retry behavior.
+bool KrtKroLibraryStaticData(KrtNativeModule module,KrtAstNode ast) {
+    if(ast.declarations!=null||module.external_count!=0){return false;}
+    KrtAstNode declaration=module.function_ast;
+    while(declaration!=null){if(declaration.op!=230){return false;}declaration=declaration.next;}
+    KrtNativeGlobalEntry entry=ast.native_globals.first;
+    while(entry!=null){
+        declaration=entry.declaration;
+        if(!entry.module_guard&&!declaration.native_readonly&&!entry.imported){
+            if(declaration.native_type!=null||declaration.native_array||declaration.native_stride!=0||
+                declaration.native_string||declaration.native_float!=0||declaration.native_function_pointer!=null||
+                entry.storage_size<=0||entry.storage_size>16){return false;}
+            int64 low=0;int64 high=0;
+            if(!KrtKroLibraryValue(declaration.left,ref low,ref high)||!KrtKroLibraryNormalize(declaration,ref low,ref high)){return false;}
+        }
+        entry=entry.next;
+    }
+    entry=ast.native_globals.first;
+    while(entry!=null){
+        if(!entry.module_guard&&!entry.declaration.native_readonly&&!entry.imported){
+            int64 low=0;int64 high=0;
+            if(!KrtKroLibraryValue(entry.declaration.left,ref low,ref high)||!KrtKroLibraryNormalize(entry.declaration,ref low,ref high)){return false;}
+            entry.static_data=true;entry.static_low=low;entry.static_high=high;
+        }
+        entry=entry.next;
+    }
+    // FinishGlobals appends this local guard after allocating every field. No
+    // code in this data object references it, so retain only the field guards.
+    entry=ast.native_globals.first;
+    if(entry!=null&&entry.module_guard){
+        if(module.initializer_guard_slot!=module.global_count-2){return false;}
+        ast.native_globals.first=entry.next;module.global_count=module.global_count-2;
+    }
+    module.function_count=0;module.function_ast=null;module.initializer_index=-1;module.initializer_guard_slot=-1;
+    return true;
+}
+
+bool KrtKroEmitLibrarySections(KrtNativeModule module,KrtAstNode ast,int64 source,KrtKroObject output){
+    output.magic=5198411;output.version=2;output.architecture=34404;
+    return KrtKroLibraryFunctions(module,ast,source,output)&&KrtKroObjectIsValid(output);
+}
+
+bool KrtKroEmitLibraryData(KrtAstNode module, int64 source, KrtKroObject output) {
+    int32 count = 0; int32 size = 0; int32 names = 1;
+    KrtAstNode declaration = module.body;
+    while (declaration != null) {
+        KrtAstNode previous = module.body;
+        while (previous != declaration) {
+            if (!KrtNativeAccessSeparateFiles(previous,declaration) && KrtScopeEqual(previous.native_scope, declaration.native_scope, source) && KrtSemanticSameName(source, previous.name_start, previous.name_length, declaration.name_start, declaration.name_length)) { return false; }
+            previous = previous.next;
+        }
+        if (!KrtNativeAnnotateType(declaration, module, source, declaration.type_start, declaration.type_length) ||
+            declaration.native_type != null || declaration.native_array || declaration.native_stride != 0 ||
+            declaration.native_string || declaration.native_float != 0 || declaration.native_function_pointer != null) { return false; }
+        int32 width = KrtNativeWideKind(declaration) ? 16 : declaration.native_width;
+        if (width <= 0 || width > 16 || count >= 65536) { return false; }
+        declaration.native_offset = size; size = size + width; names = names + (int32)declaration.name_length + 25; count = count + 1;
+        declaration = declaration.next;
+    }
+    output.magic = 5198411; output.version = 2; output.architecture = 34404;
+    output.data_size = size; output.symbol_count = count; output.strtab_size = names;
+    output.data_bytes = new byte[size + 1]; output.symbol_bytes = new byte[count * 32 + 1]; output.string_bytes = new byte[names];
+    byte[] data = output.data_bytes;
+    declaration = module.body; int32 index = 0; int32 name = 1;
+    while (declaration != null) {
+        KrtAstNode context = KrtAstMake(KrtAstKind.Function, declaration.start, 0); context.native_scope = declaration.native_scope;
+        KrtNativeBinding binding = new KrtNativeBinding(); binding.module = module; binding.unit = context; binding.source = source; binding.error_start = -1;
+        if (declaration.left != null && (!KrtNativeBindExpression(declaration.left, binding) || !KrtNativeCompatibleValue(declaration, declaration.left))) { return false; }
+        int64 low = 0; int64 high = 0;
+        if (!KrtKroLibraryValue(declaration.left, ref low, ref high) || !KrtKroLibraryNormalize(declaration, ref low, ref high)) { return false; }
+        int32 width = KrtNativeWideKind(declaration) ? 16 : declaration.native_width;
+        int32 part = 0;
+        while (part < width) {
+            data[declaration.native_offset + part] = (byte)(((part < 8 ? low : high) >> ((part % 8) * 8)) & 255); part = part + 1;
+        }
+        KrtKroLibrarySymbol(output, index, name, declaration.native_offset, width, 3);
+        byte[] symbols = output.symbol_bytes;
+        bool local = declaration.native_static || !KrtNativeAccessExported(declaration);
+        KrtKroLibraryWord(symbols, index * 32 + 16, local ? 0 : 1);
+        KrtKroLibraryName(output, source, declaration.name_start, (int32)declaration.name_length, ref name);
+        // Static storage has local binding while retaining its declared name.
+        // Access-hidden names need disambiguation inside a combined module.
+        if (!KrtNativeAccessExported(declaration)) {
+            name = name - 1; KrtLinkName suffix = KrtLinkNameNew(); KrtLinkText(suffix,"$local"); KrtLinkNumber(suffix,index);
+            byte[] suffix_bytes = suffix.bytes; byte[] names_bytes = output.string_bytes; int32 character = 0;
+            while (character < suffix.length) { names_bytes[name] = suffix_bytes[character]; name = name + 1; character = character + 1; }
+            names_bytes[name] = 0; name = name + 1;
+        }
+        index = index + 1; declaration = declaration.next;
+    }
+    output.strtab_size = name;
+    return KrtKroObjectIsValid(output);
+}
+
+bool KrtKroLibraryPublicSignature(KrtAstNode function_node, KrtAstNode ast, int64 source) {
+    return KrtNativeAbiSignatureSupported(function_node,ast,source);
+}
+
+bool KrtKroLibraryPublicDefinition(KrtAstNode declaration,KrtAbiSignature signature) {
+    return !declaration.native_closure_function&&!declaration.native_abstract&&KrtNativeAccessExported(declaration)&&declaration.op!=230&&declaration.op!=241&&declaration.native_generic_origin==null&&
+        signature.supported&&signature.contract.ok&&
+        (declaration.native_owner==null||(declaration.native_owner.native_generic_parameters==null&&
+            (declaration.native_owner.native_generic_origin==null||declaration.native_owner.value==2||declaration.native_owner.value==1)));
+}
+
+bool KrtKroLibraryNeedsAbi(KrtNativeModule module,KrtAstNode ast,int64 source) {
+    // Scalar-only objects retain the existing compact symbol-table contract.
+    KrtAstNode type=ast.declarations;bool has_struct=false;
+    while(type!=null){if(type.value>=1&&type.value<=5){has_struct=true;break;}type=type.next;}
+    if(!has_struct){return false;}
+    KrtAstNode declaration=module.function_ast;
+    while(declaration!=null){
+        KrtAbiSignature signature=KrtAbiFunction(declaration,ast,source,true);
+        if(signature.uses_struct&&KrtKroLibraryPublicDefinition(declaration,signature)){return true;}
+        declaration=declaration.next;
+    }
+    return false;
+}
+
+bool KrtKroLibraryFunctions(KrtNativeModule module, KrtAstNode ast, int64 source, KrtKroObject output) {
+    int32[] offsets = module.function_offsets; int32[] sizes = module.function_sizes;
+    KrtAstNode function_node = module.function_ast;
+    bool[] used = module.external_used;
+    int32 count = module.function_count; int32 index = 0;
+    while (index < module.external_count) { if (used[index]) { count = count + 1; } index = index + 1; }
+    output.symbol_count = count; output.symbol_bytes = new byte[(count + 1) * 32 + 1]; output.string_bytes = new byte[count * 8192 + 64];
+    byte[] string_bytes = output.string_bytes; byte[] symbols = output.symbol_bytes;
+    int32 name = 1; index = 0; int32 symbol_index = 0;
+    KrtAbiBytes manifest=KrtAbiNew();KrtAbiWord(manifest,0x32494241);KrtAbiWord(manifest,2);KrtAbiWord(manifest,0);KrtAbiWord(manifest,0);
+    int32 abi_records=0;
+    while (index < module.function_count) {
+        KrtAbiSignature signature=KrtAbiFunction(function_node,ast,source,true);
+        bool local=!KrtKroLibraryPublicDefinition(function_node,signature);
+        KrtLinkName link_name=KrtNativeFunctionLinkNameLegacy(function_node,ast,source,true);
+        if(!local&&signature.uses_struct){link_name=KrtAbiLinkName(signature);}
+        if(index==module.entry){link_name.length=0;KrtLinkText(link_name,"main");}
+        else if(!local&&signature.uses_struct){if(!KrtKroAbiRecord(manifest,symbol_index,true,signature)){return false;}abi_records=abi_records+1;}
+        if(local){KrtLinkText(link_name,"$local");KrtLinkNumber(link_name,index);}
+        if (!link_name.valid) { return false; }
+        KrtKroLibrarySymbol(output, symbol_index, name, offsets[index], sizes[index], 1);
+        KrtKroLibraryWord(symbols, symbol_index * 32 + 16, local ? 0 : (signature.weak?2:1));
+        byte[] bytes = link_name.bytes; int32 character = 0;
+        while (character < link_name.length) { string_bytes[name] = bytes[character]; name = name + 1; character = character + 1; }
+        string_bytes[name] = 0; name = name + 1;
+        index = index + 1; symbol_index = symbol_index + 1; function_node = function_node.next;
+    }
+    int32[] external_symbols = new int32[module.external_count + 1]; index = 0;
+    KrtAstNode external_node = module.external_head;
+    while (index < module.external_count) {
+        if (used[index]) {
+            KrtAbiSignature signature=KrtAbiFunction(external_node,ast,source,true);
+            KrtLinkName link_name=KrtNativeFunctionLinkNameLegacy(external_node,ast,source,true);
+            if(signature.uses_struct){
+                link_name=KrtAbiLinkName(signature);
+                if(!KrtKroAbiRecord(manifest,symbol_index,false,signature)){return false;}abi_records=abi_records+1;
+            }
+            if (!link_name.valid) { return false; }
+            external_symbols[index] = symbol_index;
+            KrtKroLibrarySymbol(output, symbol_index, name, 0, 0, 0);
+            KrtKroLibraryWord(symbols, symbol_index * 32 + 20, 1);
+            byte[] bytes = link_name.bytes; int32 character = 0;
+            while (character < link_name.length) { string_bytes[name] = bytes[character]; name = name + 1; character = character + 1; }
+            string_bytes[name] = 0; name = name + 1; symbol_index = symbol_index + 1;
+        }
+        index = index + 1; external_node = external_node.native_external_next;
+    }
+    if(!KrtKroAbiFinish(output,manifest,abi_records,ref name)){return false;}
+    KrtAbiBytes types_manifest=KrtAbiNew();KrtAbiWord(types_manifest,0x32494241);KrtAbiWord(types_manifest,3);KrtAbiWord(types_manifest,0);KrtAbiWord(types_manifest,0);
+    int32 type_records=0;
+    if(!KrtKroAbiTypes(types_manifest,ast,source,ref type_records)||!KrtKroAbiFinishNamed(output,types_manifest,type_records,ref name,"_KRT_ABI3_TYPES")){return false;}
+    output.strtab_size = name;
+    output.text_reloc_count = module.external_reloc_count; output.total_reloc_count = module.external_reloc_count; output.relocation_count = module.external_reloc_count;
+    output.text_relocation_bytes = new byte[module.external_reloc_count * 16 + 1];
+    byte[] relocations = output.text_relocation_bytes;
+    int32[] relocation_offsets = module.external_reloc_offsets; int32[] relocation_targets = module.external_reloc_targets;
+    index = 0;
+    while (index < module.external_reloc_count) {
+        KrtKroLibraryWord(relocations, index * 16, relocation_offsets[index]);
+        KrtKroLibraryWord(relocations, index * 16 + 4, external_symbols[relocation_targets[index]]);
+        // ArkLink's PC32 is relative to the end of the four-byte field.
+        KrtKroLibraryWord(relocations, index * 16 + 8, 3);
+        KrtKroLibraryWord(relocations, index * 16 + 12, 0);
+        index = index + 1;
+    }
+    return KrtKroGlobalSymbols(module,ast,source,output)&&KrtKroRuntimeDescriptors(module,ast,source,output);
+}
+
+// ===== Module metadata =====
+// A relocatable module carries its compiler-generated declaration interface.
+// Consumers read these bytes through the native lexer and parser. Ordinary
+// exported bodies become extern declarations; binary generic templates retain
+// their source bodies and private implementation dependencies.
+class KrtModuleMetadataEdit {
+    public int64 start;
+    public int64 body;
+    public int64 end;
+    public KrtAbiBytes insertion;
+    public KrtModuleMetadataEdit next;
+}
+
+int64 KrtModuleMetadataClose(KrtAstNode type,int64 source){
+    KrtLexer lexer=new KrtLexer();KrtToken token=new KrtToken();
+    unsafe(using krt.mem;){if(!KrtLexerInit(lexer,(byte*)(source+type.start),type.length)){return -1;}}
+    int32 depth=0;bool entered=false;
+    while(true){
+        KrtLexerNext(lexer,token);
+        if(token.kind==KrtTokenKind.Eof){break;}
+        if(token.category==KrtTokenCategory.Punctuation&&token.length==1){
+            unsafe(using krt.mem;){byte value=((byte*)lexer.source)[token.start];
+                if(value==123){depth=depth+1;entered=true;}else if(value==125){depth=depth-1;if(entered&&depth==0){return type.start+token.start;}}}
+        }
+    }
+    return -1;
+}
+
+KrtModuleMetadataEdit KrtModuleMetadataEdits(KrtAstNode ast,int64 source) {
+    KrtModuleMetadataEdit list = null; KrtAstNode declaration = ast.left;
+    while (declaration != null) {
+        if (!declaration.native_closure_function && (declaration.native_generator==null||declaration.native_generator_role==1) && declaration.native_generic_origin == null &&
+            (declaration.native_owner==null||declaration.native_owner.native_generic_origin==null) && !KrtNativeIsTemplate(declaration) &&
+            declaration.op != 221 && declaration.op != 223 && declaration.op != 230 && declaration.op != 241 &&
+            KrtNativeAccessExported(declaration) && declaration.left != null && declaration.left.length > 0 &&
+            !(declaration.op==220&&declaration.native_owner!=null&&declaration.start==declaration.native_owner.start)) {
+            KrtModuleMetadataEdit edit = new KrtModuleMetadataEdit(); edit.start = declaration.start;
+            // Parser spans can include trivia up to the next token, including
+            // the driver separator between source files. Export only through
+            // the matching lexical brace; strings and comments are tokens.
+            int64 close=KrtModuleMetadataClose(declaration.left,source);
+            if(close<0){edit.start=-1;edit.next=list;return edit;}
+            edit.body = declaration.left.start; edit.end = close+1;
+            KrtModuleMetadataEdit item = list; KrtModuleMetadataEdit previous = null;
+            while (item != null && item.start < edit.start) { previous = item; item = item.next; }
+            if (item == null || item.start != edit.start) {
+                edit.next = item; if (previous == null) { list = edit; } else { previous.next = edit; }
+            } else { delete edit; }
+        }
+        declaration = declaration.next;
+    }
+    KrtAstNode type=ast.declarations;
+    while(type!=null){
+        if((type.value==1||type.value==2)&&type.native_generic_parameters==null&&type.native_generic_origin==null&&type.native_generator==null){
+            KrtAstNode method=KrtNativeTypeMemberFirst(type);
+            while(method!=null&&method.native_owner==type){
+                if(method.op==220&&method.start==type.start&&KrtNativeAccessExported(method)){
+                    int64 close=KrtModuleMetadataClose(type,source);
+                    if(close<0){KrtModuleMetadataEdit invalid=new KrtModuleMetadataEdit();invalid.start=-1;invalid.next=list;return invalid;}
+                    KrtModuleMetadataEdit edit=new KrtModuleMetadataEdit();edit.start=close;edit.body=close;edit.end=close;edit.insertion=KrtAbiNew();
+                    KrtAbiText(edit.insertion,"public extern ");int64 character=0;
+                    while(character<type.name_length){KrtAbiByte(edit.insertion,(int32)KrtNameAt(source,type.name_start,type.name_length,character));character=character+1;}
+                    KrtAbiText(edit.insertion,"();\n");KrtModuleMetadataEdit item=list;KrtModuleMetadataEdit previous=null;
+                    while(item!=null&&item.start<close){previous=item;item=item.next;}
+                    edit.next=item;if(previous==null){list=edit;}else{previous.next=edit;}
+                }
+                method=KrtNativeTypeMemberNext(method);
+            }
+        }
+        type=type.next;
+    }
+    return list;
+}
+
+KrtAbiBytes KrtModuleMetadataFile(int64 source, int64 start, int64 length, KrtModuleMetadataEdit edits) {
+    KrtAbiBytes bytes = KrtAbiNew(); int64 cursor = start; int64 end = start + length;
+    while (edits != null && edits.end <= start) { edits = edits.next; }
+    unsafe(using krt.mem;) {
+        byte* input = (byte*)source;
+        while (edits != null && edits.start < end) {
+            if (edits.start < cursor || edits.body < edits.start || edits.end < edits.body || edits.end > end) { bytes.ok = false; return bytes; }
+            while (cursor < edits.start) { KrtAbiByte(bytes,(int32)input[cursor]); cursor = cursor + 1; }
+            if(edits.insertion!=null){KrtAbiAppend(bytes,edits.insertion);edits=edits.next;continue;}
+            KrtAbiText(bytes,"extern ");
+            while (cursor < edits.body) { KrtAbiByte(bytes,(int32)input[cursor]); cursor = cursor + 1; }
+            KrtAbiText(bytes,";\n"); cursor = edits.end; edits = edits.next;
+        }
+        while (cursor < end) { KrtAbiByte(bytes,(int32)input[cursor]); cursor = cursor + 1; }
+    }
+    return bytes;
+}
+
+KrtAbiBytes KrtModuleMetadataBuild(KrtAstNode ast, int64 source) {
+    KrtAbiBytes bytes = KrtAbiNew(); KrtAbiWord(bytes,0x33444f4d); KrtAbiWord(bytes,3); KrtAbiWord(bytes,0); KrtAbiWord(bytes,0);
+    KrtModuleMetadataEdit edits = KrtModuleMetadataEdits(ast,source); KrtSourceFile file = KrtDriverActiveBundle != null ? KrtDriverActiveBundle.files : null;
+    if(edits!=null&&edits.start<0){bytes.ok=false;return bytes;}
+    int32 count = 0;
+    if (file == null) {
+        KrtAbiBytes body = KrtModuleMetadataFile(source,0,KrtDriverStringLength(source),edits);
+        KrtAbiWord(bytes,0); KrtAbiWord(bytes,body.count); KrtAbiAppend(bytes,body); count = 1;
+    }
+    while (file != null) {
+        if (!file.imported_metadata) {
+            KrtAbiBytes body = KrtModuleMetadataFile(source,file.start,file.length,edits);
+            int64 path_length = KrtDriverStringLength(file.path);
+            if (path_length > 4096 || !body.ok) { bytes.ok = false; return bytes; }
+            KrtAbiWord(bytes,(int32)path_length); KrtAbiWord(bytes,body.count);
+            unsafe(using krt.mem;) { byte* path = (byte*)file.path; int64 index = 0; while (index < path_length) { KrtAbiByte(bytes,(int32)path[index]); index = index + 1; } }
+            KrtAbiAppend(bytes,body); count = count + 1;
+        }
+        file = file.order_next;
+    }
+    KrtKroLibraryWord(bytes.data,8,count); KrtKroLibraryWord(bytes.data,12,bytes.count);
+    while (edits != null) { KrtModuleMetadataEdit next = edits.next; delete edits; edits = next; }
+    return bytes;
+}
+
+bool KrtKroModuleMetadata(KrtAstNode ast, int64 source, KrtKroObject output) {
+    KrtAbiBytes bytes = KrtModuleMetadataBuild(ast,source);
+    if (!bytes.ok || output.rodata_size > 16777216 - bytes.count) {
+        KrtDiagnosticMessage("E_MODULE_METADATA",17,ast.start,"cannot serialize the module declaration interface");return false;
+    }
+    int32 offset = output.rodata_size; byte[] rodata = new byte[offset + bytes.count]; int32 index = 0;
+    while (index < offset) { rodata[index] = output.rodata_bytes[index]; index = index + 1; }
+    index = 0; while (index < bytes.count) { rodata[offset+index] = bytes.data[index]; index = index + 1; }
+    output.rodata_bytes = rodata; output.rodata_size = offset + bytes.count;
+    int32 symbol = output.symbol_count; byte[] symbols = new byte[(symbol+1)*32+1]; index = 0;
+    while (index < symbol*32) { symbols[index] = output.symbol_bytes[index]; index = index + 1; }
+    output.symbol_bytes = symbols;
+    int32 name = output.strtab_size; byte[] names = new byte[name+32]; index = 0;
+    while (index < name) { names[index] = output.string_bytes[index]; index = index + 1; }
+    output.string_bytes = names; KrtKroLibrarySymbol(output,symbol,name,offset,bytes.count,2); KrtKroLibraryWord(output.symbol_bytes,symbol*32+16,0);
+    string marker = "_KRT_MODULE3_METADATA";
+    unsafe(using krt.mem;) { byte* text = (byte*)(int64)marker; index = 0; while (text[index] != 0) { names[name] = text[index]; name = name + 1; index = index + 1; } }
+    names[name] = 0; output.strtab_size = name + 1; output.symbol_count = symbol + 1; return true;
+}
+
+// ===== Register allocation =====
+// Allocate local values after IR optimization. r14/r15 belong to globals and
+// exception records; r12/r13 are preserved by every native function.
+class KrtNativeRegisterAllocation { public int32[] registers; public int32 locals; public int32 used; }
+
+KrtNativeRegisterAllocation KrtNativeAllocateRegisters(KrtNativeModule module, int32 function_index, int32 first, int32 last) {
+    int32 locals = module.local_counts[function_index];
+    KrtNativeRegisterAllocation allocation = new KrtNativeRegisterAllocation();
+    allocation.registers = new int32[locals];
+    allocation.locals = locals;
+    if (KrtDriverOptimization == 0 || locals == 0 || locals > 1024) { return allocation; }
+    int32 length = last-first;
+    bool[] leaders = new bool[length]; leaders[0] = true;
+    int32 index = first;
+    while (index < last) {
+        int32 op = module.ops[index];
+        // Unwinding restores a handler's rbp/rsp, rather than register locals.
+        // Handler functions retain their values in their original frame slots.
+        if (op == 50 || op == 51 || op == 53 || op == 54) { delete leaders; return allocation; }
+        if (op == 17 || op == 18) {
+            int32 target = (int32)module.args[index];
+            if (target < first || target >= last) { delete leaders; return null; }
+            leaders[target-first] = true;
+            if (op == 18) {
+                target = (int32)module.extra[index];
+                if (target < first || target >= last) { delete leaders; return null; }
+                leaders[target-first] = true;
+            }
+        }
+        if ((op == 17 || op == 18 || op == 20 || op == 52) && index+1 < last) { leaders[index+1-first] = true; }
+        index = index+1;
+    }
+    int32 blocks = 0; index = 0;
+    while (index < length) { if (leaders[index]) { blocks = blocks+1; } index = index+1; }
+    int32 words = (locals+63)/64;
+    // Large functions remain correct using the existing spill slots.
+    if (blocks*words > 1048576) { delete leaders; return allocation; }
+    int32[] starts = new int32[blocks+1]; int32[] owners = new int32[length];
+    int32 block = -1; index = 0;
+    while (index < length) {
+        if (leaders[index]) { block = block+1; starts[block] = first+index; }
+        owners[index] = block; index = index+1;
+    }
+    starts[blocks] = last; delete leaders;
+    int32[] left_edges = new int32[blocks]; int32[] right_edges = new int32[blocks];
+    uint64[] uses = new uint64[blocks*words]; uint64[] definitions = new uint64[blocks*words];
+    uint64[] live_in = new uint64[blocks*words]; uint64[] live_out = new uint64[blocks*words];
+    int32[] begin = new int32[locals]; int32[] end = new int32[locals]; int32[] weight = new int32[locals];
+    bool[] escapes = new bool[locals];
+    int32 slot = 0;
+    while (slot < locals) { begin[slot] = last; end[slot] = -1; slot = slot+1; }
+    block = 0;
+    while (block < blocks) {
+        int32 stop = starts[block+1]-1; int32 op = module.ops[stop];
+        left_edges[block] = -1; right_edges[block] = -1;
+        if (op == 17 || op == 18) {
+            left_edges[block] = owners[(int32)module.args[stop]-first];
+            if (op == 18) { right_edges[block] = owners[(int32)module.extra[stop]-first]; }
+        } else if (op != 20 && op != 52 && block+1 < blocks) { left_edges[block] = block+1; }
+        index = starts[block];
+        while (index <= stop) {
+            op = module.ops[index];
+            if (op == 2 || op == 3 || op == 29) {
+                slot = (int32)module.args[index];
+                if (slot < 0 || slot >= locals) { return null; }
+                if (index < begin[slot]) { begin[slot] = index; }
+                if (index > end[slot]) { end[slot] = index; }
+                weight[slot] = weight[slot]+1;
+                int32 word = block*words+slot/64; uint64 mask = (uint64)1 << (slot%64);
+                if (op == 3) { definitions[word] = definitions[word] | mask; }
+                else if ((definitions[word] & mask) == 0) { uses[word] = uses[word] | mask; }
+                if (op == 29) { escapes[slot] = true; }
+            }
+            index = index+1;
+        }
+        block = block+1;
+    }
+    // Monotone backward dataflow handles arbitrary branch joins and backedges.
+    bool changed = true;
+    while (changed) {
+        changed = false; block = blocks-1;
+        while (block >= 0) {
+            int32 word = 0;
+            while (word < words) {
+                uint64 outgoing = 0;
+                if (left_edges[block] >= 0) { outgoing = live_in[left_edges[block]*words+word]; }
+                if (right_edges[block] >= 0) { outgoing = outgoing | live_in[right_edges[block]*words+word]; }
+                int32 cell = block*words+word;
+                uint64 incoming = uses[cell] | (outgoing & ~definitions[cell]);
+                if (incoming != live_in[cell] || outgoing != live_out[cell]) {
+                    live_in[cell] = incoming; live_out[cell] = outgoing; changed = true;
+                }
+                word = word+1;
+            }
+            block = block-1;
+        }
+    }
+    slot = 0;
+    while (slot < locals) {
+        if (slot < module.parameter_counts[function_index] && end[slot] >= first) { begin[slot] = first; }
+        block = 0; uint64 mask = (uint64)1 << (slot%64);
+        while (block < blocks) {
+            int32 cell = block*words+slot/64;
+            if ((live_in[cell] & mask) != 0 && starts[block] < begin[slot]) { begin[slot] = starts[block]; }
+            if ((live_out[cell] & mask) != 0 && starts[block+1]-1 > end[slot]) { end[slot] = starts[block+1]-1; }
+            block = block+1;
+        }
+        slot = slot+1;
+    }
+    // Prefer values with repeated accesses; disjoint intervals share a register.
+    int32[] registers = allocation.registers;
+    int32 round = 0;
+    while (round < locals) {
+        int32 selected = -1; int32 best = 0; slot = 0;
+        while (slot < locals) {
+            if (!escapes[slot] && weight[slot] > best) { selected = slot; best = weight[slot]; }
+            slot = slot+1;
+        }
+        if (selected < 0) { break; }
+        weight[selected] = 0; int32 register_index = 1;
+        while (register_index <= 2) {
+            bool available = true; slot = 0;
+            while (slot < locals) {
+                if (registers[slot] == register_index && begin[selected] <= end[slot] && begin[slot] <= end[selected]) { available = false; }
+                slot = slot+1;
+            }
+            if (available) {
+                registers[selected] = register_index;
+                allocation.used = allocation.used | (1 << (register_index-1)); break;
+            }
+            register_index = register_index+1;
+        }
+        round = round+1;
+    }
+    delete starts; delete owners; delete left_edges; delete right_edges;
+    delete uses; delete definitions; delete live_in; delete live_out;
+    delete begin; delete end; delete weight; delete escapes;
+    return allocation;
+}
+
+bool KrtKroNativeRegisterFrame(KrtKroObject output, ref int32 pc, int32 register_index, int32 slot, bool restore) {
+    // mov [rbp+disp32],r12/r13 or mov r12/r13,[rbp+disp32].
+    return KrtKroNativeByte(output,ref pc,76) && KrtKroNativeByte(output,ref pc,restore ? 139 : 137) &&
+        KrtKroNativeByte(output,ref pc,register_index == 1 ? 165 : 173) && KrtKroNativeU32(output,ref pc,-8*(slot+1));
+}
+
+bool KrtKroNativePreserveRegisters(KrtKroObject output, ref int32 pc, int32 first_slot, bool restore) {
+    return KrtKroNativeRegisterFrame(output,ref pc,1,first_slot,restore) &&
+        KrtKroNativeRegisterFrame(output,ref pc,2,first_slot+1,restore);
+}
+
+bool KrtKroNativeAllocatedLoad(KrtKroObject output, ref int32 pc, int32 slot, KrtNativeRegisterAllocation allocation) {
+    int32 register_index = allocation.registers[slot];
+    if (register_index == 0) { return KrtKroNativeFrameLoad(output,ref pc,slot); }
+    return KrtKroNativeByte(output,ref pc,65) && KrtKroNativeByte(output,ref pc,register_index == 1 ? 84 : 85);
+}
+
+bool KrtKroNativeAllocatedStore(KrtKroObject output, ref int32 pc, int32 slot, KrtNativeRegisterAllocation allocation, bool pop_value) {
+    int32 register_index = allocation.registers[slot];
+    if (register_index == 0) {
+        return (!pop_value || KrtKroNativeByte(output,ref pc,88)) && KrtKroNativeFrameStore(output,ref pc,slot);
+    }
+    if (pop_value) { return KrtKroNativeByte(output,ref pc,65) && KrtKroNativeByte(output,ref pc,register_index == 1 ? 92 : 93); }
+    return KrtKroNativeByte(output,ref pc,73) && KrtKroNativeByte(output,ref pc,137) && KrtKroNativeByte(output,ref pc,register_index == 1 ? 196 : 197);
+}
+
+// The two top expression values stay in r10/rax within a basic block. Deeper
+// values spill in stack order; calls, helper instructions and CFG edges flush
+// the cache so all predecessor paths agree on the physical operand stack.
+bool KrtKroNativeTemporaryOp(int32 op) {
+    return (op >= 0 && op <= 15) || op == 27 || op == 28 || op == 31 || op == 32;
+}
+
+bool KrtKroNativeTemporaryFlush(KrtKroObject output, ref int32 pc, ref int32 count) {
+    if (count == 2 && (!KrtKroNativeByte(output,ref pc,65) || !KrtKroNativeByte(output,ref pc,82))) { return false; }
+    if (count > 0 && !KrtKroNativeByte(output,ref pc,80)) { return false; }
+    count = 0; return true;
+}
+
+bool KrtKroNativeTemporaryPush(KrtKroObject output, ref int32 pc, ref int32 count) {
+    if (count == 2 && (!KrtKroNativeByte(output,ref pc,65) || !KrtKroNativeByte(output,ref pc,82))) { return false; }
+    if (count > 0 && !KrtKroNativeCode(output,ref pc,0xc28949,3)) { return false; }
+    if (count < 2) { count = count+1; } return true;
+}
+
+bool KrtKroNativeTemporaryPop(KrtKroObject output, ref int32 pc, ref int32 count) {
+    if (count == 2 && !KrtKroNativeCode(output,ref pc,0xd0894c,3)) { return false; }
+    if (count > 0) { count = count-1; } return true;
+}
+
+bool KrtKroNativeTemporaryCast(KrtKroObject output, ref int32 pc, int32 width) {
+    if (width == 8 || width == -8) { return true; }
+    if (width > 1000 || width < -1000) { return KrtKroNativeIntegerNormalize(output,ref pc,width); }
+    if (width == -1 || width == -2) {
+        return KrtKroNativeCode(output,ref pc,0x0f48,2) && KrtKroNativeByte(output,ref pc,width == -1 ? 190 : 191) && KrtKroNativeByte(output,ref pc,192);
+    }
+    if (width == -4) { return KrtKroNativeCode(output,ref pc,0xc089,2); }
+    if (width == 1 || width == 2) {
+        return KrtKroNativeByte(output,ref pc,15) && KrtKroNativeByte(output,ref pc,width == 1 ? 182 : 183) && KrtKroNativeByte(output,ref pc,192);
+    }
+    if (width == 4) { return KrtKroNativeCode(output,ref pc,0xc06348,3); }
+    return false;
+}
+
+bool KrtKroNativeTemporaryInstruction(KrtNativeModule module, KrtKroObject output, ref int32 pc, int32 index,
+                                     KrtNativeRegisterAllocation allocation, ref int32 count) {
+    int32 op = module.ops[index]; int32 slot = (int32)module.args[index];
+    if (op == 0) { return true; }
+    if (op == 1 || op == 2) {
+        if (!KrtKroNativeTemporaryPush(output,ref pc,ref count)) { return false; }
+        if (op == 1) { return KrtKroNativeCode(output,ref pc,0xb848,2) && KrtKroNativeU64(output,ref pc,module.args[index]); }
+        if (slot < 0 || slot >= allocation.locals) { return false; }
+        int32 register_index = allocation.registers[slot];
+        if (register_index > 0) { return KrtKroNativeCode(output,ref pc,register_index == 1 ? 0xe0894c : 0xe8894c,3); }
+        int32 displacement = -8*(slot+1);
+        if (displacement >= -128) { return KrtKroNativeCode(output,ref pc,0x458b48,3) && KrtKroNativeByte(output,ref pc,displacement); }
+        return KrtKroNativeCode(output,ref pc,0x858b48,3) && KrtKroNativeU32(output,ref pc,displacement);
+    }
+    if (op == 3) {
+        if (slot < 0 || slot >= allocation.locals) { return false; }
+        if (count == 0 && !KrtKroNativeByte(output,ref pc,88)) { return false; }
+        return KrtKroNativeAllocatedStore(output,ref pc,slot,allocation,false) && KrtKroNativeTemporaryPop(output,ref pc,ref count);
+    }
+    if (op >= 4 && op <= 13) {
+        if (count > 0 && !KrtKroNativeCode(output,ref pc,0xc38948,3)) { return false; }
+        if (count == 2 && !KrtKroNativeCode(output,ref pc,0xd0894c,3)) { return false; }
+        if (count == 1 && !KrtKroNativeByte(output,ref pc,88)) { return false; }
+        if (count == 0 && (!KrtKroNativeByte(output,ref pc,91) || !KrtKroNativeByte(output,ref pc,88))) { return false; }
+        count = 1; return KrtKroNativeBinaryResult(output,ref pc,op,module.extra[index] != 0,false);
+    }
+    if (op == 27) {
+        if (count == 0) { return KrtKroNativeByte(output,ref pc,88); }
+        return KrtKroNativeTemporaryPop(output,ref pc,ref count);
+    }
+    if (op == 32) {
+        if (count == 0) { count = 1; return KrtKroNativeCode(output,ref pc,0x24048b48,4); }
+        return KrtKroNativeTemporaryPush(output,ref pc,ref count);
+    }
+    if (count == 0) { if (!KrtKroNativeByte(output,ref pc,88)) { return false; } count = 1; }
+    if (op == 14 || op == 15) {
+        return KrtKroNativeCode(output,ref pc,0xf748,2) && KrtKroNativeByte(output,ref pc,op == 14 ? 216 : 208);
+    }
+    if (op == 28) { return KrtKroNativeTemporaryCast(output,ref pc,slot); }
+    if (op == 31) {
+        return KrtKroNativeCode(output,ref pc,0xc08548,3) && KrtKroNativeCode(output,ref pc,0xc0940f,3) && KrtKroNativeCode(output,ref pc,0xc0b60f,3);
+    }
+    return false;
+}
+
+// ===== Runtime type tables =====
+// Runtime records have stable symbols for every relocated address. A consumer
+// can share a descriptor without importing the defining module's machine code.
+class KrtKroRuntimeSymbol {
+    public int32 offset;
+    public int32 symbol;
+    public KrtKroRuntimeSymbol next;
+}
+
+bool KrtKroRuntimeAddress(KrtNativeModule module,KrtKroObject output,ref int32 pc,int32 type) {
+    if (type < 0 || type >= module.runtime_type_count || module.runtime_code_count >= module.count) { return false; }
+    if (module.runtime_code_offsets == null) {
+        module.runtime_code_offsets = new int32[module.count]; module.runtime_code_targets = new int32[module.count];
+    }
+    if (!KrtKroNativeCode(output,ref pc,0x058d48,3)) { return false; }
+    int32 index = module.runtime_code_count; module.runtime_code_offsets[index] = pc; module.runtime_code_targets[index] = type;
+    module.runtime_code_count = index+1;
+    return KrtKroNativeU32(output,ref pc,0) && KrtKroNativeByte(output,ref pc,80);
+}
+
+int32 KrtKroRuntimeAddSymbol(KrtKroObject output,KrtLinkName name,int32 offset,int32 size,int32 section,int32 binding,ref int32 position) {
+    if (name == null || !name.valid || name.length < 1 || name.length > 1048576) { return -1; }
+    int32 index = output.symbol_count;
+    KrtKroLibrarySymbol(output,index,position,offset,size,section);
+    KrtKroLibraryWord(output.symbol_bytes,index*32+16,binding);
+    if (section == 0) { KrtKroLibraryWord(output.symbol_bytes,index*32+20,1); }
+    int32 character = 0;
+    while (character < name.length) { output.string_bytes[position] = name.bytes[character]; character = character+1; position = position+1; }
+    output.string_bytes[position] = 0; position = position+1; output.symbol_count = index+1; return index;
+}
+
+KrtLinkName KrtKroRuntimeName(KrtAbiBytes identity,int32 letter) {
+    KrtLinkName name = KrtModuleDescriptorName(identity);
+    if (name.valid) { name.bytes[4] = (byte)letter; }
+    return name;
+}
+
+KrtKroRuntimeSymbol KrtKroRuntimeMap(KrtKroRuntimeSymbol head,int32 offset,int32 symbol) {
+    KrtKroRuntimeSymbol item = new KrtKroRuntimeSymbol(); item.offset = offset; item.symbol = symbol; item.next = head; return item;
+}
+int32 KrtKroRuntimeFind(KrtKroRuntimeSymbol head,int32 offset) {
+    while (head != null) { if (head.offset == offset) { return head.symbol; } head = head.next; } return -1;
+}
+
+bool KrtKroRuntimeDescriptors(KrtNativeModule module,KrtAstNode ast,int64 source,KrtKroObject output) {
+    if (module.runtime_type_count == 0) { return module.runtime_code_count == 0; }
+    if (module.runtime_bytes == null || module.runtime_length < 0 || module.runtime_length > 16777216) { return false; }
+    int32 symbols_added = module.runtime_type_count*4; int64 names_added = 0;
+    KrtNativeRuntimeType record = module.runtime_types;
+    while (record != null) {
+        names_added = names_added + (int64)(record.identity.count*2+16)*4;
+        KrtNativeRuntimeMethod method = record.methods;
+        while (method != null) {
+            symbols_added = symbols_added+2;
+            KrtLinkName implementation = KrtModuleImplementationName(method.target,ast,source);
+            if (!implementation.valid) { return false; }
+            names_added = names_added + method.identity.count*2+16 + implementation.length+1;
+            method = method.next;
+        }
+        record = record.next;
+    }
+    int32 old_symbols = output.symbol_count; int32 old_names = output.strtab_size;
+    if (symbols_added > 1048576-old_symbols || names_added > 67108864-old_names || output.rodata_size > 67108864-module.runtime_length-15) { return false; }
+    byte[] symbols = new byte[(old_symbols+symbols_added)*32+1]; int32 index = 0;
+    while (index < old_symbols*32) { symbols[index] = output.symbol_bytes[index]; index = index+1; }
+    byte[] names = new byte[(int32)names_added+old_names+1]; index = 0;
+    while (index < old_names) { names[index] = output.string_bytes[index]; index = index+1; }
+    delete output.symbol_bytes; delete output.string_bytes; output.symbol_bytes = symbols; output.string_bytes = names;
+    int32 blob_base = (output.rodata_size+15)&-16; byte[] rodata = new byte[blob_base+module.runtime_length]; index = 0;
+    while (index < output.rodata_size) { rodata[index] = output.rodata_bytes[index]; index = index+1; }
+    index = 0; while (index < module.runtime_length) { rodata[blob_base+index] = module.runtime_bytes[index]; index = index+1; }
+    delete output.rodata_bytes; output.rodata_bytes = rodata; output.rodata_size = blob_base+module.runtime_length;
+    int32 position = old_names; int32[] descriptor_symbols = new int32[module.runtime_type_count];
+    KrtKroRuntimeSymbol addresses = null; KrtKroRuntimeSymbol functions = null;
+    record = module.runtime_types;
+    while (record != null) {
+        int32 symbol = KrtKroRuntimeAddSymbol(output,KrtModuleDescriptorName(record.identity),blob_base+record.offset,96,2,2,ref position);
+        if (symbol < 0) { return false; } descriptor_symbols[record.index] = symbol;
+        symbol = KrtKroRuntimeAddSymbol(output,KrtKroRuntimeName(record.identity,75),blob_base+record.key_offset,record.identity.count,2,2,ref position);
+        if (symbol < 0) { return false; } addresses = KrtKroRuntimeMap(addresses,record.key_offset,symbol);
+        int32 interface_count = (int32)KrtNativeRuntimeRead(module.runtime_bytes,record.offset+56);
+        if (interface_count > 0) {
+            symbol = KrtKroRuntimeAddSymbol(output,KrtKroRuntimeName(record.identity,73),blob_base+record.interfaces_offset,interface_count*8,2,2,ref position);
+            if (symbol < 0) { return false; } addresses = KrtKroRuntimeMap(addresses,record.interfaces_offset,symbol);
+        }
+        int32 method_count = 0; KrtNativeRuntimeMethod method = record.methods;
+        while (method != null) { method_count = method_count+1; method = method.next; }
+        if (method_count > 0) {
+            symbol = KrtKroRuntimeAddSymbol(output,KrtKroRuntimeName(record.identity,77),blob_base+record.methods_offset,method_count*40,2,2,ref position);
+            if (symbol < 0) { return false; } addresses = KrtKroRuntimeMap(addresses,record.methods_offset,symbol);
+        }
+        method = record.methods; index = 0;
+        while (method != null) {
+            symbol = KrtKroRuntimeAddSymbol(output,KrtKroRuntimeName(method.identity,75),blob_base+method.key_offset,method.identity.count,2,2,ref position);
+            if (symbol < 0) { return false; } addresses = KrtKroRuntimeMap(addresses,method.key_offset,symbol);
+            int32 target = (int32)method.target.value; int32 section = target < 0 ? 0 : 1;
+            int32 offset = target < 0 ? 0 : module.function_offsets[target];
+            int32 size = target < 0 ? 0 : module.function_sizes[target];
+            symbol = KrtKroRuntimeAddSymbol(output,KrtModuleImplementationName(method.target,ast,source),offset,size,section,target < 0 ? 1 : 2,ref position);
+            if (symbol < 0) { return false; } functions = KrtKroRuntimeMap(functions,record.methods_offset+index*40+24,symbol);
+            method = method.next; index = index+1;
+        }
+        record = record.next;
+    }
+    int32 previous_text = output.text_reloc_count; int32 previous_data = output.rodata_reloc_count;
+    int32 text_count = previous_text+module.runtime_code_count;
+    int32 data_count = previous_data+module.runtime_relocation_count;
+    byte[] relocations = new byte[(text_count+data_count)*16+1]; index = 0;
+    while (index < previous_text*16) { relocations[index] = output.text_relocation_bytes[index]; index = index+1; }
+    index = 0;
+    while (index < module.runtime_code_count) {
+        int32 site = (previous_text+index)*16;
+        KrtKroLibraryWord(relocations,site,module.runtime_code_offsets[index]);
+        KrtKroLibraryWord(relocations,site+4,descriptor_symbols[module.runtime_code_targets[index]]);
+        KrtKroLibraryWord(relocations,site+8,3); index = index+1;
+    }
+    index = 0; while (index < previous_data*16) { relocations[text_count*16+index] = output.text_relocation_bytes[previous_text*16+index]; index = index+1; }
+    index = text_count+previous_data; KrtNativeRuntimeRelocation relocation = module.runtime_relocations;
+    while (relocation != null) {
+        int32 symbol = relocation.kind == 0 ? KrtKroRuntimeFind(addresses,relocation.target) :
+            (relocation.kind == 1 ? descriptor_symbols[relocation.target] : KrtKroRuntimeFind(functions,relocation.offset));
+        if (symbol < 0) { return false; }
+        KrtKroLibraryWord(relocations,index*16,blob_base+relocation.offset); KrtKroLibraryWord(relocations,index*16+4,symbol);
+        KrtKroLibraryWord(relocations,index*16+8,1); index = index+1; relocation = relocation.next;
+    }
+    delete output.text_relocation_bytes; output.text_relocation_bytes = relocations;
+    output.strtab_size = position; output.text_reloc_count = text_count; output.rodata_reloc_count = data_count;
+    output.total_reloc_count = text_count+data_count; output.relocation_count = output.total_reloc_count; return true;
+}
+
+// ===== SSA register allocation =====
+class KrtSsaAllocation {
+    public int32[] registers; public int32[] spills; public int32[] frame_counts;
+}
+
+KrtSsaAllocation KrtSsaAllocate(KrtSsaModule ssa) {
+    KrtSsaAllocation allocation = new KrtSsaAllocation();
+    allocation.registers = new int32[ssa.count]; allocation.spills = new int32[ssa.count];
+    allocation.frame_counts = new int32[ssa.function_count];
+    int32 function_index = 0;
+    while (function_index < ssa.function_count) {
+        int32 first = ssa.starts[function_index]; int32 last = ssa.ends[function_index]; int32 values = last-first;
+        int32 first_block = ssa.function_blocks[function_index]; int32 blocks = ssa.function_block_counts[function_index];
+        int32[] begin = new int32[values]; int32[] end = new int32[values];
+        int32 value = first;
+        while (value < last) {
+            begin[value-first] = ssa.ops[value] == 101 ? ssa.block_starts[ssa.value_blocks[value]] : value;
+            end[value-first] = value; value = value+1;
+        }
+        int32 words = (values+63)/64;
+        bool enabled = KrtDriverOptimization > 0 && !ssa.handlers[function_index] && (int64)blocks*words <= 4194304;
+        if (enabled) {
+            uint64[] definitions = new uint64[blocks*words]; uint64[] uses = new uint64[blocks*words];
+            uint64[] edges = new uint64[blocks*words]; uint64[] live_in = new uint64[blocks*words]; uint64[] live_out = new uint64[blocks*words];
+            int32 block = first_block;
+            while (block < first_block+blocks) {
+                value = ssa.block_starts[block];
+                while (value < ssa.block_ends[block]) {
+                    if (ssa.results[value]) {
+                        int32 relative = value-first; int32 cell = (block-first_block)*words+relative/64;
+                        definitions[cell] = definitions[cell] | ((uint64)1 << (relative%64));
+                    }
+                    int32 operand = 0;
+                    while (operand < ssa.operand_counts[value]) {
+                        int32 position = ssa.operand_starts[value]+operand; int32 incoming = ssa.operands[position]; int32 relative = incoming-first;
+                        uint64 mask = (uint64)1 << (relative%64);
+                        if (ssa.ops[value] == 101) {
+                            int32 predecessor = ssa.phi_predecessors[position]; int32 cell = (predecessor-first_block)*words+relative/64;
+                            edges[cell] = edges[cell] | mask;
+                            if (ssa.block_ends[predecessor]-1 > end[relative]) { end[relative] = ssa.block_ends[predecessor]-1; }
+                        } else {
+                            int32 cell = (block-first_block)*words+relative/64;
+                            if ((definitions[cell] & mask) == 0) { uses[cell] = uses[cell] | mask; }
+                            if (value > end[relative]) { end[relative] = value; }
+                        }
+                        operand = operand+1;
+                    }
+                    value = value+1;
+                }
+                block = block+1;
+            }
+            bool changed = true;
+            while (changed) {
+                changed = false; block = first_block+blocks-1;
+                while (block >= first_block) {
+                    int32 word = 0;
+                    while (word < words) {
+                        int32 cell = (block-first_block)*words+word; uint64 outgoing = edges[cell];
+                        if (ssa.block_left[block] >= 0) { outgoing = outgoing | live_in[(ssa.block_left[block]-first_block)*words+word]; }
+                        if (ssa.block_right[block] >= 0) { outgoing = outgoing | live_in[(ssa.block_right[block]-first_block)*words+word]; }
+                        uint64 incoming = uses[cell] | (outgoing & ~definitions[cell]);
+                        if (incoming != live_in[cell] || outgoing != live_out[cell]) { live_in[cell] = incoming; live_out[cell] = outgoing; changed = true; }
+                        word = word+1;
+                    }
+                    block = block-1;
+                }
+            }
+            value = first;
+            while (value < last) {
+                int32 relative = value-first; uint64 mask = (uint64)1 << (relative%64); block = first_block;
+                while (block < first_block+blocks) {
+                    int32 cell = (block-first_block)*words+relative/64;
+                    if ((live_in[cell] & mask) != 0 && ssa.block_starts[block] < begin[relative]) { begin[relative] = ssa.block_starts[block]; }
+                    if ((live_out[cell] & mask) != 0 && ssa.block_ends[block]-1 > end[relative]) { end[relative] = ssa.block_ends[block]-1; }
+                    block = block+1;
+                }
+                value = value+1;
+            }
+            delete definitions; delete uses; delete edges; delete live_in; delete live_out;
+            // Bucket intervals by their live-range start, then apply linear
+            // scan. A shorter interval can evict the active value ending last.
+            int32[] buckets = new int32[values]; int32[] next = new int32[values];
+            int32 relative = 0; while (relative < values) { buckets[relative] = -1; next[relative] = -1; relative = relative+1; }
+            value = first;
+            while (value < last) {
+                if (ssa.results[value] && ssa.uses[value] > 0) {
+                    int32 start = begin[value-first]-first; next[value-first] = buckets[start]; buckets[start] = value;
+                }
+                value = value+1;
+            }
+            int32 one = -1; int32 two = -1; relative = 0;
+            while (relative < values) {
+                value = buckets[relative];
+                while (value >= 0) {
+                    int32 position = first+relative;
+                    if (one >= 0 && end[one-first] < position) { one = -1; }
+                    if (two >= 0 && end[two-first] < position) { two = -1; }
+                    int32 register_index = 0;
+                    if (one < 0) { register_index = 1; }
+                    else if (two < 0) { register_index = 2; }
+                    else {
+                        int32 victim = end[one-first] > end[two-first] ? one : two;
+                        if (end[victim-first] > end[value-first]) { register_index = allocation.registers[victim]; allocation.registers[victim] = 0; }
+                    }
+                    if (register_index > 0) {
+                        allocation.registers[value] = register_index;
+                        if (register_index == 1) { one = value; } else { two = value; }
+                    }
+                    value = next[value-first];
+                }
+                relative = relative+1;
+            }
+            delete buckets; delete next;
+        }
+        int32 frame = ssa.source.local_counts[function_index]; value = first;
+        while (value < last) {
+            if (ssa.results[value] && ssa.uses[value] > 0 && allocation.registers[value] == 0) { allocation.spills[value] = frame; frame = frame+1; }
+            value = value+1;
+        }
+        allocation.frame_counts[function_index] = frame;
+        delete begin; delete end; function_index = function_index+1;
+    }
+    return allocation;
+}
+
+bool KrtKroSsaLoad(KrtSsaModule ssa, KrtSsaAllocation allocation, KrtKroObject output, ref int32 pc, int32 value) {
+    if (value < 0 || value >= ssa.count || !ssa.results[value]) { return false; }
+    int32 register_index = allocation.registers[value];
+    if (register_index > 0) { return KrtKroNativeByte(output,ref pc,65) && KrtKroNativeByte(output,ref pc,register_index == 1 ? 84 : 85); }
+    return KrtKroNativeFrameLoad(output,ref pc,allocation.spills[value]);
+}
+
+bool KrtKroSsaStore(KrtSsaModule ssa, KrtSsaAllocation allocation, KrtKroObject output, ref int32 pc, int32 value) {
+    if (ssa.uses[value] == 0) { return true; }
+    int32 register_index = allocation.registers[value];
+    if (register_index > 0) { return KrtKroNativeCode(output,ref pc,register_index == 1 ? 0xc48949 : 0xc58949,3); }
+    return KrtKroNativeFrameStore(output,ref pc,allocation.spills[value]);
+}
+
+bool KrtKroSsaEdge(KrtSsaModule ssa, KrtSsaAllocation allocation, KrtKroObject output, ref int32 pc, int32 predecessor, int32 target) {
+    if (target < 0 || target >= ssa.block_count) { return false; }
+    int32 first = ssa.block_phis[target]; int32 last = first+ssa.block_phi_counts[target]; int32 value = first;
+    // Read all incoming values before writing destinations, including cycles.
+    while (value < last) {
+        if (ssa.ops[value] == 101 && ssa.uses[value] > 0) {
+            int32 operand = 0; bool found = false;
+            while (operand < ssa.operand_counts[value]) {
+                int32 position = ssa.operand_starts[value]+operand;
+                if (ssa.phi_predecessors[position] == predecessor) { if (!KrtKroSsaLoad(ssa,allocation,output,ref pc,ssa.operands[position])) { return false; } found = true; break; }
+                operand = operand+1;
+            }
+            if (!found) { return false; }
+        }
+        value = value+1;
+    }
+    value = last-1;
+    while (value >= first) {
+        if (ssa.ops[value] == 101 && ssa.uses[value] > 0 && (!KrtKroNativeByte(output,ref pc,88) || !KrtKroSsaStore(ssa,allocation,output,ref pc,value))) { return false; }
+        value = value-1;
+    }
+    return true;
+}
+
+bool KrtKroSsaRead(KrtSsaModule ssa, KrtSsaAllocation allocation, KrtKroObject output, ref int32 pc, int32 value) {
+    if (value < 0 || value >= ssa.count || !ssa.results[value]) { return false; }
+    int32 register_index = allocation.registers[value];
+    if (register_index > 0) { return KrtKroNativeCode(output,ref pc,register_index == 1 ? 0xe0894c : 0xe8894c,3); }
+    int32 displacement = -8*(allocation.spills[value]+1);
+    return KrtKroNativeCode(output,ref pc,0x858b48,3) && KrtKroNativeU32(output,ref pc,displacement);
+}
+
+bool KrtKroSsaScalarOp(int32 op) {
+    return op == 1 || op == 2 || op == 3 || (op >= 4 && op <= 16) || op == 28 || op == 31 || op == 100;
+}
+
+bool KrtKroSsaScalar(KrtSsaModule ssa, KrtSsaAllocation allocation, KrtKroObject output, ref int32 pc, int32 value) {
+    int32 op = ssa.ops[value]; int32 operands = ssa.operand_counts[value]; int32 start = ssa.operand_starts[value];
+    if (operands > 1) {
+        if (!KrtKroSsaRead(ssa,allocation,output,ref pc,ssa.operands[start+1]) || !KrtKroNativeCode(output,ref pc,0xc38948,3)) { return false; }
+    }
+    if (operands > 0 && !KrtKroSsaRead(ssa,allocation,output,ref pc,ssa.operands[start])) { return false; }
+    if (op == 1) { if (!KrtKroNativeCode(output,ref pc,0xb848,2) || !KrtKroNativeU64(output,ref pc,ssa.args[value])) { return false; } }
+    else if (op == 2 || op == 100) {
+        if (!KrtKroNativeCode(output,ref pc,0x858b48,3) || !KrtKroNativeU32(output,ref pc,-8*((int32)ssa.args[value]+1))) { return false; }
+    } else if (op == 3) { return KrtKroNativeFrameStore(output,ref pc,(int32)ssa.args[value]); }
+    else if (op >= 4 && op <= 13) { if (!KrtKroNativeBinaryResult(output,ref pc,op,ssa.extra[value] != 0,false)) { return false; } }
+    else if (op == 14 || op == 15) { if (!KrtKroNativeCode(output,ref pc,0xf748,2) || !KrtKroNativeByte(output,ref pc,op == 14 ? 216 : 208)) { return false; } }
+    else if (op == 16) {
+        int32 condition = 149; int64 comparison = ssa.args[value]; bool is_unsigned = ssa.extra[value] != 0;
+        if (comparison == 61) { condition = 148; }
+        else if (comparison == 60) { condition = is_unsigned ? 146 : 156; }
+        else if (comparison == 62) { condition = is_unsigned ? 151 : 159; }
+        else if (comparison == 102) { condition = is_unsigned ? 150 : 158; }
+        else if (comparison == 103) { condition = is_unsigned ? 147 : 157; }
+        if (!KrtKroNativeCode(output,ref pc,0xd83948,3) || !KrtKroNativeByte(output,ref pc,15) || !KrtKroNativeByte(output,ref pc,condition) || !KrtKroNativeByte(output,ref pc,192) || !KrtKroNativeCode(output,ref pc,0xc0b60f,3)) { return false; }
+    } else if (op == 28) { if (!KrtKroNativeTemporaryCast(output,ref pc,(int32)ssa.args[value])) { return false; } }
+    else if (op == 31) {
+        if (!KrtKroNativeCode(output,ref pc,0xc08548,3) || !KrtKroNativeCode(output,ref pc,0xc0940f,3) || !KrtKroNativeCode(output,ref pc,0xc0b60f,3)) { return false; }
+    }
+    return KrtKroSsaStore(ssa,allocation,output,ref pc,value);
+}
+
+// ===== SSA code generation =====
+// Native emission consumes SSA value operands and CFG edges directly.
+bool KrtKroEmitSsaModule(KrtSsaModule ssa, KrtKroObject output) {
+    if (!KrtSsaValidate(ssa)) { return false; }
+    KrtNativeModule module = ssa.source;
+    module.runtime_code_count = 0;
+    KrtSsaAllocation allocation = KrtSsaAllocate(ssa);
+    if (allocation == null) { return false; }
+    if (module == null || output == null || module.count <= 0 || module.count > 16777216 || module.function_count <= 0 ||
+        module.function_count > 16384 || module.ops == null || module.args == null || module.extra == null ||
+        module.starts == null || module.local_counts == null || module.parameter_counts == null || (!module.library_mode && module.entry < 0) || module.entry >= module.function_count ||
+        module.data_length < 0 || module.data_length > 262144) { return false; }
+    int64 estimated = (int64)module.function_count*640 + module.data_length + 4096;
+    int32 estimate_function = 0;
+    while (estimate_function < module.function_count) { estimated = estimated+(int64)module.local_counts[estimate_function]*8; estimate_function = estimate_function+1; }
+    int32 estimate_index = 0;
+    while (estimate_index < ssa.count) {
+        int32 operation = ssa.ops[estimate_index];
+        if (operation == 101 && ssa.uses[estimate_index] > 0) { estimated = estimated+(int64)ssa.operand_counts[estimate_index]*24; }
+        else if (operation != 0) {
+            estimated = estimated+64+(int64)ssa.operand_counts[estimate_index]*16;
+            if (operation == 24) { estimated = estimated+128; }
+            if (operation >= 35 && operation <= 54) { estimated = estimated+512; }
+            if (operation >= 60 && operation <= 69) { estimated = estimated+1024; }
+            if (operation == 75) { estimated=estimated+160; }
+            if (operation == 22 && (ssa.extra[estimate_index] == 16 || ssa.extra[estimate_index] == -16)) { estimated = estimated+256; }
+        }
+        estimate_index = estimate_index+1;
+    }
+    if (estimated > 67108860) { return false; }
+    int32 capacity = (int32)estimated;
+    if (capacity < 4096) { capacity = 4096; }
+    int32 words = (capacity + 3) / 4;
+    if (words > 16777216) { return false; }
+    if (!KrtKroBeginText(output, words)) { return false; }
+    int32[] block_offsets = new int32[ssa.block_count];
+    int32[] function_offsets = new int32[module.function_count];
+    module.function_offsets = function_offsets;
+    int32[] function_sizes = new int32[module.function_count]; module.function_sizes = function_sizes;
+    int32 patch_capacity = ssa.count*4 + ssa.block_count*4 + 64;
+    int32[] patch_offsets = new int32[patch_capacity];
+    int32[] patch_targets = new int32[patch_capacity];
+    int32[] patch_kinds = new int32[patch_capacity];
+    module.external_reloc_offsets = new int32[patch_capacity]; module.external_reloc_targets = new int32[patch_capacity];
+    int32[] external_offsets = module.external_reloc_offsets; int32[] external_targets = module.external_reloc_targets;
+    bool[] external_used = module.external_used;
+    int32 patch_count = 0;
+    int32 pc = 0;
+    // ArkLink enters the text section base for compact objects. Emit the
+    // selected entry function first so that this remains valid even when the
+    // source was normalized helper-first. Function ids and call relocations
+    // still use their original module indices.
+    int32 emit_index = 0;
+    while (emit_index < module.function_count) {
+        int32 function_index = emit_index;
+        if (!module.library_mode && emit_index == 0) { function_index = module.entry; }
+        else if (!module.library_mode && emit_index <= module.entry) { function_index = emit_index - 1; }
+        int32 first_block = ssa.function_blocks[function_index];
+        int32 last_block = first_block+ssa.function_block_counts[function_index];
+        int32 frame_slots = allocation.frame_counts[function_index];
+        if (module.parameter_counts[function_index] < 0 || module.parameter_counts[function_index] > 128 ||
+            module.local_counts[function_index] < module.parameter_counts[function_index]) { return false; }
+        function_offsets[function_index] = pc;
+        if (function_index == module.entry) {
+            if (!KrtKroNativeCode(output, ref pc, 16724293, 3) || !KrtKroNativeGlobalsStart(output, ref pc, module.global_count)) { return false; }
+            if (module.initializer_index >= 0) {
+                if (module.initializer_index >= module.function_count || patch_count >= patch_capacity || !KrtKroNativeByte(output, ref pc, 232)) { return false; }
+                patch_offsets[patch_count] = pc; patch_targets[patch_count] = module.initializer_index; patch_kinds[patch_count] = 2; patch_count = patch_count + 1;
+                if (!KrtKroNativeU32(output, ref pc, 0)) { return false; }
+            }
+            // ELF enters with a 16-byte aligned rsp, whereas a called function
+            // receives a return address first. Match that stack shape so rbp
+            // and the aggregate arena retain the ordinary call alignment.
+            if (!KrtKroNativeCode(output,ref pc,0x08ec8348,4)) { return false; }
+        }
+        if (!KrtKroNativeByte(output, ref pc, 85) || !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 229)) { return false; }
+        // Physical calls have at most 128 source arguments and one hidden
+        // aggregate-result pointer. Scratch slots 0..122 hold stack arguments,
+        // 123 saves rsp, 124 holds indirect targets, 125..126 save registers,
+        // and 127..128 are reserved for wide operations.
+        int32 arena_bytes = module.function_frame_bytes == null ? 0 : module.function_frame_bytes[function_index];
+        if (arena_bytes < 0 || arena_bytes > 16777216) { return false; }
+        int64 wide_bytes = 0; int32 wide_block = first_block;
+        while (wide_block < last_block) {
+            int32 wide_index = ssa.block_starts[wide_block];
+            while (wide_index < ssa.block_ends[wide_block]) {
+                wide_bytes = wide_bytes + KrtKroWideScratchBytes(ssa.ops[wide_index],ssa.args[wide_index],ssa.extra[wide_index]);
+                wide_index++;
+            }
+            wide_block++;
+        }
+        int32 wide_arena = (arena_bytes+15)&-16;
+        int64 frame_size = (int64)(frame_slots+129)*8+wide_arena+wide_bytes;
+        if (frame_size > 16777216) { return false; }
+        int32 frame = (int32)((frame_size+15)&(int64)-16);
+        output.native_wide_base = frame-wide_arena;
+        output.native_wide_cursor = 0; output.native_wide_limit = (int32)wide_bytes;
+        bool aggregate_return = module.aggregate_return_sizes != null && module.aggregate_return_sizes[function_index] > 0;
+        int32 hidden_result_slot = aggregate_return && module.hidden_result_slots != null ? module.hidden_result_slots[function_index] : -1;
+        if (aggregate_return && (hidden_result_slot < module.parameter_counts[function_index] || hidden_result_slot >= module.local_counts[function_index])) { return false; }
+        if (frame > 0) {
+            if (frame <= 127) { if (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 131) || !KrtKroNativeByte(output, ref pc, 236) || !KrtKroNativeByte(output, ref pc, frame)) { return false; } }
+            else if (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 129) || !KrtKroNativeByte(output, ref pc, 236) || !KrtKroNativeU32(output, ref pc, frame)) { return false; }
+        }
+        // Save even when this function uses only spill slots: a throwing callee
+        // can bypass its epilogue before an enclosing handler returns normally.
+        if (!KrtKroNativePreserveRegisters(output,ref pc,frame_slots+125,false)) { return false; }
+        int32 parameter = 0;
+        while (parameter < module.parameter_counts[function_index]) {
+            int32 physical = aggregate_return ? parameter+1 : parameter;
+            if (!KrtKroNativeIncomingParameter(output,ref pc,physical) || !KrtKroNativeFrameStore(output,ref pc,parameter)) { return false; }
+            parameter = parameter+1;
+        }
+        int32 source_slot = module.parameter_counts[function_index];
+        if (source_slot < module.local_counts[function_index] && !KrtKroNativeCode(output,ref pc,0xc031,2)) { return false; }
+        while (source_slot < module.local_counts[function_index]) {
+            if (!KrtKroNativeFrameStore(output,ref pc,source_slot)) { return false; }
+            source_slot = source_slot+1;
+        }
+        if (aggregate_return && (!KrtKroNativeIncomingParameter(output,ref pc,0) ||
+            !KrtKroNativeFrameStore(output,ref pc,hidden_result_slot))) { return false; }
+        int32 block = first_block;
+        while (block < last_block) {
+          block_offsets[block] = pc;
+          int32 index = ssa.block_starts[block];
+          int32 last_op = 0; int32 handler_patch = -1; int32 handler_target = -1;
+          while (index < ssa.block_ends[block]) {
+            int32 op = ssa.ops[index]; int32 arity = (int32)ssa.extra[index];
+            if (op == 0 || op == 101) { index = index+1; continue; }
+            last_op = op;
+            if (KrtDriverOptimization > 0 && KrtKroSsaScalarOp(op)) {
+                if (!KrtKroSsaScalar(ssa,allocation,output,ref pc,index)) { return false; }
+                index = index+1; continue;
+            }
+            int32 operand = 0;
+            while (operand < ssa.operand_counts[index]) {
+                if (!KrtKroSsaLoad(ssa,allocation,output,ref pc,ssa.operands[ssa.operand_starts[index]+operand])) { return false; }
+                operand = operand+1;
+            }
+            bool wide_scratch = op >= 60 && op <= 69;
+            if (wide_scratch && !KrtKroNativePreserveRegisters(output,ref pc,frame_slots+127,false)) { return false; }
+            if (op == 100) {
+                if (!KrtKroNativeFrameLoad(output,ref pc,(int32)ssa.args[index])) { return false; }
+            } else if (op == (int32)KrtNativeOp.Nop) { }
+            else if (op == (int32)KrtNativeOp.Const) {
+                if (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 184) || !KrtKroNativeU64(output, ref pc, ssa.args[index]) || !KrtKroNativeByte(output, ref pc, 80)) { return false; }
+            } else if (op == (int32)KrtNativeOp.LoadLocal) {
+                if (ssa.args[index] < 0 || ssa.args[index] >= module.local_counts[function_index]) { return false; }
+                if (!KrtKroNativeFrameLoad(output, ref pc, (int32)ssa.args[index])) { return false; }
+            } else if (op == (int32)KrtNativeOp.StoreLocal) {
+                if (ssa.args[index] < 0 || ssa.args[index] >= module.local_counts[function_index]) { return false; }
+                if (!(KrtKroNativeByte(output,ref pc,88) && KrtKroNativeFrameStore(output, ref pc, (int32)ssa.args[index]))) { return false; }
+            } else if (op >= (int32)KrtNativeOp.Add && op <= (int32)KrtNativeOp.Shr) {
+                if (!KrtKroNativeBinary(output, ref pc, op, arity != 0)) { return false; }
+            } else if (op == (int32)KrtNativeOp.Neg || op == (int32)KrtNativeOp.Not) {
+                if (!KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 247) || !KrtKroNativeByte(output, ref pc, op == (int32)KrtNativeOp.Neg ? 216 : 208) || !KrtKroNativeByte(output, ref pc, 80)) { return false; }
+            } else if (op == (int32)KrtNativeOp.Compare) {
+                int32 cc = 149;
+                if (ssa.args[index] == 61) { cc = 148; } else if (ssa.args[index] == 101) { cc = 149; } else if (ssa.args[index] == 60) { cc = 156; } else if (ssa.args[index] == 62) { cc = 159; } else if (ssa.args[index] == 102) { cc = 158; } else if (ssa.args[index] == 103) { cc = 157; }
+                if (arity != 0) {
+                    if (ssa.args[index] == 60) { cc = 146; } else if (ssa.args[index] == 62) { cc = 151; }
+                    else if (ssa.args[index] == 102) { cc = 150; } else if (ssa.args[index] == 103) { cc = 147; }
+                }
+                if (!KrtKroNativeByte(output, ref pc, 91) || !KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 57) || !KrtKroNativeByte(output, ref pc, 216) || !KrtKroNativeByte(output, ref pc, 15) || !KrtKroNativeByte(output, ref pc, cc) || !KrtKroNativeByte(output, ref pc, 192) || !KrtKroNativeByte(output, ref pc, 15) || !KrtKroNativeByte(output, ref pc, 182) || !KrtKroNativeByte(output, ref pc, 192) || !KrtKroNativeByte(output, ref pc, 80)) { return false; }
+            } else if (op == (int32)KrtNativeOp.Jump) {
+                int32 target = (int32)ssa.args[index];
+                if (!KrtKroSsaEdge(ssa,allocation,output,ref pc,block,target) || patch_count >= patch_capacity || !KrtKroNativeByte(output,ref pc,233)) { return false; }
+                patch_offsets[patch_count] = pc; patch_targets[patch_count] = target; patch_kinds[patch_count] = 1; patch_count = patch_count+1;
+                if (!KrtKroNativeU32(output,ref pc,0)) { return false; }
+            } else if (op == (int32)KrtNativeOp.Branch) {
+                int32 yes = (int32)ssa.args[index]; int32 no = (int32)ssa.extra[index];
+                if (patch_count+1 >= patch_capacity || !KrtKroNativeByte(output,ref pc,88) || !KrtKroNativeCode(output,ref pc,0xc08548,3) || !KrtKroNativeCode(output,ref pc,0x840f,2)) { return false; }
+                int32 false_patch = pc; if (!KrtKroNativeU32(output,ref pc,0) || !KrtKroSsaEdge(ssa,allocation,output,ref pc,block,yes) || !KrtKroNativeByte(output,ref pc,233)) { return false; }
+                patch_offsets[patch_count] = pc; patch_targets[patch_count] = yes; patch_kinds[patch_count] = 1; patch_count = patch_count+1;
+                if (!KrtKroNativeU32(output,ref pc,0) || !KrtKroEmitTextU32(output,false_patch,pc-(false_patch+4)) || !KrtKroSsaEdge(ssa,allocation,output,ref pc,block,no) || !KrtKroNativeByte(output,ref pc,233)) { return false; }
+                patch_offsets[patch_count] = pc; patch_targets[patch_count] = no; patch_kinds[patch_count] = 1; patch_count = patch_count+1;
+                if (!KrtKroNativeU32(output,ref pc,0)) { return false; }
+            } else if (op == 44) {
+                if (!KrtKroNativeGlobalAddress(module,output,ref pc,(int32)ssa.args[index])) { return false; }
+            } else if (op == 75) {
+                if(!KrtKroNativeGuardEnter(output,ref pc)){return false;}
+            } else if (op == 76) {
+                if(!KrtKroNativeGuardFinish(output,ref pc,(int32)ssa.extra[index])){return false;}
+            } else if (op == 45) {
+                if (patch_count >= patch_capacity || ssa.args[index] < -module.external_count || ssa.args[index] >= module.function_count || !KrtKroNativeCode(output, ref pc, 0x058d48, 3)) { return false; }
+                patch_offsets[patch_count] = pc; patch_targets[patch_count] = (int32)ssa.args[index]; patch_kinds[patch_count] = 2; patch_count = patch_count + 1;
+                if (!KrtKroNativeU32(output, ref pc, 0) || !KrtKroNativeByte(output, ref pc, 80)) { return false; }
+            } else if (op == 46) {
+                if (!KrtKroNativeIndirectCall(output, ref pc, arity, frame_slots)) { return false; }
+            } else if (op == 73) {
+                if (ssa.args[index] != 0 || ssa.extra[index] != 0 || !KrtKroNativeClosureEnvironment(output, ref pc)) { return false; }
+            } else if (op == 74) {
+                if (ssa.extra[index] != 0 || !KrtKroRuntimeAddress(module,output,ref pc,(int32)ssa.args[index])) { return false; }
+            } else if (op == (int32)KrtNativeOp.Call) {
+                if (arity < 0 || arity > 129 || patch_count >= patch_capacity) { return false; }
+                int32 scratch_base = frame_slots;
+                int32 argument = arity - 1;
+                while (argument >= 6) {
+                    if (!KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeFrameStore(output, ref pc, scratch_base + argument - 6)) { return false; }
+                    argument = argument - 1;
+                }
+                while (argument >= 0) {
+                    if (!KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeMoveArg(output, ref pc, argument)) { return false; }
+                    argument = argument - 1;
+                }
+                // Save the expression stack, align the call stack, and then
+                // place argument seven nearest to the return address.
+                if (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 224) ||
+                    !KrtKroNativeFrameStore(output, ref pc, scratch_base + 123) ||
+                    !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 131) || !KrtKroNativeByte(output, ref pc, 228) || !KrtKroNativeByte(output, ref pc, 240)) { return false; }
+                int32 stack_arguments = arity > 6 ? arity - 6 : 0;
+                if ((stack_arguments & 1) != 0 && (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 131) || !KrtKroNativeByte(output, ref pc, 236) || !KrtKroNativeByte(output, ref pc, 8))) { return false; }
+                argument = stack_arguments - 1;
+                while (argument >= 0) {
+                    if (!KrtKroNativeFrameLoad(output, ref pc, scratch_base + argument)) { return false; }
+                    argument = argument - 1;
+                }
+                if (!KrtKroNativeByte(output, ref pc, 232)) { return false; }
+                patch_offsets[patch_count] = pc; patch_targets[patch_count] = (int32)ssa.args[index]; patch_kinds[patch_count] = 2; patch_count = patch_count + 1;
+                if (!KrtKroNativeU32(output, ref pc, 0)) { return false; }
+                // mov rsp,[rbp+disp32] restores parent expression operands and
+                // keeps the return value in rax.
+                if (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 139) || !KrtKroNativeByte(output, ref pc, 165) ||
+                    !KrtKroNativeU32(output, ref pc, -8 * (scratch_base + 124)) || !KrtKroNativeByte(output, ref pc, 80)) { return false; }
+            } else if (op == (int32)KrtNativeOp.Return) {
+                if (arity > 1) { return false; }
+                if (arity == 1 && !KrtKroNativeByte(output, ref pc, 88)) { return false; }
+                if (arity == 0 && (!KrtKroNativeByte(output, ref pc, 49) || !KrtKroNativeByte(output, ref pc, 192))) { return false; }
+                if (function_index == module.entry) {
+                    if (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 199) || !KrtKroNativeByte(output, ref pc, 184) || !KrtKroNativeU32(output, ref pc, 60) || !KrtKroNativeByte(output, ref pc, 15) || !KrtKroNativeByte(output, ref pc, 5)) { return false; }
+                } else if (!KrtKroNativePreserveRegisters(output,ref pc,frame_slots+125,true) ||
+                    !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 236) || !KrtKroNativeByte(output, ref pc, 93) || !KrtKroNativeByte(output, ref pc, 195)) { return false; }
+            } else if (op == (int32)KrtNativeOp.Address) {
+                if (ssa.extra[index] > 2147483647 ||
+                    (ssa.args[index] == 0 && ssa.extra[index] < -16) ||
+                    (ssa.args[index] != 0 && ssa.extra[index] <= 0)) { return false; }
+                if (ssa.args[index] == 0) {
+                    if (!KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 5) || !KrtKroNativeU32(output, ref pc, (int32)ssa.extra[index]) || !KrtKroNativeByte(output, ref pc, 80)) { return false; }
+                } else if (!KrtKroNativeByte(output, ref pc, 91) || !KrtKroNativeByte(output, ref pc, 88) ||
+                    !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 105) || !KrtKroNativeByte(output, ref pc, 219) || !KrtKroNativeU32(output, ref pc, (int32)ssa.extra[index]) ||
+                    !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 1) || !KrtKroNativeByte(output, ref pc, 216) || !KrtKroNativeByte(output, ref pc, 80)) { return false; }
+            } else if (op == 70) {
+                if (!KrtKroNativeAggregateAddress(output,ref pc,frame,ssa.args[index],ssa.extra[index],arena_bytes)) { return false; }
+            } else if (op == 71) {
+                if (!KrtKroNativeAggregateCopy(output,ref pc,ssa.args[index],ssa.extra[index])) { return false; }
+            } else if (op == 72) {
+                if (!KrtKroNativeAggregateZero(output,ref pc,ssa.args[index],ssa.extra[index])) { return false; }
+            } else if (op == (int32)KrtNativeOp.Load) {
+                if (!KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeMemoryLoad(output, ref pc, arity) || !KrtKroNativeByte(output, ref pc, 80)) { return false; }
+            } else if (op == (int32)KrtNativeOp.Store) {
+                if (!KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeByte(output, ref pc, 91) || !KrtKroNativeMemoryStore(output, ref pc, arity)) { return false; }
+            } else if (op == (int32)KrtNativeOp.Allocate) {
+                if (!KrtKroNativeAllocate(output, ref pc, ssa.args[index])) { return false; }
+            } else if (op == (int32)KrtNativeOp.Free) {
+                if (!KrtKroNativeFree(output, ref pc)) { return false; }
+            } else if (op == 30) {
+                // Shift live expression operands below the allocation so that
+                // an allocation inside a larger expression keeps stack order.
+                int32 live_values = 0;
+                if (live_values < 0) { live_values = 0; }
+                if (!KrtKroNativeByte(output, ref pc, 88) ||
+                    !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 131) || !KrtKroNativeByte(output, ref pc, 192) || !KrtKroNativeByte(output, ref pc, 15) ||
+                    !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 131) || !KrtKroNativeByte(output, ref pc, 224) || !KrtKroNativeByte(output, ref pc, 240) ||
+                    !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 230) ||
+                    !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 41) || !KrtKroNativeByte(output, ref pc, 196) ||
+                    !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 231) ||
+                    !KrtKroNativeByte(output, ref pc, 185) || !KrtKroNativeU32(output, ref pc, live_values) ||
+                    !KrtKroNativeByte(output, ref pc, 252) || !KrtKroNativeByte(output, ref pc, 243) || !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 165) ||
+                    !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 141) || !KrtKroNativeByte(output, ref pc, 132) || !KrtKroNativeByte(output, ref pc, 36) ||
+                    !KrtKroNativeU32(output, ref pc, live_values * 8) || !KrtKroNativeByte(output, ref pc, 80)) { return false; }
+            } else if (op == (int32)KrtNativeOp.Data) {
+                if (module.data_length <= 0 || module.data_storage == null || ssa.args[index] < 0 || ssa.args[index] + ssa.extra[index] > module.data_length || patch_count >= patch_capacity) { return false; }
+                if (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 141) || !KrtKroNativeByte(output, ref pc, 5)) { return false; }
+                patch_offsets[patch_count] = pc; patch_targets[patch_count] = (int32)ssa.args[index]; patch_kinds[patch_count] = 3; patch_count = patch_count + 1;
+                if (!KrtKroNativeU32(output, ref pc, 0) || !KrtKroNativeByte(output, ref pc, 80)) { return false; }
+            } else if (op == (int32)KrtNativeOp.Syscall) {
+                if (arity < 1 || arity > 7) { return false; }
+                // Source arguments are already on the expression stack:
+                // Linux arguments are popped first, then the syscall number.
+                int32 argument = arity - 2;
+                while (argument >= 0) { if (!KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeMoveSyscallArg(output, ref pc, argument)) { return false; } argument = argument - 1; }
+                if (!KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeByte(output, ref pc, 15) || !KrtKroNativeByte(output, ref pc, 5) || !KrtKroNativeByte(output, ref pc, 80)) { return false; }
+            } else if (op == (int32)KrtNativeOp.Drop) {
+                if (!KrtKroNativeByte(output, ref pc, 88)) { return false; }
+            } else if (op == (int32)KrtNativeOp.Cast) {
+                int32 width = (int32)ssa.args[index];
+                if (width != 8 && width != -8) {
+                    if (!KrtKroNativeByte(output, ref pc, 88)) { return false; }
+                    if (width > 1000 || width < -1000) {
+                        if (!KrtKroNativeIntegerNormalize(output, ref pc, width)) { return false; }
+                    } else if (width == -1 || width == -2) {
+                        if (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 15) ||
+                            !KrtKroNativeByte(output, ref pc, width == -1 ? 190 : 191) || !KrtKroNativeByte(output, ref pc, 192)) { return false; }
+                    } else if (width == -4) {
+                        if (!KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 192)) { return false; }
+                    } else if (width == 1 || width == 2) {
+                        if (!KrtKroNativeByte(output, ref pc, 15) || !KrtKroNativeByte(output, ref pc, width == 1 ? 182 : 183) || !KrtKroNativeByte(output, ref pc, 192)) { return false; }
+                    } else if (width == 4) {
+                        if (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 99) || !KrtKroNativeByte(output, ref pc, 192)) { return false; }
+                    } else { return false; }
+                    if (!KrtKroNativeByte(output, ref pc, 80)) { return false; }
+                }
+            } else if (op == (int32)KrtNativeOp.Ref) {
+                int32 slot = (int32)ssa.args[index];
+                if (slot < 0 || slot >= module.local_counts[function_index]) { return false; }
+                if (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 141) || !KrtKroNativeByte(output, ref pc, 133) ||
+                    !KrtKroNativeU32(output, ref pc, -8 * (slot + 1)) || !KrtKroNativeByte(output, ref pc, 80)) { return false; }
+            } else if (op == 31) {
+                if (!KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 133) || !KrtKroNativeByte(output, ref pc, 192) ||
+                    !KrtKroNativeByte(output, ref pc, 15) || !KrtKroNativeByte(output, ref pc, 148) || !KrtKroNativeByte(output, ref pc, 192) ||
+                    !KrtKroNativeByte(output, ref pc, 15) || !KrtKroNativeByte(output, ref pc, 182) || !KrtKroNativeByte(output, ref pc, 192) || !KrtKroNativeByte(output, ref pc, 80)) { return false; }
+            } else if (op == 32) {
+                if (!KrtKroNativeByte(output, ref pc, 255) || !KrtKroNativeByte(output, ref pc, 52) || !KrtKroNativeByte(output, ref pc, 36)) { return false; }
+            } else if (op == 33) {
+                if (!KrtKroNativeByte(output, ref pc, 91) || !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 216) ||
+                    !KrtKroNativeMemoryLoad(output, ref pc, arity) ||
+                    !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 193) ||
+                    !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 5) || !KrtKroNativeU32(output, ref pc, (int32)ssa.args[index]) ||
+                    !KrtKroNativeMemoryStore(output, ref pc, arity) || !KrtKroNativeByte(output, ref pc, 81)) { return false; }
+            } else if (op == 35) {
+                if (!KrtKroNativeStringEqual(output, ref pc)) { return false; }
+            } else if (op == 36) {
+                if (!KrtKroNativeStringConcat(output, ref pc)) { return false; }
+            } else if (op == 37) {
+                if (!KrtKroNativeStringLength(output, ref pc)) { return false; }
+            } else if (op == 38) {
+                if (!KrtKroNativeFloatConvert(output, ref pc, (int32)ssa.args[index], arity)) { return false; }
+            } else if (op == 39) {
+                if (!KrtKroNativeFloatBinary(output, ref pc, (int32)ssa.args[index], arity)) { return false; }
+            } else if (op == 40) {
+                if (!KrtKroNativeFloatCompare(output, ref pc, (int32)ssa.args[index], arity)) { return false; }
+            } else if (op >= 41 && op <= 43) {
+                if (!KrtKroNativeFloatUnary(output, ref pc, op, arity, (int32)ssa.args[index])) { return false; }
+            } else if (op == 60) {
+                if (!KrtKroNativeWideConvert(output, ref pc, (int32)ssa.args[index])) { return false; }
+            } else if (op == 61) {
+                if (!KrtKroNativeWideBinary(output, ref pc, (int32)ssa.args[index], arity != 0)) { return false; }
+            } else if (op == 62) {
+                if (!KrtKroNativeWideCompare(output, ref pc, (int32)ssa.args[index], arity != 0)) { return false; }
+            } else if (op == 63) {
+                if (!KrtKroNativeWideUnary(output, ref pc, (int32)ssa.args[index])) { return false; }
+            } else if (op == 69) {
+                if (!KrtKroNativeWideRef(output, ref pc)) { return false; }
+            } else if (op == 67) {
+                if (!KrtKroNativeWidePost(output, ref pc, (int32)ssa.args[index], arity != 0)) { return false; }
+            } else if (op == 68) {
+                if (!KrtKroNativeWideFloat(output, ref pc, (int32)ssa.args[index], arity)) { return false; }
+            } else if (op == 66) {
+                if (!KrtKroNativeCode(output, ref pc, 47176, 2) || !KrtKroNativeU64(output, ref pc, ssa.args[index]) ||
+                    !KrtKroNativeCode(output, ref pc, 47688, 2) || !KrtKroNativeU64(output, ref pc, ssa.extra[index]) ||
+                    !KrtKroNativeWideBox(output, ref pc) || !KrtKroNativeByte(output, ref pc, 80)) { return false; }
+            } else if (op == 50) {
+                if (arity < 0 || arity + 6 > module.local_counts[function_index] || patch_count >= patch_capacity ||
+                    ssa.args[index] < first_block || ssa.args[index] >= last_block ||
+                    !KrtKroNativeTryEnter(output, ref pc, arity)) { return false; }
+                handler_patch = pc; handler_target = (int32)ssa.args[index];
+                if (!KrtKroNativeU32(output, ref pc, 0) || !KrtKroNativeTryFinish(output, ref pc)) { return false; }
+            } else if (op == 51) {
+                int32 record = (int32)ssa.args[index];
+                if (record < 0 || record + 6 > module.local_counts[function_index] || !KrtKroNativeTryLeave(output, ref pc, record)) { return false; }
+            } else if (op == 52) {
+                if (!KrtKroNativeThrow(output, ref pc)) { return false; }
+            } else if (op == 53 || op == 54) {
+                int32 record = (int32)ssa.args[index];
+                if (record < 0 || record + 6 > module.local_counts[function_index] ||
+                    !KrtKroNativeFrameLoad(output, ref pc, record + (op == 53 ? 2 : 1))) { return false; }
+            }
+            else { return false; }
+            if (wide_scratch && !KrtKroNativePreserveRegisters(output,ref pc,frame_slots+127,true)) { return false; }
+            if (ssa.results[index] && (!KrtKroNativeByte(output,ref pc,88) || !KrtKroSsaStore(ssa,allocation,output,ref pc,index))) { return false; }
+            index = index+1;
+          }
+          if (last_op != 17 && last_op != 18 && last_op != 20 && last_op != 52) {
+              int32 target = last_op == 50 ? ssa.block_right[block] : ssa.block_left[block];
+              if (target >= 0) {
+                  if (!KrtKroSsaEdge(ssa,allocation,output,ref pc,block,target) || patch_count >= patch_capacity || !KrtKroNativeByte(output,ref pc,233)) { return false; }
+                  patch_offsets[patch_count] = pc; patch_targets[patch_count] = target; patch_kinds[patch_count] = 1; patch_count = patch_count+1;
+                  if (!KrtKroNativeU32(output,ref pc,0)) { return false; }
+              }
+          }
+          if (handler_patch >= 0) {
+              // Exceptional edges copy phi values from this function's spill
+              // frame after unwinding restores its frame and stack pointers.
+              if (!KrtKroEmitTextU32(output,handler_patch,pc-(handler_patch+4)) ||
+                  !KrtKroSsaEdge(ssa,allocation,output,ref pc,block,handler_target) ||
+                  patch_count >= patch_capacity || !KrtKroNativeByte(output,ref pc,233)) { return false; }
+              patch_offsets[patch_count] = pc; patch_targets[patch_count] = handler_target; patch_kinds[patch_count] = 1; patch_count = patch_count+1;
+              if (!KrtKroNativeU32(output,ref pc,0)) { return false; }
+          }
+          block = block+1;
+        }
+
+        function_sizes[function_index] = pc - function_offsets[function_index];
+        emit_index = emit_index + 1;
+    }
+    int32 data_base = pc;
+    if (module.data_length > 0) {
+        if (module.data_storage == null || pc + module.data_length > capacity) { return false; }
+        int32 data_index = 0; while (data_index < module.data_length) { if (!KrtKroNativeByte(output, ref pc, (int32)module.data_storage[data_index])) { return false; } data_index = data_index + 1; }
+    }
+    int32 patch = 0;
+    while (patch < patch_count) {
+        int32 target = 0;
+        if (patch_kinds[patch] == 1) { if (patch_targets[patch] < 0 || patch_targets[patch] >= ssa.block_count) { return false; } target = block_offsets[patch_targets[patch]]; }
+        else if (patch_kinds[patch] == 2) {
+            if (patch_targets[patch] < 0) {
+                int32 external = -patch_targets[patch] - 1;
+                if (external < 0 || external >= module.external_count || module.external_reloc_count >= patch_capacity) { return false; }
+                external_offsets[module.external_reloc_count] = patch_offsets[patch]; external_targets[module.external_reloc_count] = external;
+                external_used[external] = true; module.external_reloc_count = module.external_reloc_count + 1;
+                patch = patch + 1; continue;
+            }
+            if (patch_targets[patch] >= module.function_count) { return false; } target = function_offsets[patch_targets[patch]];
+        }
+        else { target = data_base + patch_targets[patch]; }
+        int32 relative = target - (patch_offsets[patch] + 4);
+        if (!KrtKroEmitTextU32(output, patch_offsets[patch], relative)) { return false; }
+        patch = patch + 1;
+    }
+    output.magic = 5198411; output.version = 2; output.architecture = 34404;
+    output.entry_point = 0; output.entry_symbol_value = 0;
+    output.text_size = pc; output.rodata_size = 0; output.data_size = 0; output.bss_size = 0;
+    output.text_reloc_count = 0; output.rodata_reloc_count = 0; output.data_reloc_count = 0; output.bss_align = 0;
+    output.total_reloc_count = 0; output.relocation_count = 0; output.symbol_count = 1; output.strtab_size = 6;
+    delete allocation.registers; delete allocation.spills; delete allocation.frame_counts; delete allocation;
+    return KrtKroObjectIsValid(output);
+}
+
+bool KrtKroEmitNativeModule(KrtNativeModule module, KrtKroObject output) {
+    if (module == null) { return false; }
+    if (module.ssa == null) { module.ssa = KrtSsaBuild(module,null,0); }
+    return module.ssa != null && KrtKroEmitSsaModule(module.ssa,output);
+}
+
+// ===== Wide value encoding =====
+// Wide values are 16-byte values. Expression snapshots live in this function's
+// frame; persistent locals, arguments, fields and results copy their bytes.
+int32 KrtKroWideScratchBytes(int32 operation, int64 argument, int64 extra) {
+    if (operation == 22) { return extra == 16 || extra == -16 ? 16 : 0; }
+    if (operation == 60) { return argument == 2 ? 0 : 16; }
+    if (operation == 61 || operation == 66 || operation == 69) { return 16; }
+    if (operation == 63) { return argument == 33 ? 0 : 16; }
+    if (operation == 67) { return 48; }
+    if (operation == 68) { return argument == 3 || argument == 4 ? 16 : 0; }
+    return 0;
+}
+
+bool KrtKroNativeWideBox(KrtKroObject output, ref int32 pc) {
+    if (output.native_wide_cursor < 0 || output.native_wide_cursor > output.native_wide_limit - 16 ||
+        output.native_wide_base < output.native_wide_cursor + 16) { return false; }
+    int32 displacement = output.native_wide_cursor - output.native_wide_base;
+    output.native_wide_cursor = output.native_wide_cursor + 16;
+    // lea rcx,[rbp+disp32]; mov [rcx],rax; mov [rcx+8],rdx; mov rax,rcx.
+    // rcx is caller scratch; r12/r13 remain untouched for SSA allocation.
+    return KrtKroNativeCode(output,ref pc,0x8d48,2) && KrtKroNativeByte(output,ref pc,0x8d) &&
+        KrtKroNativeU32(output,ref pc,displacement) && KrtKroNativeCode(output,ref pc,0x018948,3) &&
+        KrtKroNativeCode(output,ref pc,0x08518948,4) && KrtKroNativeCode(output,ref pc,0xc88948,3);
+}
+
+bool KrtKroNativeWideLoad(KrtKroObject output, ref int32 pc) {
+    if (!(KrtKroNativeCode(output, ref pc, 153141493402440, 7))) { return false; }
+    return KrtKroNativeWideBox(output, ref pc);
+}
+
+bool KrtKroNativeWideStore(KrtKroObject output, ref int32 pc) {
+    return KrtKroNativeCode(output, ref pc, 39204227213460808, 7) &&
+        KrtKroNativeCode(output, ref pc, 1384320850413576, 7) &&
+        KrtKroNativeCode(output, ref pc, 3247170600945969, 7) &&
+        KrtKroNativeCode(output, ref pc, 139692360, 4);
+}
+
+bool KrtKroNativeWideConvert(KrtKroObject output, ref int32 pc, int32 mode) {
+    if (!(KrtKroNativeCode(output, ref pc, 88, 1))) { return false; }
+    if (mode == 2) {
+    if (!(KrtKroNativeCode(output, ref pc, 39204201443657032, 7) &&
+        KrtKroNativeCode(output, ref pc, 0, 1))) { return false; }
+    } else {
+        if (mode == 5) {
+    if (!(KrtKroNativeCode(output, ref pc, 39204227213460808, 7) &&
+        KrtKroNativeCode(output, ref pc, 1384287476123728, 7) &&
+        KrtKroNativeCode(output, ref pc, 3526475825, 4))) { return false; }
+        } else if (mode == 0) {
+    if (!(KrtKroNativeCode(output, ref pc, 39240, 2))) { return false; }
+        } else if (mode == 1) {
+    if (!(KrtKroNativeCode(output, ref pc, 53809, 2))) { return false; }
+        } else { return false; }
+        if (!KrtKroNativeWideBox(output, ref pc)) { return false; }
+    }
+    return KrtKroNativeCode(output, ref pc, 80, 1);
+}
+
+bool KrtKroNativeWideOperands(KrtKroObject output, ref int32 pc) {
+    return KrtKroNativeCode(output, ref pc, 2661645009049689, 7) &&
+        KrtKroNativeCode(output, ref pc, 153141493402440, 7) &&
+        KrtKroNativeCode(output, ref pc, 20497309442835691, 7) &&
+        KrtKroNativeCode(output, ref pc, 25204414439803269, 7) &&
+        KrtKroNativeCode(output, ref pc, 13797681382770696, 7) &&
+        KrtKroNativeCode(output, ref pc, 14365129, 3);
+}
+
+bool KrtKroNativeWideBinary(KrtKroObject output, ref int32 pc, int32 operation, bool unsigned_value) {
+    if (!KrtKroNativeWideOperands(output, ref pc)) { return false; }
+    if (operation == 43) {
+    if (!(KrtKroNativeCode(output, ref pc, 239767770366280, 6))) { return false; }
+    }
+    else if (operation == 45) {
+    if (!(KrtKroNativeCode(output, ref pc, 239802130114888, 6))) { return false; }
+    }
+    else if (operation == 42) {
+    if (!(KrtKroNativeCode(output, ref pc, 60991075149449545, 7) &&
+        KrtKroNativeCode(output, ref pc, 59392632353132360, 7) &&
+        KrtKroNativeCode(output, ref pc, 239699052590920, 6))) { return false; }
+    }
+    else if (operation == 38) {
+    if (!(KrtKroNativeCode(output, ref pc, 239836489851208, 6))) { return false; }
+    }
+    else if (operation == 124) {
+    if (!(KrtKroNativeCode(output, ref pc, 239733410629960, 6))) { return false; }
+    }
+    else if (operation == 94) {
+    if (!(KrtKroNativeCode(output, ref pc, 239905209332040, 6))) { return false; }
+    }
+    else if (operation == 106) {
+    if (!(KrtKroNativeCode(output, ref pc, 32441062718955907, 7) &&
+        KrtKroNativeCode(output, ref pc, 59471220916045833, 7) &&
+        KrtKroNativeCode(output, ref pc, 20480093198019552, 7) &&
+        KrtKroNativeCode(output, ref pc, 3224494803, 4))) { return false; }
+    }
+    else if (operation == 107) {
+        if (unsigned_value) {
+    if (!(KrtKroNativeCode(output, ref pc, 32441062718955907, 7) &&
+        KrtKroNativeCode(output, ref pc, 59471281179805705, 7) &&
+        KrtKroNativeCode(output, ref pc, 20495486360808426, 7) &&
+        KrtKroNativeCode(output, ref pc, 3526486227, 4))) { return false; }
+        } else {
+    if (!(KrtKroNativeCode(output, ref pc, 32441062718955907, 7) &&
+        KrtKroNativeCode(output, ref pc, 59471281179805705, 7) &&
+        KrtKroNativeCode(output, ref pc, 20495486360939514, 7) &&
+        KrtKroNativeCode(output, ref pc, 70346217158867, 6))) { return false; }
+        }
+    } else if (operation == 47 || operation == 37) {
+    if (!(KrtKroNativeCode(output, ref pc, 15544645, 3))) { return false; }
+        if (!unsigned_value) {
+    if (!(KrtKroNativeCode(output, ref pc, 53270309617435976, 7) &&
+        KrtKroNativeCode(output, ref pc, 61070483579207683, 7) &&
+        KrtKroNativeCode(output, ref pc, 61633433546425160, 7) &&
+        KrtKroNativeCode(output, ref pc, 36944752378873160, 7) &&
+        KrtKroNativeCode(output, ref pc, 36953322942890741, 7) &&
+        KrtKroNativeCode(output, ref pc, 944746528979, 5))) { return false; }
+        }
+    if (!(KrtKroNativeCode(output, ref pc, 33170106679331145, 7) &&
+        KrtKroNativeCode(output, ref pc, 54097372010465283, 7) &&
+        KrtKroNativeCode(output, ref pc, 19652882459078981, 7) &&
+        KrtKroNativeCode(output, ref pc, 2160057137, 7) &&
+        KrtKroNativeCode(output, ref pc, 20779469612568904, 7) &&
+        KrtKroNativeCode(output, ref pc, 4294502655840977, 7) &&
+        KrtKroNativeCode(output, ref pc, 58909500065301650, 7) &&
+        KrtKroNativeCode(output, ref pc, 20561373784458705, 7) &&
+        KrtKroNativeCode(output, ref pc, 20564655725861689, 7) &&
+        KrtKroNativeCode(output, ref pc, 56903338980198969, 7) &&
+        KrtKroNativeCode(output, ref pc, 501941182077257, 7) &&
+        KrtKroNativeCode(output, ref pc, 3413495807, 4))) { return false; }
+        if (operation == 47) {
+    if (!(KrtKroNativeCode(output, ref pc, 18518564533209420, 7) &&
+        KrtKroNativeCode(output, ref pc, 69603528980743670, 7) &&
+        KrtKroNativeCode(output, ref pc, 69603487616551128, 7) &&
+        KrtKroNativeCode(output, ref pc, 218, 1))) { return false; }
+        } else {
+    if (!(KrtKroNativeCode(output, ref pc, 18536156720302412, 7) &&
+        KrtKroNativeCode(output, ref pc, 69603528980678134, 7) &&
+        KrtKroNativeCode(output, ref pc, 69603487616551128, 7) &&
+        KrtKroNativeCode(output, ref pc, 218, 1))) { return false; }
+        }
+    } else { return false; }
+    return KrtKroNativeWideBox(output, ref pc) && KrtKroNativeCode(output, ref pc, 80, 1);
+}
+
+bool KrtKroNativeWideCompare(KrtKroObject output, ref int32 pc, int32 operation, bool unsigned_value) {
+    if (!KrtKroNativeWideOperands(output, ref pc)) { return false; }
+    if (operation == 61) {
+    if (!(KrtKroNativeCode(output, ref pc, 20506103532499272, 7) &&
+        KrtKroNativeCode(output, ref pc, 827117785097, 5))) { return false; }
+    }
+    else if (operation == 101) {
+    if (!(KrtKroNativeCode(output, ref pc, 20506103532499272, 7) &&
+        KrtKroNativeCode(output, ref pc, 827134562313, 5))) { return false; }
+    }
+    else if (operation == 60) {
+        if (unsigned_value) {
+    if (!(KrtKroNativeCode(output, ref pc, 16123274846681416, 7) &&
+        KrtKroNativeCode(output, ref pc, 4226435733655496, 7) &&
+        KrtKroNativeCode(output, ref pc, 49298, 2))) { return false; }
+        } else {
+    if (!(KrtKroNativeCode(output, ref pc, 16123274846681416, 7) &&
+        KrtKroNativeCode(output, ref pc, 4226435733655496, 7) &&
+        KrtKroNativeCode(output, ref pc, 49308, 2))) { return false; }
+        }
+    }
+    else if (operation == 102) {
+        if (unsigned_value) {
+    if (!(KrtKroNativeCode(output, ref pc, 16123274846681416, 7) &&
+        KrtKroNativeCode(output, ref pc, 4226435733917640, 7) &&
+        KrtKroNativeCode(output, ref pc, 49298, 2))) { return false; }
+        } else {
+    if (!(KrtKroNativeCode(output, ref pc, 16123274846681416, 7) &&
+        KrtKroNativeCode(output, ref pc, 4226435733917640, 7) &&
+        KrtKroNativeCode(output, ref pc, 49308, 2))) { return false; }
+        }
+    }
+    else if (operation == 62) {
+        if (unsigned_value) {
+    if (!(KrtKroNativeCode(output, ref pc, 16123274846681416, 7) &&
+        KrtKroNativeCode(output, ref pc, 4226435733983176, 7) &&
+        KrtKroNativeCode(output, ref pc, 49303, 2))) { return false; }
+        } else {
+    if (!(KrtKroNativeCode(output, ref pc, 16123274846681416, 7) &&
+        KrtKroNativeCode(output, ref pc, 4226435733983176, 7) &&
+        KrtKroNativeCode(output, ref pc, 49311, 2))) { return false; }
+        }
+    }
+    else if (operation == 103) {
+        if (unsigned_value) {
+    if (!(KrtKroNativeCode(output, ref pc, 16123274846681416, 7) &&
+        KrtKroNativeCode(output, ref pc, 4226435733721032, 7) &&
+        KrtKroNativeCode(output, ref pc, 49303, 2))) { return false; }
+        } else {
+    if (!(KrtKroNativeCode(output, ref pc, 16123274846681416, 7) &&
+        KrtKroNativeCode(output, ref pc, 4226435733721032, 7) &&
+        KrtKroNativeCode(output, ref pc, 49311, 2))) { return false; }
+        }
+    }
+    else { return false; }
+    return KrtKroNativeCode(output, ref pc, 1354806799, 4);
+}
+
+bool KrtKroNativeWideUnary(KrtKroObject output, ref int32 pc, int32 operation) {
+    if (!(KrtKroNativeCode(output, ref pc, 20276595373983832, 7) &&
+        KrtKroNativeCode(output, ref pc, 66147217735962763, 7) &&
+        KrtKroNativeCode(output, ref pc, 902777811204, 5))) { return false; }
+    if (operation == 33) {
+        return KrtKroNativeCode(output, ref pc, 4433866803644744, 7) &&
+        KrtKroNativeCode(output, ref pc, 5292214, 3);
+    }
+    if (operation == 45) {
+    if (!(KrtKroNativeCode(output, ref pc, 231461304727368, 7) &&
+        KrtKroNativeCode(output, ref pc, 14350152, 3))) { return false; }
+    } else if (operation == 126) {
+    if (!(KrtKroNativeCode(output, ref pc, 231959520409416, 6))) { return false; }
+    } else { return false; }
+    return KrtKroNativeWideBox(output, ref pc) && KrtKroNativeCode(output, ref pc, 80, 1);
+}
+
+bool KrtKroNativeWidePost(KrtKroObject output, ref int32 pc, int32 increment, bool packed) {
+    if (!(KrtKroNativeCode(output, ref pc, 930016154459, 5))) { return false; }
+    if (packed) { if (!KrtKroNativeWideLoad(output, ref pc)) { return false; } }
+    else { if (!KrtKroNativeMemoryLoad(output, ref pc, 8)) { return false; } }
+    if (!(KrtKroNativeCode(output, ref pc, 20560, 2))) { return false; }
+    if (!KrtKroNativeCode(output, ref pc, 47176, 2) || !KrtKroNativeU64(output, ref pc, increment)) { return false; }
+    if (!(KrtKroNativeCode(output, ref pc, 80, 1))) { return false; }
+    if (!KrtKroNativeWideConvert(output, ref pc, 0) || !KrtKroNativeWideBinary(output, ref pc, 43, false)) { return false; }
+    if (!(KrtKroNativeCode(output, ref pc, 1364941144, 4))) { return false; }
+    return KrtKroNativeMemoryStore(output, ref pc, packed ? 16 : 8);
+}
+
+bool KrtKroNativeWideFloat(KrtKroObject output, ref int32 pc, int32 mode, int32 width) {
+    if (mode == 1 || mode == 2) { return KrtKroNativeWideFloatToBits(output,ref pc,mode,width); }
+    if (mode != 3 && mode != 4) { return false; }
+    if (width == 4 && !KrtKroNativeFloatConvert(output, ref pc, 4, 8)) { return false; }
+    if (!(KrtKroNativeCode(output, ref pc, 65514717103868248, 7) &&
+        KrtKroNativeCode(output, ref pc, 65796187802388543, 7) &&
+        KrtKroNativeCode(output, ref pc, 34357739828, 7) &&
+        KrtKroNativeCode(output, ref pc, 33776997272381825, 7) &&
+        KrtKroNativeCode(output, ref pc, 2163835206, 7) &&
+        KrtKroNativeCode(output, ref pc, 72057592868257395, 7) &&
+        KrtKroNativeCode(output, ref pc, 9367839337086975, 7) &&
+        KrtKroNativeCode(output, ref pc, 13850448017443024, 7) &&
+        KrtKroNativeCode(output, ref pc, 69535860713423826, 7) &&
+        KrtKroNativeCode(output, ref pc, 65534501673075673, 7) &&
+        KrtKroNativeCode(output, ref pc, 70231532480176107, 7) &&
+        KrtKroNativeCode(output, ref pc, 54787630533538624, 7) &&
+        KrtKroNativeCode(output, ref pc, 38641300733481800, 7) &&
+        KrtKroNativeCode(output, ref pc, 66357940018432194, 7) &&
+        KrtKroNativeCode(output, ref pc, 37521737075667204, 7) &&
+        KrtKroNativeCode(output, ref pc, 20504754900333760, 7) &&
+        KrtKroNativeCode(output, ref pc, 240755599790723, 6))) { return false; }
+    return KrtKroNativeWideBox(output, ref pc) && KrtKroNativeCode(output, ref pc, 80, 1);
+}
+
+bool KrtKroNativeWideRef(KrtKroObject output, ref int32 pc) {
+    if (!(KrtKroNativeCode(output, ref pc, 54189739872045147, 7))) { return false; }
+    if (!KrtKroNativeCode(output, ref pc, 34063, 2)) { return false; }
+    int32 ready_patch = pc;
+    if (!KrtKroNativeU32(output, ref pc, 0)) { return false; }
+    if (!(KrtKroNativeCode(output, ref pc, 3526475825, 4))) { return false; }
+    if (!KrtKroNativeWideBox(output, ref pc)) { return false; }
+    if (!(KrtKroNativeCode(output, ref pc, 231752, 3))) { return false; }
+    return KrtKroEmitTextU32(output, ready_patch, pc - ready_patch - 4) && KrtKroNativeCode(output, ref pc, 80, 1);
 }

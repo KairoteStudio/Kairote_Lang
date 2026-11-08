@@ -15,7 +15,7 @@ python3 Test/SelfHost/Bootstrap.py
 SELFHOST_COMPILER="$PWD/build/selfhost/stage2/program" python3 -m unittest discover -s Test/SelfHost
 python3 Test/SelfHost/RunStandardLibrary.py
 python3 Test/SelfHost/CompareDaily.py --work build/selfhost-comparison/current --fail-on-wrong
-./SelfHost/krtc build Test/SelfHost/examples/language-project
+./SelfHost/bin/linux/KrtProject build Test/SelfHost/examples/language-project
 ./Test/SelfHost/examples/language-project/bin/release/LanguageDemo
 ```
 
@@ -23,7 +23,7 @@ LanguageDemo 是实际的多文件工程，包含泛型构造、浮点数组、f
 
 `Test/SelfHost/examples/dispatch-project` 的 DispatchDemo 进一步组合抽象基类、虚方法、base 调用、接口继承、泛型接口约束、接口数组及接口类型的异常捕获。使用同样的 build 命令后，输出 `reading verified` 和 `interface collection verified`，退出码为 0。
 
-Kairote 原生驱动处理源码依赖、配置、缓存、位置映射、产物发布和链接调用；类型绑定、泛型实例化、异常展开、浮点和整数机器码、KRO 数据与符号也在原生编译器内生成。`SelfHost/krtc` 直接执行该二进制，测试脚本负责构造测试输入和记录结果。
+Kairote 原生驱动处理源码依赖、配置、缓存、位置映射、产物发布和链接调用；类型绑定、泛型实例化、异常展开、浮点和整数机器码、KRO 数据与符号也在原生编译器内生成。`SelfHost/bin/linux/KrtProject` 直接执行该二进制，测试脚本负责构造测试输入和记录结果。
 
 ## 本轮补充内容
 
@@ -115,7 +115,7 @@ SelfHost 的两项拒绝都是 `.Length()` 方法形式；对应的 `.Length` �
 
 完整套件及两代原生验收包含实际 HTTP 服务器、结构体和装箱路由测试。ArkLink 的 6 个组件在 ASan/UBSan 下通过，并通过 18 项 NativeQuality 验收；链接器源码与被测产物 SHA 已核对。各门禁和资源记录保留在完成报告及其引用的独立报告中。这些结果不证明全部语言与 Re.KrtC 等价。
 
-全部门禁通过后，默认编译器已切换到本轮全新自举的 Stage 2，原生程序 SHA 为 `dd7c5df6c233644dd302283bc180df3011b1766277736711cfbe79359be10af5`；默认 ArkLink SHA 为 `2774e36fa6e0e2cb2070ffe23bae516672fc2b369a8e004da245cae20aa2f45c`。`build/selfhost-types/final14/default-installation/report.json` 保存切换前后身份和旧工具位置。随后在空 PATH 下通过 `SelfHost/krtc` 编译并执行行项目金额程序，验证结构体复制、装箱解箱、自定义 `IEnumerator<int32>` 及正常/提前退出的 Dispose，实际输出 `63`；记录为 `build/selfhost-types/default-entry-smoke14/executed.json`。入口脚本仍直接执行原生编译器。
+全部门禁通过后，默认编译器已切换到本轮全新自举的 Stage 2，原生程序 SHA 为 `dd7c5df6c233644dd302283bc180df3011b1766277736711cfbe79359be10af5`；默认 ArkLink SHA 为 `2774e36fa6e0e2cb2070ffe23bae516672fc2b369a8e004da245cae20aa2f45c`。`build/selfhost-types/final14/default-installation/report.json` 保存切换前后身份和旧工具位置。随后在空 PATH 下通过 `SelfHost/bin/linux/KrtProject` 编译并执行行项目金额程序，验证结构体复制、装箱解箱、自定义 `IEnumerator<int32>` 及正常/提前退出的 Dispose，实际输出 `63`；记录为 `build/selfhost-types/default-entry-smoke14/executed.json`。入口脚本仍直接执行原生编译器。
 
 `final10` 的未完成报告及其失败和总时限证据继续保留；历史或专项结果不替代本轮最终验收。
 

@@ -11,8 +11,8 @@ from Test.SelfHost.test_contract import ROOT, KRTC, ARKLINK, compiler_prelude
 
 class ParserTests(unittest.TestCase):
     def check_ast(self, source_text, assertions, compilation_unit=False, expected_errors=0):
-        parts = ('Compiler/Frontend/Lexer/Token.krt', 'Compiler/Frontend/Lexer/Lexer.krt',
-                 'Compiler/Frontend/Parser/Ast.krt', 'Compiler/Frontend/Parser/Parser.krt', 'Compiler/Frontend/Parser/Names.krt')
+        parts = ('Compiler/Frontend/Lexer/Lexer.krt',
+                 'Compiler/Frontend/Parser/Parser.krt')
         prelude = compiler_prelude(parts)
         program = f'''
 int32 main() {{

@@ -76,13 +76,12 @@ def main():
         parser.error(f'compiler not found: {compiler}')
     args.work.mkdir(parents=True, exist_ok=True)
     os.environ['SELFHOST_COMPILER'] = str(compiler)
-    os.environ['KRTC'] = str(ROOT / 'SelfHost/krtc')
     os.environ['KRT_STDLIB_TEST_LEVELS'] = ','.join(str(level) for level in levels)
     if args.linker is not None:
         if not args.linker.resolve().is_file():
             parser.error(f'linker not found: {args.linker}')
         os.environ['KRT_STDLIB_LINKER'] = str(args.linker.resolve())
-    tracked = [compiler, ROOT / 'SelfHost/krtc', *sorted((ROOT / 'SelfHost').rglob('*.krt')),
+    tracked = [compiler, ROOT / 'SelfHost/RunNativeCompiler', *sorted((ROOT / 'SelfHost').rglob('*.krt')),
                *sorted((ROOT / 'libs').rglob('*.krt'))]
     if os.environ.get('KRT_STDLIB_LINKER'):
         tracked.append(Path(os.environ['KRT_STDLIB_LINKER']).resolve())
@@ -94,7 +93,7 @@ def main():
     report = {
         'schema': 1, 'compiler': str(compiler),
         'compiler_sha256': hashlib.sha256(compiler.read_bytes()).hexdigest(),
-        'launcher_sha256': hashlib.sha256((ROOT / 'SelfHost/krtc').read_bytes()).hexdigest(),
+        'launcher_sha256': hashlib.sha256((ROOT / 'SelfHost/RunNativeCompiler').read_bytes()).hexdigest(),
         'compiler_sources': {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
                              for path in sorted((ROOT / 'SelfHost').rglob('*.krt'))},
         'optimization_levels': levels, 'tests_run': result.testsRun,

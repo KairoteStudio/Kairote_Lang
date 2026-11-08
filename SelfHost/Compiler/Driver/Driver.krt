@@ -1,0 +1,1345 @@
+// ===== Object ABI validation =====
+// Native pre-link ABI2/ABI3 validation. KRO payloads remain normal linker inputs;
+// their exact contracts are checked before any executable is published.
+class KrtDriverAbiRecord {
+    public int64 path;
+    public int64 nominal;
+    public int64 nominal_length;
+    public int64 contract;
+    public int64 contract_length;
+    public int64 name;
+    public bool defined;
+    public int32 kind;
+    public bool weak;
+    public uint64 hash;
+    public int64 definition_path;
+    public KrtDriverAbiRecord hash_next;
+    public KrtDriverAbiRecord next;
+}
+class KrtDriverAbiMapping {
+    public int64 data;
+    public int64 length;
+    public KrtDriverAbiMapping next;
+}
+class KrtDriverAbiState {
+    public KrtDriverAbiRecord records;
+    public KrtDriverAbiRecord tail;
+    public KrtDriverAbiRecord[] buckets;
+    public int32 capacity;
+    public int32 count;
+    public KrtDriverAbiMapping mappings;
+}
+int64 KrtDriverAbiWord(int64 data,int64 offset){unsafe(using krt.mem;){byte* bytes=(byte*)data;return(int64)bytes[offset]|((int64)bytes[offset+1]<<8)|((int64)bytes[offset+2]<<16)|((int64)bytes[offset+3]<<24);}}
+bool KrtDriverAbiRange(int64 offset,int64 size,int64 length){return offset>=0&&size>=0&&offset<=length&&size<=length-offset;}
+bool KrtDriverAbiEqual(int64 left,int64 left_length,int64 right,int64 right_length){if(left_length!=right_length){return false;}unsafe(using krt.mem;){byte* first=(byte*)left;byte* second=(byte*)right;int64 index=0;while(index<left_length){if(first[index]!=second[index]){return false;}index=index+1;}}return true;}
+uint64 KrtDriverAbiHash(int64 data,int64 length){uint64 hash=14695981039346656037;unsafe(using krt.mem;){byte* bytes=(byte*)data;int64 index=0;while(index<length){hash=(hash^(uint64)bytes[index])*1099511628211;index=index+1;}}return hash;}
+bool KrtDriverAbiFailure(string code,int64 path,string message){KrtDriverError(code,(string)KrtDriverConcat(KrtDriverConcat(path,(int64)": "),(int64)message));return false;}
+int64 KrtDriverAbiSymbolName(KrtDriverBuffer object,int64 symbols,int64 strings,int64 string_length,int64 index){
+    int64 offset=KrtDriverAbiWord(object.data,symbols+index*32);if(offset>=string_length){return 0;}
+    unsafe(using krt.mem;){byte* bytes=(byte*)(object.data+strings);int64 length=0;while(length<string_length-offset&&bytes[offset+length]!=0){length=length+1;}if(length==string_length-offset){return 0;}return object.data+strings+offset;}
+}
+// Objects use a checked mapping, independently of the source-reader budget.
+bool KrtDriverAbiReadBinary(int64 path,KrtDriverBuffer buffer){
+    int64 descriptor=syscall(2,path,0,0,0,0,0);if(descriptor<0){return false;}
+    int64 length=syscall(8,descriptor,0,2,0,0,0);
+    if(length<=0||length>1073741824){syscall(3,descriptor,0,0,0,0,0);return false;}
+    int64 data=syscall(9,0,length,1,2,descriptor,0);syscall(3,descriptor,0,0,0,0,0);
+    if(data<0&&data>=-4095){return false;}buffer.data=data;buffer.length=length;buffer.ok=true;return true;
+}
+bool KrtDriverAbiInsert(KrtDriverAbiState state,KrtDriverAbiRecord record){
+    if(state.capacity==0){state.capacity=256;state.buckets=new KrtDriverAbiRecord[256];}
+    if(state.count>=state.capacity*3/4&&state.capacity<1048576){
+        state.capacity=state.capacity*2;KrtDriverAbiRecord[] buckets=new KrtDriverAbiRecord[state.capacity];
+        KrtDriverAbiRecord existing=state.records;
+        while(existing!=null){int32 slot=(int32)(existing.hash&(uint64)(state.capacity-1));existing.hash_next=buckets[slot];buckets[slot]=existing;existing=existing.next;}
+        delete state.buckets;state.buckets=buckets;
+    }
+    record.hash=KrtDriverAbiHash(record.nominal,record.nominal_length);
+    int32 slot=(int32)(record.hash&(uint64)(state.capacity-1));KrtDriverAbiRecord existing=state.buckets[slot];
+    while(existing!=null){
+        if(record.hash==existing.hash&&KrtDriverAbiEqual(record.nominal,record.nominal_length,existing.nominal,existing.nominal_length)){
+            if(!KrtDriverAbiEqual(record.contract,record.contract_length,existing.contract,existing.contract_length)){
+                return KrtDriverAbiFailure("E_ABI_LAYOUT",record.path,(string)KrtDriverConcat((int64)"contract conflicts with ",existing.path));
+            }
+            if(record.kind!=existing.kind){return KrtDriverAbiFailure("E_ABI_MANIFEST",record.path,"ABI record kinds disagree");}
+            if(record.kind!=2&&record.defined&&existing.defined&&!record.weak&&!existing.weak){return KrtDriverAbiFailure("E_ABI_SYMBOL",record.path,(string)KrtDriverConcat((int64)"duplicate public native definition in ",existing.definition_path));}
+            if(record.defined&&(!existing.defined||existing.weak)){existing.defined=true;existing.weak=record.weak;existing.definition_path=record.path;}delete record;return true;
+        }
+        existing=existing.hash_next;
+    }
+    if(state.count>=1048576){return KrtDriverAbiFailure("E_ABI_MANIFEST",record.path,"ABI contract index exceeds 1048576 entries");}
+    if(record.defined){record.definition_path=record.path;}
+    record.hash_next=state.buckets[slot];state.buckets[slot]=record;state.count=state.count+1;
+    if(state.records==null){state.records=record;}else{state.tail.next=record;}state.tail=record;return true;
+}
+bool KrtDriverAbiReadManifest(int64 path,KrtDriverAbiState state,KrtDriverBuffer object,int64 symbols,int64 strings,int64 string_length,int64 count,int64 text,int64 manifest,int64 manifest_size,int32 version,bool types,bool[] required,bool[] recorded){
+    if(manifest_size<16||KrtDriverAbiWord(object.data,manifest)!=0x32494241){return KrtDriverAbiFailure("E_ABI_MANIFEST",path,"invalid ABI manifest header");}
+    if(KrtDriverAbiWord(object.data,manifest+4)!=version){return KrtDriverAbiFailure("E_ABI_VERSION",path,"unsupported ABI manifest version");}
+    int64 records=KrtDriverAbiWord(object.data,manifest+8);int64 length=KrtDriverAbiWord(object.data,manifest+12);
+    if(length!=manifest_size||records>(types?1048576:count)){return KrtDriverAbiFailure("E_ABI_MANIFEST",path,"invalid ABI manifest record count or length");}
+    int64 position=16;int64 record_index=0;
+    while(record_index<records){
+        if(!KrtDriverAbiRange(position,16,length)){return KrtDriverAbiFailure("E_ABI_MANIFEST",path,"truncated ABI record header");}
+        int64 symbol=KrtDriverAbiWord(object.data,manifest+position);int64 defined=KrtDriverAbiWord(object.data,manifest+position+4);
+        int64 nominal_length=KrtDriverAbiWord(object.data,manifest+position+8);int64 contract_length=KrtDriverAbiWord(object.data,manifest+position+12);position=position+16;
+        if(types){
+            if(symbol!=4294967295||defined!=2||nominal_length<18||contract_length<nominal_length+12||!KrtDriverAbiRange(position,nominal_length+contract_length,length)){
+                return KrtDriverAbiFailure("E_ABI_MANIFEST",path,"invalid type contract record");
+            }
+            KrtDriverAbiRecord record=new KrtDriverAbiRecord();record.path=path;record.defined=true;record.kind=2;
+            record.nominal=object.data+manifest+position;record.nominal_length=nominal_length;record.contract=record.nominal+nominal_length;record.contract_length=contract_length;
+            if(!KrtDriverAbiEqual(record.nominal,6,(int64)"_KRTT$",6)||!KrtDriverAbiEqual(record.contract,8,(int64)"KRTTYPE3",8)||
+               !KrtDriverAbiEqual(record.contract+8,nominal_length,record.nominal,nominal_length)){
+                return KrtDriverAbiFailure("E_ABI_MANIFEST",path,"invalid canonical type identity");
+            }
+            if(!KrtDriverAbiInsert(state,record)){return false;}
+            position=position+nominal_length+contract_length;record_index=record_index+1;continue;
+        }
+        if(symbol>=count||(defined!=0&&defined!=1&&(defined!=5||version!=3))||!required[(int32)symbol]||recorded[(int32)symbol]||nominal_length<6||contract_length<nominal_length+18||
+           !KrtDriverAbiRange(position,nominal_length+contract_length,length)){
+            return KrtDriverAbiFailure("E_ABI_MANIFEST",path,"invalid or duplicate ABI record");
+        }
+        int64 section=KrtDriverAbiWord(object.data,symbols+symbol*32+12);int64 binding=KrtDriverAbiWord(object.data,symbols+symbol*32+16);
+        int64 value=KrtDriverAbiWord(object.data,symbols+symbol*32+4);int64 size=KrtDriverAbiWord(object.data,symbols+symbol*32+8);
+        int64 symbol_type=KrtDriverAbiWord(object.data,symbols+symbol*32+20);
+        if(symbol_type!=1||((defined==1||defined==5)&&(section!=1||binding!=(defined==5?2:1)||!KrtDriverAbiRange(value,size,text)))||
+           (defined==0&&(section!=0||binding!=1||value!=0||size!=0))){
+            return KrtDriverAbiFailure("E_ABI_MANIFEST",path,"ABI record disagrees with symbol definition");
+        }
+        KrtDriverAbiRecord record=new KrtDriverAbiRecord();record.path=path;record.defined=defined==1||defined==5;record.weak=defined==5;
+        record.nominal=object.data+manifest+position;record.nominal_length=nominal_length;record.contract=record.nominal+nominal_length;record.contract_length=contract_length;
+        record.name=KrtDriverAbiSymbolName(object,symbols,strings,string_length,symbol);
+        bool named=KrtDriverStartsWith(record.name,"_KRT3$");
+        if((named&&version!=3)||!KrtDriverAbiEqual(record.nominal,6,(int64)"_KRT1$",6)||!KrtDriverAbiEqual(record.contract,7,(int64)(named?"KRTABI3":"KRTABI2"),7)||
+           !KrtDriverAbiEqual(record.contract+7,nominal_length,record.nominal,nominal_length)){
+            return KrtDriverAbiFailure("E_ABI_MANIFEST",path,"invalid canonical contract identity");
+        }
+        KrtLinkName expected=KrtLinkNameNew();KrtLinkText(expected,named?"_KRT3$":"_KRT2$");
+        unsafe(using krt.mem;){byte* nominal=(byte*)record.nominal;int64 character=6;while(character<nominal_length){if(nominal[character]==0){expected.valid=false;break;}KrtLinkByte(expected,nominal[character]);character=character+1;}}
+        KrtLinkText(expected,"$H");KrtAbiHex(expected,KrtDriverAbiHash(record.contract,contract_length));
+        if(!expected.valid||KrtDriverStringLength(record.name)!=expected.length){return KrtDriverAbiFailure("E_ABI_MANIFEST",path,"invalid ABI symbol name");}
+        unsafe(using krt.mem;){byte* actual=(byte*)record.name;int32 character=0;
+            while(character<expected.length&&actual[character]==expected.bytes[character]){character=character+1;}
+            if(character!=expected.length||actual[character]!=0){return KrtDriverAbiFailure("E_ABI_MANIFEST",path,"ABI symbol fingerprint disagrees with exact contract");}
+        }
+        if(!KrtDriverAbiInsert(state,record)){return false;}
+        recorded[(int32)symbol]=true;position=position+nominal_length+contract_length;record_index=record_index+1;
+    }
+    if(position!=length){return KrtDriverAbiFailure("E_ABI_MANIFEST",path,"trailing ABI record bytes");}
+    return true;
+}
+bool KrtDriverAbiReadStorage(int64 path,KrtDriverAbiState state,KrtDriverBuffer object,int64 symbols,int64 strings,int64 string_length,int64 index,int64 text,int64 data){
+    int64 name=KrtDriverAbiSymbolName(object,symbols,strings,string_length,index);
+    if(!KrtDriverStartsWith(name,"_KRTG3$")&&!KrtDriverStartsWith(name,"_KRTJ3$")&&!KrtDriverStartsWith(name,"_KRTL3$")){return true;}
+    bool initializer=KrtDriverStartsWith(name,"_KRTL3$");int64 symbol=symbols+index*32;
+    int64 section=KrtDriverAbiWord(object.data,symbol+12);int64 binding=KrtDriverAbiWord(object.data,symbol+16);
+    int64 offset=KrtDriverAbiWord(object.data,symbol+4);int64 size=KrtDriverAbiWord(object.data,symbol+8);
+    if((binding!=1&&binding!=2)||KrtDriverAbiWord(object.data,symbol+20)!=(initializer?1:2)||
+       (section!=0&&(section!=(initializer?1:3)||!KrtDriverAbiRange(offset,size,initializer?text:data)))||
+       (section==0&&(binding!=1||offset!=0||size!=0))){return KrtDriverAbiFailure("E_ABI_MANIFEST",path,"invalid native storage or initializer symbol");}
+    KrtDriverAbiRecord record=new KrtDriverAbiRecord();record.path=path;record.nominal=name;record.nominal_length=KrtDriverStringLength(name);
+    record.contract=name;record.contract_length=0;record.name=name;record.kind=1;record.defined=section!=0;record.weak=binding==2;
+    return KrtDriverAbiInsert(state,record);
+}
+
+bool KrtDriverAbiRead(int64 path,KrtDriverAbiState state){
+    KrtDriverBuffer object=new KrtDriverBuffer();if(!KrtDriverAbiReadBinary(path,object)){return KrtDriverAbiFailure("E_ABI_MANIFEST",path,"unable to map object contracts (object budget: 1 GiB)");}
+    KrtDriverAbiMapping mapping=new KrtDriverAbiMapping();mapping.data=object.data;mapping.length=object.length;mapping.next=state.mappings;state.mappings=mapping;
+    if(object.length<64||KrtDriverAbiWord(object.data,0)!=5198411||KrtDriverAbiWord(object.data,4)!=2){return KrtDriverAbiFailure("E_ABI_MANIFEST",path,"invalid KRO header");}
+    int64 text=KrtDriverAbiWord(object.data,16);int64 rodata=KrtDriverAbiWord(object.data,20);int64 data=KrtDriverAbiWord(object.data,24);
+    int64 count=KrtDriverAbiWord(object.data,48);int64 string_length=KrtDriverAbiWord(object.data,52);int64 relocations=KrtDriverAbiWord(object.data,56);
+    int64 relocation_sum=KrtDriverAbiWord(object.data,32)+KrtDriverAbiWord(object.data,36)+KrtDriverAbiWord(object.data,40);
+    int64 rodata_start=64+text;int64 symbols=rodata_start+rodata+data;int64 strings=symbols+count*32+relocations*16;
+    if(count>1048576||relocations>4194304||relocations!=relocation_sum||!KrtDriverAbiRange(64,text+rodata+data,object.length)||
+       !KrtDriverAbiRange(symbols,count*32+relocations*16,object.length)||!KrtDriverAbiRange(strings,string_length,object.length)){
+        return KrtDriverAbiFailure("E_ABI_MANIFEST",path,"KRO tables exceed object bounds");
+    }
+    int64[] manifests=new int64[3];int64[] sizes=new int64[3];int32 marker=0;
+    while(marker<3){manifests[marker]=-1;marker=marker+1;}
+    bool[] required=new bool[(int32)count];bool[] recorded=new bool[(int32)count];int64 index=0;
+    while(index<count){
+        int64 name=KrtDriverAbiSymbolName(object,symbols,strings,string_length,index);if(name==0){return KrtDriverAbiFailure("E_ABI_MANIFEST",path,"invalid symbol string");}
+        marker=-1;
+        if(KrtDriverStringEqual(name,(int64)"_KRT_ABI2_MANIFEST")){marker=0;}
+        else if(KrtDriverStringEqual(name,(int64)"_KRT_ABI3_MANIFEST")){marker=1;}
+        else if(KrtDriverStringEqual(name,(int64)"_KRT_ABI3_TYPES")){marker=2;}
+        if(marker>=0){
+            int64 offset=KrtDriverAbiWord(object.data,symbols+index*32+4);int64 size=KrtDriverAbiWord(object.data,symbols+index*32+8);
+            if(manifests[marker]>=0||KrtDriverAbiWord(object.data,symbols+index*32+12)!=2||KrtDriverAbiWord(object.data,symbols+index*32+16)!=0||KrtDriverAbiWord(object.data,symbols+index*32+20)!=2||!KrtDriverAbiRange(offset,size,rodata)){
+                return KrtDriverAbiFailure("E_ABI_MANIFEST",path,"manifest must be one local read-only symbol");
+            }
+            manifests[marker]=rodata_start+offset;sizes[marker]=size;
+        }
+        if(KrtDriverStartsWith(name,"_KRT2$")||KrtDriverStartsWith(name,"_KRT3$")){required[(int32)index]=true;}
+        index=index+1;
+    }
+    marker=0;while(marker<3){
+        if(manifests[marker]>=0&&!KrtDriverAbiReadManifest(path,state,object,symbols,strings,string_length,count,text,manifests[marker],sizes[marker],marker==0?2:3,marker==2,required,recorded)){return false;}
+        marker=marker+1;
+    }
+    index=0;while(index<count){if(!KrtDriverAbiReadStorage(path,state,object,symbols,strings,string_length,index,text,data)){return false;}index=index+1;}
+    index=0;while(index<count){if(required[(int32)index]&&!recorded[(int32)index]){return KrtDriverAbiFailure("E_ABI_MANIFEST",path,"native ABI symbol is missing its contract record");}index=index+1;}
+    return true;
+}
+void KrtDriverAbiDispose(KrtDriverAbiState state){
+    KrtDriverAbiRecord record=state.records;while(record!=null){KrtDriverAbiRecord next=record.next;delete record;record=next;}
+    KrtDriverAbiMapping mapping=state.mappings;while(mapping!=null){KrtDriverAbiMapping next=mapping.next;syscall(11,mapping.data,mapping.length,0,0,0,0);delete mapping;mapping=next;}
+    if(state.buckets!=null){delete state.buckets;}delete state;
+}
+bool KrtDriverAbiCheckContracts(KrtDriverPath objects,bool require_definitions){
+    KrtDriverAbiState state=new KrtDriverAbiState();KrtDriverPath object=objects;
+    while(object!=null){if(!KrtDriverAbiRead(object.value,state)){KrtDriverAbiDispose(state);return false;}object=object.next;}
+    KrtDriverAbiRecord record=state.records;
+    while(record!=null){
+        if(require_definitions&&!record.defined){KrtDriverAbiFailure("E_ABI_SYMBOL",record.path,(string)KrtDriverConcat((int64)(record.kind==1?"missing native storage or initializer definition: ":(KrtDriverStartsWith(record.name,"_KRT2$")?"missing public ABI2 definition: ":"missing public ABI3 definition: ")),record.name));KrtDriverAbiDispose(state);return false;}
+        record=record.next;
+    }
+    KrtDriverAbiDispose(state);return true;
+}
+bool KrtDriverAbiValidate(KrtDriverPath objects){return KrtDriverAbiCheckContracts(objects,true);}
+
+// ===== Artifact output =====
+// Text artifacts are emitted directly by the native compiler.
+static int32 KrtDriverArtifactTarget = 0;
+static KrtDriverBuffer KrtDriverLastVm = null;
+
+bool KrtArtifactText(int64 descriptor, string text) {
+    return KrtDriverWriteAll(descriptor,(int64)text,KrtDriverStringLength((int64)text));
+}
+
+string KrtArtifactOp(int32 op) {
+    if (op == 0) { return "nop"; } if (op == 1) { return "const"; }
+    if (op == 2) { return "load.local"; } if (op == 3) { return "store.local"; }
+    if (op == 4) { return "add"; } if (op == 5) { return "sub"; } if (op == 6) { return "mul"; }
+    if (op == 7) { return "div"; } if (op == 8) { return "mod"; }
+    if (op == 9) { return "and"; } if (op == 10) { return "or"; } if (op == 11) { return "xor"; }
+    if (op == 12) { return "shl"; } if (op == 13) { return "shr"; }
+    if (op == 14) { return "neg"; } if (op == 15) { return "not"; } if (op == 16) { return "compare"; }
+    if (op == 17) { return "jump"; } if (op == 18) { return "branch"; }
+    if (op == 19) { return "call"; } if (op == 20) { return "return"; }
+    if (op == 21) { return "address"; } if (op == 22) { return "load"; } if (op == 23) { return "store"; }
+    if (op == 24) { return "allocate"; } if (op == 25) { return "data"; }
+    if (op == 26) { return "syscall"; } if (op == 27) { return "drop"; } if (op == 28) { return "cast"; }
+    if (op == 29) { return "ref"; } if (op == 30) { return "stack.allocate"; }
+    if (op == 31) { return "bool.not"; } if (op == 32) { return "dup"; }
+    if (op == 33) { return "post.increment"; } if (op == 34) { return "free"; }
+    if (op == 35) { return "string.equal"; } if (op == 36) { return "string.concat"; } if (op == 37) { return "string.length"; }
+    if (op == 38) { return "float.convert"; } if (op == 39) { return "float.binary"; } if (op == 40) { return "float.compare"; }
+    if (op == 41) { return "float.neg"; } if (op == 42) { return "float.bool"; } if (op == 43) { return "float.post.increment"; }
+    if (op == 44) { return "global.address"; } if (op == 45) { return "function.address"; } if (op == 46) { return "call.indirect"; }
+    if (op == 50) { return "try.enter"; } if (op == 51) { return "try.leave"; } if (op == 52) { return "throw"; }
+    if (op == 53) { return "catch.value"; } if (op == 54) { return "catch.type"; }
+    if (op == 60) { return "wide.convert"; } if (op == 61) { return "wide.binary"; } if (op == 62) { return "wide.compare"; }
+    if (op == 63) { return "wide.unary"; } if (op == 66) { return "wide.literal"; } if (op == 67) { return "wide.post.increment"; }
+    if (op == 68) { return "wide.float"; } if (op == 69) { return "wide.ref"; }
+    if (op == 70) { return "aggregate.address"; } if (op == 71) { return "aggregate.copy"; } if (op == 72) { return "aggregate.zero"; }
+    if (op == 73) { return "closure.environment"; }
+    if (op == 74) { return "type.descriptor"; }
+    if (op == 75) { return "global.guard.enter"; } if (op == 76) { return "global.guard.finish"; }
+    return "unknown";
+}
+
+bool KrtArtifactWriteIr(KrtNativeModule module, int64 descriptor) {
+    if (module == null) { return KrtArtifactText(descriptor,"; data-only module\n"); }
+    if (module.ssa != null) { return KrtSsaWriteIr(module.ssa,descriptor); }
+    if (!KrtArtifactText(descriptor,"; Kairote native stack IR\n")) { return false; }
+    int32 function_index = 0;
+    while (function_index < module.function_count) {
+        int64 header = KrtDriverConcat((int64)"function ",KrtDriverNumber(function_index));
+        header = KrtDriverConcat(header,KrtDriverConcat((int64)" params=",KrtDriverNumber(module.parameter_counts[function_index])));
+        header = KrtDriverConcat(header,KrtDriverConcat((int64)" locals=",KrtDriverNumber(module.local_counts[function_index])));
+        if (function_index == module.entry) { header = KrtDriverConcat(header,(int64)" entry"); }
+        if (!KrtArtifactText(descriptor,(string)header) || !KrtArtifactText(descriptor," {\n")) { return false; }
+        int32 index = module.starts[function_index]; int32 last = module.count;
+        if (function_index + 1 < module.function_count) { last = module.starts[function_index + 1]; }
+        while (index < last) {
+            int64 line = KrtDriverConcat((int64)"  ",KrtDriverNumber(index));
+            line = KrtDriverConcat(line,KrtDriverConcat((int64)": ",(int64)KrtArtifactOp(module.ops[index])));
+            line = KrtDriverConcat(line,KrtDriverConcat((int64)" ",KrtDriverNumber(module.args[index])));
+            line = KrtDriverConcat(line,KrtDriverConcat((int64)" ",KrtDriverNumber(module.extra[index])));
+            if (!KrtArtifactText(descriptor,(string)line) || !KrtArtifactText(descriptor,"\n")) { return false; }
+            index = index + 1;
+        }
+        if (!KrtArtifactText(descriptor,"}\n")) { return false; }
+        function_index = function_index + 1;
+    }
+    return true;
+}
+
+bool KrtArtifactIr(KrtNativeModule module, int64 path) {
+    int64 descriptor = syscall(2,path,577,420,0,0,0); if (descriptor < 0) { return false; }
+    bool result = KrtArtifactWriteIr(module,descriptor);
+    if (syscall(3,descriptor,0,0,0,0,0) != 0) { result = false; }
+    return result;
+}
+
+int32 KrtArtifactWord(byte[] bytes, int32 offset) {
+    return (int32)bytes[offset] | ((int32)bytes[offset+1] << 8) | ((int32)bytes[offset+2] << 16) | ((int32)bytes[offset+3] << 24);
+}
+
+int64 KrtArtifactSymbol(KrtKroObject object, int32 symbol_index) {
+    if (object.symbol_bytes == null || object.string_bytes == null || symbol_index < 0 || symbol_index >= object.symbol_count) { return 0; }
+    int32 offset = KrtArtifactWord(object.symbol_bytes,symbol_index*32);
+    if (offset < 0 || offset >= object.strtab_size) { return 0; }
+    int32 length = 0; while (offset+length < object.strtab_size && object.string_bytes[offset+length] != 0) { length = length + 1; }
+    int64 name = KrtDriverAlloc(length+1);
+    unsafe(using krt.mem;) {
+        byte* target = (byte*)name; int32 index = 0;
+        while (index < length) { target[index] = object.string_bytes[offset+index]; index = index+1; }
+        target[length] = 0;
+    }
+    return name;
+}
+
+bool KrtArtifactAssembly(KrtKroObject object, KrtNativeModule module, int64 path) {
+    if (object == null || module == null || object.text_words == null) { return false; }
+    int64 descriptor = syscall(2,path,577,420,0,0,0); if (descriptor < 0) { return false; }
+    bool ok = KrtArtifactText(descriptor,"# Kairote x86-64 native code; assemble with GNU as.\n.section .text\n");
+    int32[] labels = new int32[object.text_size+1]; int32 function_index = 0;
+    while (function_index < module.function_count) {
+        int32 offset = module.function_offsets[function_index];
+        if (offset < 0 || offset >= object.text_size) { ok = false; break; }
+        labels[offset] = function_index+1; function_index = function_index+1;
+    }
+    int32 position = 0; int32 relocation = 0; int32 next_relocation = -1;
+    if (object.text_reloc_count > 0) { next_relocation = KrtArtifactWord(object.text_relocation_bytes,0); }
+    unsafe(using krt.mem;) {
+        byte* line = stackalloc byte[128]; byte* digits = (byte*)(int64)"0123456789abcdef";
+        while (position < object.text_size && ok) {
+            if (labels[position] > 0) {
+                function_index = labels[position]-1;
+                int64 label = KrtDriverConcat((int64)".Lkrt_function_",KrtDriverNumber(function_index));
+                ok = KrtArtifactText(descriptor,(string)label) && KrtArtifactText(descriptor,":\n");
+                if (function_index == module.entry) { ok = ok && KrtArtifactText(descriptor,".global _start\n.global main\n_start:\nmain:\n"); }
+                if (object.symbol_bytes != null) {
+                    int64 name = KrtArtifactSymbol(object,function_index);
+                    if (name != 0 && !KrtDriverWord(name,"main") && KrtArtifactWord(object.symbol_bytes,function_index*32+16) != 0) {
+                        ok = ok && KrtArtifactText(descriptor,".global \"") && KrtArtifactText(descriptor,(string)name) && KrtArtifactText(descriptor,"\"\n\"") && KrtArtifactText(descriptor,(string)name) && KrtArtifactText(descriptor,"\":\n");
+                    }
+                }
+                if (!ok) { break; }
+            }
+            if (position == next_relocation) {
+                int32 symbol_index = KrtArtifactWord(object.text_relocation_bytes,relocation*16+4);
+                int64 name = KrtArtifactSymbol(object,symbol_index);
+                if (name == 0 || KrtArtifactWord(object.text_relocation_bytes,relocation*16+8) != 3) { ok = false; break; }
+                ok = KrtArtifactText(descriptor,".long \"") && KrtArtifactText(descriptor,(string)name) && KrtArtifactText(descriptor,"\" - . - 4\n");
+                position = position+4; relocation = relocation+1; next_relocation = -1;
+                if (relocation < object.text_reloc_count) { next_relocation = KrtArtifactWord(object.text_relocation_bytes,relocation*16); }
+                continue;
+            }
+            line[0]=46; line[1]=98; line[2]=121; line[3]=116; line[4]=101; line[5]=32;
+            int32 length = 6; int32 count = 0;
+            while (position < object.text_size && count < 16 && position != next_relocation) {
+                if (count > 0 && labels[position] > 0) { break; }
+                if (count > 0) { line[length]=44; length=length+1; }
+                int32 value = (object.text_words[position/4] >> ((position%4)*8)) & 255;
+                line[length]=48; line[length+1]=120; line[length+2]=digits[value/16]; line[length+3]=digits[value%16]; length=length+4;
+                position=position+1; count=count+1;
+            }
+            line[length]=10; length=length+1;
+            ok = KrtDriverWriteAll(descriptor,(int64)line,length);
+        }
+    }
+    delete labels; if (syscall(3,descriptor,0,0,0,0,0) != 0) { ok=false; }
+    return ok;
+}
+
+// ===== Command line =====
+// Application entry, options and compilation orchestration are self-hosted.
+class KrtDriverOptions {
+    public KrtDriverPath sources;
+    public KrtDriverPath objects;
+    public KrtDriverPath includes;
+    public int64 output;
+    public int64 compiler;
+    public int64 linker;
+    public int64 library_root;
+    public int64 configuration;
+    public int64 command;
+    public int64 name;
+    public int64 retained_output;
+    public int32 jobs;
+    public bool object_mode;
+    public bool check;
+    public bool rebuild;
+    public bool quiet;
+    public bool list_sources;
+    public bool emit_source;
+    public bool help;
+    public bool version;
+    public int32 optimization;
+    public bool optimization_set;
+    public int32 target;
+    public bool target_set;
+    public bool eo_executable;
+    public bool keep_temp;
+    public bool show_ir;
+}
+
+bool KrtDriverWord(int64 word, string expected) { return KrtDriverStringEqual(word, (int64)expected); }
+
+bool KrtDriverProjectCommand(int64 word) {
+    return KrtDriverWord(word,"new") || KrtDriverWord(word,"build") || KrtDriverWord(word,"check") ||
+        KrtDriverWord(word,"clean") || KrtDriverWord(word,"project-info") || KrtDriverWord(word,"run-vm");
+}
+
+bool KrtDriverParseArguments(KrtDriverPath arguments, KrtDriverOptions options) {
+    int64 repository = KrtDriverRepository();
+    options.compiler = KrtDriverExecutablePath();
+    options.optimization = 2;
+    options.jobs = 8;
+    options.library_root = KrtDriverJoinPath(repository,(int64)"libs");
+    options.linker = KrtDriverJoinPath(repository,(int64)"build/ArkLink/ArkLink");
+    if (!KrtDriverFileExists(options.linker)) { options.linker = KrtDriverJoinPath(repository,(int64)"ArkLink/build/ArkLink"); }
+    options.configuration = KrtDriverGetEnv("KRT_CONFIG");
+    if (KrtDriverStringLength(options.configuration) == 0) { options.configuration = (int64)"release"; }
+    bool literal = false;
+    while (arguments != null) {
+        int64 word = arguments.value;
+        if (!literal && KrtDriverWord(word,"--")) { literal = true; arguments = arguments.next; continue; }
+        if (!literal && (KrtDriverWord(word,"help") || KrtDriverWord(word,"--help") || KrtDriverWord(word,"-h"))) { options.help = true; arguments = arguments.next; continue; }
+        if (!literal && (KrtDriverWord(word,"version") || KrtDriverWord(word,"--version"))) { options.version = true; arguments = arguments.next; continue; }
+        if (!literal && (KrtDriverWord(word,"--show-ir") || KrtDriverWord(word,"--ir"))) { options.show_ir = true; arguments = arguments.next; continue; }
+        if (!literal && KrtDriverWord(word,"--keep-temp")) { options.keep_temp = true; arguments = arguments.next; continue; }
+        if (!literal && (KrtDriverWord(word,"-c") || KrtDriverWord(word,"--object") || KrtDriverWord(word,"--emit-kro"))) { options.object_mode = true; options.target = 1; options.target_set = true; options.eo_executable = false; arguments = arguments.next; continue; }
+        if (!literal && KrtDriverWord(word,"--check")) { options.check = true; arguments = arguments.next; continue; }
+        if (!literal && KrtDriverWord(word,"--rebuild")) { options.rebuild = true; arguments = arguments.next; continue; }
+        if (!literal && KrtDriverWord(word,"--list-sources")) { options.list_sources = true; arguments = arguments.next; continue; }
+        if (!literal && KrtDriverWord(word,"--emit-source")) { options.emit_source = true; arguments = arguments.next; continue; }
+        if (!literal && KrtDriverStartsWith(word,"-j") && KrtDriverStringLength(word) > 2) {
+            int32 jobs = KrtDriverJobs(word + 2); if (jobs == 0) { KrtDriverError("E_OPTION","jobs must be between 1 and 256"); return false; }
+            options.jobs = jobs; arguments = arguments.next; continue;
+        }
+        if (!literal && KrtDriverStartsWith(word,"-O") && KrtDriverStringLength(word) != 2) {
+            if (KrtDriverStringLength(word) != 3) { KrtDriverError("E_OPTION","optimization level must be -O0, -O1, -O2 or -O3"); return false; }
+            unsafe(using krt.mem;) { int32 level = (int32)((byte*)word)[2]-48;
+                if (level < 0 || level > 3) { KrtDriverError("E_OPTION","optimization level must be -O0, -O1, -O2 or -O3"); return false; }
+                options.optimization = level; options.optimization_set = true;
+            } arguments = arguments.next; continue;
+        }
+        bool output = !literal && (KrtDriverWord(word,"-o") || KrtDriverWord(word,"--output") || KrtDriverWord(word,"output"));
+        bool include = !literal && (KrtDriverWord(word,"-I") || KrtDriverWord(word,"--include"));
+        bool compiler = !literal && KrtDriverWord(word,"--compiler");
+        bool linker = !literal && KrtDriverWord(word,"--linker");
+        bool configuration = !literal && KrtDriverWord(word,"--config");
+        bool name = !literal && KrtDriverWord(word,"--name");
+        bool optimization = !literal && KrtDriverWord(word,"-O");
+        bool target = !literal && (KrtDriverWord(word,"target") || KrtDriverWord(word,"--target"));
+        bool jobs = !literal && (KrtDriverWord(word,"-j") || KrtDriverWord(word,"--jobs"));
+        if (output || include || compiler || linker || configuration || name || optimization || target || jobs) {
+            if (arguments.next == null) { KrtDriverError("E_OPTION","expected a value after option"); return false; }
+            arguments = arguments.next; int64 value = arguments.value;
+            if (output) { options.output = KrtDriverAbsolutePath(value); }
+            if (include) { options.includes = KrtDriverAppend(options.includes,KrtDriverAbsolutePath(value)); }
+            if (compiler) { options.compiler = KrtDriverAbsolutePath(value); }
+            if (linker) { options.linker = KrtDriverAbsolutePath(value); }
+            if (configuration) { options.configuration = value; }
+            if (name) { options.name = value; }
+            if (jobs) { int32 count = KrtDriverJobs(value); if (count == 0) { KrtDriverError("E_OPTION","jobs must be between 1 and 256"); return false; } options.jobs = count; }
+            if (optimization) {
+                if (KrtDriverStringLength(value) != 1) { KrtDriverError("E_OPTION","optimization level must be 0, 1, 2 or 3"); return false; }
+                unsafe(using krt.mem;) { int32 level = (int32)((byte*)value)[0]-48;
+                    if (level < 0 || level > 3) { KrtDriverError("E_OPTION","optimization level must be 0, 1, 2 or 3"); return false; }
+                    options.optimization = level; options.optimization_set = true;
+                }
+            }
+            if (target) {
+                options.target_set = true; options.object_mode = false; options.eo_executable = false;
+                if (KrtDriverWord(value,"exe")) { options.target = 0; }
+                else if (KrtDriverWord(value,"eo")) { options.target = 1; options.eo_executable = true; options.keep_temp = true; }
+                else if (KrtDriverWord(value,"ir")) { options.target = 2; }
+                else if (KrtDriverWord(value,"asm")) { options.target = 3; }
+                else if (KrtDriverWord(value,"vm")) { options.target = 4; }
+                else { KrtDriverError("E_OPTION",(string)KrtDriverConcat((int64)"unknown target type: ",value)); return false; }
+            }
+            arguments = arguments.next; continue;
+        }
+        if (!literal && KrtDriverStartsWith(word,"-I") && KrtDriverStringLength(word) > 2) {
+            options.includes = KrtDriverAppend(options.includes,KrtDriverAbsolutePath(word+2)); arguments = arguments.next; continue;
+        }
+        if (!literal && KrtDriverStartsWith(word,"-")) {
+            if (KrtDriverStartsWith(word,"-O")) { KrtDriverError("E_OPTION","optimization level must be -O0, -O1, -O2 or -O3"); }
+            else { KrtDriverError("E_OPTION",(string)KrtDriverConcat((int64)"unknown option: ",word)); }
+            return false;
+        }
+        if (!literal && options.sources == null && options.command == 0 && KrtDriverProjectCommand(word)) { options.command = word; }
+        else { options.sources = KrtDriverAppend(options.sources,word); }
+        arguments = arguments.next;
+    }
+    return true;
+}
+
+int32 KrtDriverJobs(int64 value) {
+    int64 length = KrtDriverStringLength(value); if (length < 1 || length > 3) { return 0; }
+    int32 jobs = 0;
+    unsafe(using krt.mem;) { byte* digits = (byte*)value; int32 index = 0;
+        while (index < length) { if (digits[index] < 48 || digits[index] > 57) { return 0; } jobs = jobs * 10 + (int32)digits[index] - 48; index = index + 1; }
+    }
+    if (jobs < 1 || jobs > 256) { return 0; } return jobs;
+}
+
+void KrtDriverUsage() {
+    KrtDriverPrint("Usage: KrtProject [options] source.krt ...\n       KrtProject new TYPE DIRECTORY [--name NAME]\n       KrtProject build|check|clean [PROJECT] [--config NAME]\n       KrtProject run-vm BYTECODE\n\nhelp / --help    version / --version\n-O0 / -O1 / -O2 / -O3  Optimization level, default -O2\ntarget exe|ir|asm|vm|eo   -o / output PATH   -c Emit KRO object\n-j N / --jobs N  Parallel project compilation, default 8\n--keep-temp  Preserve intermediate files    --show-ir / --ir\n--check  Validate only    -I PATH  Module directory\n--linker PATH    --compiler PATH    --rebuild\n");
+}
+bool KrtDriverIsProjectPath(int64 path) {
+    if (KrtDriverIsDirectory(path)) { return true; }
+    if (KrtDriverStringEqual(KrtProjectName(path),(int64)"project.krt")) { return true; }
+    return KrtDriverEndsWith(path,".json") || KrtDriverEndsWith(path,".esproj");
+}
+
+int32 KrtDriverMain() {
+    KrtDriverPath arguments = KrtDriverArguments();
+    if (arguments == null) { KrtDriverError("E_DRIVER","unable to read process arguments"); return 1; }
+    // Keep the original object contract available to native test harnesses.
+    if (arguments.next == null) {
+        if (KrtDriverFileExists((int64)"program.krt")) { return KrtCompilePath("program.krt","stage1-probe.kro") ? 0 : 1; }
+        KrtDriverUsage(); return 0;
+    }
+    KrtDriverOptions options = new KrtDriverOptions();
+    if (!KrtDriverParseArguments(arguments.next,options)) { return 1; }
+    if (options.help) {
+        KrtDriverUsage();
+        return 0;
+    }
+    if (options.version) { KrtDriverPrint("Kairote Lang Compiler Version: 0.00.0006cc (SelfHost native)\n"); return 0; }
+    if (options.command != 0) {
+        if (KrtDriverWord(options.command,"run-vm")) {
+            if (options.sources == null || options.sources.next != null) { KrtDriverError("E_OPTION","run-vm expects one bytecode path"); return 1; }
+            return KrtVmRun(KrtDriverAbsolutePath(options.sources.value));
+        }
+        if ((KrtDriverWord(options.command,"build") || KrtDriverWord(options.command,"check")) && options.sources != null && !KrtDriverIsProjectPath(options.sources.value)) {
+            options.check = KrtDriverWord(options.command,"check"); return KrtDriverCompile(options);
+        }
+        return KrtDriverProject(options);
+    }
+    if (options.sources != null && KrtDriverIsProjectPath(options.sources.value)) { options.command = (int64)"build"; return KrtDriverProject(options); }
+    return KrtDriverCompile(options);
+}
+
+// ===== Imported modules =====
+// Public declaration interfaces and binary generic template bodies are read
+// from KRO itself. Source paths in the interface are provenance keys; loading
+// a module never opens those provider source files.
+bool KrtModulesFailure(int64 path,string detail){return KrtDriverAbiFailure("E_MODULE_METADATA",path,detail);}
+
+int64 KrtModulesCopy(int64 data,int64 length){
+    int64 copy=KrtDriverAlloc(length+1);if(copy<=0){return 0;}
+    unsafe(using krt.mem;){byte* input=(byte*)data;byte* output=(byte*)copy;int64 index=0;while(index<length){output[index]=input[index];index=index+1;}output[length]=0;}
+    return copy;
+}
+
+bool KrtModulesAppend(KrtSourceBundle bundle,int64 object_path,int64 path_data,int64 path_length,int64 source,int64 length){
+    int64 path=path_length>0?KrtModulesCopy(path_data,path_length):KrtDriverConcat(object_path,(int64)"::interface");
+    if(path<=0){return KrtModulesFailure(object_path,"unable to allocate interface provenance");}
+    KrtSourceFile previous=KrtSourcesFindFile(bundle,path);
+    if(previous!=null){
+        if(previous.imported_metadata&&!KrtDriverAbiEqual(previous.original,previous.length,source,length)){
+            return KrtModulesFailure(object_path,"repeated module declaration interfaces disagree");
+        }
+        return true;
+    }
+    if(bundle.count>=4096||length>16777216-bundle.total_bytes-12){return KrtModulesFailure(object_path,"module interfaces exceed the source compilation budget");}
+    int64 data=KrtModulesCopy(source,length);if(data<=0){return KrtModulesFailure(object_path,"unable to allocate module interface");}
+    KrtSourceFile file=new KrtSourceFile();file.path=path;file.original=data;file.transformed=data;file.length=length;
+    file.imported_metadata=true;file.module_authority=object_path;file.state=2;file.lexical_error=-1;
+    if(bundle.count>0){bundle.total_bytes=bundle.total_bytes+12;}
+    if(bundle.files==null){bundle.files=file;}else{bundle.order_tail.order_next=file;}
+    bundle.order_tail=file;file.next=bundle.loaded;bundle.loaded=file;
+    bundle.total_bytes=bundle.total_bytes+length;bundle.count=bundle.count+1;
+    return KrtSourcesScan(bundle,file);
+}
+
+bool KrtModulesReadMapped(KrtSourceBundle bundle,int64 path,KrtDriverBuffer object){
+    if(object.length<64||KrtDriverAbiWord(object.data,0)!=5198411||KrtDriverAbiWord(object.data,4)!=2){return KrtModulesFailure(path,"invalid KRO header");}
+    int64 text=KrtDriverAbiWord(object.data,16);int64 rodata=KrtDriverAbiWord(object.data,20);int64 data=KrtDriverAbiWord(object.data,24);
+    int64 count=KrtDriverAbiWord(object.data,48);int64 strings_length=KrtDriverAbiWord(object.data,52);int64 relocations=KrtDriverAbiWord(object.data,56);
+    int64 symbols=64+text+rodata+data;int64 strings=symbols+count*32+relocations*16;
+    if(count>1048576||relocations>4194304||!KrtDriverAbiRange(64,text+rodata+data,object.length)||
+       !KrtDriverAbiRange(symbols,count*32+relocations*16,object.length)||!KrtDriverAbiRange(strings,strings_length,object.length)){
+        return KrtModulesFailure(path,"KRO tables exceed object bounds");
+    }
+    int64 metadata=-1;int64 size=0;int64 index=0;
+    while(index<count){
+        int64 name=KrtDriverAbiSymbolName(object,symbols,strings,strings_length,index);if(name==0){return KrtModulesFailure(path,"invalid KRO symbol string");}
+        if(KrtDriverStringEqual(name,(int64)"_KRT_MODULE3_METADATA")){
+            int64 offset=KrtDriverAbiWord(object.data,symbols+index*32+4);size=KrtDriverAbiWord(object.data,symbols+index*32+8);
+            if(metadata>=0||KrtDriverAbiWord(object.data,symbols+index*32+12)!=2||KrtDriverAbiWord(object.data,symbols+index*32+16)!=0||KrtDriverAbiWord(object.data,symbols+index*32+20)!=2||!KrtDriverAbiRange(offset,size,rodata)){
+                return KrtModulesFailure(path,"module interface must be one local read-only symbol");
+            }
+            metadata=object.data+64+text+offset;
+        }
+        index=index+1;
+    }
+    if(metadata<0){return true;}
+    if(size<16||size>16777216||KrtDriverAbiWord(metadata,0)!=0x33444f4d||KrtDriverAbiWord(metadata,12)!=size){return KrtModulesFailure(path,"invalid module interface header");}
+    if(KrtDriverAbiWord(metadata,4)!=3){return KrtModulesFailure(path,"unsupported module interface version");}
+    int64 files=KrtDriverAbiWord(metadata,8);if(files>4096){return KrtModulesFailure(path,"module interface has too many files");}
+    int64 position=16;index=0;
+    while(index<files){
+        if(!KrtDriverAbiRange(position,8,size)){return KrtModulesFailure(path,"truncated module interface record");}
+        int64 path_length=KrtDriverAbiWord(metadata,position);int64 length=KrtDriverAbiWord(metadata,position+4);position=position+8;
+        if(path_length>4096||!KrtDriverAbiRange(position,path_length+length,size)){return KrtModulesFailure(path,"module interface record exceeds metadata bounds");}
+        unsafe(using krt.mem;){byte* name=(byte*)(metadata+position);int64 character=0;while(character<path_length){if(name[character]==0){return KrtModulesFailure(path,"module interface provenance contains a null byte");}character=character+1;}}
+        if(!KrtModulesAppend(bundle,path,metadata+position,path_length,metadata+position+path_length,length)){return false;}
+        position=position+path_length+length;index=index+1;
+    }
+    if(position!=size){return KrtModulesFailure(path,"trailing module interface bytes");}
+    return true;
+}
+
+bool KrtModulesRead(KrtSourceBundle bundle,int64 path){
+    KrtDriverBuffer object=new KrtDriverBuffer();if(!KrtDriverAbiReadBinary(path,object)){delete object;return KrtModulesFailure(path,"unable to map object interface");}
+    bool ok=KrtModulesReadMapped(bundle,path,object);syscall(11,object.data,object.length,0,0,0,0);delete object;return ok;
+}
+
+bool KrtModulesRebuild(KrtSourceBundle bundle){
+    bundle.data=KrtDriverAlloc(bundle.total_bytes+1);if(bundle.data<=0){return false;}
+    unsafe(using krt.mem;){
+        byte* output=(byte*)bundle.data;byte* separator=(byte*)(int64)"\nnamespace;\n";int64 offset=0;bool first=true;KrtSourceFile file=bundle.files;
+        while(file!=null){
+            if(!first){int64 part=0;while(part<12){output[offset]=separator[part];offset=offset+1;part=part+1;}}first=false;
+            file.start=offset;byte* input=(byte*)file.transformed;int64 index=0;while(index<file.length){output[offset]=input[index];offset=offset+1;index=index+1;}
+            file=file.order_next;
+        }
+        output[offset]=0;bundle.length=offset;
+    }
+    return true;
+}
+
+bool KrtModulesImport(KrtSourceBundle bundle,KrtDriverPath objects){
+    if(bundle==null||objects==null){return true;}
+    if(!KrtDriverAbiCheckContracts(objects,false)){return false;}
+    KrtDriverPath object=objects;bool changed=false;int32 count=bundle.count;
+    while(object!=null){if(!KrtModulesRead(bundle,object.value)){return false;}object=object.next;}
+    changed=bundle.count!=count;return !changed||bundle.data==0||KrtModulesRebuild(bundle);
+}
+
+class KrtModuleImportedType {
+    public KrtAstNode declaration;
+    public KrtLinkName name;
+    public uint64 hash;
+    public KrtModuleImportedType next;
+}
+
+bool KrtModulesTemplateEqual(KrtAstNode first,KrtAstNode second,int64 source){
+    KrtLexer left=new KrtLexer();KrtLexer right=new KrtLexer();KrtToken a=new KrtToken();KrtToken b=new KrtToken();
+    unsafe(using krt.mem;){if(!KrtLexerInit(left,(byte*)(source+first.start),first.length)||!KrtLexerInit(right,(byte*)(source+second.start),second.length)){return false;}}
+    while(true){
+        KrtLexerNext(left,a);KrtLexerNext(right,b);
+        if(a.kind!=b.kind||a.length!=b.length){return false;}
+        if(a.kind==KrtTokenKind.Eof){return true;}
+        if(!KrtDriverAbiEqual(source+first.start+a.start,a.length,source+second.start+b.start,b.length)){return false;}
+    }
+    return false;
+}
+
+// Imported public declarations describe the same nominal type independently
+// of the provider's source path. Layout contracts have already been checked;
+// keep one syntax declaration and its owner methods for semantic resolution.
+bool KrtModulesMergeImportedAst(KrtAstNode unit,int64 source){
+    int32 types=0;KrtAstNode type=unit.declarations;bool imports=false;
+    while(type!=null){types=types+1;if(type.native_imported){imports=true;}type=type.next;}
+    if(!imports){return true;}
+    int32 capacity=256;while(capacity<types*2){capacity=capacity*2;}
+    KrtModuleImportedType[] buckets=new KrtModuleImportedType[capacity];
+    KrtAstNode[] discarded=new KrtAstNode[capacity];type=unit.declarations;
+    while(type!=null){
+        if(KrtNativeAccessExported(type)){
+            KrtLinkName name=KrtLinkNameNew();KrtLinkDeclaration(name,type,source);
+            if(!name.valid){KrtDriverError("E_MODULE_METADATA","imported nominal name exceeds the supported size");return false;}
+            uint64 hash=14695981039346656037;int32 index=0;while(index<name.length){hash=(hash^(uint64)name.bytes[index])*1099511628211;index=index+1;}
+            int32 slot=(int32)(hash&(uint64)(capacity-1));KrtModuleImportedType entry=buckets[slot];
+            while(entry!=null&&(entry.hash!=hash||!KrtLinkNamesEqual(entry.name,name))){entry=entry.next;}
+            if(entry==null){entry=new KrtModuleImportedType();entry.declaration=type;entry.name=name;entry.hash=hash;entry.next=buckets[slot];buckets[slot]=entry;}
+            else if(type.native_imported||entry.declaration.native_imported){
+                KrtAstNode previous=entry.declaration;
+                if(previous.value!=type.value||(previous.native_generic_parameters==null)!=(type.native_generic_parameters==null)){
+                    KrtDriverError("E_ABI_LAYOUT","repeated imported types have different declaration kinds");return false;
+                }
+                if(type.native_generic_parameters!=null&&!KrtModulesTemplateEqual(previous,type,source)){
+                    KrtDriverError("E_MODULE_METADATA","repeated binary generic templates disagree");return false;
+                }
+                KrtAstNode removed=type;
+                if(previous.native_imported&&!type.native_imported){removed=previous;entry.declaration=type;}
+                int32 dropped=(int32)(((uint64)(int64)removed>>3)&(uint64)(capacity-1));while(discarded[dropped]!=null&&discarded[dropped]!=removed){dropped=(dropped+1)&(capacity-1);}discarded[dropped]=removed;
+            }
+        }
+        type=type.next;
+    }
+    KrtAstNode previous=null;type=unit.declarations;
+    while(type!=null){KrtAstNode next=type.next;int32 slot=(int32)(((uint64)(int64)type>>3)&(uint64)(capacity-1));while(discarded[slot]!=null&&discarded[slot]!=type){slot=(slot+1)&(capacity-1);}
+        if(discarded[slot]==type){if(previous==null){unit.declarations=next;}else{previous.next=next;}}
+        else{previous=type;}type=next;}
+    previous=null;KrtAstNode method=unit.left;
+    while(method!=null){KrtAstNode next=method.next;KrtAstNode owner=method.native_owner;bool removed=false;
+        if(owner!=null){int32 slot=(int32)(((uint64)(int64)owner>>3)&(uint64)(capacity-1));while(discarded[slot]!=null&&discarded[slot]!=owner){slot=(slot+1)&(capacity-1);}removed=discarded[slot]==owner;}
+        if(removed){if(previous==null){unit.left=next;}else{previous.next=next;}unit.child_count=unit.child_count-1;}else{previous=method;}method=next;}
+    int32 slot=0;while(slot<capacity){KrtModuleImportedType entry=buckets[slot];while(entry!=null){KrtModuleImportedType next=entry.next;delete entry.name.bytes;delete entry.name;delete entry;entry=next;}slot=slot+1;}
+    delete buckets;delete discarded;return true;
+}
+
+bool KrtModulesImportedPosition(int64 position){
+    if(KrtDriverActiveBundle==null){return false;}
+    KrtSourceFile file=KrtDriverActiveBundle.files;
+    while(file!=null){if(position>=file.start&&position<file.start+file.length){return file.imported_metadata;}file=file.order_next;}
+    return false;
+}
+
+int64 KrtModulesSourceAuthority(int64 position){
+    if(KrtDriverActiveBundle==null){return 0;}
+    KrtSourceFile file=KrtDriverActiveBundle.files;
+    while(file!=null){if(position>=file.start&&position<file.start+file.length){return file.path;}file=file.order_next;}
+    return 0;
+}
+
+bool KrtModulesSameModule(int64 first,int64 second){
+    if(KrtDriverActiveBundle==null){return true;}
+    int64 first_authority=0;int64 second_authority=0;KrtSourceFile file=KrtDriverActiveBundle.files;
+    while(file!=null){
+        if(first>=file.start&&first<file.start+file.length){first_authority=file.module_authority;}
+        if(second>=file.start&&second<file.start+file.length){second_authority=file.module_authority;}
+        file=file.order_next;
+    }
+    return first_authority==second_authority||(first_authority!=0&&second_authority!=0&&KrtDriverStringEqual(first_authority,second_authority));
+}
+
+bool KrtModulesMarkImportedAst(KrtAstNode unit){
+    if(KrtDriverActiveBundle==null){return true;}
+    bool imported=false;KrtSourceFile file=KrtDriverActiveBundle.files;
+    while(file!=null){if(file.imported_metadata){imported=true;break;}file=file.order_next;}
+    if(!imported){return true;}
+    int32 capacity=256;KrtAstNode[] stack=new KrtAstNode[capacity];int32 count=1;stack[0]=unit;int32 visited=0;
+    int32 seen_capacity=512;KrtAstNode[] seen=new KrtAstNode[seen_capacity];
+    while(count>0){
+        count=count-1;KrtAstNode node=stack[count];if(node==null){continue;}
+        int32 slot=(int32)(((uint64)(int64)node>>3)&(uint64)(seen_capacity-1));
+        while(seen[slot]!=null&&seen[slot]!=node){slot=(slot+1)&(seen_capacity-1);}
+        if(seen[slot]==node){continue;}
+        seen[slot]=node;
+        node.native_imported=KrtModulesImportedPosition(node.start);
+        visited=visited+1;if(visited>4194304){delete seen;delete stack;KrtDriverError("E_MODULE_METADATA","module syntax graph exceeds import marking budget");return false;}
+        if(visited>=seen_capacity/2){
+            int32 expanded_capacity=seen_capacity*2;KrtAstNode[] expanded_seen=new KrtAstNode[expanded_capacity];int32 entry=0;
+            while(entry<seen_capacity){
+                KrtAstNode previous=seen[entry];
+                if(previous!=null){int32 target=(int32)(((uint64)(int64)previous>>3)&(uint64)(expanded_capacity-1));while(expanded_seen[target]!=null){target=(target+1)&(expanded_capacity-1);}expanded_seen[target]=previous;}
+                entry=entry+1;
+            }
+            delete seen;seen=expanded_seen;seen_capacity=expanded_capacity;
+        }
+        if(count>capacity-16){
+            int32 size=capacity*2;KrtAstNode[] expanded=new KrtAstNode[size];int32 index=0;
+            while(index<count){expanded[index]=stack[index];index=index+1;}delete stack;stack=expanded;capacity=size;
+        }
+        stack[count]=node.left;count=count+1;stack[count]=node.right;count=count+1;
+        stack[count]=node.alternate;count=count+1;stack[count]=node.body;count=count+1;
+        stack[count]=node.declarations;count=count+1;stack[count]=node.next;count=count+1;
+        stack[count]=node.syntax_type;count=count+1;stack[count]=node.syntax_parameter_types;count=count+1;
+        stack[count]=node.native_generic_parameters;count=count+1;stack[count]=node.native_constraints;count=count+1;
+        stack[count]=node.native_base_call;count=count+1;
+    }
+    delete seen;delete stack;return true;
+}
+
+// ===== Parallel compilation =====
+// Fork workers execute native compilation directly. Their address spaces keep
+// compiler globals independent, while the parent publishes deterministic results.
+static int64 KrtDriverLastErrorCode = 0;
+
+class KrtDriverCompileTask {
+    public KrtDriverOptions options;
+    public int64 source;
+    public int64 output;
+    public int64 cached;
+    public int64 log_path;
+    public int64 pid;
+    public int32 status;
+    public KrtDriverCompileTask next;
+}
+
+bool KrtDriverDeferredCode(int64 code) {
+    return KrtDriverStringEqual(code,(int64)"E_MODULE") || KrtDriverStringEqual(code,(int64)"E_LOWER") ||
+        KrtDriverStringEqual(code,(int64)"E_UNDEFINED_METHOD") || KrtDriverStringEqual(code,(int64)"E_GENERIC_CONSTRAINT") ||
+        KrtDriverStringEqual(code,(int64)"E_LIBRARY_SYMBOL") || KrtDriverStringEqual(code,(int64)"E_LIBRARY_DATA") ||
+        KrtDriverStringEqual(code,(int64)"E_IMPORT") || KrtDriverStringEqual(code,(int64)"E_LINKAGE");
+}
+
+void KrtDriverCompileWorker(KrtDriverCompileTask task) {
+    int64 log = syscall(2,task.log_path,577,384,0,0,0);
+    if (log < 0) { syscall(60,3,0,0,0,0,0); return; }
+    if (syscall(33,log,2,0,0,0,0) < 0 || syscall(33,log,1,0,0,0,0) < 0) { syscall(60,3,0,0,0,0,0); return; }
+    if (log != 1 && log != 2) { syscall(3,log,0,0,0,0,0); }
+    KrtDriverLastErrorCode = 0; KrtDriverQuiet = false; task.options.quiet = false;
+    int32 status = KrtDriverCompile(task.options); int32 result = 2;
+    if (status == 0 && KrtDriverFileExists(task.options.output)) { result = 0; }
+    else if (status != 0 && KrtDriverDeferredCode(KrtDriverLastErrorCode)) { result = 1; }
+    syscall(60,result,0,0,0,0,0);
+}
+
+void KrtDriverWorkerDiagnostic(KrtDriverCompileTask task) {
+    KrtDriverError("E_WORKER",(string)KrtDriverConcat((int64)"compilation worker failed: ",task.source));
+    if (task.status == 3) { KrtDriverError("E_OUTPUT",(string)KrtDriverConcat((int64)"unable to open worker diagnostic output: ",task.log_path)); }
+    KrtDriverBuffer log = new KrtDriverBuffer();
+    if (KrtDriverReadFile(task.log_path,log) && log.length > 0) { KrtDriverWriteAll(2,log.data,log.length); }
+    if (task.status < 0) { KrtDriverError("E_WORKER",(string)KrtDriverConcat((int64)"worker terminated by signal ",KrtDriverNumber(-task.status))); }
+}
+
+bool KrtDriverParallelCompile(KrtDriverCompileTask tasks, int32 jobs) {
+    if (jobs < 1 || jobs > 256) { KrtDriverError("E_OPTION","jobs must be between 1 and 256"); return false; }
+    int32 total = 0; KrtDriverCompileTask task = tasks;
+    while (task != null) { task.status = -1; task.pid = 0; total = total + 1; task = task.next; }
+    if (total == 0) { return true; }
+    if (jobs > total) { jobs = total; }
+    int64 message = KrtDriverConcat((int64)"compiling units: ",KrtDriverNumber(total));
+    message = KrtDriverConcat(message,KrtDriverConcat((int64)" files, up to ",KrtDriverNumber(jobs)));
+    KrtDriverPrint((string)KrtDriverConcat(message,(int64)" jobs\n"));
+    KrtDriverCompileTask pending = tasks; int32 active = 0; bool ok = true;
+    while (pending != null || active > 0) {
+        while (ok && pending != null && active < jobs) {
+            int64 pid = syscall(57,0,0,0,0,0,0);
+            if (pid == 0) { KrtDriverCompileWorker(pending); syscall(60,2,0,0,0,0,0); return false; }
+            if (pid < 0) { KrtDriverError("E_WORKER","unable to fork compilation worker"); ok = false; break; }
+            pending.pid = pid; pending.status = -2; pending = pending.next; active = active + 1;
+        }
+        if (active == 0) { break; }
+        int32 status = 0; int64 waited = 0;
+        unsafe(using krt.mem;) { waited = syscall(61,-1,(int64)&status,0,0,0,0); }
+        if (waited == -4) { continue; }
+        if (waited < 0) { KrtDriverError("E_WORKER","unable to wait for compilation worker"); ok = false; break; }
+        task = tasks; while (task != null && task.pid != waited) { task = task.next; }
+        if (task == null || task.status != -2) { KrtDriverError("E_WORKER","unexpected compilation worker state"); ok = false; continue; }
+        active = active - 1;
+        if ((status & 127) != 0) { task.status = -(status & 127); ok = false; }
+        else { task.status = (status >> 8) & 255; if (task.status > 1) { ok = false; } }
+        if (!ok) { pending = null; }
+    }
+    // Reap every child before a caller can remove its temporary output directory.
+    if (active > 0) {
+        task = tasks;
+        while (task != null) {
+            if (task.status == -2) {
+                int32 status = 0; int64 waited = 0;
+                unsafe(using krt.mem;) { waited = syscall(61,task.pid,(int64)&status,0,0,0,0); while (waited == -4) { waited = syscall(61,task.pid,(int64)&status,0,0,0,0); } }
+                if (waited < 0) { task.status = 2; }
+                else if ((status & 127) != 0) { task.status = -(status & 127); }
+                else { task.status = (status >> 8) & 255; }
+            }
+            task = task.next;
+        }
+    }
+    task = tasks; while (task != null) { if (task.status > 1 || (task.status < 0 && task.pid > 0)) { KrtDriverWorkerDiagnostic(task); } task = task.next; }
+    return ok;
+}
+
+// ===== Source loading and project source collection =====
+// Native source loading uses the compiler lexer. Source spans always refer to
+// the original bytes; imports are blanked in place and file boundaries reset
+// namespace scope without changing offsets inside an individual source file.
+class KrtSourceDirective {
+    public int64 name;
+    public bool quoted;
+    public bool wildcard;
+    public int64 position;
+    public int64 end;
+    public KrtDriverPath files;
+    public KrtSourceDirective next;
+}
+
+class KrtSourceFile {
+    public bool imported_metadata;
+    public int64 module_authority;
+    public int64 path;
+    public int64 original;
+    public int64 transformed;
+    public int64 length;
+    public int64 start;
+    public int64 lexical_error;
+    public int32 state;
+    public KrtSourceDirective directives;
+    public KrtSourceFile next;
+    public KrtSourceFile order_next;
+}
+
+class KrtSourceName {
+    public int64 value;
+    public KrtSourceName next;
+}
+
+class KrtSourceScope {
+    public int64 name;
+    public bool declarations;
+    public KrtSourceScope parent;
+}
+
+class KrtSourceBundle {
+    public int64 data;
+    public int64 length;
+    public int64 total_bytes;
+    public int32 count;
+    public KrtSourceFile files;
+    public KrtSourceFile order_tail;
+    public KrtSourceFile loaded;
+    public KrtSourceName names;
+    public KrtDriverPath search;
+}
+
+static KrtSourceBundle KrtDriverActiveBundle = null;
+
+void KrtSourcesWrite(string value) {
+    syscall(1, 2, (int64)value, KrtDriverStringLength((int64)value), 0, 0, 0);
+}
+
+void KrtSourcesWriteNumber(int64 value) {
+    unsafe(using krt.mem;) {
+        byte* digits = stackalloc byte[24];
+        int32 index = 24;
+        if (value < 0) { value = 0; }
+        while (true) {
+            index = index - 1;
+            digits[index] = (byte)(48 + value % 10);
+            value = value / 10;
+            if (value == 0) { break; }
+        }
+        syscall(1, 2, (int64)(digits + index), 24 - index, 0, 0, 0);
+    }
+}
+
+void KrtSourcesLocation(KrtSourceFile file, int64 position) {
+    if (position < 0) { position = 0; }
+    if (position > file.length) { position = file.length; }
+    int64 line = 1; int64 column = 1; int64 index = 0;
+    unsafe(using krt.mem;) {
+        byte* text = (byte*)file.original;
+        while (index < position) {
+            int64 value = text[index];
+            if (value == 10) { line = line + 1; column = 1; }
+            else if (value < 128 || value >= 192) { column = column + 1; }
+            index = index + 1;
+        }
+    }
+    syscall(1, 2, file.path, KrtDriverStringLength(file.path), 0, 0, 0);
+    KrtSourcesWrite(":"); KrtSourcesWriteNumber(line);
+    KrtSourcesWrite(":"); KrtSourcesWriteNumber(column);
+}
+
+bool KrtSourcesFail(KrtSourceFile file, int64 position, string code, string detail) {
+    if (KrtDriverQuiet) { return false; }
+    KrtSourcesLocation(file, position);
+    KrtSourcesWrite(": "); KrtSourcesWrite(code);
+    KrtSourcesWrite(": "); KrtSourcesWrite(detail); KrtSourcesWrite("\n");
+    return false;
+}
+
+void KrtSourcesDiagnostic(KrtSourceBundle bundle, string code, int32 code_length, int64 position) {
+    KrtSourcesDiagnosticDetails(bundle,code,code_length,position,null);
+}
+
+void KrtSourcesDiagnosticDetails(KrtSourceBundle bundle, string code, int32 code_length, int64 position, string message) {
+    KrtSourceFile selected = bundle.files;
+    if (selected == null) {
+        syscall(1, 2, (int64)code, code_length, 0, 0, 0);
+        KrtSourcesWrite(" at byte "); KrtSourcesWriteNumber(position); KrtSourcesWrite("\n");
+        return;
+    }
+    KrtSourceFile file = selected.order_next;
+    while (file != null && file.start <= position) { selected = file; file = file.order_next; }
+    KrtSourcesLocation(selected, position - selected.start);
+    KrtSourcesWrite(": "); syscall(1, 2, (int64)code, code_length, 0, 0, 0);
+    KrtSourcesWrite(": ");
+    if (message != null) { KrtSourcesWrite(message); }
+    else if (KrtDriverStringEqual((int64)code, (int64)"E_PARSE")) { KrtSourcesWrite("invalid syntax"); }
+    else if (KrtDriverStringEqual((int64)code, (int64)"E_MODULE")) { KrtSourcesWrite("invalid module or entry point"); }
+    else if (KrtDriverStringEqual((int64)code, (int64)"E_CONDITIONAL_ARRAY")) { KrtSourcesWrite("Conditional array operands must have the same element type and storage"); }
+    else if (KrtDriverStringEqual((int64)code, (int64)"E_ARGUMENT_COUNT")) { KrtSourcesWrite("argument count does not match any callable declaration"); }
+    else if (KrtDriverStringEqual((int64)code, (int64)"E_WRITABLE_REF")) { KrtSourcesWrite("reference arguments require writable storage and the ref marker"); }
+    else if (KrtDriverStringEqual((int64)code, (int64)"E_CAPTURE_BORROW")) { KrtSourcesWrite("closures cannot capture ref parameters, inline struct receivers, or values borrowed from stack storage"); }
+    else if (KrtDriverStringEqual((int64)code, (int64)"E_UNDEFINED_METHOD")) { KrtSourcesWrite("Undefined method for the supplied receiver and argument types"); }
+    else if (KrtDriverStringEqual((int64)code, (int64)"E_NOT_NULLABLE")) { KrtSourcesWrite("null requires an explicitly nullable '?' type; indirect calls require a nonnullable function pointer"); }
+    else if (KrtDriverStringEqual((int64)code, (int64)"E_GENERIC_CONSTRAINT")) { KrtSourcesWrite("generic type arguments do not satisfy the declared constraints"); }
+    else if (KrtDriverStringEqual((int64)code, (int64)"E_SWITCH")) { KrtSourcesWrite("invalid switch label or duplicate case/default"); }
+    else if (KrtDriverStringEqual((int64)code, (int64)"E_INHERITANCE")) { KrtSourcesWrite("cyclic class or interface inheritance"); }
+    else if (KrtDriverStringEqual((int64)code, (int64)"E_LOWER")) { KrtSourcesWrite("invalid or unsupported expression, type, name, or control flow"); }
+    else if (KrtDriverStringEqual((int64)code, (int64)"E_EMIT")) { KrtSourcesWrite("machine code generation failed"); }
+    else if (KrtDriverStringEqual((int64)code, (int64)"E_LIBRARY_DATA")) { KrtSourcesWrite("object data requires a supported scalar constant initializer"); }
+    else if (KrtDriverStringEqual((int64)code, (int64)"E_LIBRARY_SYMBOL")) { KrtSourcesWrite("unable to emit library symbols"); }
+    else if (KrtDriverStringEqual((int64)code, (int64)"E_LINKAGE")) { KrtSourcesWrite("conflicting or unsupported native function prototype"); }
+    else if (KrtDriverStringEqual((int64)code, (int64)"E_SIZE")) { KrtSourcesWrite("combined source must contain 1 to 16777216 bytes"); }
+    else { KrtSourcesWrite("compilation failed"); }
+    KrtSourcesWrite(" (combined byte "); KrtSourcesWriteNumber(position); KrtSourcesWrite(")\n");
+}
+
+bool KrtSourcesWord(KrtSourceFile file, KrtToken token, string value) {
+    if (token.category != KrtTokenCategory.Identifier || token.length != KrtDriverStringLength((int64)value)) { return false; }
+    unsafe(using krt.mem;) {
+        byte* text = (byte*)file.original; byte* expected = (byte*)(int64)value;
+        int64 index = 0;
+        while (index < token.length) { if (text[token.start + index] != expected[index]) { return false; } index = index + 1; }
+    }
+    return true;
+}
+
+bool KrtSourcesPunctuation(KrtSourceFile file, KrtToken token, int64 value) {
+    if (token.category != KrtTokenCategory.Punctuation || token.length != 1) { return false; }
+    unsafe(using krt.mem;) { return ((byte*)file.original)[token.start] == value; }
+}
+
+int64 KrtSourcesUtf8Error(int64 data, int64 length) {
+    unsafe(using krt.mem;) {
+        byte* text = (byte*)data; int64 index = 0;
+        while (index < length) {
+            int64 start = index; int64 lead = text[index]; int32 count = 0;
+            int64 low = 128; int64 high = 191;
+            if (lead < 128) { index = index + 1; continue; }
+            if (lead >= 194 && lead <= 223) { count = 1; }
+            else if (lead >= 224 && lead <= 239) {
+                count = 2;
+                if (lead == 224) { low = 160; }
+                if (lead == 237) { high = 159; }
+            } else if (lead >= 240 && lead <= 244) {
+                count = 3;
+                if (lead == 240) { low = 144; }
+                if (lead == 244) { high = 143; }
+            } else { return start; }
+            if (index + count >= length || text[index + 1] < low || text[index + 1] > high) { return start; }
+            int32 part = 2;
+            while (part <= count) { if (text[index + part] < 128 || text[index + part] > 191) { return start; } part = part + 1; }
+            index = index + count + 1;
+        }
+    }
+    return -1;
+}
+
+int64 KrtSourcesQualifiedName(int64 scope, int64 name) {
+    int64 scope_length = KrtDriverStringLength(scope);
+    if (scope_length == 0) { return name; }
+    int64 name_length = KrtDriverStringLength(name);
+    int64 result = KrtDriverAlloc(scope_length + name_length + 2);
+    if (result <= 0) { return 0; }
+    unsafe(using krt.mem;) {
+        byte* output = (byte*)result; byte* parent = (byte*)scope; byte* child = (byte*)name; int64 index = 0;
+        while (index < scope_length) { output[index] = parent[index]; index = index + 1; }
+        output[index] = 46; index = 0;
+        while (index < name_length) { output[scope_length + 1 + index] = child[index]; index = index + 1; }
+        output[scope_length + name_length + 1] = 0;
+    }
+    return result;
+}
+
+bool KrtSourcesHasName(KrtSourceBundle bundle, int64 value) {
+    KrtSourceName name = bundle.names;
+    while (name != null) { if (KrtDriverStringEqual(name.value, value)) { return true; } name = name.next; }
+    return false;
+}
+
+void KrtSourcesAddName(KrtSourceBundle bundle, int64 value) {
+    if (value == 0 || KrtSourcesHasName(bundle, value)) { return; }
+    KrtSourceName name = new KrtSourceName(); name.value = value; name.next = bundle.names; bundle.names = name;
+}
+
+void KrtSourcesAddNamespace(KrtSourceBundle bundle, int64 value) {
+    int64 length = KrtDriverStringLength(value); int64 index = 0;
+    unsafe(using krt.mem;) {
+        byte* text = (byte*)value;
+        while (index < length) {
+            if (text[index] == 46) { KrtSourcesAddName(bundle, KrtDriverCopyString(value, index)); }
+            index = index + 1;
+        }
+    }
+    KrtSourcesAddName(bundle, value);
+}
+
+// Leaves the first token following the name in token. A name is reconstructed
+// from lexer spans, so comments between its components are harmless.
+bool KrtSourcesParseName(KrtSourceFile file, KrtLexer lexer, KrtToken token, KrtSourceDirective result) {
+    if (token.category != KrtTokenCategory.Identifier) { return false; }
+    unsafe(using krt.mem;) {
+        byte* output = stackalloc byte[4096]; byte* input = (byte*)file.original; int64 length = 0;
+        while (true) {
+            if (length + token.length >= 4096) { return false; }
+            int64 index = 0;
+            while (index < token.length) { output[length] = input[token.start + index]; length = length + 1; index = index + 1; }
+            KrtLexerNext(lexer, token);
+            if (!KrtSourcesPunctuation(file, token, 46)) { break; }
+            KrtLexerNext(lexer, token);
+            if (KrtSourcesPunctuation(file, token, 42)) { result.wildcard = true; KrtLexerNext(lexer, token); break; }
+            if (token.category != KrtTokenCategory.Identifier || length + 1 >= 4096) { return false; }
+            output[length] = 46; length = length + 1;
+        }
+        result.name = KrtDriverCopyString((int64)output, length);
+    }
+    return result.name > 0;
+}
+
+bool KrtSourcesParseDirective(KrtSourceFile file, KrtLexer lexer, KrtToken token) {
+    bool is_import = KrtSourcesWord(file, token, "import"); int64 start = token.start;
+    KrtSourceDirective directive = new KrtSourceDirective(); directive.position = start;
+    KrtLexerNext(lexer, token);
+    if (is_import && token.category == KrtTokenCategory.String) {
+        directive.quoted = true;
+        if (token.length < 3 || token.length > 4097) { return KrtSourcesFail(file, start, "E_IMPORT", "invalid import path"); }
+        unsafe(using krt.mem;) {
+            byte* input = (byte*)file.original; int64 index = token.start + 1; int64 end = token.start + token.length - 1;
+            while (index < end) { if (input[index] == 92 || input[index] == 0) { return KrtSourcesFail(file, start, "E_IMPORT", "invalid import path"); } index = index + 1; }
+        }
+        directive.name = KrtDriverCopyString(file.original + token.start + 1, token.length - 2);
+        KrtLexerNext(lexer, token);
+    } else {
+        if (!KrtSourcesParseName(file, lexer, token, directive)) { return KrtSourcesFail(file, start, "E_IMPORT", "expected a module name or quoted import path"); }
+        if (!is_import && KrtSourcesPunctuation(file, token, 61)) {
+            // The left hand side of a using alias is one identifier.
+            unsafe(using krt.mem;) {
+                byte* alias = (byte*)directive.name; int64 index = 0;
+                while (alias[index] != 0) { if (alias[index] == 46) { return KrtSourcesFail(file, start, "E_IMPORT", "invalid using alias"); } index = index + 1; }
+            }
+            if (directive.wildcard) { return KrtSourcesFail(file, start, "E_IMPORT", "invalid using alias"); }
+            KrtLexerNext(lexer, token);
+            if (!KrtSourcesParseName(file, lexer, token, directive) || directive.wildcard) { return KrtSourcesFail(file, start, "E_IMPORT", "invalid using alias"); }
+        }
+    }
+    if (!KrtSourcesPunctuation(file, token, 59)) { return KrtSourcesFail(file, start, "E_IMPORT", "expected ';' after source directive"); }
+    directive.end = token.start + token.length;
+    if (file.directives == null) { file.directives = directive; }
+    else { KrtSourceDirective tail = file.directives; while (tail.next != null) { tail = tail.next; } tail.next = directive; }
+    if (is_import) {
+        unsafe(using krt.mem;) {
+            byte* transformed = (byte*)file.transformed; int64 index = start; int64 end = token.start + token.length;
+            while (index < end) { if (transformed[index] != 10 && transformed[index] != 13) { transformed[index] = 32; } index = index + 1; }
+        }
+    }
+    KrtLexerNext(lexer, token); return true;
+}
+
+bool KrtSourcesScan(KrtSourceBundle bundle, KrtSourceFile file) {
+    KrtLexer lexer = new KrtLexer(); KrtToken token = new KrtToken();
+    unsafe(using krt.mem;) { if (!KrtLexerInit(lexer, (byte*)file.original, file.length)) { return false; } }
+    KrtLexerNext(lexer, token); file.lexical_error = -1;
+    int64 current = (int64)""; bool declarations = true; int32 parentheses = 0; KrtSourceScope scopes = null;
+    while (token.kind != KrtTokenKind.Eof) {
+        // Keep source inspection possible for malformed files. Compilation
+        // validates each unit before bundling can join unfinished literals.
+        if (token.kind == KrtTokenKind.Invalid) {
+            if (file.lexical_error < 0) { file.lexical_error = token.start; }
+            KrtLexerNext(lexer, token); continue;
+        }
+        if (parentheses == 0 && (KrtSourcesWord(file, token, "using") || KrtSourcesWord(file, token, "import"))) {
+            if (!KrtSourcesParseDirective(file, lexer, token)) { return false; }
+            continue;
+        }
+        if (declarations && parentheses == 0 && KrtSourcesWord(file, token, "namespace")) {
+            KrtLexerNext(lexer, token);
+            if (KrtSourcesPunctuation(file, token, 59)) { current = (int64)""; KrtLexerNext(lexer, token); continue; }
+            KrtSourceDirective name = new KrtSourceDirective();
+            if (!KrtSourcesParseName(file, lexer, token, name) || name.wildcard) { continue; }
+            int64 previous = current; current = KrtSourcesQualifiedName(current, name.name); KrtSourcesAddNamespace(bundle, current);
+            if (KrtSourcesPunctuation(file, token, 123)) {
+                KrtSourceScope scope = new KrtSourceScope(); scope.name = previous; scope.declarations = declarations; scope.parent = scopes; scopes = scope;
+                KrtLexerNext(lexer, token);
+            } else if (KrtSourcesPunctuation(file, token, 59)) { KrtLexerNext(lexer, token); }
+            continue;
+        }
+        if (declarations && parentheses == 0 && (KrtSourcesWord(file, token, "class") || KrtSourcesWord(file, token, "struct") ||
+            KrtSourcesWord(file, token, "enum") || KrtSourcesWord(file, token, "interface"))) {
+            KrtLexerNext(lexer, token);
+            if (token.category == KrtTokenCategory.Identifier) {
+                int64 name = KrtDriverCopyString(file.original + token.start, token.length);
+                KrtSourcesAddName(bundle, KrtSourcesQualifiedName(current, name));
+            }
+            continue;
+        }
+        if (KrtSourcesPunctuation(file, token, 123)) {
+            KrtSourceScope scope = new KrtSourceScope(); scope.name = current; scope.declarations = declarations; scope.parent = scopes; scopes = scope; declarations = false;
+        } else if (KrtSourcesPunctuation(file, token, 125) && scopes != null) {
+            current = scopes.name; declarations = scopes.declarations; scopes = scopes.parent;
+        } else if (KrtSourcesPunctuation(file, token, 40)) { parentheses = parentheses + 1; }
+        else if (KrtSourcesPunctuation(file, token, 41) && parentheses > 0) { parentheses = parentheses - 1; }
+        KrtLexerNext(lexer, token);
+    }
+    return true;
+}
+
+bool KrtSourcesValidate(KrtSourceBundle bundle) {
+    KrtSourceFile file = bundle.files;
+    while (file != null) {
+        if (file.lexical_error >= 0) { return KrtSourcesFail(file, file.lexical_error, "E_PARSE", "invalid syntax"); }
+        file = file.order_next;
+    }
+    return true;
+}
+
+KrtSourceFile KrtSourcesFindFile(KrtSourceBundle bundle, int64 path) {
+    KrtSourceFile file = bundle.loaded;
+    while (file != null) { if (KrtDriverStringEqual(file.path, path)) { return file; } file = file.next; }
+    return null;
+}
+
+KrtSourceFile KrtSourcesLoad(KrtSourceBundle bundle, int64 path) {
+    path = KrtDriverAbsolutePath(path);
+    if (path <= 0) { return null; }
+    KrtSourceFile file = KrtSourcesFindFile(bundle, path);
+    if (file != null) { return file; }
+    file = new KrtSourceFile(); file.path = path;
+    KrtDriverBuffer input = new KrtDriverBuffer();
+    KrtDriverReadFile(path, input);
+    if (!input.ok) { KrtSourcesFail(file, 0, "E_INPUT", "unable to read source file"); return null; }
+    file.original = input.data; file.length = input.length;
+    bundle.total_bytes = bundle.total_bytes + file.length;
+    if (bundle.count > 0) { bundle.total_bytes = bundle.total_bytes + 12; }
+    bundle.count = bundle.count + 1;
+    if (bundle.total_bytes > 16777216) { KrtSourcesFail(file, 0, "E_SIZE", "combined source exceeds 16777216 bytes"); return null; }
+    int64 invalid_utf8 = KrtSourcesUtf8Error(input.data, input.length);
+    if (invalid_utf8 >= 0) {
+        KrtSourcesLocation(file, invalid_utf8); KrtSourcesWrite(": E_ENCODING: invalid UTF-8 at byte "); KrtSourcesWriteNumber(invalid_utf8); KrtSourcesWrite("\n"); return null;
+    }
+    file.transformed = KrtDriverCopyString(input.data, input.length);
+    if (file.transformed <= 0) { KrtSourcesFail(file, 0, "E_MEMORY", "source allocation failed"); return null; }
+    file.next = bundle.loaded; bundle.loaded = file;
+    if (!KrtSourcesScan(bundle, file)) { return null; }
+    return file;
+}
+
+void KrtSourcesAddSearch(KrtSourceBundle bundle, int64 value) {
+    if (value <= 0) { return; }
+    value = KrtDriverAbsolutePath(value);
+    KrtDriverPath path = bundle.search; KrtDriverPath tail = null;
+    while (path != null) { if (KrtDriverStringEqual(path.value, value)) { return; } tail = path; path = path.next; }
+    KrtDriverPath added = new KrtDriverPath(); added.value = value;
+    if (tail == null) { bundle.search = added; } else { tail.next = added; }
+}
+
+int64 KrtSourcesRelativePath(KrtSourceDirective directive) {
+    if (directive.quoted) { return directive.name; }
+    int64 length = KrtDriverStringLength(directive.name);
+    int64 result = KrtDriverCopyString(directive.name, length);
+    unsafe(using krt.mem;) {
+        byte* text = (byte*)result; int64 index = 0;
+        while (index < length) { if (text[index] == 46) { text[index] = 47; } index = index + 1; }
+    }
+    return result;
+}
+
+bool KrtSourcesHasSuffix(int64 value) {
+    unsafe(using krt.mem;) {
+        byte* text = (byte*)value; int64 index = 0; int64 slash = -1; int64 dot = -1;
+        while (text[index] != 0) { if (text[index] == 47) { slash = index; dot = -1; } else if (text[index] == 46) { dot = index; } index = index + 1; }
+        return dot > slash + 1 && dot < index - 1;
+    }
+}
+
+int64 KrtSourcesAppendExtension(int64 value) {
+    int64 length = KrtDriverStringLength(value); int64 result = KrtDriverAlloc(length + 5);
+    if (result <= 0) { return 0; }
+    unsafe(using krt.mem;) {
+        byte* output = (byte*)result; byte* input = (byte*)value; int64 index = 0;
+        while (index < length) { output[index] = input[index]; index = index + 1; }
+        output[length] = 46; output[length + 1] = 107; output[length + 2] = 114; output[length + 3] = 116; output[length + 4] = 0;
+    }
+    return result;
+}
+
+KrtDriverPath KrtSourcesAtDirectory(int64 directory, int64 relative, KrtSourceDirective directive) {
+    int64 candidate = KrtDriverJoinPath(directory, relative);
+    if (candidate <= 0) { return null; }
+    if (!directive.quoted && KrtDriverIsDirectory(candidate)) {
+        KrtDriverPath matches = KrtDriverListKrtFiles(candidate);
+        if (matches != null) { return matches; }
+    }
+    if (directive.wildcard) { return null; }
+    if (!directive.quoted || !KrtSourcesHasSuffix(candidate)) { candidate = KrtSourcesAppendExtension(candidate); }
+    if (candidate <= 0 || !KrtDriverFileExists(candidate) || KrtDriverIsDirectory(candidate)) { return null; }
+    KrtDriverPath found = new KrtDriverPath(); found.value = candidate; return found;
+}
+
+bool KrtSourcesVisit(KrtSourceBundle bundle, KrtSourceFile file) {
+    // A visiting node is a dependency cycle. Its declaration is emitted by the
+    // first visit, exactly once, after its remaining dependencies are visited.
+    if (file.state != 0) { return true; }
+    file.state = 1;
+    KrtSourceDirective directive = file.directives;
+    while (directive != null) {
+        int64 relative = KrtSourcesRelativePath(directive);
+        int64 local = KrtDriverDirectory(file.path);
+        KrtDriverPath matches = KrtSourcesAtDirectory(local, relative, directive);
+        KrtDriverPath search = bundle.search;
+        while (matches == null && search != null) {
+            if (!KrtDriverStringEqual(search.value, local)) { matches = KrtSourcesAtDirectory(search.value, relative, directive); }
+            search = search.next;
+        }
+        if (matches == null && (directive.quoted || !KrtSourcesHasName(bundle, directive.name))) {
+            KrtSourcesLocation(file, directive.position); KrtSourcesWrite(": E_IMPORT: cannot find module '");
+            syscall(1, 2, directive.name, KrtDriverStringLength(directive.name), 0, 0, 0);
+            if (directive.wildcard) { KrtSourcesWrite(".*"); }
+            KrtSourcesWrite("' ("); syscall(1, 2, relative, KrtDriverStringLength(relative), 0, 0, 0); KrtSourcesWrite(")\n");
+            return false;
+        }
+        // Index every unit in a directory before traversing its edges, so
+        // sibling namespaces and type aliases need no corresponding filename.
+        KrtDriverPath dependency = matches;
+        while (dependency != null) {
+            if (KrtSourcesLoad(bundle, dependency.value) == null) { return false; }
+            dependency = dependency.next;
+        }
+        dependency = matches;
+        directive.files = matches;
+        while (dependency != null) {
+            int64 normalized = KrtDriverAbsolutePath(dependency.value);
+            KrtSourceFile unit = KrtSourcesFindFile(bundle, normalized);
+            if (unit == null || !KrtSourcesVisit(bundle, unit)) { return false; }
+            dependency = dependency.next;
+        }
+        directive = directive.next;
+    }
+    file.state = 2;
+    if (bundle.files == null) { bundle.files = file; } else { bundle.order_tail.order_next = file; }
+    bundle.order_tail = file;
+    return true;
+}
+
+bool KrtSourcesCollectModules(KrtDriverPath roots, KrtDriverPath include_dirs, int64 library_root, KrtSourceBundle bundle, KrtDriverPath objects) {
+    if (roots == null) { return false; }
+    KrtDriverPath path = include_dirs;
+    while (path != null) { KrtSourcesAddSearch(bundle, path.value); path = path.next; }
+    path = roots;
+    while (path != null) {
+        int64 absolute = KrtDriverAbsolutePath(path.value); int64 directory = KrtDriverDirectory(absolute);
+        KrtSourcesAddSearch(bundle, directory); path = path.next;
+    }
+    path = roots;
+    while (path != null) {
+        int64 absolute = KrtDriverAbsolutePath(path.value); int64 directory = KrtDriverDirectory(absolute);
+        KrtSourcesAddSearch(bundle, KrtDriverJoinPath(directory, (int64)"libs")); path = path.next;
+    }
+    if (library_root > 0) { KrtSourcesAddSearch(bundle, library_root); }
+    // Explicit source declarations are visible before the first dependency is
+    // resolved. Their order never determines whether a namespace alias binds.
+    path = roots;
+    while (path != null) { if (KrtSourcesLoad(bundle, path.value) == null) { return false; } path = path.next; }
+    if(!KrtModulesImport(bundle,objects)){return false;}
+    path = roots;
+    while (path != null) {
+        KrtSourceFile file = KrtSourcesFindFile(bundle, KrtDriverAbsolutePath(path.value));
+        if (file == null || !KrtSourcesVisit(bundle, file)) { return false; }
+        path = path.next;
+    }
+    bundle.length = bundle.total_bytes;
+    if (bundle.length < 0 || bundle.length > 16777216) { return KrtSourcesFail(bundle.files, 0, "E_SIZE", "combined source must contain 0 to 16777216 bytes"); }
+    bundle.data = KrtDriverAlloc(bundle.length + 1);
+    if (bundle.data <= 0) { return KrtSourcesFail(bundle.files, 0, "E_MEMORY", "combined source allocation failed"); }
+    unsafe(using krt.mem;) {
+        byte* output = (byte*)bundle.data; byte* separator = (byte*)(int64)"\nnamespace;\n";
+        int64 offset = 0; bool first = true; KrtSourceFile file = bundle.files;
+        while (file != null) {
+            if (!first) { int64 part = 0; while (part < 12) { output[offset] = separator[part]; offset = offset + 1; part = part + 1; } }
+            first = false;
+            file.start = offset; byte* input = (byte*)file.transformed; int64 index = 0;
+            while (index < file.length) { output[offset] = input[index]; offset = offset + 1; index = index + 1; }
+            file = file.order_next;
+        }
+        output[offset] = 0; bundle.length = offset;
+    }
+    return true;
+}
+
+bool KrtSourcesCollect(KrtDriverPath roots,KrtDriverPath include_dirs,int64 library_root,KrtSourceBundle bundle){
+    return KrtSourcesCollectModules(roots,include_dirs,library_root,bundle,null);
+}

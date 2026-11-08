@@ -109,7 +109,7 @@ class Comparison:
         self.work = args.work.resolve()
         self.work.mkdir(parents=True, exist_ok=True)
         self.tools = {"selfhost": args.selfhost.resolve(), "rekrtc": args.rekrtc.resolve(),
-                      "launcher": ROOT / "SelfHost/krtc", "comparison": Path(__file__).resolve()}
+                      "launcher": ROOT / "SelfHost/RunNativeCompiler", "comparison": Path(__file__).resolve()}
         for path in self.tools.values():
             if not path.is_file():
                 raise FileNotFoundError(path)

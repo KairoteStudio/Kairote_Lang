@@ -19,7 +19,7 @@ class LanguageProjectTest(unittest.TestCase):
             shutil.copytree(ROOT / 'Test/SelfHost/examples/dispatch-project', project,
                             ignore=shutil.ignore_patterns('bin', 'obj', '.krtcache'))
             compiled = subprocess.run([
-                str(ROOT / 'SelfHost/krtc'), 'build', str(project),
+                str(ROOT / 'SelfHost/RunNativeCompiler'), 'build', str(project),
                 '--compiler', str(COMPILER), '--linker', str(LINKER)], capture_output=True, text=True, timeout=60)
             self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
             executed = subprocess.run([str(project / 'bin/release/DispatchDemo')],
@@ -33,7 +33,7 @@ class LanguageProjectTest(unittest.TestCase):
             shutil.copytree(ROOT / 'Test/SelfHost/examples/language-project', project,
                             ignore=shutil.ignore_patterns('bin', 'obj', '.krtcache'))
             compiled = subprocess.run([
-                str(ROOT / 'SelfHost/krtc'), 'build', str(project),
+                str(ROOT / 'SelfHost/RunNativeCompiler'), 'build', str(project),
                 '--compiler', str(COMPILER), '--linker', str(LINKER)], capture_output=True, text=True, timeout=60)
             self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
             executed = subprocess.run([str(project / 'bin/release/LanguageDemo')],

@@ -1,6 +1,6 @@
 # Lexer Token 词表
 
-`SelfHost/Compiler/Frontend/Lexer/Token.krt` 与 Re.KrtC 的 `Tokenizer.h` 及 `IntegerWidths.def` 对齐：299 个不同数值种类，EOF 为 0，UNKNOWN 为 298。`KrtLexerNext` 实际返回细分类种类，不再把所有关键字和运算符归为同一个 token。
+`SelfHost/Compiler/Frontend/Lexer/Lexer.krt` 与 Re.KrtC 的 `Tokenizer.h` 及 `IntegerWidths.def` 对齐：299 个不同数值种类，EOF 为 0，UNKNOWN 为 298。`KrtLexerNext` 实际返回细分类种类，不再把所有关键字和运算符归为同一个 token。
 
 | 范围 | 实现 |
 | --- | --- |

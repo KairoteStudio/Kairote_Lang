@@ -18,7 +18,7 @@ class GlobalsAndFunctionPointers(unittest.TestCase):
             path = work / 'main.krt'
             path.write_text(source)
             binary = work / 'program'
-            command=[str(ROOT / 'SelfHost/krtc'), str(path), '--compiler', str(COMPILER), '--linker', str(LINKER),
+            command=[str(ROOT / 'SelfHost/RunNativeCompiler'), str(path), '--compiler', str(COMPILER), '--linker', str(LINKER),
                      f'-O{optimization}', '-o', str(binary)]
             if vm:
                 command+=['target','vm']

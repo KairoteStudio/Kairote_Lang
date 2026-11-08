@@ -42,7 +42,7 @@ Re.KrtC 的 `Ast.h` 枚举了 106 种节点。对 Parser 入口文件的节点�
 | Sizeof、Cast、Is、GenericType | Sizeof/Cast/TypeTest 及类型子树 | 数字 sizeof 正确；GenericType 节点存在本身不代表独立元类型值语义 |
 | Lambda | Lambda 的参数与表达式确实保留；原生未实现闭包绑定/生成 | 种子可达，但生成表达式值为零，调用最小程序无法正确链接/执行 |
 
-主要来源是 `ParserStatement.c`、`ParserExpression.c`、`ParserAdvanced.c`、`PointerTypes.inc` 和 `EnumParser.inc`。SelfHost 对应入口在 `Compiler/Frontend/Parser/`，绑定在 `Compiler/Frontend/Semantic/NativeBinding.krt`，生成在 `Compiler/Middle/Ir/Ir.krt` 及专用模块。
+主要来源是 `ParserStatement.c`、`ParserExpression.c`、`ParserAdvanced.c`、`PointerTypes.inc` 和 `EnumParser.inc`。SelfHost 对应入口在 `Compiler/Frontend/Parser/`，绑定在 `Compiler/Frontend/Semantic/Semantic.krt`，生成在 `Compiler/Middle/Ir/Ir.krt` 及专用模块。
 
 ## 被测快照的真实遗漏
 

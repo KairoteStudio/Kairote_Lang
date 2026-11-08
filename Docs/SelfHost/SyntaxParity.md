@@ -64,7 +64,7 @@ python3 Test/SelfHost/Bootstrap.py
 python3 Test/SelfHost/RunStandardLibrary.py --compiler build/selfhost/stage2/program
 ```
 
-`test_parser` 包含实际类型 AST 前瞻、using frame、源码顺序节点、错误同步/多条诊断、后续有效声明及 64 条错误上限，并保留函数、分支、循环和转换等子节点。AST 探针支持 `SELFHOST_COMPILER`，可以运行原生生成后的 parser 程序；套件中的独立种子回归仍直接调用 `KRTC`。探针使用实际组件的依赖闭包，`CompilerState.krt` 与 `DiagnosticsState.krt` 提供完整共享状态和诊断记录，避免记录字段引入无关运行算法；这些属于解析结构证据。集合、泛型、异常和命名空间测试支持 `SELFHOST_COMPILER`，可显式指定已生成的 Stage 2 进行执行验证。
+`test_parser` 包含实际类型 AST 前瞻、using frame、源码顺序节点、错误同步/多条诊断、后续有效声明及 64 条错误上限，并保留函数、分支、循环和转换等子节点。AST 探针支持 `SELFHOST_COMPILER`，可以运行原生生成后的 parser 程序；套件中的独立种子回归仍直接调用 `KRTC`。探针使用实际组件的依赖闭包，`CompilerState.krt` 与 `ErrorReports.krt` 提供完整共享状态和诊断记录，避免记录字段引入无关运行算法；这些属于解析结构证据。集合、泛型、异常和命名空间测试支持 `SELFHOST_COMPILER`，可显式指定已生成的 Stage 2 进行执行验证。
 
 自举报告 `build/selfhost/report.json` 记录实际源码与工具哈希、Stage 2/3/4 固定点、各代正例运行、重复负例诊断和原生 CLI 测试。只有 Stage 0 的种子输入由测试脚本拼接；后续各代直接通过原生 CLI 读取原始 Kairote 文件，依赖加载、工程配置、缓存、诊断和链接调用全部参与自编译。Python 仅用于测试与证据记录。标准库报告位于 `build/selfhost-standard-library/report.json`，具体命令可用 `--work` 选择其他目录。应使用与当前源码一致的报告，不能把旧报告的通过数量当作当前验收结论。
 

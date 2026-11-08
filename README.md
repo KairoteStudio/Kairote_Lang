@@ -92,15 +92,16 @@ zig build
 
 ### SelfHost 原生编译器
 
-`SelfHost/**/*.krt` 实现编译器及日常驱动，包括源码依赖、诊断、工程配置、缓存和链接调用。生成 Stage 2 后，`SelfHost/krtc` 直接执行原生编译器；Python 仅用于自举与测试脚本。
+`SelfHost/Main.krt` 与 `SelfHost/Compiler/**/*.krt` 实现编译器及日常驱动，包括源码依赖、诊断、工程配置、缓存和链接调用。生成 Stage 2 后，`SelfHost/RunNativeCompiler` 是启动脚本；真正的编译器程序名为 `KrtProject`。`SelfHost/project.krt` 使用 C 版 KrtC 的 `Configure(Project p)` 配置格式，Stage 2 原生项目驱动据此构建整个编译器；项目配置文件不参与编译器源码集合。Python 仅用于自举与测试脚本。
 
 ```bash
 cmake -S . -B build
 cmake --build build --target KrtC ArkLink -j4
 python3 Test/SelfHost/Bootstrap.py
-./SelfHost/krtc hello-selfhost.krt -o hello-selfhost
+build/selfhost/stage2/program build SelfHost/project.krt
+./SelfHost/bin/linux/KrtProject hello-selfhost.krt -o hello-selfhost
 ./hello-selfhost
-./SelfHost/krtc build path/to/project
+./SelfHost/bin/linux/KrtProject build path/to/project
 ```
 
 上面的 `hello-selfhost.krt` 使用 SelfHost 的顶层 `main` 入口：

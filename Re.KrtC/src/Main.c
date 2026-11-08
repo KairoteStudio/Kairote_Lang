@@ -828,7 +828,7 @@ static int compile_multiple_files(const char** input_files, int input_count, con
     return 0;
 }
 
-static int build_project(const char* project_file, const char* output_path __attribute__((unused)), int keep_temp,
+static int build_project_independent(const char* project_file, const char* output_path __attribute__((unused)), int keep_temp,
                          int optimization_level) {
 
     KrtPlatform* platform = KrtPlatformGetCurrent();
@@ -990,6 +990,192 @@ static int build_project(const char* project_file, const char* output_path __att
     KrtConfigDestroy(config);
 
     return 0;
+}
+
+
+static int compile_project_sources_together(const char** sources, int source_count, const char* object_dir,
+                                           const char* output, int keep_temp, int optimization_level) {
+#ifdef _WIN32
+    long process_id = (long)GetCurrentProcessId();
+#else
+    long process_id = (long)getpid();
+#endif
+    char aggregate_path[KRT_MAX_PATH];
+    char aggregate_kro[KRT_MAX_PATH];
+    snprintf(aggregate_path, sizeof(aggregate_path), "%s%ckrt_project_aggregate_%ld.krt", object_dir,
+             KRT_PATH_SEPARATOR, process_id);
+    snprintf(aggregate_kro, sizeof(aggregate_kro), "krt_project_aggregate_%ld.kro", process_id);
+
+    FILE* aggregate = fopen(aggregate_path, "wb");
+    if (!aggregate) {
+        KrtError("无法创建合并项目源码: %s", aggregate_path);
+        return 1;
+    }
+
+    int write_failed = 0;
+    char buffer[64 * 1024];
+    for (int i = 0; i < source_count && !write_failed; i++) {
+        FILE* input = fopen(sources[i], "rb");
+        if (!input) {
+            KrtError("无法读取项目源文件: %s", sources[i]);
+            write_failed = 1;
+            break;
+        }
+        if (fprintf(aggregate, "\n// project source: %s\n", sources[i]) < 0) {
+            write_failed = 1;
+        }
+        size_t count;
+        while (!write_failed && (count = fread(buffer, 1, sizeof(buffer), input)) != 0) {
+            if (fwrite(buffer, 1, count, aggregate) != count) {
+                write_failed = 1;
+            }
+        }
+        if (ferror(input)) {
+            KrtError("读取项目源文件失败: %s", sources[i]);
+            write_failed = 1;
+        }
+        if (fclose(input) != 0) {
+            write_failed = 1;
+        }
+    }
+    if (fclose(aggregate) != 0) {
+        write_failed = 1;
+    }
+    if (write_failed) {
+        KrtError("合并项目源码失败");
+        KrtDeleteFile(aggregate_path);
+        return 1;
+    }
+
+    int result = compile_single_file(aggregate_path, output, KRT_TARGET_CMD_EXE, 0, keep_temp,
+                                    optimization_level);
+    KrtDeleteFile(aggregate_path);
+    if (!keep_temp) {
+        KrtDeleteFile(aggregate_kro);
+    }
+    return result;
+}
+
+static int compare_project_source_paths(const void* left, const void* right) {
+    const char* const* a = (const char* const*)left;
+    const char* const* b = (const char* const*)right;
+    return strcmp(*a, *b);
+}
+
+static int build_project(const char* project_file, const char* output_path __attribute__((unused)), int keep_temp,
+                         int optimization_level) {
+    KrtPlatform* platform = KrtPlatformGetCurrent();
+    if (!platform) {
+        KrtError("Failed to create platform abstraction");
+        return 1;
+    }
+
+    KrtProjectKrtConfig* project = KrtProjectKrtLoad(project_file);
+    if (!project) {
+        KrtError("无法加载项目文件: %s", project_file);
+        KrtPlatformDestroy(platform);
+        return 1;
+    }
+
+    const char* project_root = (project->base_dir && project->base_dir[0] != '\0') ? project->base_dir : ".";
+
+    if (project->source_count == 0) {
+        KrtError("项目 '%s' 中没有 sources 定义", project->project_name ? project->project_name : project_file);
+        KrtProjectKrtDestroy(project);
+        KrtPlatformDestroy(platform);
+        return 1;
+    }
+
+    if (!project->compile_together) {
+        KrtProjectKrtDestroy(project);
+        KrtPlatformDestroy(platform);
+        return build_project_independent(project_file, output_path, keep_temp, optimization_level);
+    }
+
+    const char** source_paths = (const char**)calloc((size_t)project->source_count, sizeof(const char*));
+    if (!source_paths) {
+        KrtError("无法分配项目源文件列表");
+        KrtProjectKrtDestroy(project);
+        KrtPlatformDestroy(platform);
+        return 1;
+    }
+
+    for (int i = 0; i < project->source_count; i++) {
+        const char* src = project->sources[i];
+        if (!src || src[0] == '\0') {
+            continue;
+        }
+
+        char* source_path = (char*)malloc(KRT_MAX_PATH);
+        if (!source_path) {
+            KrtError("无法分配源文件路径");
+            for (int j = 0; j < i; j++) {
+                free((void*)source_paths[j]);
+            }
+            free(source_paths);
+            KrtProjectKrtDestroy(project);
+            KrtPlatformDestroy(platform);
+            return 1;
+        }
+        KrtPlatformPathJoin(platform, source_path, KRT_MAX_PATH, project_root, src);
+        if (!KrtPlatformPathExists(platform, source_path)) {
+            KrtError("源文件不存在: %s", source_path);
+            free(source_path);
+            for (int j = 0; j < i; j++) {
+                free((void*)source_paths[j]);
+            }
+            free(source_paths);
+            KrtProjectKrtDestroy(project);
+            KrtPlatformDestroy(platform);
+            return 1;
+        }
+        source_paths[i] = source_path;
+    }
+    qsort(source_paths, (size_t)project->source_count, sizeof(*source_paths), compare_project_source_paths);
+
+    const char* out_name =
+        (project->output_name && project->output_name[0] != '\0') ? project->output_name : project->project_name;
+    char bin_dir[KRT_MAX_PATH];
+    char platform_name[32];
+    char bin_subdir[KRT_MAX_PATH];
+    char project_output_path[KRT_MAX_PATH];
+    char project_filename[KRT_MAX_PATH];
+    char obj_dir[KRT_MAX_PATH];
+    KrtStrlcpy(platform_name, platform->name, sizeof(platform_name));
+    for (int i = 0; platform_name[i]; i++) {
+        platform_name[i] = (char)tolower((unsigned char)platform_name[i]);
+    }
+    snprintf(bin_subdir, sizeof(bin_subdir), "bin%c%s", KrtPlatformGetSeparator(platform), platform_name);
+    KrtPlatformPathJoin(platform, bin_dir, sizeof(bin_dir), project_root, bin_subdir);
+    KrtEnsureDirectoryRecursive(bin_dir);
+    if (platform->type == KRT_CONFIG_PLATFORM_WINDOWS) {
+        snprintf(project_filename, sizeof(project_filename), "%s.exe", out_name ? out_name : "output");
+    } else {
+        KrtStrlcpy(project_filename, out_name ? out_name : "output", sizeof(project_filename));
+    }
+    KrtPlatformPathJoin(platform, project_output_path, sizeof(project_output_path), bin_dir, project_filename);
+    KrtPlatformPathJoin(platform, obj_dir, sizeof(obj_dir), project_root, "obj");
+    if (KrtEnsureDirectoryRecursive(obj_dir) != 0) {
+        KrtError("无法创建项目对象目录: %s", obj_dir);
+        for (int i = 0; i < project->source_count; i++) {
+            free((void*)source_paths[i]);
+        }
+        free(source_paths);
+        KrtProjectKrtDestroy(project);
+        KrtPlatformDestroy(platform);
+        return 1;
+    }
+
+    int result = compile_project_sources_together(source_paths, project->source_count, obj_dir,
+                                                  project_output_path, keep_temp, optimization_level);
+    for (int i = 0; i < project->source_count; i++) {
+        free((void*)source_paths[i]);
+    }
+    free(source_paths);
+
+    KrtPlatformDestroy(platform);
+    KrtProjectKrtDestroy(project);
+    return result;
 }
 
 static int run_compiler(const char** input_files, int input_count, const char* output_file,

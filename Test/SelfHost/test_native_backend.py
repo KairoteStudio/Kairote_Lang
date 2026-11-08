@@ -108,7 +108,7 @@ class NativeBackendTest(unittest.TestCase):
         metadata["aggregate_invalid_alignment"]=["m.function_frame_bytes[0]=8;"]
         with tempfile.TemporaryDirectory(prefix="krt-native-backend-") as directory:
             work = Path(directory)
-            parts = [path.read_text() for path in sorted((ROOT / "SelfHost").rglob("*.krt")) if path.name != "Main.krt"]
+            parts = [path.read_text() for path in sorted(p for p in (ROOT / "SelfHost").rglob("*.krt") if p.name != "project.krt") if path.name not in {"Main.krt", "project.krt"}]
             body = ["int32 main() {", "KrtNativeModule m = new KrtNativeModule();", "KrtKroObject o = new KrtKroObject();"]
             for number, (name, specification) in enumerate(list(cases.items()) + list(invalid.items()), 1):
                 ops, starts, local_counts, parameter_counts = specification[:4]

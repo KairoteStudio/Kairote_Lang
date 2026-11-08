@@ -185,7 +185,7 @@ class DriverIntegrationTests(unittest.TestCase):
         return path
 
     def compile(self, *arguments):
-        return subprocess.run([str(ROOT / 'SelfHost/krtc'), '--compiler', str(COMPILER),
+        return subprocess.run([str(ROOT / 'SelfHost/RunNativeCompiler'), '--compiler', str(COMPILER),
                                '--linker', str(LINKER), *map(str, arguments)], cwd=self.work,
                               capture_output=True, text=True, timeout=30)
 

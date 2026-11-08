@@ -1,8 +1,8 @@
 # Native VM bytecode
 
-`SelfHost/krtc source.krt target vm -o program` writes real bytecode to `program`
+`SelfHost/bin/linux/KrtProject source.krt target vm -o program` writes real bytecode to `program`
 and the compatibility sidecar `program.ebc`. Run either file with
-`SelfHost/krtc run-vm program`. The interpreter and serializers are written
+`SelfHost/bin/linux/KrtProject run-vm program`. The interpreter and serializers are written
 in Kairote and run inside the native compiler process. VM compilation does not
 invoke ArkLink, a C compiler, Python, or the seed compiler.
 

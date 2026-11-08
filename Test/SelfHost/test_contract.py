@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def compiler_prelude(parts):
     sources = {path: path.read_text() for path in (ROOT / 'SelfHost').rglob('*.krt')
-               if path.name != 'Main.krt'}
+               if path.name not in {'Main.krt', 'project.krt'}}
     # Fixture modules use the actual component definitions, including AST field
     # types and their transitive helper calls. Ignore identifiers in comments
     # and literals so fixture strings do not introduce compiler dependencies.
@@ -30,11 +30,12 @@ def compiler_prelude(parts):
     selected = {ROOT / 'SelfHost' / part for part in parts}
     if any('Compiler/Frontend/Parser/' in part for part in parts):
         selected.update((ROOT / 'SelfHost/Compiler/Frontend/Parser').glob('*.krt'))
-    if any('NativeBinding.krt' in part or part == 'Compiler/Frontend/Semantic/Semantic.krt' for part in parts):
-        selected.update(path for path in (ROOT / 'SelfHost').rglob('*.krt') if path.name != 'Main.krt')
-    if any('Compiler/Driver/Compiler.krt' in part for part in parts):
-        selected.add(ROOT / 'SelfHost/Compiler/Backend/Kro/Library.krt')
-        selected.update((ROOT / 'SelfHost/Compiler/Driver').glob('*.krt'))
+    if any('Semantic.krt' in part or part == 'Compiler/Frontend/Semantic/Semantic.krt' for part in parts):
+        selected.update(path for path in (ROOT / 'SelfHost').rglob('*.krt') if path.name not in {'Main.krt', 'project.krt'})
+    if any('Compiler/Pipeline/CompilerPipeline.krt' in part for part in parts):
+        selected.add(ROOT / 'SelfHost/Compiler/Backend/Kro/KroBackend.krt')
+        for layer in ('Driver', 'Build', 'Pipeline', 'Platform'):
+            selected.update((ROOT / 'SelfHost/Compiler' / layer).glob('*.krt'))
     pending = list(selected)
     while pending:
         path = pending.pop()
@@ -47,7 +48,7 @@ def compiler_prelude(parts):
 
 class ContractTests(unittest.TestCase):
     def test_stage1_bootstrap_probe(self):
-        parts = sorted((ROOT / "SelfHost").rglob("*.krt"))
+        parts = sorted(p for p in (ROOT / "SelfHost").rglob("*.krt") if p.name != "project.krt")
         with tempfile.TemporaryDirectory(prefix="krt-stage1-") as directory:
             work = Path(directory)
             source = work / "Stage1.krt"
@@ -149,9 +150,9 @@ class ContractTests(unittest.TestCase):
 
     def test_local_binding(self):
         parts = [
-            'Compiler/Frontend/Lexer/Token.krt', 'Compiler/Frontend/Lexer/Lexer.krt',
-            'Compiler/Frontend/Parser/Ast.krt', 'Compiler/Frontend/Parser/Parser.krt', 'Compiler/Frontend/Parser/Names.krt',
-            'Compiler/Middle/Ir/Ir.krt', 'Compiler/Middle/Ir/Floating.krt', 'Compiler/Middle/Ir/Exceptions.krt', 'Compiler/Frontend/Semantic/Semantic.krt', 'Compiler/Frontend/Semantic/NativeBinding.krt', 'Compiler/Frontend/Semantic/Names.krt', 'Compiler/Frontend/Semantic/Generics.krt', 'Compiler/Frontend/Semantic/Exceptions.krt', 'Compiler/Frontend/Semantic/Floating.krt',
+            'Compiler/Frontend/Lexer/Lexer.krt',
+            'Compiler/Frontend/Parser/Parser.krt',
+            'Compiler/Middle/Ir/Ir.krt', 'Compiler/Frontend/Semantic/Semantic.krt', 'Compiler/Frontend/Semantic/Types.krt', 'Compiler/Frontend/Semantic/SemanticFeatures.krt', 'Compiler/Frontend/Semantic/SemanticRuntime.krt',
         ]
         prelude = compiler_prelude(parts)
         cases = [
@@ -197,9 +198,9 @@ int32 main() {{
 
     def test_pointer_index_frontend_contract(self):
         parts = [
-            'Compiler/Frontend/Lexer/Token.krt', 'Compiler/Frontend/Lexer/Lexer.krt',
-            'Compiler/Frontend/Parser/Ast.krt', 'Compiler/Frontend/Parser/Parser.krt', 'Compiler/Frontend/Parser/Names.krt',
-            'Compiler/Middle/Ir/Ir.krt', 'Compiler/Middle/Ir/Floating.krt', 'Compiler/Middle/Ir/Exceptions.krt', 'Compiler/Frontend/Semantic/Semantic.krt', 'Compiler/Frontend/Semantic/NativeBinding.krt', 'Compiler/Frontend/Semantic/Names.krt', 'Compiler/Frontend/Semantic/Generics.krt', 'Compiler/Frontend/Semantic/Exceptions.krt', 'Compiler/Frontend/Semantic/Floating.krt',
+            'Compiler/Frontend/Lexer/Lexer.krt',
+            'Compiler/Frontend/Parser/Parser.krt',
+            'Compiler/Middle/Ir/Ir.krt', 'Compiler/Frontend/Semantic/Semantic.krt', 'Compiler/Frontend/Semantic/Types.krt', 'Compiler/Frontend/Semantic/SemanticFeatures.krt', 'Compiler/Frontend/Semantic/SemanticRuntime.krt',
         ]
         prelude = compiler_prelude(parts)
         text = 'int32 main() { byte* p = stackalloc byte[4]; p[0] = 1; return p[0]; }'
@@ -241,8 +242,8 @@ int32 main() {{
 
     def test_multi_function_main_ordering_contract(self):
         parts = [
-            'Compiler/Frontend/Lexer/Token.krt', 'Compiler/Frontend/Lexer/Lexer.krt',
-            'Compiler/Frontend/Parser/Ast.krt', 'Compiler/Frontend/Parser/Parser.krt', 'Compiler/Frontend/Parser/Names.krt',
+            'Compiler/Frontend/Lexer/Lexer.krt',
+            'Compiler/Frontend/Parser/Parser.krt',
             'Compiler/Frontend/Semantic/Semantic.krt',
         ]
         prelude = compiler_prelude(parts)
@@ -274,8 +275,8 @@ int32 main() {{
 
     def test_bitwise_and_shift_expression_contract(self):
         parts = [
-            'Compiler/Frontend/Lexer/Token.krt', 'Compiler/Frontend/Lexer/Lexer.krt',
-            'Compiler/Frontend/Parser/Ast.krt', 'Compiler/Frontend/Parser/Parser.krt', 'Compiler/Frontend/Parser/Names.krt',
+            'Compiler/Frontend/Lexer/Lexer.krt',
+            'Compiler/Frontend/Parser/Parser.krt',
         ]
         prelude = compiler_prelude(parts)
         source_text = 'int32 main() { return 1 | 2 ^ 3 & 4 << 1; }'
@@ -304,8 +305,8 @@ int32 main() {{
 
     def test_multiple_parameter_binding_contract(self):
         parts = [
-            'Compiler/Frontend/Lexer/Token.krt', 'Compiler/Frontend/Lexer/Lexer.krt',
-            'Compiler/Frontend/Parser/Ast.krt', 'Compiler/Frontend/Parser/Parser.krt', 'Compiler/Frontend/Parser/Names.krt',
+            'Compiler/Frontend/Lexer/Lexer.krt',
+            'Compiler/Frontend/Parser/Parser.krt',
             'Compiler/Frontend/Semantic/Semantic.krt',
         ]
         prelude = compiler_prelude(parts)
@@ -334,8 +335,8 @@ int32 main() {{
 
     def test_large_function_module_contract(self):
         parts = [
-            'Compiler/Frontend/Lexer/Token.krt', 'Compiler/Frontend/Lexer/Lexer.krt',
-            'Compiler/Frontend/Parser/Ast.krt', 'Compiler/Frontend/Parser/Parser.krt', 'Compiler/Frontend/Parser/Names.krt',
+            'Compiler/Frontend/Lexer/Lexer.krt',
+            'Compiler/Frontend/Parser/Parser.krt',
             'Compiler/Frontend/Semantic/Semantic.krt',
         ]
         prelude = compiler_prelude(parts)
@@ -363,8 +364,8 @@ int32 main() {{
 
     def test_void_unsafe_loop_control_contract(self):
         parts = [
-            'Compiler/Frontend/Lexer/Token.krt', 'Compiler/Frontend/Lexer/Lexer.krt',
-            'Compiler/Frontend/Parser/Ast.krt', 'Compiler/Frontend/Parser/Parser.krt', 'Compiler/Frontend/Parser/Names.krt',
+            'Compiler/Frontend/Lexer/Lexer.krt',
+            'Compiler/Frontend/Parser/Parser.krt',
             'Compiler/Frontend/Semantic/Semantic.krt',
         ]
         prelude = compiler_prelude(parts)
@@ -391,7 +392,7 @@ int32 main() {{
             self.assertEqual(subprocess.run([str(binary)], timeout=10).returncode, 0)
 
     def test_frontend_ir_backend_contracts_compile_together(self):
-        parts = [str(path.relative_to(ROOT)) for path in sorted((ROOT / "SelfHost").rglob("*.krt")) if path.name != "Main.krt"]
+        parts = [str(path.relative_to(ROOT)) for path in sorted(p for p in (ROOT / "SelfHost").rglob("*.krt") if p.name != "project.krt") if path.name not in {"Main.krt", "project.krt"}]
         parts.append("Test/SelfHost/test_contract.krt")
         with tempfile.TemporaryDirectory(prefix="krt-contract-") as directory:
             work = Path(directory)

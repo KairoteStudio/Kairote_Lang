@@ -13,7 +13,7 @@ class SeedScopedStorageTests(unittest.TestCase):
         # The unmodified interpreter helper declares float32 result inside its
         # narrow branch and float64 result afterwards. Reusing their IR name
         # changed the exact 2.25 payload from 1074790400 to 1074790402.
-        source = (ROOT / 'SelfHost/Compiler/Backend/Vm/Floating.krt').read_text() + '''
+        source = (ROOT / 'SelfHost/Compiler/Backend/Vm/Interpreter.krt').read_text() + '''
 float64 siblings(int32 branch) {
     if(branch==0) { float32 value=1.25; value+=1.0; return (float64)value; }
     if(branch==1) { int64 value=17; value+=9; return (float64)value; }

@@ -8,7 +8,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
-COMPILER = Path(os.environ.get("KRTC", ROOT / "Re.KrtC/build/KrtC")).resolve()
+COMPILER = Path(os.environ.get("SELFHOST_COMPILER", os.environ.get("KRTC", ROOT / "Re.KrtC/build/KrtC"))).resolve()
 LINKER = os.environ.get("KRT_STDLIB_LINKER")
 LEVELS = tuple(int(value) for value in os.environ.get("KRT_STDLIB_TEST_LEVELS", "0,1,2,3").split(","))
 

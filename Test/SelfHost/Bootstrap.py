@@ -271,7 +271,7 @@ class Bootstrap:
         self.work.mkdir(parents=True, exist_ok=True)
         self.commands = []
         self.report = {"complete": False, "commands": self.commands, "hashes": {}, "probes": {}}
-        self.sources = sorted((ROOT / "SelfHost").rglob("*.krt"))
+        self.sources = sorted(p for p in (ROOT / "SelfHost").rglob("*.krt") if p.name != "project.krt")
         self.source = "\n".join(p.read_text() for p in self.sources)
         self.report["source_sha256"] = hashlib.sha256(self.source.encode()).hexdigest()
         self.report["source_files"] = [str(path.relative_to(ROOT)) for path in self.sources]
@@ -292,7 +292,7 @@ class Bootstrap:
         try:
             build.report = json.loads((build.work / "report.json").read_text())
             build.commands = build.report["commands"]
-            build.sources = sorted((ROOT / "SelfHost").rglob("*.krt"))
+            build.sources = sorted(p for p in (ROOT / "SelfHost").rglob("*.krt") if p.name != "project.krt")
             build.source = "\n".join(path.read_text() for path in build.sources)
             build.validate_saved_stages()
         except (OSError, KeyError, TypeError, ValueError) as error:
@@ -301,7 +301,7 @@ class Bootstrap:
 
     def source_hashes(self):
         return {str(path.relative_to(ROOT)): file_sha256(path)
-                for path in sorted((ROOT / "SelfHost").rglob("*.krt"))}
+                for path in sorted(p for p in (ROOT / "SelfHost").rglob("*.krt") if p.name != "project.krt")}
 
     def record_artifacts(self, *paths):
         hashes = self.report.setdefault("artifact_sha256", {})

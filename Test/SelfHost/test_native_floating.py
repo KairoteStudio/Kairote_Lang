@@ -49,7 +49,7 @@ class NativeFloatingTests(unittest.TestCase):
         cls.directory = tempfile.TemporaryDirectory(prefix='krt-floating-')
         cls.work = Path(cls.directory.name)
         source = cls.work / 'compiler.krt'
-        source.write_text('\n'.join(p.read_text() for p in sorted((ROOT / 'SelfHost').rglob('*.krt'))))
+        source.write_text('\n'.join(p.read_text() for p in sorted(p for p in (ROOT / 'SelfHost').rglob('*.krt') if p.name != 'project.krt')))
         cls.compiler = cls.work / 'compiler'
         result = subprocess.run([str(KRTC), '-O2', str(source), 'output', str(cls.compiler)], cwd=cls.work, capture_output=True, text=True, timeout=120)
         if result.returncode:

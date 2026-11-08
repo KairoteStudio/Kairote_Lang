@@ -1,6 +1,6 @@
 # Native projects
 
-`SelfHost/krtc` directly executes the native Stage 2 compiler. Its Kairote driver
+`SelfHost/RunNativeCompiler` is only a convenience launcher; the actual native CLI is `SelfHost/bin/linux/KrtProject`. `SelfHost/project.krt` uses the C KrtC `Configure(Project p)` project format and can be built by the native project driver with `build/selfhost/stage2/program build SelfHost/project.krt`. Its Kairote driver
 implements source loading, diagnostics, project configuration, caching, atomic
 output publication and linker invocation. Build Stage 2 with
 `python3 Test/SelfHost/Bootstrap.py` before using the default compiler.
@@ -8,11 +8,11 @@ Python is used by test and bootstrap harnesses only; project commands also work
 by calling `build/selfhost/stage2/program` directly.
 
 ```sh
-./SelfHost/krtc new console /tmp/hello-kairote
-./SelfHost/krtc build /tmp/hello-kairote
+./SelfHost/bin/linux/KrtProject new console /tmp/hello-kairote
+./SelfHost/bin/linux/KrtProject build /tmp/hello-kairote
 /tmp/hello-kairote/bin/release/hello-kairote
-./SelfHost/krtc check /tmp/hello-kairote
-./SelfHost/krtc clean /tmp/hello-kairote
+./SelfHost/bin/linux/KrtProject check /tmp/hello-kairote
+./SelfHost/bin/linux/KrtProject clean /tmp/hello-kairote
 ```
 
 `build`, `check`, and `clean` accept a project directory, an explicit project
@@ -42,7 +42,7 @@ function Configure(Project p) {
 ```
 
 The receiverless `function Configure() { Name("Example"); Sources("main.krt"); }`
-form also works. `string`, `var`, and `let` configuration variables, string
+form also works. `CompileTogether(true)` asks the C KrtC project builder to concatenate the selected source files and compile them as one translation unit; this is useful when files share declarations without per-file imports. The default remains independent source/object compilation. The SelfHost project enables this mode because its compiler modules are one shared compilation unit. `string`, `var`, and `let` configuration variables, string
 concatenation, `if`/`else`, equality and boolean conditions are supported.
 `${config}`, `${os}`, `${platform}`, `${variable}` and `${env:VARIABLE}` expand
 inside strings. The default configuration is `release`, or `KRT_CONFIG` when
@@ -143,8 +143,8 @@ int32 main() { return (int32)Demo.Add(19, 23); }
 ```
 
 ```sh
-SelfHost/krtc Math.krt -c -o Math.kro
-SelfHost/krtc Main.krt Math.kro -o Program
+SelfHost/bin/linux/KrtProject Math.krt -c -o Math.kro
+SelfHost/bin/linux/KrtProject Main.krt Math.kro -o Program
 # project.krt can select the object with Libraries("Math.kro").
 ```
 
