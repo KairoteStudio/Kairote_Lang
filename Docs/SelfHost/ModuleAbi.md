@@ -5,9 +5,9 @@ SelfHost 的模块接口由编译器写入 KRO。消费模块读取 KRO 内的�
 ## 独立编译
 
 ```sh
-SelfHost/krtc Provider.krt -c -o Provider.kro
-SelfHost/krtc Consumer.krt Provider.kro -c -o Consumer.kro
-SelfHost/krtc Provider.kro Consumer.kro -o program
+SelfHost/bin/linux/KrtProject Provider.krt -c -o Provider.kro
+SelfHost/bin/linux/KrtProject Consumer.krt Provider.kro -c -o Consumer.kro
+SelfHost/bin/linux/KrtProject Provider.kro Consumer.kro -o program
 ```
 
 Consumer 可以直接 `using` Provider 导出的命名空间，使用公开类型、字段、构造函数、方法和泛型。普通公开函数体导出为 `extern` 声明。开放泛型保留模板体及其私有依赖；消费者为此前未出现的闭实例生成代码。

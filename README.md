@@ -7,7 +7,7 @@ Kairote Programming Language
 # **Kairote Programming Language**
 
 ### *系统级编程语言 | 编译速度比你想的快亿点点*
-[![Official](https://img.shields.io/badge/project-official-green.svg?colorA=303033&colorB=ff8a2c&label=KairoteStudio&style=for-the-badge)]
+
 [![License: MPL](https://img.shields.io/badge/License-MPL-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MPL)
 [![Stars](https://img.shields.io/github/stars/KairoteStudio/Kairote_Lang?style=for-the-badge&logo=github&color=blue)](https://github.com/KairoteStudio/Kairote_Lang/stargazers)
 [![Forks](https://img.shields.io/github/forks/KairoteStudio/Kairote_Lang?style=for-the-badge&logo=github&color=orange)](https://github.com/KairoteStudio/Kairote_Lang/network/members)
@@ -90,6 +90,32 @@ zig build
 > cd ../ArkLink && cmake -S . -B build && cmake --build build
 > ```
 
+### SelfHost 原生编译器
+
+`SelfHost/Main.krt` 与 `SelfHost/Compiler/**/*.krt` 实现编译器及日常驱动，包括源码依赖、诊断、工程配置、缓存和链接调用。生成 Stage 2 后，`SelfHost/RunNativeCompiler` 是启动脚本；真正的编译器程序名为 `KrtProject`。`SelfHost/project.krt` 使用 C 版 KrtC 的 `Configure(Project p)` 配置格式，Stage 2 原生项目驱动据此构建整个编译器；项目配置文件不参与编译器源码集合。Python 仅用于自举与测试脚本。
+
+```bash
+cmake -S . -B build
+cmake --build build --target KrtC ArkLink -j4
+python3 Test/SelfHost/Bootstrap.py
+build/selfhost/stage2/program build SelfHost/project.krt
+./SelfHost/bin/linux/KrtProject hello-selfhost.krt -o hello-selfhost
+./hello-selfhost
+./SelfHost/bin/linux/KrtProject build path/to/project
+```
+
+上面的 `hello-selfhost.krt` 使用 SelfHost 的顶层 `main` 入口：
+
+```KrtL
+using System;
+int32 main() {
+    Console.WriteLine("Hello, KairoteLang!");
+    return 0;
+}
+```
+
+详见 [SelfHost 编译器](./SelfHost/README.md) 和 [工程构建](./Docs/SelfHost/Projects.md)。[通用迭代器与生成器](./Docs/SelfHost/Iterators.md)、[装箱](./Docs/SelfHost/Boxing.md) 和 [跨模块 ABI](./Docs/SelfHost/ModuleAbi.md) 均由原生编译器实现。结构体保留 ABI2 布局契约；命名类、接口、枚举、二进制泛型模板及模块静态存储使用 ABI3 契约。通用 C ABI 的支持范围单独说明。
+
 ### 编写你的第一个 KairoteLang 程序 或 [学习文档](./Docs/KrtC/Doc/README.md)
 
 下面是 Re.KrtC 的入口示例；创建 `hello.krt` 文件：
@@ -138,7 +164,7 @@ KrtC build hello.krt
 
 ```
 Kairote_Lang/
-├── Re.KrtC/                # 编译器核心
+├── Re.KrtC/                # 编译器核心 (KrtC → Re.KrtC)
 │   ├── src/
 │   │   ├── Core/           # 基础库（内存、平台、工具）
 │   │   ├── Compiler/       # 编译器前端、中端、后端
@@ -164,13 +190,14 @@ Kairote_Lang/
 
 - **前端**: 递归下降语法分析器，支持完整的 C# 语法子集
 - **中端**: SSA 形式的中间表示，支持多种优化 passes
-- **后端**: ObjectFile生成
+- **后端**: 多目标代码生成（x86, x64, ARM）
 
 ### 链接器 (ArkLink)
 
 - 支持 COFF、ELF、PE 格式
 - 增量链接支持
 - 符号版本控制
+- 死代码消除
 
 ---
 
@@ -180,10 +207,9 @@ Kairote_Lang/
 - [x] 链接器实现
 - [x] SSA IR 中端
 - [x] x86 / Kro 后端
-- [x] 标准库完善
-- [ ] IDE(Coming and soon~)
+- [ ] 标准库完善
 - [ ] 包管理器
-- [ ] IDE 插件(后续可能推出
+- [ ] IDE 插件
 - [ ] JIT 编译支持
 - [ ] 跨平台优化
 
@@ -191,7 +217,7 @@ Kairote_Lang/
 
 ## 参与贡献
 
-我们欢迎所有形式的贡献！无论是提交 Bug 报告，功能建议，还是代码贡献。
+我们欢迎所有形式的贡献！无论是提交 Bug 报告、功能建议，还是代码贡献。
 
 ### 如何贡献
 
@@ -225,9 +251,7 @@ Kairote_Lang/
 ---
 
 ## 相关项目
-- [Kortina](https://github.com/KairoteStudio/Kortina)
-- [Korterm](https://github.com/KairoteStudio/Korterm)
-- [LitaToolbox](https://github.com/KairoteStudio/litatoolbox)
+- None
 
 ---
 
@@ -248,9 +272,10 @@ Kairote_Lang/
 
 ### 技术参考
 
-- [LLVM](https://llvm.org/) SSA 设计理念
-- [C# Language Specification](https://docs.microsoft.com/en-us/dotnet/csharp/) 语法基础
-- [GCC](https://gcc.gnu.org/) 代码生成参考
+- [LLVM](https://llvm.org/) - SSA 设计理念
+- [C# Language Specification](https://docs.microsoft.com/en-us/dotnet/csharp/) - 语法基础
+- [GCC](https://gcc.gnu.org/) - 代码生成参考
+- [Rust](https://www.rust-lang.org/) - 类型系统灵感
 
 ### 贡献者
 

@@ -1,12 +1,12 @@
 # SelfHost 编译器
 
-Kairote 编写的 Linux x86-64 编译器直接生成 KRO，再由 ArkLink 链接。完整 `SelfHost/**/*.krt` 源码参与自编译：Stage 0 生成 Stage 1，随后生成 Stage 2、Stage 3 和用于固定点检查的 Stage 4。验证要求 Stage 2、3、4 的 KRO 逐字节相同，并在生成的编译器上执行程序、比较输出和错误诊断。
+Kairote 编写的 Linux x86-64 编译器直接生成 KRO，再由 ArkLink 链接。`Main.krt` 与 `Compiler/**/*.krt` 完整源码参与自编译；`project.krt` 是项目元数据，不会拼进源码集合：Stage 0 生成 Stage 1，随后生成 Stage 2、Stage 3 和用于固定点检查的 Stage 4。验证要求 Stage 2、3、4 的 KRO 逐字节相同，并在生成的编译器上执行程序、比较输出和错误诊断。
 
 这说明已实现的编译器能够完整自举。与 Re.KrtC 的语言、优化和独立链接能力是否一致，需要分别验收，不能由自举成功推导。
 
 ## 源码布局
 
-编译器源码位于 `SelfHost/Compiler/`，按 `Driver/`、`Frontend/`、`Middle/`、`Backend/` 分层，与 `Re.KrtC/src/Compiler/` 使用相同的顶层目录结构。两个实现的文件粒度不要求一一对应：自举版按 Kairote 模块拆分，C 版有些实现集中在 `.c` 文件或 `.inc` 文件中。`SelfHost/Main.krt` 是编译器入口。
+编译器源码位于 `SelfHost/Compiler/`，按 `Build/`、`Driver/`、`Frontend/`、`Middle/`、`Pipeline/`、`Platform/`、`Backend/` 分层，与 `Re.KrtC/src/Compiler/` 对齐顶层职责。相关实现已合并，文件按功能组组织，不要求一方法一文件；自举按全部 Kairote 源码文件组成完整编译单元，不要求每个文件独立编译。`SelfHost/Main.krt` 是编译器入口。
 
 ## 运行自举
 
@@ -26,18 +26,24 @@ python3 Test/SelfHost/Bootstrap.py
 
 ## 日常编译
 
-完成自举后，默认使用 Stage 2：
+完成自举后，先用项目配置生成 `KrtProject`：
 
 ```sh
-./SelfHost/krtc program.krt -o program
-./program
-./SelfHost/krtc helper.krt main.krt -o combined
-./SelfHost/krtc program.krt -c -o program.kro
-./SelfHost/krtc --check program.krt
-./SelfHost/krtc -I libs Test/SelfHost/examples/daily.krt -o build/daily
+build/selfhost/stage2/program build SelfHost/project.krt
 ```
 
-`SelfHost/krtc` 是直接执行原生编译器的 shell 启动器。也可直接运行 `build/selfhost/stage2/program`，参数相同。省略 `-o` 时，在当前目录生成首个输入的文件名主干；`-c` 默认增加 `.kro` 后缀。兼容 `output 路径`，支持带空格的路径。日常编译、工程命令和链接均不依赖 Python。
+然后直接使用生成的原生程序：
+
+```sh
+./SelfHost/bin/linux/KrtProject program.krt -o program
+./program
+./SelfHost/bin/linux/KrtProject helper.krt main.krt -o combined
+./SelfHost/bin/linux/KrtProject program.krt -c -o program.kro
+./SelfHost/bin/linux/KrtProject --check program.krt
+./SelfHost/bin/linux/KrtProject -I libs Test/SelfHost/examples/daily.krt -o build/daily
+```
+
+`SelfHost/RunNativeCompiler` 是启动 Stage 2 的辅助脚本；需要 Stage 2 已经存在。SelfHost 自身通过 [project.krt](project.krt) 声明项目；运行 `build/selfhost/stage2/program build SelfHost/project.krt` 会生成真正的 `SelfHost/bin/linux/KrtProject` 编译器程序，日常命令直接调用该二进制。省略 `-o` 时，在当前目录生成首个输入的文件名主干；`-c` 默认增加 `.kro` 后缀。兼容 `output 路径`，支持带空格的路径。日常编译、工程命令和链接均不依赖 Python。
 
 `-I` 添加模块搜索目录，默认包含仓库 `libs`。加载器支持文件级 `using System.Console;`、`using System;`、`using System.*;`、using 别名和 `import "helper.krt";`。依赖按确定顺序加载，同一文件只加载一次；循环依赖共享声明，缺失依赖会报错。每个文件的 namespace 和 using 作用域单独保存。
 
@@ -50,24 +56,24 @@ Kairote 原生驱动负责命令行参数、依赖加载、源码位置映射、
 ## 工程与标准库
 
 ```sh
-./SelfHost/krtc new console /tmp/kairote-example
-./SelfHost/krtc build /tmp/kairote-example
-./SelfHost/krtc build /tmp/kairote-example -j4
-./SelfHost/krtc check /tmp/kairote-example
-./SelfHost/krtc clean /tmp/kairote-example
+./SelfHost/bin/linux/KrtProject new console /tmp/kairote-example
+./SelfHost/bin/linux/KrtProject build /tmp/kairote-example
+./SelfHost/bin/linux/KrtProject build /tmp/kairote-example -j4
+./SelfHost/bin/linux/KrtProject check /tmp/kairote-example
+./SelfHost/bin/linux/KrtProject clean /tmp/kairote-example
 ```
 
 仓库中也提供了组合使用新语言能力的 [LanguageDemo 工程](../Test/SelfHost/examples/language-project/project.krt)：
 
 ```sh
-./SelfHost/krtc build Test/SelfHost/examples/language-project
+./SelfHost/bin/linux/KrtProject build Test/SelfHost/examples/language-project
 ./Test/SelfHost/examples/language-project/bin/release/LanguageDemo
 ```
 
 [DispatchDemo 工程](../Test/SelfHost/examples/dispatch-project/project.krt) 演示抽象基类、虚方法、接口继承、接口泛型约束、接口数组及接口异常捕获：
 
 ```sh
-./SelfHost/krtc build Test/SelfHost/examples/dispatch-project
+./SelfHost/bin/linux/KrtProject build Test/SelfHost/examples/dispatch-project
 ./Test/SelfHost/examples/dispatch-project/bin/release/DispatchDemo
 ```
 

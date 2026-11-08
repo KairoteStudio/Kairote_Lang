@@ -33,7 +33,7 @@ class NativeBindingTests(unittest.TestCase):
             ('ref array element', 'void f(ref int32 x) { x=7; } int32 main() { int32[] x=new int32[2]; f(ref x[0]); return x[0]; }', True),
             ('grouped comparison', 'class Box { public int32 x; } int32 main() { Box b=new Box(); if((b.x < 2 || b.x > 7)) { return 1; } return 0; }', True),
         ]
-        parts = sorted(path for path in (ROOT / 'SelfHost').rglob('*.krt') if path.name != 'Main.krt')
+        parts = sorted(path for path in (ROOT / 'SelfHost').rglob('*.krt') if path.name not in {'Main.krt', 'project.krt'})
         prelude = '\n'.join(path.read_text() for path in parts)
         harness = '''
 bool check(string text) {

@@ -1,0 +1,15 @@
+function Configure(Project p) {
+    p.Name("KrtProject");
+    p.Type("console");
+    p.CompileTogether(true);
+    p.Sources(
+        "Main.krt",
+        "Compiler/Backend/Kro/*.krt", "Compiler/Backend/Vm/*.krt",
+        "Compiler/Build/*.krt", "Compiler/Driver/*.krt",
+        "Compiler/Frontend/*.krt", "Compiler/Frontend/Lexer/*.krt",
+        "Compiler/Frontend/Parser/*.krt", "Compiler/Frontend/Semantic/*.krt",
+        "Compiler/Middle/Ir/*.krt", "Compiler/Pipeline/*.krt",
+        "Compiler/Platform/*.krt"
+    );
+    p.Output("KrtProject");
+}

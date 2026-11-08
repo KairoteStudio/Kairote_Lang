@@ -1,6 +1,0 @@
-// Floating values travel as IEEE bits in the native compiler's internal ABI.
-// Pointer/array annotations retain their element format, but are scalar integers.
-int32 KrtNativeFloatKind(KrtAstNode node) {
-    if (node == null || node.native_stride > 0) { return 0; }
-    return node.native_float;
-}

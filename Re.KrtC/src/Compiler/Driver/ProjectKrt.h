@@ -12,6 +12,7 @@ typedef struct KrtProjectKrtConfig {
     int source_count;
     char** libraries;
     int library_count;
+    bool compile_together;
     char* base_dir;
 } KrtProjectKrtConfig;
 

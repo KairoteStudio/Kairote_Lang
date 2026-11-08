@@ -113,6 +113,7 @@ IR 验证器在每次优化前后运行，检查 SSA 定义唯一性、基本块
 ```text
 SelfHost/
 ├── Compiler/
+│   ├── Build/
 │   ├── Driver/
 │   ├── Frontend/
 │   │   ├── Lexer/
@@ -120,6 +121,8 @@ SelfHost/
 │   │   └── Semantic/
 │   ├── Middle/
 │   │   └── Ir/
+│   ├── Pipeline/
+│   ├── Platform/
 │   └── Backend/
 │       ├── Kro/
 │       └── Vm/

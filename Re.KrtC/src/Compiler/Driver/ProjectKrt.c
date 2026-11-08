@@ -480,6 +480,33 @@ static int krt_proj_eval_call(KrtProjEval* ev, ASTNode* c) {
         return 0;
     }
 
+    if (strcmp(m, "CompileTogether") == 0 || strcmp(m, "compileTogether") == 0 ||
+        strcmp(m, "compile_together") == 0) {
+        if (c->data.call.argument_count != 1) {
+            KrtError("project.krt: CompileTogether requires one boolean argument");
+            return -1;
+        }
+        ASTNode* value = c->data.call.arguments[0];
+        if (value && value->type == AST_BOOLEAN) {
+            ev->cfg->compile_together = value->data.boolean_value != 0;
+            return 0;
+        }
+        char* alloc = NULL;
+        const char* text = krt_proj_str_arg(ev, value, &alloc);
+        if (!text || (strcmp(text, "true") != 0 && strcmp(text, "false") != 0)) {
+            if (alloc) {
+                KRT_FREE(alloc);
+            }
+            KrtError("project.krt: CompileTogether expects true or false");
+            return -1;
+        }
+        ev->cfg->compile_together = strcmp(text, "true") == 0;
+        if (alloc) {
+            KRT_FREE(alloc);
+        }
+        return 0;
+    }
+
     if (strcmp(m, "Name") == 0 || strcmp(m, "name") == 0) {
         if (c->data.call.argument_count >= 1) {
             char* alloc = NULL;

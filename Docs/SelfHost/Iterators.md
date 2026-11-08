@@ -92,7 +92,7 @@ int32 main() {
 
 ## 原生实现与验证
 
-协议绑定与降低分别位于 [Semantic/Iterators.krt](../../SelfHost/Compiler/Frontend/Semantic/Iterators.krt) 和 [Ir/Iterators.krt](../../SelfHost/Compiler/Middle/Ir/Iterators.krt)。惰性生成器分别位于 [Semantic/Generators.krt](../../SelfHost/Compiler/Frontend/Semantic/Generators.krt) 和 [Ir/Generators.krt](../../SelfHost/Compiler/Middle/Ir/Generators.krt)。编译和降低均由 Kairote 实现。
+协议绑定与降低分别位于 [Semantic/SemanticFeatures.krt](../../SelfHost/Compiler/Frontend/Semantic/SemanticFeatures.krt) 和 [Ir/Ir.krt](../../SelfHost/Compiler/Middle/Ir/Ir.krt)。惰性生成器分别位于 [Semantic/SemanticFeatures.krt](../../SelfHost/Compiler/Frontend/Semantic/SemanticFeatures.krt) 和 [Ir/Ir.krt](../../SelfHost/Compiler/Middle/Ir/Ir.krt)。编译和降低均由 Kairote 实现。
 
 生成器保留一次绑定的源 AST 与 SSA 控制流。编译器将局部和聚合帧地址映射到堆上的持久激活记录，并建立各个 `yield` 的恢复边。现有 SSA、寄存器分配、异常指令和 Native / VM 后端处理这些指令；结果不预先收集到数组。生成对象使用普通运行时类型描述符及接口 ABI，身份由工厂声明和完整闭合签名确定。
 

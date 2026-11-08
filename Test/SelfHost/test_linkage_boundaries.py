@@ -15,7 +15,7 @@ class NativeLinkageBoundaries(unittest.TestCase):
         self.work = Path(directory.name)
 
     def invoke(self, *args):
-        return subprocess.run([str(ROOT / 'SelfHost/krtc'), *map(str, args),
+        return subprocess.run([str(ROOT / 'SelfHost/RunNativeCompiler'), *map(str, args),
                                '--compiler', str(COMPILER), '--linker', str(LINKER)],
                               cwd=self.work, capture_output=True, text=True, timeout=60)
 

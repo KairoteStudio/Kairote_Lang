@@ -1,3 +1,0 @@
-bool KrtNativeWideKind(KrtAstNode node) {
-    return node != null && node.native_wide && node.native_stride == 0;
-}

@@ -1,3 +1,362 @@
+// ===== Bytecode format =====
+// EBC v1 is the seed compiler's scalar bytecode format. Version 2 retains the
+// native stack IR and exact 64-bit operands instead of rounding integers to double.
+void KrtVmWrite(int64 data, int64 position, int64 value, int32 width) {
+    unsafe(using krt.mem;) {
+        byte* bytes = (byte*)data; int32 index = 0;
+        while (index < width) { bytes[position + index] = (byte)(value & 255); value = (int64)((uint64)value >> 8); index = index + 1; }
+    }
+}
+
+int64 KrtVmRead(int64 data, int64 position, int32 width) {
+    uint64 value = 0; int32 index = 0;
+    unsafe(using krt.mem;) {
+        byte* bytes = (byte*)data;
+        while (index < width) { value = value | ((uint64)bytes[position + index] << (index * 8)); index = index + 1; }
+    }
+    return (int64)value;
+}
+
+int32 KrtVmStorage(int64 width) {
+    if (width > 1000 || width < -1000) { return KrtKroNativeIntegerStorage((int32)width); }
+    if (width < 0) { width = -width; }
+    return (int32)width;
+}
+
+bool KrtVmWidth(int64 width) {
+    if (width > 1000 || width < -1000) {
+        int64 bits = width; if (bits < 0) { bits = -bits; } bits = bits - 1000;
+        return bits >= 2 && bits <= 64 && bits % 2 == 0;
+    }
+    return width == 1 || width == -1 || width == 2 || width == -2 || width == 4 || width == -4 || width == 8 || width == -8 || width == 16 || width == -16;
+}
+
+bool KrtVmSupported(int32 op) {
+    return (op >= 0 && op <= 46) || (op >= 50 && op <= 54) || (op >= 60 && op <= 63) || (op >= 66 && op <= 76);
+}
+
+bool KrtVmAlignment(int64 alignment) { return alignment >= 1 && alignment <= 16 && (alignment & (alignment - 1)) == 0; }
+
+int32 KrtVmPhysicalParameters(KrtNativeModule module, int32 function_index) {
+    int32 count = module.parameter_counts[function_index];
+    if (module.aggregate_return_sizes[function_index] > 0) { count = count + 1; }
+    return count;
+}
+
+bool KrtVmValidateVersion(KrtNativeModule module, int32 version) {
+    if (version < 2 || version > 6) { return false; }
+    if (module == null || module.count <= 0 || module.count > 16777216 || module.function_count <= 0 || module.function_count > 16384 ||
+        module.entry < 0 || module.entry >= module.function_count || module.global_count < 0 || module.global_count > 65536 ||
+        module.initializer_index < -1 || module.initializer_index >= module.function_count || module.data_length < 0 || module.data_length > 262144) { return false; }
+    int32[] depths = new int32[module.count]; int32[] queue = new int32[module.count];
+    int32 function_index = 0;
+    while (function_index < module.function_count) {
+        int32 first = module.starts[function_index]; int32 last = module.count;
+        if (function_index + 1 < module.function_count) { last = module.starts[function_index + 1]; }
+        int32 locals = module.local_counts[function_index]; int32 parameters = module.parameter_counts[function_index];
+        if (first < 0 || first >= last || last > module.count || (function_index == 0 && first != 0) || locals < 0 || locals > 131072 || parameters < 0 || parameters > 128 || parameters > locals) { return false; }
+        int32 frame_bytes = module.function_frame_bytes[function_index]; int32 result_size = module.aggregate_return_sizes[function_index];
+        int32 hidden_slot = module.hidden_result_slots[function_index];
+        if (frame_bytes < 0 || frame_bytes > 67108864 || result_size < 0 || result_size > 67108864) { return false; }
+        if (result_size > 0) {
+            if (!KrtVmAlignment(module.aggregate_return_alignments[function_index]) || hidden_slot < parameters || hidden_slot >= locals) { return false; }
+        } else if (hidden_slot != -1) { return false; }
+        int32 index = first;
+        while (index < last) {
+            int32 op = module.ops[index]; int64 argument = module.args[index]; int64 extra = module.extra[index];
+            if (!KrtVmSupported(op)) { KrtDriverError("E_VM","instruction is not supported by the VM backend"); return false; }
+            if (op == 73 && (version < 4 || argument != 0 || extra != 0 || index != first)) { return false; }
+            if (op == 74 && (version < 5 || argument < 0 || argument >= module.runtime_type_count || extra != 0)) { return false; }
+            if (op == 75 && (version < 5 || argument != 0 || extra != 0)) { return false; }
+            if (op == 76 && (version < 5 || argument != 0 || (extra != 0 && extra != 1))) { return false; }
+            if ((op == 2 || op == 3 || op == 29) && (argument < 0 || argument >= locals)) { return false; }
+            if ((op == 17 || op == 18) && (argument < first || argument >= last)) { return false; }
+            if (op == 18 && (extra < first || extra >= last)) { return false; }
+            if ((op == 19 || op == 45) && (argument < 0 || argument >= module.function_count)) {
+                KrtDriverError("E_VM","external KRO calls are not available in VM bytecode"); return false;
+            }
+            if ((op == 19 || op == 46) && (extra < 0 || extra > 129)) { return false; }
+            if (op == 19 && extra != KrtVmPhysicalParameters(module,(int32)argument)) { return false; }
+            if (op == 20 && (extra < 0 || extra > 1)) { return false; }
+            if ((op == 22 || op == 23 || op == 33) && !KrtVmWidth(extra)) { KrtDriverError("E_VM","memory width is not supported by the VM backend"); return false; }
+            if (op == 24 && (argument < 0 || argument > 2147483647)) { return false; }
+            if (op == 25 && (argument < 0 || extra < 0 || argument > module.data_length || extra > module.data_length - argument)) { return false; }
+            if (op == 26 && (extra < 1 || extra > 7)) { return false; }
+            if (op == 28 && !KrtVmWidth(argument)) { return false; }
+            if (op == 44 && (argument < 0 || argument >= module.global_count)) { return false; }
+            if (op == 38 && ((argument != 0 && argument != -8 && argument != 4 && argument != 8) || (extra != 0 && extra != -8 && extra != 4 && extra != 8))) { return false; }
+            if (op >= 39 && op <= 43 && extra != 4 && extra != 8) { return false; }
+            if (op == 39 && argument != 43 && argument != 45 && argument != 42 && argument != 47 && argument != 37) { return false; }
+            if (op == 40 && argument != 61 && argument != 101 && argument != 60 && argument != 62 && argument != 102 && argument != 103) { return false; }
+            if (op == 50 && (argument < first || argument >= last || extra < 0 || extra + 6 > locals)) { return false; }
+            if ((op == 51 || op == 53 || op == 54) && (argument < 0 || argument + 6 > locals)) { return false; }
+            if (op == 60 && argument != 0 && argument != 1 && argument != 2 && argument != 5) { return false; }
+            if (op == 61 && argument != 43 && argument != 45 && argument != 42 && argument != 47 && argument != 37 && argument != 38 && argument != 124 && argument != 94 && argument != 106 && argument != 107) { return false; }
+            if (op == 62 && argument != 61 && argument != 101 && argument != 60 && argument != 62 && argument != 102 && argument != 103) { return false; }
+            if (op == 63 && argument != 33 && argument != 45 && argument != 126) { return false; }
+            if (op == 67 && ((argument != -1 && argument != 1) || (extra != 0 && extra != 1) ||
+                (version>=6&&extra!=1))) { return false; }
+            if (op == 68 && (argument < 1 || argument > 4 || (extra != 4 && extra != 8))) { return false; }
+            if(op==69&&(argument!=0||extra!=0||version>=6)){return false;}
+            if (op == 70 && (argument < 0 || extra <= 0 || argument > frame_bytes || extra > frame_bytes - argument)) { return false; }
+            if ((op == 71 || op == 72) && (argument <= 0 || argument > 67108864 || !KrtVmAlignment(extra))) { return false; }
+            index = index + 1;
+        }
+        if (!KrtKroNativeStackDepths(module,first,last,depths,queue)) { return false; }
+        function_index = function_index + 1;
+    }
+    return KrtVmPhysicalParameters(module,module.entry) == 0 && (module.initializer_index < 0 || KrtVmPhysicalParameters(module,module.initializer_index) == 0);
+}
+
+bool KrtVmValidate(KrtNativeModule module) { return KrtVmValidateVersion(module,6); }
+
+bool KrtVmEmitV1(KrtNativeModule module, KrtDriverBuffer artifact) {
+    if (module.global_count != 0 || module.initializer_index >= 0 || module.parameter_counts[module.entry] != 0) { return false; }
+    int32 first = module.starts[module.entry]; int32 last = module.count;
+    if (module.entry + 1 < module.function_count) { last = module.starts[module.entry + 1]; }
+    bool constant = false; bool returned = false; int64 value = 0; int32 index = first;
+    while (index < last) {
+        int32 op = module.ops[index];
+        if (op == 0) { }
+        else if (op == 1 && !constant && !returned) { value = module.args[index]; constant = true; }
+        else if (op == 28 && constant && !returned) { value = KrtNativeFoldCast(value,module.args[index]); }
+        else if (op == 20 && !returned && module.extra[index] == 1 && constant) { returned = true; break; }
+        else { return false; }
+        index = index + 1;
+    }
+    // Every integer in this interval is represented exactly by the v1 double.
+    if (!returned || value < -9007199254740992 || value > 9007199254740992) { return false; }
+    int64 data = KrtDriverAlloc(56); if (data == 0) { return false; }
+    KrtVmWrite(data,0,0x45534243,4); KrtVmWrite(data,4,1,2); KrtVmWrite(data,6,6,4);
+    KrtVmWrite(data,10,25,1); KrtVmWrite(data,11,10,1); KrtVmWrite(data,12,0,1); KrtVmWrite(data,13,0,1); KrtVmWrite(data,14,24,1); KrtVmWrite(data,15,27,1);
+    int32 line = 16; while (line < 40) { KrtVmWrite(data,line,0,1); line = line + 1; }
+    KrtVmWrite(data,40,1,4); KrtVmWrite(data,44,2,4);
+    unsafe(using krt.mem;) { float64 number = (float64)value; KrtVmWrite(data,48,*(int64*)&number,8); }
+    artifact.data = data; artifact.length = 56; artifact.ok = true; return true;
+}
+
+bool KrtVmEmit(KrtNativeModule module, KrtDriverBuffer artifact) {
+    artifact.ok = false;
+    if (!KrtVmValidate(module) || !KrtVmRuntimeValidate(module)) { KrtDriverError("E_VM","invalid or unsupported VM module"); return false; }
+    if (module.runtime_type_count == 0 && KrtVmEmitV1(module,artifact)) { return true; }
+    int32 version = 2; int32 metadata_index = 0;
+    while (metadata_index < module.function_count) {
+        if (module.function_frame_bytes[metadata_index] > 0 || module.aggregate_return_sizes[metadata_index] > 0) { version = 3; }
+        metadata_index = metadata_index + 1;
+    }
+    // Version 4 extends callable values with tagged closure descriptors. It
+    // retains version 3's exact aggregate function metadata and instruction words.
+    int32 callable_index = 0;
+    while (callable_index < module.count) {
+        if (module.ops[callable_index] == 73) { version = 4; }
+        callable_index = callable_index + 1;
+    }
+    if (module.runtime_type_count > 0 || module.runtime_length > 0) { version = 6; }
+    callable_index=0;
+    while(callable_index<module.count){
+        int32 op=module.ops[callable_index];
+        if((op>=60&&op<=69)||(op>=74&&op<=76)){version=6;}
+        callable_index=callable_index+1;
+    }
+    int32 function_bytes = 12; if (version >= 3) { function_bytes = 28; }
+    int64 size = 32 + (int64)module.function_count * function_bytes + (int64)module.count * 24 + module.data_length;
+    if (version >= 5) { size = size + KrtVmRuntimeFooterSize(module); }
+    if (size > 67108864) { KrtDriverError("E_VM","VM bytecode exceeds the 64 MiB artifact buffer limit"); return false; }
+    int64 data = KrtDriverAlloc(size); if (data == 0) { return false; }
+    KrtVmWrite(data,0,0x45534243,4); KrtVmWrite(data,4,version,2); KrtVmWrite(data,6,0,2);
+    KrtVmWrite(data,8,module.count,4); KrtVmWrite(data,12,module.function_count,4); KrtVmWrite(data,16,module.entry,4);
+    KrtVmWrite(data,20,module.global_count,4); KrtVmWrite(data,24,module.initializer_index,4); KrtVmWrite(data,28,module.data_length,4);
+    int64 position = 32; int32 index = 0;
+    while (index < module.function_count) {
+        KrtVmWrite(data,position,module.starts[index],4); KrtVmWrite(data,position + 4,module.local_counts[index],4); KrtVmWrite(data,position + 8,module.parameter_counts[index],4);
+        if (version >= 3) {
+            KrtVmWrite(data,position + 12,module.function_frame_bytes[index],4); KrtVmWrite(data,position + 16,module.aggregate_return_sizes[index],4);
+            KrtVmWrite(data,position + 20,module.aggregate_return_alignments[index],4); KrtVmWrite(data,position + 24,module.hidden_result_slots[index],4);
+        }
+        position = position + function_bytes; index = index + 1;
+    }
+    index = 0;
+    while (index < module.count) {
+        KrtVmWrite(data,position,module.ops[index],4); KrtVmWrite(data,position + 4,0,4); KrtVmWrite(data,position + 8,module.args[index],8); KrtVmWrite(data,position + 16,module.extra[index],8);
+        position = position + 24; index = index + 1;
+    }
+    unsafe(using krt.mem;) { byte* target = (byte*)data; index = 0;
+        while (index < module.data_length) { target[position + index] = module.data_storage[index]; index = index + 1; }
+    }
+    if (version >= 5 && !KrtVmRuntimeEmit(module,data,position+module.data_length)) { return false; }
+    artifact.data = data; artifact.length = size; artifact.ok = true; return true;
+}
+
+bool KrtVmReadV2(KrtDriverBuffer artifact, KrtNativeModule module) {
+    if (artifact.length < 32 || KrtVmRead(artifact.data,6,2) != 0) { return false; }
+    int32 version = (int32)KrtVmRead(artifact.data,4,2); if (version < 2 || version > 6) { return false; }
+    int32 function_bytes = 12; if (version >= 3) { function_bytes = 28; }
+    int64 count = KrtVmRead(artifact.data,8,4); int64 functions = KrtVmRead(artifact.data,12,4); int64 data_length = KrtVmRead(artifact.data,28,4);
+    int64 plain_size=32+functions*function_bytes+count*24+data_length;
+    if (count <= 0 || count > 16777216 || functions <= 0 || functions > 16384 || data_length > 262144 ||
+        plain_size>artifact.length || (version<5&&artifact.length!=plain_size) || !KrtNativeInit(module)) { return false; }
+    // NativeInit starts with a small growable instruction buffer. Deserialization
+    // owns a known instruction count and must allocate that full extent first.
+    module.ops = new int32[(int32)count]; module.args = new int64[(int32)count]; module.extra = new int64[(int32)count];
+    module.starts = new int32[(int32)functions]; module.local_counts = new int32[(int32)functions]; module.parameter_counts = new int32[(int32)functions];
+    module.count = (int32)count; module.function_count = (int32)functions; module.entry = (int32)KrtVmRead(artifact.data,16,4);
+    module.global_count = (int32)KrtVmRead(artifact.data,20,4); module.initializer_index = (int32)KrtVmRead(artifact.data,24,4); module.data_length = (int32)data_length;
+    int64 position = 32; int32 index = 0;
+    while (index < module.function_count) {
+        module.starts[index] = (int32)KrtVmRead(artifact.data,position,4); module.local_counts[index] = (int32)KrtVmRead(artifact.data,position + 4,4); module.parameter_counts[index] = (int32)KrtVmRead(artifact.data,position + 8,4);
+        if (version >= 3) {
+            module.function_frame_bytes[index] = (int32)KrtVmRead(artifact.data,position + 12,4); module.aggregate_return_sizes[index] = (int32)KrtVmRead(artifact.data,position + 16,4);
+            module.aggregate_return_alignments[index] = (int32)KrtVmRead(artifact.data,position + 20,4); module.hidden_result_slots[index] = (int32)KrtVmRead(artifact.data,position + 24,4);
+        }
+        position = position + function_bytes; index = index + 1;
+    }
+    index = 0;
+    while (index < module.count) {
+        if (KrtVmRead(artifact.data,position + 4,4) != 0) { return false; }
+        module.ops[index] = (int32)KrtVmRead(artifact.data,position,4); module.args[index] = KrtVmRead(artifact.data,position + 8,8); module.extra[index] = KrtVmRead(artifact.data,position + 16,8);
+        position = position + 24; index = index + 1;
+    }
+    module.data = artifact.data + position;
+    if (version >= 5 && !KrtVmRuntimeRead(artifact,module,plain_size)) { return false; }
+    return KrtVmValidateVersion(module,version);
+}
+
+// ===== Virtual machine =====
+// Decimal value parsing.
+// Exact binary-double to six-significant-digit general format (%g).
+// Decimal rounding uses integer digits and ties to even.
+int64 KrtVmNumberText(int64 bits) {
+    uint64 raw = (uint64)bits; bool negative = (raw >> 63) != 0;
+    int32 exponent_bits = (int32)((raw >> 52) & 2047); uint64 significand = raw & 4503599627370495;
+    int64 result = 0;
+    if (exponent_bits == 2047) {
+        result = (int64)"inf"; if (significand != 0) { result = (int64)"nan"; }
+        if (negative) { result = KrtDriverConcat((int64)"-",result); } return result;
+    }
+    if (exponent_bits == 0 && significand == 0) { if (negative) { return (int64)"-0"; } return (int64)"0"; }
+    int32 power = -1074;
+    if (exponent_bits != 0) { significand = significand | 4503599627370496; power = exponent_bits - 1075; }
+    uint32[] limbs = new uint32[128]; int32 count = 1;
+    limbs[0] = (uint32)(significand % 1000000000); uint64 high = significand / 1000000000;
+    if (high != 0) { limbs[1] = (uint32)high; count = 2; }
+    int32 scale = 0; int32 repetitions = power; int32 multiplier = 2;
+    if (power < 0) { scale = -power; repetitions = -power; multiplier = 5; }
+    int32 repeat = 0;
+    while (repeat < repetitions) {
+        uint64 carry = 0; int32 index = 0;
+        while (index < count) {
+            uint64 value = (uint64)limbs[index] * (uint64)multiplier + carry;
+            limbs[index] = (uint32)(value % 1000000000); carry = value / 1000000000; index = index + 1;
+        }
+        if (carry != 0) { if (count >= 128) { return 0; } limbs[count] = (uint32)carry; count = count + 1; }
+        repeat = repeat + 1;
+    }
+    int64 digits = KrtDriverAlloc((int64)count * 9 + 1); if (digits == 0) { return 0; }
+    int64 first = KrtDriverNumber(limbs[count - 1]); int64 length = KrtDriverStringLength(first);
+    unsafe(using krt.mem;) {
+        byte* output = (byte*)digits; byte* source = (byte*)first; int64 index = 0;
+        while (index < length) { output[index] = source[index]; index = index + 1; }
+        int32 limb = count - 2;
+        while (limb >= 0) {
+            uint32 number = limbs[limb]; int32 place = 8;
+            while (place >= 0) { output[length + place] = (byte)(48 + number % 10); number = number / 10; place = place - 1; }
+            length = length + 9; limb = limb - 1;
+        }
+        output[length] = 0;
+    }
+    int32 exponent = (int32)length - scale - 1; int32 rounded = 0;
+    unsafe(using krt.mem;) {
+        byte* source = (byte*)digits; int32 index = 0;
+        while (index < 6) { rounded = rounded * 10; if (index < length) { rounded = rounded + (int32)source[index] - 48; } index = index + 1; }
+        if (length > 6) {
+            bool remainder = false; index = 7;
+            while (index < length) { if (source[index] != 48) { remainder = true; break; } index = index + 1; }
+            if (source[6] > 53 || (source[6] == 53 && (remainder || (rounded & 1) != 0))) { rounded = rounded + 1; }
+        }
+    }
+    if (rounded == 1000000) { rounded = 100000; exponent = exponent + 1; }
+    int64 significant = KrtDriverNumber(rounded); int64 significant_length = 6;
+    unsafe(using krt.mem;) { byte* source = (byte*)significant;
+        while (significant_length > 1 && source[significant_length - 1] == 48) { significant_length = significant_length - 1; }
+    }
+    int64 text = KrtDriverAlloc(48); if (text == 0) { return 0; } int64 position = 0;
+    unsafe(using krt.mem;) {
+        byte* output = (byte*)text; byte* source = (byte*)significant;
+        if (negative) { output[position] = 45; position = position + 1; }
+        if (exponent < -4 || exponent >= 6) {
+            output[position] = source[0]; position = position + 1;
+            if (significant_length > 1) { output[position] = 46; position = position + 1; int32 index = 1;
+                while (index < significant_length) { output[position] = source[index]; position = position + 1; index = index + 1; }
+            }
+            output[position] = 101; position = position + 1;
+            if (exponent < 0) { output[position] = 45; exponent = -exponent; } else { output[position] = 43; } position = position + 1;
+            int64 exponent_text = KrtDriverNumber(exponent); int64 exponent_length = KrtDriverStringLength(exponent_text); byte* exponent_digits = (byte*)exponent_text;
+            if (exponent_length < 2) { output[position] = 48; position = position + 1; }
+            int32 index = 0; while (index < exponent_length) { output[position] = exponent_digits[index]; position = position + 1; index = index + 1; }
+        }
+        else if (exponent < 0) {
+            output[position] = 48; output[position + 1] = 46; position = position + 2; int32 zeros = -exponent - 1;
+            while (zeros > 0) { output[position] = 48; position = position + 1; zeros = zeros - 1; }
+            int32 index = 0; while (index < significant_length) { output[position] = source[index]; position = position + 1; index = index + 1; }
+        }
+        else {
+            int32 decimal_point = exponent + 1; int32 index = 0;
+            while (index < significant_length || index < decimal_point) {
+                if (index == decimal_point) { output[position] = 46; position = position + 1; }
+                output[position] = 48; if (index < significant_length) { output[position] = source[index]; }
+                position = position + 1; index = index + 1;
+            }
+        }
+        output[position] = 0;
+    }
+    return text;
+}
+
+// Floating-point bytecode values.
+// IEEE payloads remain raw bits in scalar VM slots.
+float64 KrtVmFloatValue(int64 bits, int32 width) {
+    unsafe(using krt.mem;) {
+        if (width == 4) { int32 narrow = (int32)bits; return (float64)*(float32*)&narrow; }
+        return *(float64*)&bits;
+    }
+}
+int64 KrtVmFloatBits(float64 value, int32 width) {
+    unsafe(using krt.mem;) {
+        if (width == 4) { float32 narrow = (float32)value; return (int64)*(uint32*)&narrow; }
+        return *(int64*)&value;
+    }
+}
+int64 KrtVmFloatConvert(int64 bits, int32 origin, int32 target) {
+    if (origin == target) { return bits; }
+    float64 number = 0.0;
+    if (origin == 4 || origin == 8) { number = KrtVmFloatValue(bits,origin); }
+    else if (origin == -8) { number = (float64)(uint64)bits; }
+    else { number = (float64)bits; }
+    if (target == 4 || target == 8) { return KrtVmFloatBits(number,target); }
+    if (target == -8) { return (int64)(uint64)number; }
+    return (int64)number;
+}
+int64 KrtVmFloatBinary(int64 left, int64 right, int32 operation, int32 width) {
+    float64 a = KrtVmFloatValue(left,width); float64 b = KrtVmFloatValue(right,width);
+    if (width == 4) {
+        float32 x = (float32)a; float32 y = (float32)b; float32 result = 0.0;
+        if (operation == 43) { result = x + y; } else if (operation == 45) { result = x - y; }
+        else if (operation == 42) { result = x * y; } else if (operation == 47) { result = x / y; } else { result = x % y; }
+        return KrtVmFloatBits((float64)result,width);
+    }
+    float64 result = 0.0;
+    if (operation == 43) { result = a + b; } else if (operation == 45) { result = a - b; }
+    else if (operation == 42) { result = a * b; } else if (operation == 47) { result = a / b; } else { result = a % b; }
+    return KrtVmFloatBits(result,width);
+}
+int64 KrtVmFloatCompare(int64 left, int64 right, int32 operation, int32 width) {
+    float64 a = KrtVmFloatValue(left,width); float64 b = KrtVmFloatValue(right,width); bool result = false;
+    if (operation == 61) { result = a == b; } else if (operation == 101) { result = a != b; }
+    else if (operation == 60) { result = a < b; } else if (operation == 62) { result = a > b; }
+    else if (operation == 102) { result = a <= b; } else if (operation == 103) { result = a >= b; }
+    return result ? 1 : 0;
+}
+
 // Native EBC execution. VM addresses point into tracked allocations, so malformed
 // bytecode and expired references report E_VM instead of reading compiler memory.
 class KrtVmRegion {
@@ -554,4 +913,445 @@ int32 KrtVmRun(int64 path) {
     int32 result=KrtVmExecuteVersion(module,(int32)version);
     if(module.runtime_pointer!=0){syscall(11,module.runtime_pointer,module.runtime_length,0,0,0,0);module.runtime_pointer=0;}
     return result;
+}
+
+// Wide-integer bytecode values.
+// EBC6 wide values use persistent inline storage for language values and a
+// separate fixed scratch address for every producing instruction. Earlier
+// bytecode retains its original immutable pointer-wide local ABI.
+class KrtVmWideLayout {
+    public int32[] offsets;
+    public int32[] sizes;
+}
+int32 KrtVmWideScratchBytes(int32 op,int64 argument,int64 extra) {
+    if(op==67){return 32;}
+    if((op==22&&KrtVmStorage(extra)==16)||(op==60&&argument!=2)||op==61||
+        (op==63&&argument!=33)||op==66||(op==68&&argument>=3)){return 16;}
+    return 0;
+}
+KrtVmWideLayout KrtVmMakeWideLayout(KrtNativeModule module) {
+    KrtVmWideLayout layout=new KrtVmWideLayout();
+    layout.offsets=new int32[module.count];layout.sizes=new int32[module.function_count];
+    int32 function_index=0;
+    while(function_index<module.function_count){
+        int32 first=module.starts[function_index];int32 last=module.count;
+        if(function_index+1<module.function_count){last=module.starts[function_index+1];}
+        int32 size=0;int32 index=first;
+        while(index<last){
+            int32 bytes=KrtVmWideScratchBytes(module.ops[index],module.args[index],module.extra[index]);
+            layout.offsets[index]=-1;
+            if(bytes>0){
+                if(size>67108864-bytes){delete layout.offsets;delete layout.sizes;delete layout;return null;}
+                layout.offsets[index]=size;size=size+bytes;
+            }
+            index=index+1;
+        }
+        layout.sizes[function_index]=size;function_index=function_index+1;
+    }
+    return layout;
+}
+int64 KrtVmWideBox(KrtVmState state, int128 value) {
+    int64 pointer=0;
+    if(state.wide_inline){
+        KrtVmFrame frame=state.frame;
+        if(frame==null||frame.wide_cursor<0||frame.wide_cursor>frame.wide_limit-16){state.failed=true;return 0;}
+        pointer=frame.wide_base+frame.wide_cursor;frame.wide_cursor=frame.wide_cursor+16;
+    }else{pointer=KrtVmAllocate(state,16,0,false);}
+    if (pointer != 0) { unsafe(using krt.mem;) { *(int128*)pointer = value; } }
+    return pointer;
+}
+int128 KrtVmWideValue(KrtVmState state, int64 pointer) {
+    if (pointer == 0) { return 0; }
+    if (!KrtVmMemory(state,pointer,16)) { return 0; }
+    unsafe(using krt.mem;) { return *(int128*)pointer; }
+}
+int64 KrtVmWideBinary(KrtVmState state, int64 left, int64 right, int32 operation, bool unsigned_value) {
+    int128 a = KrtVmWideValue(state,left); int128 b = KrtVmWideValue(state,right); int128 result = 0;
+    if (operation == 43) { result = a + b; }
+    else if (operation == 45) { result = a - b; }
+    else if (operation == 42) { result = a * b; }
+    else if (operation == 38) { result = a & b; }
+    else if (operation == 124) { result = a | b; }
+    else if (operation == 94) { result = a ^ b; }
+    else if (operation == 106) { result = a << ((int64)b & 127); }
+    else if (operation == 107) { if (unsigned_value) { result = (int128)((uint128)a >> ((int64)b & 127)); } else { result = a >> ((int64)b & 127); } }
+    else if (operation == 47 || operation == 37) {
+        if (b == 0) { state.failed = true; return 0; }
+        if (unsigned_value) { if (operation == 47) { result = (int128)((uint128)a / (uint128)b); } else { result = (int128)((uint128)a % (uint128)b); } }
+        else { if (operation == 47) { result = a / b; } else { result = a % b; } }
+    }
+    else { state.failed = true; return 0; }
+    return KrtVmWideBox(state,result);
+}
+int64 KrtVmWideCompare(KrtVmState state, int64 left, int64 right, int32 operation, bool unsigned_value) {
+    int128 a = KrtVmWideValue(state,left); int128 b = KrtVmWideValue(state,right); bool result = false;
+    if (operation == 61) { result = a == b; } else if (operation == 101) { result = a != b; }
+    else if (unsigned_value) {
+        if (operation == 60) { result = (uint128)a < (uint128)b; } else if (operation == 62) { result = (uint128)a > (uint128)b; }
+        else if (operation == 102) { result = (uint128)a <= (uint128)b; } else if (operation == 103) { result = (uint128)a >= (uint128)b; }
+    }
+    else {
+        if (operation == 60) { result = a < b; } else if (operation == 62) { result = a > b; }
+        else if (operation == 102) { result = a <= b; } else if (operation == 103) { result = a >= b; }
+    }
+    return result ? 1 : 0;
+}
+int64 KrtVmWideFloat(KrtVmState state, int64 operand, int32 mode, int32 width) {
+    if (mode == 1 || mode == 2) {
+        int128 value = KrtVmWideValue(state,operand); float64 number = 0.0;
+        if (width == 4) {
+            if (mode == 1) { number = (float64)(float32)value; } else { number = (float64)(float32)(uint128)value; }
+        } else {
+            if (mode == 1) { number = (float64)value; } else { number = (float64)(uint128)value; }
+        }
+        return KrtVmFloatBits(number,width);
+    }
+    float64 number = KrtVmFloatValue(operand,width); int128 value = 0;
+    if (mode == 3) { value = (int128)number; } else { value = (int128)(uint128)number; }
+    return KrtVmWideBox(state,value);
+}
+
+// ===== Legacy bytecode =====
+// Reader for the seed's EBC v1. Seed files contain one main chunk and no
+// function table; unresolved global/function opcodes are rejected explicitly.
+class KrtVmLegacyValue { public int32 kind; public int64 value; }
+class KrtVmLegacyState {
+    public KrtVmLegacyValue[] stack;
+    public KrtVmLegacyValue[] locals;
+    public KrtVmLegacyValue[] constants;
+    public int32 depth;
+    public int32 constant_count;
+    public bool failed;
+}
+KrtVmLegacyValue KrtVmLegacyMake(int32 kind, int64 value) {
+    KrtVmLegacyValue item = new KrtVmLegacyValue(); item.kind = kind; item.value = value; return item;
+}
+KrtVmLegacyValue KrtVmLegacyNumber(float64 number) {
+    unsafe(using krt.mem;) { return KrtVmLegacyMake(2,*(int64*)&number); }
+}
+float64 KrtVmLegacyDouble(KrtVmLegacyValue item) {
+    int64 bits = item.value; unsafe(using krt.mem;) { return *(float64*)&bits; }
+}
+bool KrtVmLegacyTrue(KrtVmLegacyValue item) {
+    if (item == null || item.kind == 1) { return false; }
+    if (item.kind == 0) { return item.value != 0; }
+    if (item.kind == 2) { return KrtVmLegacyDouble(item) != 0.0; }
+    return true;
+}
+void KrtVmLegacyPush(KrtVmLegacyState state, KrtVmLegacyValue item) {
+    if (state.depth >= 262144 || item == null) { state.failed = true; return; }
+    state.stack[state.depth] = item; state.depth = state.depth + 1;
+}
+KrtVmLegacyValue KrtVmLegacyPop(KrtVmLegacyState state) {
+    if (state.depth <= 0) { state.failed = true; return KrtVmLegacyMake(1,0); }
+    state.depth = state.depth - 1; return state.stack[state.depth];
+}
+
+bool KrtVmLegacyRead(KrtDriverBuffer artifact, KrtVmLegacyState state, ref int32 count) {
+    int64 size = KrtVmRead(artifact.data,6,4);
+    if (size <= 0 || size > 262144 || 14 + size * 5 > artifact.length) { return false; }
+    count = (int32)size; int64 position = 10 + size * 5; int64 constants = KrtVmRead(artifact.data,position,4); position = position + 4;
+    if (constants > 65536) { return false; }
+    state.constant_count = (int32)constants; state.constants = new KrtVmLegacyValue[(int32)constants];
+    int32 index = 0;
+    while (index < constants) {
+        if (position + 4 > artifact.length) { return false; }
+        int64 kind = KrtVmRead(artifact.data,position,4); position = position + 4; int64 value = 0;
+        if (kind == 0) { if (position >= artifact.length) { return false; } value = KrtVmRead(artifact.data,position,1); position = position + 1; if (value > 1) { return false; } }
+        else if (kind == 1) { }
+        else if (kind == 2) { if (position + 8 > artifact.length) { return false; } value = KrtVmRead(artifact.data,position,8); position = position + 8; }
+        else if (kind == 4) {
+            if (position + 2 > artifact.length) { return false; }
+            int64 length = KrtVmRead(artifact.data,position,2); position = position + 2;
+            if (length > artifact.length - position) { return false; }
+            value = KrtDriverCopyString(artifact.data + position,length); if (value == 0) { return false; } position = position + length;
+        }
+        else { return false; }
+        state.constants[index] = KrtVmLegacyMake((int32)kind,value); index = index + 1;
+    }
+    if (position != artifact.length) { return false; }
+    // Validate instructions before execution, including jump boundaries.
+    bool[] boundary = new bool[count + 1]; int32 pc = 0;
+    while (pc < count) {
+        boundary[pc] = true; int32 op = (int32)KrtVmRead(artifact.data,10 + pc,1); int32 width = 1;
+        if (op == 0 || op == 5 || op == 6 || op == 25) { width = 2; }
+        else if (op >= 20 && op <= 22) { width = 3; }
+        else if (op == 7 || op == 8 || op == 9 || op == 23 || op > 27) { return false; }
+        if (pc + width > count) { return false; }
+        if (op == 0 && KrtVmRead(artifact.data,11 + pc,1) >= constants) { return false; }
+        pc = pc + width;
+    }
+    boundary[count] = true; pc = 0;
+    while (pc < count) {
+        int32 op = (int32)KrtVmRead(artifact.data,10 + pc,1); int32 width = 1;
+        if (op == 0 || op == 5 || op == 6 || op == 25) { width = 2; }
+        else if (op >= 20 && op <= 22) {
+            width = 3; int32 offset = (int32)KrtVmRead(artifact.data,11 + pc,2); int32 target = pc + 3 + offset;
+            if (op == 22) { target = pc + 3 - offset; }
+            if (target < 0 || target >= count || !boundary[target]) { return false; }
+        }
+        pc = pc + width;
+    }
+    return true;
+}
+
+bool KrtVmLegacyPrint(KrtVmLegacyValue item) {
+    if (item.kind == 0) { if (item.value != 0) { KrtDriverPrint("true"); } else { KrtDriverPrint("false"); } }
+    else if (item.kind == 1) { KrtDriverPrint("null"); }
+    else if (item.kind == 4) { KrtDriverPrint((string)item.value); }
+    else if (item.kind == 2) {
+        int64 text = KrtVmNumberText(item.value); if (text == 0) { return false; } KrtDriverPrint((string)text);
+    }
+    else { return false; }
+    KrtDriverPrint("\n"); return true;
+}
+
+int32 KrtVmRunV1(KrtDriverBuffer artifact) {
+    KrtVmLegacyState state = new KrtVmLegacyState(); int32 count = 0;
+    if (!KrtVmLegacyRead(artifact,state,ref count)) { KrtDriverError("E_VM","invalid or unsupported version 1 bytecode"); return 1; }
+    state.stack = new KrtVmLegacyValue[262144]; state.locals = new KrtVmLegacyValue[256]; int32 index = 0;
+    while (index < 256) { state.locals[index] = KrtVmLegacyMake(1,0); index = index + 1; }
+    int32 pc = 0;
+    while (pc >= 0 && pc < count && !state.failed) {
+        int32 op = (int32)KrtVmRead(artifact.data,10 + pc,1); pc = pc + 1;
+        if (op == 0) { int32 slot = (int32)KrtVmRead(artifact.data,10 + pc,1); pc = pc + 1; KrtVmLegacyPush(state,state.constants[slot]); }
+        else if (op == 1 || op == 2 || op == 3) { int64 value = 0; if (op == 2) { value = 1; } KrtVmLegacyPush(state,KrtVmLegacyMake(op == 1 ? 1 : 0,value)); }
+        else if (op == 4) { KrtVmLegacyPop(state); }
+        else if (op == 5 || op == 6) {
+            int32 slot = (int32)KrtVmRead(artifact.data,10 + pc,1); pc = pc + 1;
+            if (op == 5) { KrtVmLegacyPush(state,state.locals[slot]); }
+            else if (state.depth <= 0) { state.failed = true; }
+            else { state.locals[slot] = state.stack[state.depth - 1]; }
+        }
+        else if (op >= 10 && op <= 16) {
+            KrtVmLegacyValue right = KrtVmLegacyPop(state); KrtVmLegacyValue left = KrtVmLegacyPop(state);
+            if (op == 10) {
+                bool equal = false;
+                if (left.kind == right.kind) {
+                    if (left.kind == 2) { equal = KrtVmLegacyDouble(left) == KrtVmLegacyDouble(right); }
+                    else if (left.kind == 4) { equal = KrtDriverStringEqual(left.value,right.value); }
+                    else { equal = left.value == right.value; }
+                }
+                KrtVmLegacyPush(state,KrtVmLegacyMake(0,equal ? 1 : 0));
+            }
+            else if (left.kind != 2 || right.kind != 2) { state.failed = true; }
+            else {
+                float64 a = KrtVmLegacyDouble(left); float64 b = KrtVmLegacyDouble(right);
+                if (op == 11 || op == 12) { bool relation = false; if (op == 11) { relation = a > b; } else { relation = a < b; } KrtVmLegacyPush(state,KrtVmLegacyMake(0,relation ? 1 : 0)); }
+                else { float64 number = 0.0; if (op == 13) { number = a + b; } else if (op == 14) { number = a - b; } else if (op == 15) { number = a * b; } else { number = a / b; }
+                    KrtVmLegacyPush(state,KrtVmLegacyNumber(number));
+                }
+            }
+        }
+        else if (op == 17) { KrtVmLegacyValue item = KrtVmLegacyPop(state); bool truth = KrtVmLegacyTrue(item); KrtVmLegacyPush(state,KrtVmLegacyMake(0,truth ? 0 : 1)); }
+        else if (op == 18) { KrtVmLegacyValue item = KrtVmLegacyPop(state); if (item.kind != 2) { state.failed = true; } else { KrtVmLegacyPush(state,KrtVmLegacyNumber(-KrtVmLegacyDouble(item))); } }
+        else if (op == 19) { if (!KrtVmLegacyPrint(KrtVmLegacyPop(state))) { state.failed = true; } }
+        else if (op >= 20 && op <= 22) {
+            int32 offset = (int32)KrtVmRead(artifact.data,10 + pc,2); pc = pc + 2;
+            if (op == 20) { pc = pc + offset; }
+            else if (op == 22) { pc = pc - offset; }
+            else if (state.depth <= 0) { state.failed = true; }
+            else if (!KrtVmLegacyTrue(state.stack[state.depth - 1])) { pc = pc + offset; }
+        }
+        else if (op == 24 || op == 27) {
+            if (op == 27) { return 0; }
+            KrtVmLegacyValue item = KrtVmLegacyPop(state);
+            if (state.failed) { break; }
+            if (item.kind == 2) { return (int32)KrtVmLegacyDouble(item); }
+            if (item.kind == 0) { return (int32)item.value; }
+            if (item.kind == 1) { return 0; } state.failed = true;
+        }
+        else if (op == 25) { pc = pc + 1; }
+        else if (op == 26) {
+            KrtVmLegacyValue item = KrtVmLegacyPop(state);
+            if (item.kind != 2) { state.failed = true; }
+            else { KrtVmLegacyPush(state,KrtVmLegacyMake(4,KrtDriverNumber((int64)KrtVmLegacyDouble(item)))); }
+        }
+        else { state.failed = true; }
+    }
+    KrtDriverError("E_VM","invalid version 1 VM stack, value or execution state"); return 1;
+}
+
+// ===== Runtime type validation =====
+// EBC5 carries address-free runtime records. Validate their complete structure
+// before replacing relocations with VM addresses or callable indices.
+class KrtVmRuntimeSchema {
+    public KrtNativeModule module;
+    public int64 data;
+    public int32 length;
+    public byte[] occupied;
+    public int32[] kinds;
+    public int32[] targets;
+    public int32[] bases;
+    public int32 consumed;
+}
+
+bool KrtVmRuntimeRange(KrtVmRuntimeSchema schema,int64 start,int64 length,int32 alignment) {
+    return start >= 0 && length >= 0 && start <= schema.length && length <= schema.length-start &&
+        (start & (alignment-1)) == 0;
+}
+bool KrtVmRuntimeClaim(KrtVmRuntimeSchema schema,int64 start,int64 length,int32 alignment,byte role) {
+    if (!KrtVmRuntimeRange(schema,start,length,alignment)) { return false; }
+    int32 index=(int32)start; int32 end=(int32)(start+length);
+    // Interned canonical keys may share precisely the same immutable range.
+    // Separate first-byte markers prohibit partial or differently sized aliases.
+    if(role==2&&length>0&&schema.occupied[index]==5){
+        index=index+1;while(index<end){if(schema.occupied[index]!=2){return false;}index=index+1;}
+        return end==schema.length||schema.occupied[end]!=2;
+    }
+    while(index<end){if(schema.occupied[index]!=0){return false;}schema.occupied[index]=role;index=index+1;}
+    if(role==2&&length>0){schema.occupied[(int32)start]=5;}
+    return true;
+}
+// A zero pointer has no relocation; every non-null pointer has exactly one
+// relocation of the required category. All relocation sites are consumed once.
+int32 KrtVmRuntimePointer(KrtVmRuntimeSchema schema,int32 offset,int32 kind,bool required) {
+    if(!KrtVmRuntimeRange(schema,offset,8,8)||KrtVmRead(schema.data,offset,8)!=0){return -2;}
+    int32 word=offset/8;int32 found=schema.kinds[word];
+    if(found==0){return required?-2:-1;}
+    if(found!=kind+1){return -2;}
+    schema.kinds[word]=-found;schema.consumed=schema.consumed+1;return schema.targets[word];
+}
+bool KrtVmRuntimeKey(KrtVmRuntimeSchema schema,int32 record) {
+    int64 length=KrtVmRead(schema.data,record+8,8);
+    int32 key=KrtVmRuntimePointer(schema,record+16,0,true);
+    if(key<0||length<=0||!KrtVmRuntimeClaim(schema,key,length,1,(byte)2)){return false;}
+    uint64 hash=14695981039346656037;int32 index=0;
+    while(index<length){hash=(hash^(uint64)KrtVmRead(schema.data,key+index,1))*1099511628211;index=index+1;}
+    return hash==(uint64)KrtVmRead(schema.data,record,8);
+}
+bool KrtVmRuntimeRecord(KrtVmRuntimeSchema schema,int32 type_index) {
+    KrtNativeModule module=schema.module;int32 offset=module.runtime_offsets[type_index];
+    int64 kind=KrtVmRead(schema.data,offset+24,8);int64 storage=KrtVmRead(schema.data,offset+32,8);
+    int64 alignment=KrtVmRead(schema.data,offset+40,8);int64 flags=KrtVmRead(schema.data,offset+88,8);
+    if(kind<0||kind>9||storage<0||storage>16777216||!KrtVmAlignment(alignment)||(flags & ~3)!=0){return false;}
+    if((kind==0&&storage!=0)||(kind!=0&&storage==0)){return false;}
+    if((kind==3||kind==4||kind==5||kind==7||kind==8)&&storage!=8){return false;}
+    if(kind==6&&storage!=1&&storage!=2&&storage!=4&&storage!=8&&storage!=16){return false;}
+    if((flags&1)!=0&&kind!=6&&kind!=7&&kind!=8){return false;}
+    if((flags&1)!=0&&storage!=8){return false;}
+    if((kind==7||kind==8)&&(flags&1)==0){return false;}
+    if(!KrtVmRuntimeKey(schema,offset)){return false;}
+    int32 parent_index=KrtVmRuntimePointer(schema,offset+48,1,false);
+    if(parent_index<-1||(parent_index>=0&&(kind!=1||parent_index==type_index||
+        KrtVmRead(schema.data,module.runtime_offsets[parent_index]+24,8)!=1))){return false;}
+    schema.bases[type_index]=parent_index;
+    int64 interfaces=KrtVmRead(schema.data,offset+56,8);
+    int32 table=KrtVmRuntimePointer(schema,offset+64,0,interfaces>0);
+    if(interfaces<0||interfaces>module.runtime_type_count||table<-1||
+        (interfaces==0&&table!=-1)||(interfaces>0&&kind!=1&&kind!=2&&kind!=3)){return false;}
+    if(interfaces>0){
+        if(!KrtVmRuntimeClaim(schema,table,interfaces*8,8,(byte)3)){return false;}
+        int32 index=0;
+        while(index<interfaces){int32 target=KrtVmRuntimePointer(schema,table+index*8,1,true);
+            if(target<0||target==type_index||KrtVmRead(schema.data,module.runtime_offsets[target]+24,8)!=3){return false;}
+            index=index+1;
+        }
+    }
+    int64 methods=KrtVmRead(schema.data,offset+72,8);
+    table=KrtVmRuntimePointer(schema,offset+80,0,methods>0);
+    if(methods<0||methods>schema.length/40||table<-1||(methods==0&&table!=-1)||
+        (methods>0&&kind!=1&&kind!=2)){return false;}
+    if(methods>0){
+        if(!KrtVmRuntimeClaim(schema,table,methods*40,8,(byte)4)){return false;}
+        int32 index=0;
+        while(index<methods){int32 method=table+index*40;
+            if(!KrtVmRuntimeKey(schema,method)||KrtVmRuntimePointer(schema,method+24,2,true)<0||
+                KrtVmRead(schema.data,method+32,8)!=(kind==2?16:0)){return false;}
+            index=index+1;
+        }
+    }
+    return true;
+}
+bool KrtVmRuntimeValidateData(KrtNativeModule module,int64 data) {
+    int32 length=module.runtime_length;int32 count=module.runtime_type_count;
+    if(length<0||length>16777216||count<0||count>65536||module.runtime_relocation_count<0||
+        module.runtime_relocation_count>length/8){return false;}
+    if(count==0){return length==0&&module.runtime_relocation_count==0&&module.runtime_relocations==null;}
+    if(data==0||module.runtime_offsets==null||length<(int64)count*96){return false;}
+    KrtVmRuntimeSchema schema=new KrtVmRuntimeSchema();schema.module=module;schema.data=data;schema.length=length;
+    schema.occupied=new byte[length];schema.kinds=new int32[(length+7)/8];schema.targets=new int32[(length+7)/8];
+    schema.bases=new int32[count];
+    int32 index=0;
+    while(index<count){int32 offset=module.runtime_offsets[index];
+        if(!KrtVmRuntimeClaim(schema,offset,96,16,(byte)1)){return false;}
+        index=index+1;
+    }
+    int32 relocations=0;KrtNativeRuntimeRelocation relocation=module.runtime_relocations;
+    while(relocation!=null){
+        if(relocations>=module.runtime_relocation_count||!KrtVmRuntimeRange(schema,relocation.offset,8,8)||
+            relocation.kind<0||relocation.kind>2||relocation.target<0||schema.kinds[relocation.offset/8]!=0||
+            KrtVmRead(data,relocation.offset,8)!=0){return false;}
+        if(relocation.kind==0&&relocation.target>=length){return false;}
+        if(relocation.kind==1&&relocation.target>=count){return false;}
+        if(relocation.kind==2&&relocation.target>=module.function_count){return false;}
+        schema.kinds[relocation.offset/8]=relocation.kind+1;schema.targets[relocation.offset/8]=relocation.target;
+        relocations=relocations+1;relocation=relocation.next;
+    }
+    if(relocations!=module.runtime_relocation_count){return false;}
+    index=0;while(index<count){if(!KrtVmRuntimeRecord(schema,index)){return false;}index=index+1;}
+    if(schema.consumed!=relocations){return false;}
+    // Padding is deterministic zero data, never an unvalidated record.
+    index=0;while(index<length){if(schema.occupied[index]==0&&KrtVmRead(data,index,1)!=0){return false;}index=index+1;}
+    byte[] visited=new byte[count];index=0;
+    while(index<count){int32 current=index;
+        while(current>=0&&visited[current]==0){visited[current]=1;current=schema.bases[current];}
+        if(current>=0&&visited[current]==1){return false;}
+        current=index;while(current>=0&&visited[current]==1){visited[current]=2;current=schema.bases[current];}
+        index=index+1;
+    }
+    delete visited;delete schema.occupied;delete schema.kinds;delete schema.targets;
+    delete schema.bases;delete schema;return true;
+}
+bool KrtVmRuntimeValidate(KrtNativeModule module) {
+    unsafe(using krt.mem;){return KrtVmRuntimeValidateData(module,(int64)module.runtime_bytes);}
+}
+
+int64 KrtVmRuntimeFooterSize(KrtNativeModule module) {
+    return 16+(int64)module.runtime_type_count*4+(int64)module.runtime_relocation_count*12+module.runtime_length;
+}
+bool KrtVmRuntimeEmit(KrtNativeModule module,int64 data,int64 position) {
+    KrtVmWrite(data,position,0x3554524b,4);KrtVmWrite(data,position+4,module.runtime_length,4);
+    KrtVmWrite(data,position+8,module.runtime_type_count,4);KrtVmWrite(data,position+12,module.runtime_relocation_count,4);
+    position=position+16;int32 index=0;
+    while(index<module.runtime_type_count){KrtVmWrite(data,position,module.runtime_offsets[index],4);position=position+4;index=index+1;}
+    KrtNativeRuntimeRelocation relocation=module.runtime_relocations;
+    while(relocation!=null){KrtVmWrite(data,position,relocation.offset,4);KrtVmWrite(data,position+4,relocation.kind,4);
+        KrtVmWrite(data,position+8,relocation.target,4);position=position+12;relocation=relocation.next;}
+    unsafe(using krt.mem;){byte* target=(byte*)data;index=0;
+        while(index<module.runtime_length){target[position+index]=module.runtime_bytes[index];index=index+1;}}
+    return true;
+}
+bool KrtVmRuntimeRead(KrtDriverBuffer artifact,KrtNativeModule module,int64 position) {
+    if(position<0||position>artifact.length-16||KrtVmRead(artifact.data,position,4)!=0x3554524b){return false;}
+    int64 length=KrtVmRead(artifact.data,position+4,4);int64 count=KrtVmRead(artifact.data,position+8,4);
+    int64 relocations=KrtVmRead(artifact.data,position+12,4);
+    if(length>16777216||count>65536||relocations>length/8||
+        (count==0&&(length!=0||relocations!=0))||count*96>length||
+        artifact.length-position!=16+count*4+relocations*12+length){return false;}
+    module.runtime_length=(int32)length;module.runtime_type_count=(int32)count;module.runtime_relocation_count=(int32)relocations;
+    module.runtime_offsets=new int32[(int32)count];position=position+16;int32 index=0;
+    while(index<count){module.runtime_offsets[index]=(int32)KrtVmRead(artifact.data,position,4);position=position+4;index=index+1;}
+    index=0;while(index<relocations){KrtNativeRuntimeRelocation item=new KrtNativeRuntimeRelocation();
+        item.offset=(int32)KrtVmRead(artifact.data,position,4);item.kind=(int32)KrtVmRead(artifact.data,position+4,4);
+        item.target=(int32)KrtVmRead(artifact.data,position+8,4);item.next=module.runtime_relocations;module.runtime_relocations=item;
+        position=position+12;index=index+1;
+    }
+    int64 serialized=length==0?0:artifact.data+position;
+    if(!KrtVmRuntimeValidateData(module,serialized)){return false;}
+    // Literal lengths and relocation records need not align the file's blob.
+    // Runtime exception tags reserve descriptor pointer bits, so descriptors
+    // must have absolute alignment as well as aligned offsets within the blob.
+    module.runtime_pointer=length==0?0:KrtDriverAlloc(length);
+    if(length>0&&module.runtime_pointer==0){return false;}
+    unsafe(using krt.mem;){byte* target=(byte*)module.runtime_pointer;byte* original=(byte*)serialized;
+        index=0;while(index<length){target[index]=original[index];index=index+1;}}
+    KrtNativeRuntimeRelocation relocation=module.runtime_relocations;
+    while(relocation!=null){int64 target=0;
+        if(relocation.kind==0){target=module.runtime_pointer+relocation.target;}
+        else if(relocation.kind==1){target=module.runtime_pointer+module.runtime_offsets[relocation.target];}
+        else{target=(int64)relocation.target+1;}
+        KrtVmWrite(module.runtime_pointer,relocation.offset,target,8);relocation=relocation.next;
+    }
+    return true;
 }

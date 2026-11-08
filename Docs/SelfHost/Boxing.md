@@ -55,7 +55,7 @@ checked 拆箱失败抛出 `int32` 值 `-2147483647`，可使用普通 `try` / `
 
 ## 实现与验证
 
-绑定与值复制分别由 [Semantic/Boxing.krt](../../SelfHost/Compiler/Frontend/Semantic/Boxing.krt) 和 [Ir/Boxing.krt](../../SelfHost/Compiler/Middle/Ir/Boxing.krt) 实现。运行时类型描述符与跨模块对象分派共用精确的类型身份；装箱不会使用模块内声明序号作为类型身份。
+绑定与值复制分别由 [SemanticFeatures.krt](../../SelfHost/Compiler/Frontend/Semantic/SemanticFeatures.krt) 和 [Ir/Ir.krt](../../SelfHost/Compiler/Middle/Ir/Ir.krt) 实现。运行时类型描述符与跨模块对象分派共用精确的类型身份；装箱不会使用模块内声明序号作为类型身份。
 
 ```sh
 SELFHOST_COMPILER="$PWD/build/selfhost/stage2/program" \
