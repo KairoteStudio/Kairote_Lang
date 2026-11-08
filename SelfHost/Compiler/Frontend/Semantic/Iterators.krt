@@ -1,0 +1,215 @@
+// Foreach uses the ordinary call, access, generic and dispatch binder. The
+// prepared tree contains anonymous typed locals and a real try/finally loop;
+// no protocol-specific calling convention or item materialization is needed.
+bool KrtNativeIteratorError(KrtNativeBinding binding, KrtAstNode node) {
+    binding.module.native_error = 16;
+    if (binding.error_start < 0) { binding.error_start = node.start; }
+    KrtDiagnostic("E_ITERATOR",10,node.start); return false;
+}
+
+bool KrtNativeIteratorNominal(KrtAstNode value) {
+    return value != null && value.native_type != null &&
+        (value.native_type.value == 1 || value.native_type.value == 2 || value.native_type.value == 3 || value.native_type.value == 5) &&
+        !value.native_array && value.native_pointer_depth == 0 && value.native_function_pointer == null &&
+        value.native_fixed_length == 0;
+}
+
+bool KrtNativeIteratorReference(KrtAstNode value) {
+    return KrtNativeIteratorNominal(value) && value.native_type.value != 2;
+}
+
+KrtAstNode KrtNativeIteratorMethodName(KrtAstNode owner, string name, KrtNativeBinding binding, bool extensions) {
+    KrtAstNode method = binding.module.left; KrtAstNode extension = null;
+    while (method != null) {
+        if (KrtNativeSpanWord(binding.source,method.name_start,method.name_length,name)) {
+            if (method.native_owner != null && KrtNativeDerivesFrom(owner,method.native_owner)) { return method; }
+            if (extensions && method.native_owner == null && extension == null) { extension = method; }
+        }
+        method = method.next;
+    }
+    return extension;
+}
+
+KrtAstNode KrtNativeIteratorFieldName(KrtAstNode owner, string name, KrtNativeBinding binding) {
+    while (owner != null) {
+        KrtAstNode field = owner.body;
+        while (field != null) {
+            if (KrtNativeSpanWord(binding.source,field.name_start,field.name_length,name)) { return field; }
+            field = field.next;
+        }
+        owner = owner.native_base;
+    }
+    return null;
+}
+
+bool KrtNativeIteratorAddressable(KrtAstNode value) {
+    if (value == null) { return false; }
+    if (value.kind == KrtAstKind.Identifier) { return true; }
+    if (value.kind == KrtAstKind.Member) {
+        return !KrtNativeAggregateKind(value.left) || KrtNativeIteratorAddressable(value.left);
+    }
+    if (value.kind == KrtAstKind.Index) {
+        return value.left.native_fixed_length == 0 || KrtNativeIteratorAddressable(value.left);
+    }
+    return value.kind == KrtAstKind.Unary && value.op == 42;
+}
+
+KrtAstNode KrtNativeIteratorLocal(KrtAstNode value, KrtNativeBinding binding, bool collection) {
+    KrtAstNode declaration = KrtAstMake(KrtAstKind.Variable,value.start,0);
+    KrtNativeCopyType(declaration,value); declaration.left = value;
+    declaration.native_scope = binding.unit.native_scope; declaration.native_context = binding.unit.native_context;
+    declaration.native_using_scope = binding.using_scope;
+    // An addressable struct receiver preserves GetEnumerator's ordinary
+    // mutation semantics. A readonly receiver still gets the usual defensive
+    // method copy; rvalues and enumerator results have independent value frames.
+    bool addressable = collection && KrtNativeAggregateKind(value) && KrtNativeIteratorAddressable(value);
+    if (addressable) {
+        declaration.native_ref = true; declaration.native_readonly = value.native_readonly;
+    } else if (!KrtNativeBindAggregateFrame(declaration,binding)) { return null; }
+    declaration.local_slot = binding.slots; binding.slots = binding.slots + 1;
+    return declaration;
+}
+
+KrtAstNode KrtNativeIteratorRead(KrtAstNode declaration) {
+    KrtAstNode value = KrtAstMake(KrtAstKind.Identifier,declaration.start,0);
+    KrtNativeCopyType(value,declaration); value.local_slot = declaration.local_slot;
+    value.native_frame_offset = declaration.native_frame_offset;
+    value.native_ref = declaration.native_ref; value.native_readonly = declaration.native_readonly;
+    value.native_variable = declaration; value.op = 247;
+    return value;
+}
+
+KrtAstNode KrtNativeIteratorCall(KrtAstNode receiver, KrtAstNode name, KrtAstNode site, KrtNativeBinding binding) {
+    KrtAstNode member = KrtAstMake(KrtAstKind.Member,site.start,0);
+    member.left = receiver; member.name_start = name.name_start; member.name_length = name.name_length;
+    member.native_scope = binding.unit.native_scope; member.native_context = binding.unit.native_context;
+    member.native_using_scope = binding.using_scope;
+    KrtAstNode call = KrtAstMake(KrtAstKind.Call,site.start,0);
+    call.left = member; call.parameter_count = 0;
+    call.native_scope = binding.unit.native_scope; call.native_context = binding.unit.native_context;
+    call.native_using_scope = binding.using_scope;
+    if (!KrtNativeBindCall(call,binding)) { return null; }
+    if (member.native_static || call.native_target == null) { KrtNativeIteratorError(binding,site); return null; }
+    return call;
+}
+
+KrtAstNode KrtNativeIteratorBlock(KrtAstNode first, KrtAstNode site) {
+    KrtAstNode block = KrtAstMake(KrtAstKind.Block,site.start,site.length);
+    block.left = first; block.child_count = first == null ? 0 : 1;
+    block.native_scope = site.native_scope; block.native_context = site.native_context;
+    block.native_using_scope = site.native_using_scope;
+    return block;
+}
+
+KrtAstNode KrtNativeIteratorPresent(KrtAstNode local, KrtAstNode body, KrtAstNode site) {
+    if (!KrtNativeIteratorReference(local)) { return body; }
+    KrtAstNode guard = KrtAstMake(KrtAstKind.If,site.start,0);
+    guard.left = KrtNativeIteratorRead(local); guard.right = body;
+    return KrtNativeIteratorBlock(guard,site);
+}
+
+bool KrtNativeBindIteratorForeach(KrtAstNode statement, KrtNativeBinding binding) {
+    KrtAstNode collection = statement.right;
+    if (!KrtNativeIteratorNominal(collection)) { return KrtNativeIteratorError(binding,collection); }
+    KrtAstNode get_name = KrtNativeIteratorMethodName(collection.native_type,"GetEnumerator",binding,true);
+    if (get_name == null) { return KrtNativeIteratorError(binding,collection); }
+    KrtAstNode collection_local = KrtNativeIteratorLocal(collection,binding,true);
+    if (collection_local == null) { return false; }
+    KrtAstNode factory = KrtNativeIteratorCall(KrtNativeIteratorRead(collection_local),get_name,statement,binding);
+    if (factory == null) { return false; }
+    if (!KrtNativeIteratorNominal(factory)) { return KrtNativeIteratorError(binding,statement); }
+    KrtAstNode enumerator = KrtNativeIteratorLocal(factory,binding,false);
+    if (enumerator == null) { return false; }
+    KrtAstNode move_name = KrtNativeIteratorMethodName(enumerator.native_type,"MoveNext",binding,true);
+    if (move_name == null) { return KrtNativeIteratorError(binding,statement); }
+    KrtAstNode move = KrtNativeIteratorCall(KrtNativeIteratorRead(enumerator),move_name,statement,binding);
+    if (move == null) { return false; }
+    if (!move.native_boolean || move.native_array || move.native_pointer_depth != 0 || move.native_function_pointer != null) {
+        return KrtNativeIteratorError(binding,statement);
+    }
+    KrtAstNode current = null;
+    KrtAstNode current_name = KrtNativeIteratorFieldName(enumerator.native_type,"Current",binding);
+    if (current_name != null) {
+        current = KrtAstMake(KrtAstKind.Member,statement.start,0);
+        current.left = KrtNativeIteratorRead(enumerator); current.name_start = current_name.name_start;
+        current.name_length = current_name.name_length;
+        if (!KrtNativeBindExpression(current,binding)) { return false; }
+        if (current.native_static || current.native_global > 0) { return KrtNativeIteratorError(binding,statement); }
+    } else {
+        current_name = KrtNativeIteratorMethodName(enumerator.native_type,"Current",binding,true);
+        if (current_name == null) { return KrtNativeIteratorError(binding,statement); }
+        current = KrtNativeIteratorCall(KrtNativeIteratorRead(enumerator),current_name,statement,binding);
+        if (current == null) { return false; }
+    }
+    if (KrtNativeVoidValue(current)) { return KrtNativeIteratorError(binding,statement); }
+    KrtAstNode dispose = null;
+    KrtAstNode dispose_name = KrtNativeIteratorMethodName(enumerator.native_type,"Dispose",binding,false);
+    if (dispose_name != null) {
+        dispose = KrtNativeIteratorCall(KrtNativeIteratorRead(enumerator),dispose_name,statement,binding);
+        if (dispose == null) { return false; }
+        if (!KrtNativeVoidValue(dispose)) { return KrtNativeIteratorError(binding,statement); }
+    }
+
+    KrtAstNode original = statement.left;
+    KrtAstNode variable = KrtAstMake(KrtAstKind.Variable,original.start,original.length);
+    variable.name_start = original.name_start; variable.name_length = original.name_length;
+    variable.type_start = original.type_start; variable.type_length = original.type_length;
+    variable.syntax_type = original.syntax_type; variable.syntax_suffixes = original.syntax_suffixes;
+    variable.syntax_modifiers = original.syntax_modifiers;
+    variable.native_scope = original.native_scope; variable.native_context = original.native_context;
+    variable.native_using_scope = original.native_using_scope; variable.left = current;
+    if (!KrtNativeAnnotateType(variable,binding.module,binding.source,variable.type_start,variable.type_length)) {
+        return KrtNativeBindingError(binding,variable);
+    }
+    if (KrtNativeIsInferredType(variable,binding.source)) { KrtNativeCopyType(variable,current); }
+    if (!KrtNativeCheckValueAccess(variable,binding) || !KrtNativeBindAggregateFrame(variable,binding)) { return false; }
+    if (!KrtNativeCompatibleValue(variable,current)) { return KrtNativeBindingError(binding,variable); }
+    variable.native_stack_borrow = current.native_stack_borrow;
+    variable.local_slot = binding.slots; binding.slots = binding.slots + 1;
+    KrtAstNode iteration = KrtNativeIteratorBlock(variable,statement.body);
+    variable.next = statement.body; iteration.child_count = 2;
+    variable.native_lexical_block = iteration;
+    KrtNativeName saved = binding.names; binding.depth = binding.depth + 1;
+    bool valid = KrtNativeAddName(binding,variable,variable.local_slot,false) && KrtNativeBindBlock(statement.body,binding);
+    binding.names = saved; binding.depth = binding.depth - 1;
+    if (!valid) { return false; }
+
+    KrtAstNode loop = KrtAstMake(KrtAstKind.While,statement.start,statement.length);
+    loop.left = move; loop.right = iteration;
+    KrtAstNode active = KrtNativeIteratorBlock(loop,statement);
+    KrtAstNode boxed = null;
+    if (enumerator.native_type.value == 3 || enumerator.native_type.value == 5) {
+        KrtAstNode probe = KrtAstMake(KrtAstKind.Call,statement.start,0);
+        KrtNativeCopyType(probe,move); probe.left = KrtNativeIteratorRead(enumerator); probe.op = 248;
+        boxed = KrtNativeIteratorLocal(probe,binding,false);
+        if (boxed == null) { return false; }
+    }
+    if (dispose != null || boxed != null) {
+        KrtAstNode cleanup_call = KrtAstMake(KrtAstKind.Expression,statement.start,0); cleanup_call.left = dispose;
+        KrtAstNode cleanup = KrtNativeIteratorBlock(cleanup_call,statement);
+        if (boxed != null) {
+            KrtAstNode release = KrtAstMake(KrtAstKind.Call,statement.start,0);
+            release.op = 249; release.left = KrtNativeIteratorRead(enumerator); release.right = KrtNativeIteratorRead(boxed);
+            KrtAstNode release_statement = KrtAstMake(KrtAstKind.Expression,statement.start,0); release_statement.left = release;
+            KrtAstNode release_block = KrtNativeIteratorBlock(release_statement,statement);
+            if (dispose != null) {
+                KrtAstNode dispose_guard = KrtAstMake(KrtAstKind.Try,statement.start,0);
+                dispose_guard.left = cleanup; dispose_guard.alternate = release_block;
+                dispose_guard.local_slot = binding.slots; dispose_guard.native_size = binding.slots + 6;
+                binding.slots = binding.slots + 12; cleanup = KrtNativeIteratorBlock(dispose_guard,statement);
+            } else { cleanup = release_block; }
+        }
+        KrtAstNode guarded = KrtAstMake(KrtAstKind.Try,statement.start,statement.length);
+        guarded.left = active; guarded.alternate = cleanup;
+        guarded.local_slot = binding.slots; guarded.native_size = binding.slots + 6; binding.slots = binding.slots + 12;
+        active = KrtNativeIteratorBlock(guarded,statement);
+    }
+    if (boxed != null) { boxed.next = active; active = KrtNativeIteratorBlock(boxed,statement); active.child_count = 2; }
+    active = KrtNativeIteratorPresent(enumerator,active,statement);
+    enumerator.next = active;
+    KrtAstNode factory_body = KrtNativeIteratorBlock(enumerator,statement); factory_body.child_count = 2;
+    factory_body = KrtNativeIteratorPresent(collection_local,factory_body,statement);
+    collection_local.next = factory_body;
+    statement.native_target = KrtNativeIteratorBlock(collection_local,statement); statement.native_target.child_count = 2;
+    return true;
+}

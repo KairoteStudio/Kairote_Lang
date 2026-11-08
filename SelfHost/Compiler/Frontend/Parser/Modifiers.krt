@@ -1,0 +1,25 @@
+// Preserve declaration modifiers independently of semantic visibility checks.
+int32 KrtParserModifierFlag(KrtParser parser){
+    if(KrtParserIsWord(parser,"public")){return 1;}
+    if(KrtParserIsWord(parser,"private")){return 2;}
+    if(KrtParserIsWord(parser,"protected")){return 4;}
+    if(KrtParserIsWord(parser,"internal")){return 8192;}
+    if(KrtParserIsWord(parser,"static")){return 8;}
+    if(KrtParserIsWord(parser,"readonly")){return 16;}
+    if(KrtParserIsWord(parser,"const")){return 32;}
+    if(KrtParserIsWord(parser,"virtual")){return 64;}
+    if(KrtParserIsWord(parser,"override")){return 128;}
+    if(KrtParserIsWord(parser,"abstract")){return 256;}
+    if(KrtParserIsWord(parser,"async")){return 512;}
+    if(KrtParserIsWord(parser,"extern")){return 1024;}
+    if(KrtParserIsWord(parser,"partial")){return 2048;}
+    if(KrtParserIsWord(parser,"let")){return 4096;}
+    return 0;
+}
+
+// Keep the written access flags. Semantic validation rejects incompatible
+// combinations and reports repeated access words without losing declarations.
+int32 KrtParserAddModifierFlag(int32 modifiers,int32 flag){
+    if((flag&8199)!=0&&(modifiers&flag)!=0){modifiers=modifiers|16384;}
+    return modifiers|flag;
+}

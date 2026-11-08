@@ -4,8 +4,9 @@ import subprocess
 import tempfile
 import unittest
 
+from Test.SelfHost.Bootstrap import KRTC
+
 ROOT = Path(__file__).resolve().parents[2]
-KRTC = Path(os.environ.get("KRTC", ROOT / "Re.KrtC/build/KrtC")).resolve()
 
 class LexerTests(unittest.TestCase):
     def run_parts(self, parts):
@@ -20,7 +21,7 @@ class LexerTests(unittest.TestCase):
                 self.assertEqual(subprocess.run([str(binary)], capture_output=True, timeout=10).returncode, 0, f"O{level}")
 
     def test_native_tokens(self):
-        self.run_parts(("SelfHost/Frontend/Lexer/Token.krt", "SelfHost/Frontend/Lexer/Lexer.krt", "Test/SelfHost/test_lexer.krt"))
+        self.run_parts(("SelfHost/Compiler/Frontend/Lexer/Token.krt", "SelfHost/Compiler/Frontend/Lexer/Lexer.krt", "Test/SelfHost/test_lexer.krt"))
 
     def test_object_parameter_fields(self):
         self.run_parts(("Test/SelfHost/test_object_fields.krt",))

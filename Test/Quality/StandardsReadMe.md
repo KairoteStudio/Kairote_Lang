@@ -1,5 +1,35 @@
 # 开发规范整改验证
 
+## 2026-10-01 超长函数整改与全量复查
+
+`ark_backend_elf_link` 从 1619 行拆为 23 行的驱动函数及 9 个阶段函数，阶段函数最长 348 行。阶段间共享私有 `ElfLinkState`，所有错误出口由统一清理函数释放临时资源，成功后才转移输出所有权。同步修正名称映射扩容的部分失败处理、未检查的映射插入和字符串表重建清理。
+
+全量检查发现并修正 9 个既有文件的格式偏差及 `SmartPtr.c` 的内部函数命名。152 份生产 C 源文件/头文件/包含文件、1377 个函数均满足长度限制：最长函数 497 行，最长文件 3634 行；仓库 Python 函数和 Kairote 函数体长度复查也未发现超过 500 行的函数，源码文件没有超过 5000 行。
+
+`CheckStandards.py` 新增 `--all` 和 `--strict-lengths`；`Audit.py` 默认执行全量严格检查，既有超长函数也会导致失败退出。当前全量机械检查零违规、零长度报备；GCC/Clang 检查 65 个编译单元，零警告、零错误；CMake Release 和 Zig 构建通过。
+
+[test_elf_failure.c](test_elf_failure.c) 扩展为 7 类场景，覆盖静态/动态 ELF、动态函数与数据重定位、40 个导入/导出的名称映射扩容、多节重定位和 TLS。170 个后端分配点逐一注入失败，断言错误输出为空且跟踪分配归零；7 类成功产物及节映射与重构前逐字节一致。6 组 ASan/UBSan C 组件回归、15 项规范检查器测试、50 项指针测试、25 项语言回归、19 项整数位宽测试、59 项标准库测试和 75 项语法运行用例通过。LSan 因当前环境的 ptrace 限制无法启用，分配平衡断言仅覆盖测试跟踪的后端分配。
+
+完整 ASan/UBSan 编译器也已构建，并通过 50 项指针测试、25 项语言回归和 75 项语法运行用例；编译器与链接器均启用插桩，LSan 关闭。原生与插桩检查均未发现 sanitizer 错误。
+
+复查命令：
+
+```bash
+python3 Test/Quality/CheckStandards.py --all --strict-lengths --base HEAD
+python3 Test/Quality/Audit.py --jobs 4
+python3 Test/Quality/RunTests.py
+```
+
+## 2026-10-01 项目组织整理
+
+编译器目录迁移为 `Re.KrtC/src/Compiler/`、存根头文件目录迁移为 `Re.KrtC/StubInclude/`；版本文件、测试索引与自举 Python 工具统一为 PascalCase。构建清单、C include、Python 导入、CLI 入口与文档引用同步更新。规范检查器保留命名迁移前的接口和长度基线，对歧义路径仍按新增文件检查。
+
+编辑器使用根目录 `.editorconfig`；C 格式继续采用 `ClangFormat.yaml`。Zig 缓存逐条忽略规则合并为目录规则。根目录 102 个实验产物保留在本地忽略目录 `build/Artifacts/RootSnapshot.cHgAPZ/`。
+
+本轮验证：CMake Release 与 Zig 0.16.0 构建通过；GCC/Clang 共检查 65 个编译单元，零警告、零错误；相对 `main` 的机械规范检查零违规，保留下文既有 ELF 超长函数报备；6 组 ASan/UBSan C 组件回归、NativeQuality（含 14 项规范检查器测试）、33 项自举驱动/工程测试和 75 项语法运行用例通过。该结果仅说明上述检查覆盖的整理行为，不代表完整人工开发规范审查。
+
+## 历史整改记录
+
 本次依据 [DevStand.md](../../DevStand.md) 检查 PR #12 的改动。之前的审计只覆盖编译警告、制表符、尾随空白和文件末尾换行，不能据此宣称通过完整开发规范检查。
 
 | 条款 | 修正 |
@@ -34,7 +64,7 @@ Sanitizer 检查编译器、链接器及 C 组件；生成程序运行原生断�
 
 本轮原生编译器 SHA-256：`14e8d0088123701b9e84699f55b5c4a42c3bdf7e23e9552f9d3bbf3066707b0f`。插桩编译器 SHA-256：`615ebf9e645252fc45ff37604197ebe430f0b89a498abba0074e652d25a62347`。
 
-## 按 1.4 条款报备的既有超长函数
+## 历史超长函数报备（2026-10-01 已整改）
 
 `ArkLink/src/Backend/BackendElf.c` 的 `ark_backend_elf_link` 为 1619 行，基线中已超过 500 行。本轮保留其 ELF 构建阶段与状态组织，避免将错误处理修正扩大为整条 ELF 输出布局重构；相关清理路径已通过故障注入测试。其余本轮检查的函数不超过 500 行，所有文件不超过 5000 行。
 

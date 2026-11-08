@@ -1,0 +1,35 @@
+KrtAstNode KrtNativePrintHelper(KrtAstNode ast, int64 source, string name) {
+    KrtAstNode unit = ast.left;
+    while (unit != null) { if (unit.op == 241 && KrtNativeSpanWord(source,unit.name_start,unit.name_length,name)) { return unit; } unit = unit.next; }
+    return null;
+}
+
+bool KrtNativePrintCall(KrtAstNode ast, KrtNativeModule module, int64 source, string name, int32 count) {
+    KrtAstNode helper = KrtNativePrintHelper(ast,source,name);
+    return helper != null && KrtNativeEmit(module,(int32)KrtNativeOp.Call,helper.value,count) >= 0;
+}
+
+bool KrtNativeLowerPrint(KrtAstNode statement, KrtAstNode ast, KrtNativeModule module, int64 source) {
+    KrtAstNode value = statement.left;
+    while (value != null) {
+        if (!KrtNativeLowerExpression(value,ast,module,source)) { return false; }
+        if (value.native_string || value.kind == KrtAstKind.Null) { }
+        else if (KrtNativeFloatKind(value) != 0) {
+            int32 format = KrtNativeFloatKind(value);
+            if (format != 8 && KrtNativeEmit(module,(int32)KrtNativeOp.FloatConvert,format,8) < 0) { return false; }
+            if (!KrtNativePrintCall(ast,module,source,"__KrtPrintFloatBits",1)) { return false; }
+        } else if (KrtNativeWideKind(value)) {
+            if (!KrtNativePrintCall(ast,module,source,value.native_unsigned ? "__KrtPrintWideUnsigned" : "__KrtPrintWideSigned",1)) { return false; }
+        } else if (value.native_boolean) {
+            if (!KrtNativePrintCall(ast,module,source,"__KrtPrintBoolean",1)) { return false; }
+        } else if (value.native_character) {
+            if (!KrtNativePrintCall(ast,module,source,"__KrtPrintCharacter",1)) { return false; }
+        } else {
+            bool address = value.native_type != null || KrtNativeSemanticStride(value) > 0;
+            if (!KrtNativePrintCall(ast,module,source,value.native_unsigned || address ? "__KrtPrintUnsigned" : "__KrtPrintSigned",1)) { return false; }
+        }
+        if (!KrtNativePrintCall(ast,module,source,"__KrtPrintWrite",1) || KrtNativeEmit(module,(int32)KrtNativeOp.Drop,0,0) < 0) { return false; }
+        value = value.next;
+    }
+    return statement.value == 0 || (KrtNativePrintCall(ast,module,source,"__KrtPrintLine",0) && KrtNativeEmit(module,(int32)KrtNativeOp.Drop,0,0) >= 0);
+}

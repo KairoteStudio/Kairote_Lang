@@ -22,7 +22,7 @@
 
 该轮基线是上一轮已经优化过的编译器，SHA-256 为 `1a04b02c11de101ac5d656b75f5414d42e41a694f9b728cca8361447f6fcda4e`；测量使用的修改后编译器为 `baed7a2e6d60a86f0146de23fd30e703ab2624872263a90f22235dbf19bbc39d`。发现复合赋值错误之前完成的首轮 210 个样本与对应编译器、汇编保存在本地忽略目录 `BeforeCompoundFix/`，该轮未完成，不与最终样本混合。最终表中的两种循环写法都有独立的等价 C/Krt 源码与汇编。
 
-实现主要在 [KroTailCalls.inc](../../../Re.KrtC/src/compiler/Backend/Kro/KroTailCalls.inc)，由 [寄存器和栈规划](../../../Re.KrtC/src/compiler/Backend/Kro/KroRegisterPacking.inc) 与 [代码生成](../../../Re.KrtC/src/compiler/Backend/Kro/KroCodegen.c) 接入：
+实现主要在 [KroTailCalls.inc](../../../Re.KrtC/src/Compiler/Backend/Kro/KroTailCalls.inc)，由 [寄存器和栈规划](../../../Re.KrtC/src/Compiler/Backend/Kro/KroRegisterPacking.inc) 与 [代码生成](../../../Re.KrtC/src/Compiler/Backend/Kro/KroCodegen.c) 接入：
 
 - 自尾调用复用当前栈帧；先保存全部新参数，再更新原参数，保留参数交换、循环依赖和共享寄存器位段。宽参数、超过寄存器数量的参数和引用参数均有测试。
 - 固定位宽的加法、乘法、按位与/或/异或可累积到保留寄存器。利用整数模 2^N 的语义，最终返回时按原类型归一化；超过 64 位使用两个寄存器。这里不重结合浮点运算，也不将减法等非结合运算转换成累加器。

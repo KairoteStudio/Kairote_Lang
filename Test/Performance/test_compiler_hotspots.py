@@ -17,8 +17,8 @@ def build_harness(output, replacements=None):
     sources = [str(project / source) for source in sources if source != "src/Main.c"]
     for original, replacement in (replacements or {}).items():
         sources = [str(replacement) if path.endswith(original) else path for path in sources]
-    includes = ["src", "src/Core", "src/Tools", "src/Bytecode", "Shared", "stub_include", "vm",
-                "src/compiler/Driver", "src/compiler/Frontend/Semantic"]
+    includes = ["src", "src/Core", "src/Tools", "src/Bytecode", "Shared", "StubInclude", "vm",
+                "src/Compiler/Driver", "src/Compiler/Frontend/Semantic"]
     command = [os.environ.get("CC", "cc"), "-std=gnu11", "-O2", "-w", "-ffunction-sections", "-fdata-sections"]
     command += ["-I" + str(project / path) for path in includes]
     command += [str(ROOT / "Test/Performance/test_compiler_hotspots.c"), *sources,

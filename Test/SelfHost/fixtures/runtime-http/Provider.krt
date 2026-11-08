@@ -1,0 +1,81 @@
+using System.Collections.Generic;
+namespace RuntimeRoutes;
+
+public struct Request {
+    int32 method;
+    string path;
+    uint128 id;
+    byte tag[5];
+}
+public struct Response {
+    int32 status;
+    string body;
+    uint128 id;
+    byte tag[5];
+}
+public class Audit {
+    public int32 enumerated;
+    public int32 disposed;
+    public int32 handled;
+    public int32 resources;
+}
+public interface Route {
+    bool Matches(Request request);
+    Response Handle(Request request);
+    void Dispose();
+}
+
+private struct Failure {
+    int32 status;
+    uint128 id;
+    byte tag[5];
+}
+private struct Rule : Route {
+    int32 kind;
+    int32 calls;
+    Audit audit;
+    byte[] resource;
+    public bool Matches(Request request) {
+        return kind == 0 ? request.path == "/" : true;
+    }
+    public Response Handle(Request request) {
+        calls++;
+        audit.handled++;
+        if (request.method != 1 || request.id != ((uint128)1 << 100) + 19 ||
+            request.tag[0] != 31 || request.tag[4] != 37 || resource[3] != 41 || calls != 1) {
+            throw 91;
+        }
+        if (request.path == "/fail") {
+            Failure failure = default(Failure);
+            failure.status = 503; failure.id = request.id; failure.tag[4] = 37;
+            throw failure;
+        }
+        Response result = default(Response);
+        result.status = kind == 0 ? 200 : 404;
+        result.body = kind == 0 ? "你好，模块！\n" : "Runtime route missing\n";
+        result.id = request.id + 1;
+        result.tag[0] = request.tag[0]; result.tag[4] = request.tag[4] + 1;
+        request.tag[4] = 99;
+        return result;
+    }
+    public void Dispose() {
+        if (resource != null) {
+            delete resource; resource = null;
+            audit.disposed++; audit.resources--;
+        }
+    }
+}
+
+IEnumerable<Route> Routes(Audit audit) {
+    try {
+        for (int32 kind = 0; kind < 2; kind++) {
+            Rule rule = default(Rule);
+            rule.kind = kind; rule.audit = audit;
+            rule.resource = new byte[4]; rule.resource[3] = 41;
+            audit.resources++;
+            yield return rule;
+        }
+    } finally {
+        audit.enumerated++;
+    }
+}

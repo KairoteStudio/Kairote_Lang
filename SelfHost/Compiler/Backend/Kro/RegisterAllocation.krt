@@ -1,0 +1,247 @@
+// Allocate local values after IR optimization. r14/r15 belong to globals and
+// exception records; r12/r13 are preserved by every native function.
+class KrtNativeRegisterAllocation { public int32[] registers; public int32 locals; public int32 used; }
+
+KrtNativeRegisterAllocation KrtNativeAllocateRegisters(KrtNativeModule module, int32 function_index, int32 first, int32 last) {
+    int32 locals = module.local_counts[function_index];
+    KrtNativeRegisterAllocation allocation = new KrtNativeRegisterAllocation();
+    allocation.registers = new int32[locals];
+    allocation.locals = locals;
+    if (KrtDriverOptimization == 0 || locals == 0 || locals > 1024) { return allocation; }
+    int32 length = last-first;
+    bool[] leaders = new bool[length]; leaders[0] = true;
+    int32 index = first;
+    while (index < last) {
+        int32 op = module.ops[index];
+        // Unwinding restores a handler's rbp/rsp, rather than register locals.
+        // Handler functions retain their values in their original frame slots.
+        if (op == 50 || op == 51 || op == 53 || op == 54) { delete leaders; return allocation; }
+        if (op == 17 || op == 18) {
+            int32 target = (int32)module.args[index];
+            if (target < first || target >= last) { delete leaders; return null; }
+            leaders[target-first] = true;
+            if (op == 18) {
+                target = (int32)module.extra[index];
+                if (target < first || target >= last) { delete leaders; return null; }
+                leaders[target-first] = true;
+            }
+        }
+        if ((op == 17 || op == 18 || op == 20 || op == 52) && index+1 < last) { leaders[index+1-first] = true; }
+        index = index+1;
+    }
+    int32 blocks = 0; index = 0;
+    while (index < length) { if (leaders[index]) { blocks = blocks+1; } index = index+1; }
+    int32 words = (locals+63)/64;
+    // Large functions remain correct using the existing spill slots.
+    if (blocks*words > 1048576) { delete leaders; return allocation; }
+    int32[] starts = new int32[blocks+1]; int32[] owners = new int32[length];
+    int32 block = -1; index = 0;
+    while (index < length) {
+        if (leaders[index]) { block = block+1; starts[block] = first+index; }
+        owners[index] = block; index = index+1;
+    }
+    starts[blocks] = last; delete leaders;
+    int32[] left_edges = new int32[blocks]; int32[] right_edges = new int32[blocks];
+    uint64[] uses = new uint64[blocks*words]; uint64[] definitions = new uint64[blocks*words];
+    uint64[] live_in = new uint64[blocks*words]; uint64[] live_out = new uint64[blocks*words];
+    int32[] begin = new int32[locals]; int32[] end = new int32[locals]; int32[] weight = new int32[locals];
+    bool[] escapes = new bool[locals];
+    int32 slot = 0;
+    while (slot < locals) { begin[slot] = last; end[slot] = -1; slot = slot+1; }
+    block = 0;
+    while (block < blocks) {
+        int32 stop = starts[block+1]-1; int32 op = module.ops[stop];
+        left_edges[block] = -1; right_edges[block] = -1;
+        if (op == 17 || op == 18) {
+            left_edges[block] = owners[(int32)module.args[stop]-first];
+            if (op == 18) { right_edges[block] = owners[(int32)module.extra[stop]-first]; }
+        } else if (op != 20 && op != 52 && block+1 < blocks) { left_edges[block] = block+1; }
+        index = starts[block];
+        while (index <= stop) {
+            op = module.ops[index];
+            if (op == 2 || op == 3 || op == 29) {
+                slot = (int32)module.args[index];
+                if (slot < 0 || slot >= locals) { return null; }
+                if (index < begin[slot]) { begin[slot] = index; }
+                if (index > end[slot]) { end[slot] = index; }
+                weight[slot] = weight[slot]+1;
+                int32 word = block*words+slot/64; uint64 mask = (uint64)1 << (slot%64);
+                if (op == 3) { definitions[word] = definitions[word] | mask; }
+                else if ((definitions[word] & mask) == 0) { uses[word] = uses[word] | mask; }
+                if (op == 29) { escapes[slot] = true; }
+            }
+            index = index+1;
+        }
+        block = block+1;
+    }
+    // Monotone backward dataflow handles arbitrary branch joins and backedges.
+    bool changed = true;
+    while (changed) {
+        changed = false; block = blocks-1;
+        while (block >= 0) {
+            int32 word = 0;
+            while (word < words) {
+                uint64 outgoing = 0;
+                if (left_edges[block] >= 0) { outgoing = live_in[left_edges[block]*words+word]; }
+                if (right_edges[block] >= 0) { outgoing = outgoing | live_in[right_edges[block]*words+word]; }
+                int32 cell = block*words+word;
+                uint64 incoming = uses[cell] | (outgoing & ~definitions[cell]);
+                if (incoming != live_in[cell] || outgoing != live_out[cell]) {
+                    live_in[cell] = incoming; live_out[cell] = outgoing; changed = true;
+                }
+                word = word+1;
+            }
+            block = block-1;
+        }
+    }
+    slot = 0;
+    while (slot < locals) {
+        if (slot < module.parameter_counts[function_index] && end[slot] >= first) { begin[slot] = first; }
+        block = 0; uint64 mask = (uint64)1 << (slot%64);
+        while (block < blocks) {
+            int32 cell = block*words+slot/64;
+            if ((live_in[cell] & mask) != 0 && starts[block] < begin[slot]) { begin[slot] = starts[block]; }
+            if ((live_out[cell] & mask) != 0 && starts[block+1]-1 > end[slot]) { end[slot] = starts[block+1]-1; }
+            block = block+1;
+        }
+        slot = slot+1;
+    }
+    // Prefer values with repeated accesses; disjoint intervals share a register.
+    int32[] registers = allocation.registers;
+    int32 round = 0;
+    while (round < locals) {
+        int32 selected = -1; int32 best = 0; slot = 0;
+        while (slot < locals) {
+            if (!escapes[slot] && weight[slot] > best) { selected = slot; best = weight[slot]; }
+            slot = slot+1;
+        }
+        if (selected < 0) { break; }
+        weight[selected] = 0; int32 register_index = 1;
+        while (register_index <= 2) {
+            bool available = true; slot = 0;
+            while (slot < locals) {
+                if (registers[slot] == register_index && begin[selected] <= end[slot] && begin[slot] <= end[selected]) { available = false; }
+                slot = slot+1;
+            }
+            if (available) {
+                registers[selected] = register_index;
+                allocation.used = allocation.used | (1 << (register_index-1)); break;
+            }
+            register_index = register_index+1;
+        }
+        round = round+1;
+    }
+    delete starts; delete owners; delete left_edges; delete right_edges;
+    delete uses; delete definitions; delete live_in; delete live_out;
+    delete begin; delete end; delete weight; delete escapes;
+    return allocation;
+}
+
+bool KrtKroNativeRegisterFrame(KrtKroObject output, ref int32 pc, int32 register_index, int32 slot, bool restore) {
+    // mov [rbp+disp32],r12/r13 or mov r12/r13,[rbp+disp32].
+    return KrtKroNativeByte(output,ref pc,76) && KrtKroNativeByte(output,ref pc,restore ? 139 : 137) &&
+        KrtKroNativeByte(output,ref pc,register_index == 1 ? 165 : 173) && KrtKroNativeU32(output,ref pc,-8*(slot+1));
+}
+
+bool KrtKroNativePreserveRegisters(KrtKroObject output, ref int32 pc, int32 first_slot, bool restore) {
+    return KrtKroNativeRegisterFrame(output,ref pc,1,first_slot,restore) &&
+        KrtKroNativeRegisterFrame(output,ref pc,2,first_slot+1,restore);
+}
+
+bool KrtKroNativeAllocatedLoad(KrtKroObject output, ref int32 pc, int32 slot, KrtNativeRegisterAllocation allocation) {
+    int32 register_index = allocation.registers[slot];
+    if (register_index == 0) { return KrtKroNativeFrameLoad(output,ref pc,slot); }
+    return KrtKroNativeByte(output,ref pc,65) && KrtKroNativeByte(output,ref pc,register_index == 1 ? 84 : 85);
+}
+
+bool KrtKroNativeAllocatedStore(KrtKroObject output, ref int32 pc, int32 slot, KrtNativeRegisterAllocation allocation, bool pop_value) {
+    int32 register_index = allocation.registers[slot];
+    if (register_index == 0) {
+        return (!pop_value || KrtKroNativeByte(output,ref pc,88)) && KrtKroNativeFrameStore(output,ref pc,slot);
+    }
+    if (pop_value) { return KrtKroNativeByte(output,ref pc,65) && KrtKroNativeByte(output,ref pc,register_index == 1 ? 92 : 93); }
+    return KrtKroNativeByte(output,ref pc,73) && KrtKroNativeByte(output,ref pc,137) && KrtKroNativeByte(output,ref pc,register_index == 1 ? 196 : 197);
+}
+
+// The two top expression values stay in r10/rax within a basic block. Deeper
+// values spill in stack order; calls, helper instructions and CFG edges flush
+// the cache so all predecessor paths agree on the physical operand stack.
+bool KrtKroNativeTemporaryOp(int32 op) {
+    return (op >= 0 && op <= 15) || op == 27 || op == 28 || op == 31 || op == 32;
+}
+
+bool KrtKroNativeTemporaryFlush(KrtKroObject output, ref int32 pc, ref int32 count) {
+    if (count == 2 && (!KrtKroNativeByte(output,ref pc,65) || !KrtKroNativeByte(output,ref pc,82))) { return false; }
+    if (count > 0 && !KrtKroNativeByte(output,ref pc,80)) { return false; }
+    count = 0; return true;
+}
+
+bool KrtKroNativeTemporaryPush(KrtKroObject output, ref int32 pc, ref int32 count) {
+    if (count == 2 && (!KrtKroNativeByte(output,ref pc,65) || !KrtKroNativeByte(output,ref pc,82))) { return false; }
+    if (count > 0 && !KrtKroNativeCode(output,ref pc,0xc28949,3)) { return false; }
+    if (count < 2) { count = count+1; } return true;
+}
+
+bool KrtKroNativeTemporaryPop(KrtKroObject output, ref int32 pc, ref int32 count) {
+    if (count == 2 && !KrtKroNativeCode(output,ref pc,0xd0894c,3)) { return false; }
+    if (count > 0) { count = count-1; } return true;
+}
+
+bool KrtKroNativeTemporaryCast(KrtKroObject output, ref int32 pc, int32 width) {
+    if (width == 8 || width == -8) { return true; }
+    if (width > 1000 || width < -1000) { return KrtKroNativeIntegerNormalize(output,ref pc,width); }
+    if (width == -1 || width == -2) {
+        return KrtKroNativeCode(output,ref pc,0x0f48,2) && KrtKroNativeByte(output,ref pc,width == -1 ? 190 : 191) && KrtKroNativeByte(output,ref pc,192);
+    }
+    if (width == -4) { return KrtKroNativeCode(output,ref pc,0xc089,2); }
+    if (width == 1 || width == 2) {
+        return KrtKroNativeByte(output,ref pc,15) && KrtKroNativeByte(output,ref pc,width == 1 ? 182 : 183) && KrtKroNativeByte(output,ref pc,192);
+    }
+    if (width == 4) { return KrtKroNativeCode(output,ref pc,0xc06348,3); }
+    return false;
+}
+
+bool KrtKroNativeTemporaryInstruction(KrtNativeModule module, KrtKroObject output, ref int32 pc, int32 index,
+                                     KrtNativeRegisterAllocation allocation, ref int32 count) {
+    int32 op = module.ops[index]; int32 slot = (int32)module.args[index];
+    if (op == 0) { return true; }
+    if (op == 1 || op == 2) {
+        if (!KrtKroNativeTemporaryPush(output,ref pc,ref count)) { return false; }
+        if (op == 1) { return KrtKroNativeCode(output,ref pc,0xb848,2) && KrtKroNativeU64(output,ref pc,module.args[index]); }
+        if (slot < 0 || slot >= allocation.locals) { return false; }
+        int32 register_index = allocation.registers[slot];
+        if (register_index > 0) { return KrtKroNativeCode(output,ref pc,register_index == 1 ? 0xe0894c : 0xe8894c,3); }
+        int32 displacement = -8*(slot+1);
+        if (displacement >= -128) { return KrtKroNativeCode(output,ref pc,0x458b48,3) && KrtKroNativeByte(output,ref pc,displacement); }
+        return KrtKroNativeCode(output,ref pc,0x858b48,3) && KrtKroNativeU32(output,ref pc,displacement);
+    }
+    if (op == 3) {
+        if (slot < 0 || slot >= allocation.locals) { return false; }
+        if (count == 0 && !KrtKroNativeByte(output,ref pc,88)) { return false; }
+        return KrtKroNativeAllocatedStore(output,ref pc,slot,allocation,false) && KrtKroNativeTemporaryPop(output,ref pc,ref count);
+    }
+    if (op >= 4 && op <= 13) {
+        if (count > 0 && !KrtKroNativeCode(output,ref pc,0xc38948,3)) { return false; }
+        if (count == 2 && !KrtKroNativeCode(output,ref pc,0xd0894c,3)) { return false; }
+        if (count == 1 && !KrtKroNativeByte(output,ref pc,88)) { return false; }
+        if (count == 0 && (!KrtKroNativeByte(output,ref pc,91) || !KrtKroNativeByte(output,ref pc,88))) { return false; }
+        count = 1; return KrtKroNativeBinaryResult(output,ref pc,op,module.extra[index] != 0,false);
+    }
+    if (op == 27) {
+        if (count == 0) { return KrtKroNativeByte(output,ref pc,88); }
+        return KrtKroNativeTemporaryPop(output,ref pc,ref count);
+    }
+    if (op == 32) {
+        if (count == 0) { count = 1; return KrtKroNativeCode(output,ref pc,0x24048b48,4); }
+        return KrtKroNativeTemporaryPush(output,ref pc,ref count);
+    }
+    if (count == 0) { if (!KrtKroNativeByte(output,ref pc,88)) { return false; } count = 1; }
+    if (op == 14 || op == 15) {
+        return KrtKroNativeCode(output,ref pc,0xf748,2) && KrtKroNativeByte(output,ref pc,op == 14 ? 216 : 208);
+    }
+    if (op == 28) { return KrtKroNativeTemporaryCast(output,ref pc,slot); }
+    if (op == 31) {
+        return KrtKroNativeCode(output,ref pc,0xc08548,3) && KrtKroNativeCode(output,ref pc,0xc0940f,3) && KrtKroNativeCode(output,ref pc,0xc0b60f,3);
+    }
+    return false;
+}

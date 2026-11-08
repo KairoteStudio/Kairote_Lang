@@ -1,0 +1,159 @@
+// Reader for the seed's EBC v1. Seed files contain one main chunk and no
+// function table; unresolved global/function opcodes are rejected explicitly.
+class KrtVmLegacyValue { public int32 kind; public int64 value; }
+class KrtVmLegacyState {
+    public KrtVmLegacyValue[] stack;
+    public KrtVmLegacyValue[] locals;
+    public KrtVmLegacyValue[] constants;
+    public int32 depth;
+    public int32 constant_count;
+    public bool failed;
+}
+KrtVmLegacyValue KrtVmLegacyMake(int32 kind, int64 value) {
+    KrtVmLegacyValue item = new KrtVmLegacyValue(); item.kind = kind; item.value = value; return item;
+}
+KrtVmLegacyValue KrtVmLegacyNumber(float64 number) {
+    unsafe(using krt.mem;) { return KrtVmLegacyMake(2,*(int64*)&number); }
+}
+float64 KrtVmLegacyDouble(KrtVmLegacyValue item) {
+    int64 bits = item.value; unsafe(using krt.mem;) { return *(float64*)&bits; }
+}
+bool KrtVmLegacyTrue(KrtVmLegacyValue item) {
+    if (item == null || item.kind == 1) { return false; }
+    if (item.kind == 0) { return item.value != 0; }
+    if (item.kind == 2) { return KrtVmLegacyDouble(item) != 0.0; }
+    return true;
+}
+void KrtVmLegacyPush(KrtVmLegacyState state, KrtVmLegacyValue item) {
+    if (state.depth >= 262144 || item == null) { state.failed = true; return; }
+    state.stack[state.depth] = item; state.depth = state.depth + 1;
+}
+KrtVmLegacyValue KrtVmLegacyPop(KrtVmLegacyState state) {
+    if (state.depth <= 0) { state.failed = true; return KrtVmLegacyMake(1,0); }
+    state.depth = state.depth - 1; return state.stack[state.depth];
+}
+
+bool KrtVmLegacyRead(KrtDriverBuffer artifact, KrtVmLegacyState state, ref int32 count) {
+    int64 size = KrtVmRead(artifact.data,6,4);
+    if (size <= 0 || size > 262144 || 14 + size * 5 > artifact.length) { return false; }
+    count = (int32)size; int64 position = 10 + size * 5; int64 constants = KrtVmRead(artifact.data,position,4); position = position + 4;
+    if (constants > 65536) { return false; }
+    state.constant_count = (int32)constants; state.constants = new KrtVmLegacyValue[(int32)constants];
+    int32 index = 0;
+    while (index < constants) {
+        if (position + 4 > artifact.length) { return false; }
+        int64 kind = KrtVmRead(artifact.data,position,4); position = position + 4; int64 value = 0;
+        if (kind == 0) { if (position >= artifact.length) { return false; } value = KrtVmRead(artifact.data,position,1); position = position + 1; if (value > 1) { return false; } }
+        else if (kind == 1) { }
+        else if (kind == 2) { if (position + 8 > artifact.length) { return false; } value = KrtVmRead(artifact.data,position,8); position = position + 8; }
+        else if (kind == 4) {
+            if (position + 2 > artifact.length) { return false; }
+            int64 length = KrtVmRead(artifact.data,position,2); position = position + 2;
+            if (length > artifact.length - position) { return false; }
+            value = KrtDriverCopyString(artifact.data + position,length); if (value == 0) { return false; } position = position + length;
+        }
+        else { return false; }
+        state.constants[index] = KrtVmLegacyMake((int32)kind,value); index = index + 1;
+    }
+    if (position != artifact.length) { return false; }
+    // Validate instructions before execution, including jump boundaries.
+    bool[] boundary = new bool[count + 1]; int32 pc = 0;
+    while (pc < count) {
+        boundary[pc] = true; int32 op = (int32)KrtVmRead(artifact.data,10 + pc,1); int32 width = 1;
+        if (op == 0 || op == 5 || op == 6 || op == 25) { width = 2; }
+        else if (op >= 20 && op <= 22) { width = 3; }
+        else if (op == 7 || op == 8 || op == 9 || op == 23 || op > 27) { return false; }
+        if (pc + width > count) { return false; }
+        if (op == 0 && KrtVmRead(artifact.data,11 + pc,1) >= constants) { return false; }
+        pc = pc + width;
+    }
+    boundary[count] = true; pc = 0;
+    while (pc < count) {
+        int32 op = (int32)KrtVmRead(artifact.data,10 + pc,1); int32 width = 1;
+        if (op == 0 || op == 5 || op == 6 || op == 25) { width = 2; }
+        else if (op >= 20 && op <= 22) {
+            width = 3; int32 offset = (int32)KrtVmRead(artifact.data,11 + pc,2); int32 target = pc + 3 + offset;
+            if (op == 22) { target = pc + 3 - offset; }
+            if (target < 0 || target >= count || !boundary[target]) { return false; }
+        }
+        pc = pc + width;
+    }
+    return true;
+}
+
+bool KrtVmLegacyPrint(KrtVmLegacyValue item) {
+    if (item.kind == 0) { if (item.value != 0) { KrtDriverPrint("true"); } else { KrtDriverPrint("false"); } }
+    else if (item.kind == 1) { KrtDriverPrint("null"); }
+    else if (item.kind == 4) { KrtDriverPrint((string)item.value); }
+    else if (item.kind == 2) {
+        int64 text = KrtVmNumberText(item.value); if (text == 0) { return false; } KrtDriverPrint((string)text);
+    }
+    else { return false; }
+    KrtDriverPrint("\n"); return true;
+}
+
+int32 KrtVmRunV1(KrtDriverBuffer artifact) {
+    KrtVmLegacyState state = new KrtVmLegacyState(); int32 count = 0;
+    if (!KrtVmLegacyRead(artifact,state,ref count)) { KrtDriverError("E_VM","invalid or unsupported version 1 bytecode"); return 1; }
+    state.stack = new KrtVmLegacyValue[262144]; state.locals = new KrtVmLegacyValue[256]; int32 index = 0;
+    while (index < 256) { state.locals[index] = KrtVmLegacyMake(1,0); index = index + 1; }
+    int32 pc = 0;
+    while (pc >= 0 && pc < count && !state.failed) {
+        int32 op = (int32)KrtVmRead(artifact.data,10 + pc,1); pc = pc + 1;
+        if (op == 0) { int32 slot = (int32)KrtVmRead(artifact.data,10 + pc,1); pc = pc + 1; KrtVmLegacyPush(state,state.constants[slot]); }
+        else if (op == 1 || op == 2 || op == 3) { int64 value = 0; if (op == 2) { value = 1; } KrtVmLegacyPush(state,KrtVmLegacyMake(op == 1 ? 1 : 0,value)); }
+        else if (op == 4) { KrtVmLegacyPop(state); }
+        else if (op == 5 || op == 6) {
+            int32 slot = (int32)KrtVmRead(artifact.data,10 + pc,1); pc = pc + 1;
+            if (op == 5) { KrtVmLegacyPush(state,state.locals[slot]); }
+            else if (state.depth <= 0) { state.failed = true; }
+            else { state.locals[slot] = state.stack[state.depth - 1]; }
+        }
+        else if (op >= 10 && op <= 16) {
+            KrtVmLegacyValue right = KrtVmLegacyPop(state); KrtVmLegacyValue left = KrtVmLegacyPop(state);
+            if (op == 10) {
+                bool equal = false;
+                if (left.kind == right.kind) {
+                    if (left.kind == 2) { equal = KrtVmLegacyDouble(left) == KrtVmLegacyDouble(right); }
+                    else if (left.kind == 4) { equal = KrtDriverStringEqual(left.value,right.value); }
+                    else { equal = left.value == right.value; }
+                }
+                KrtVmLegacyPush(state,KrtVmLegacyMake(0,equal ? 1 : 0));
+            }
+            else if (left.kind != 2 || right.kind != 2) { state.failed = true; }
+            else {
+                float64 a = KrtVmLegacyDouble(left); float64 b = KrtVmLegacyDouble(right);
+                if (op == 11 || op == 12) { bool relation = false; if (op == 11) { relation = a > b; } else { relation = a < b; } KrtVmLegacyPush(state,KrtVmLegacyMake(0,relation ? 1 : 0)); }
+                else { float64 number = 0.0; if (op == 13) { number = a + b; } else if (op == 14) { number = a - b; } else if (op == 15) { number = a * b; } else { number = a / b; }
+                    KrtVmLegacyPush(state,KrtVmLegacyNumber(number));
+                }
+            }
+        }
+        else if (op == 17) { KrtVmLegacyValue item = KrtVmLegacyPop(state); bool truth = KrtVmLegacyTrue(item); KrtVmLegacyPush(state,KrtVmLegacyMake(0,truth ? 0 : 1)); }
+        else if (op == 18) { KrtVmLegacyValue item = KrtVmLegacyPop(state); if (item.kind != 2) { state.failed = true; } else { KrtVmLegacyPush(state,KrtVmLegacyNumber(-KrtVmLegacyDouble(item))); } }
+        else if (op == 19) { if (!KrtVmLegacyPrint(KrtVmLegacyPop(state))) { state.failed = true; } }
+        else if (op >= 20 && op <= 22) {
+            int32 offset = (int32)KrtVmRead(artifact.data,10 + pc,2); pc = pc + 2;
+            if (op == 20) { pc = pc + offset; }
+            else if (op == 22) { pc = pc - offset; }
+            else if (state.depth <= 0) { state.failed = true; }
+            else if (!KrtVmLegacyTrue(state.stack[state.depth - 1])) { pc = pc + offset; }
+        }
+        else if (op == 24 || op == 27) {
+            if (op == 27) { return 0; }
+            KrtVmLegacyValue item = KrtVmLegacyPop(state);
+            if (state.failed) { break; }
+            if (item.kind == 2) { return (int32)KrtVmLegacyDouble(item); }
+            if (item.kind == 0) { return (int32)item.value; }
+            if (item.kind == 1) { return 0; } state.failed = true;
+        }
+        else if (op == 25) { pc = pc + 1; }
+        else if (op == 26) {
+            KrtVmLegacyValue item = KrtVmLegacyPop(state);
+            if (item.kind != 2) { state.failed = true; }
+            else { KrtVmLegacyPush(state,KrtVmLegacyMake(4,KrtDriverNumber((int64)KrtVmLegacyDouble(item)))); }
+        }
+        else { state.failed = true; }
+    }
+    KrtDriverError("E_VM","invalid version 1 VM stack, value or execution state"); return 1;
+}

@@ -1,0 +1,54 @@
+// A failed receiver/type guard terminates deterministically, like the existing
+// allocation guards. Its operands never read through a null object pointer.
+bool KrtNativeLowerDispatchTrap(KrtNativeModule module) {
+    return KrtNativeEmit(module, (int32)KrtNativeOp.Const, 60, 0) >= 0 &&
+        KrtNativeEmit(module, (int32)KrtNativeOp.Const, 126, 0) >= 0 &&
+        KrtNativeEmit(module, (int32)KrtNativeOp.Syscall, 0, 2) >= 0 &&
+        KrtNativeEmit(module, (int32)KrtNativeOp.Drop, 0, 0) >= 0;
+}
+
+bool KrtNativeLowerDispatch(KrtAstNode expression, KrtAstNode ast, KrtNativeModule module, int64 source) {
+    KrtAstNode selected = expression.native_target;
+    if (!KrtNativeLowerCallReceiver(expression,expression.left.left,ast,module,source) ||
+        KrtNativeEmit(module, (int32)KrtNativeOp.StoreLocal, expression.local_slot, 0) < 0 ||
+        KrtNativeEmit(module, (int32)KrtNativeOp.LoadLocal, expression.local_slot, 0) < 0) { return false; }
+    int32 present = KrtNativeEmit(module, (int32)KrtNativeOp.Branch, -1, -1);
+    if (present < 0 || !KrtNativeLowerDispatchTrap(module)) { return false; }
+    module.extra[present] = present + 1; module.args[present] = module.count;
+    KrtNativeRuntimeType key = KrtNativeRuntimeRegisterKey(module,KrtModuleMethodIdentity(selected,ast,source));
+    int32 descriptor = KrtNativeBoxTemporary(module); int32 table = KrtNativeBoxTemporary(module);
+    int32 count = KrtNativeBoxTemporary(module); int32 position = KrtNativeBoxTemporary(module);
+    int32 entry = KrtNativeBoxTemporary(module); int32 expected = KrtNativeBoxTemporary(module);
+    if (key == null || descriptor < 0 || table < 0 || count < 0 || position < 0 || entry < 0 || expected < 0 ||
+        !KrtNativeRuntimeLoad(module,expression.local_slot,0) || KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,descriptor,0) < 0 ||
+        !KrtNativeRuntimeLoad(module,descriptor,72) || KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,count,0) < 0 ||
+        !KrtNativeRuntimeLoad(module,descriptor,80) || KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,table,0) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.RuntimeDescriptor,key.index,0) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,expected,0) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.Const,0,0) < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,position,0) < 0) { return false; }
+    int32 loop = module.count;
+    if (KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,position,0) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,count,0) < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.Compare,60,0) < 0) { return false; }
+    int32 available = KrtNativeEmit(module,(int32)KrtNativeOp.Branch,-1,-1);
+    if (available < 0) { return false; } module.args[available] = module.count;
+    if (KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,table,0) < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,position,0) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.Const,40,0) < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.Mul,0,0) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.Add,0,0) < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,entry,0) < 0 ||
+        !KrtNativeLowerRuntimeKeyEqual(module,entry,expected)) { return false; }
+    int32 matched = KrtNativeEmit(module,(int32)KrtNativeOp.Branch,-1,-1);
+    if (matched < 0) { return false; } module.extra[matched] = module.count;
+    if (KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,position,0) < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.Const,1,0) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.Add,0,0) < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,position,0) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.Jump,loop,0) < 0) { return false; }
+    module.extra[available] = module.count;
+    if (!KrtNativeLowerDispatchTrap(module)) { return false; }
+    module.args[matched] = module.count;
+    if (!KrtNativeRuntimeLoad(module,entry,24)) { return false; }
+    if (KrtNativeInlineValue(expression) && !KrtNativeLowerAggregateFrame(expression,module)) { return false; }
+    if (KrtNativeEmit(module, (int32)KrtNativeOp.LoadLocal, expression.local_slot, 0) < 0 ||
+        !KrtNativeRuntimeLoad(module,entry,32) || KrtNativeEmit(module,(int32)KrtNativeOp.Add,0,0) < 0) { return false; }
+    if (!KrtNativeLowerArguments(expression.right, selected, 1, ast, module, source)) { return false; }
+    if (KrtNativeInlineValue(expression)) { return KrtNativeEmit(module,(int32)KrtNativeOp.IndirectCall,0,selected.parameter_count + 1) >= 0; }
+    return KrtNativeEmit(module, (int32)KrtNativeOp.IndirectCall, 0, selected.parameter_count) >= 0 &&
+        (KrtNativeWideKind(expression) ? KrtNativeNormalizeWide(module,expression) : KrtNativeEmit(module,(int32)KrtNativeOp.Cast,KrtNativeValueWidth(expression),0) >= 0);
+}

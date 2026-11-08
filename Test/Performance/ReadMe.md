@@ -11,14 +11,14 @@
 
 | 问题 | 实现 |
 |---|---|
-| 每个字符遍历所有宏 | [Preprocessor.c](../../Re.KrtC/src/compiler/Driver/Preprocessor.c) 一次扫描完整标识符，再查可扩容哈希索引；同时保护字符串、字符和注释，不再替换较长标识符内部的宏名 |
-| 标准库反复解析 | [StdlibCache.inc](../../Re.KrtC/src/compiler/Pipeline/StdlibCache.inc) 缓存解析树；预加载标准库和语义分析期间的库导入共用缓存 |
-| 符号双重扫描 | [SymbolTable.c](../../Re.KrtC/src/compiler/Frontend/Semantic/SymbolTable.c) 为每个作用域建立哈希索引，并按负载扩容全局索引；类内精确查找直接使用作用域链索引 |
-| 小文件线程和 Pipeline 开销 | [ParallelCompiler.c](../../Re.KrtC/src/compiler/Driver/ParallelCompiler.c) 按批领取任务，每个工作线程复用一个 Pipeline；源文件总量不足 128 KiB 时顺序执行，不创建线程池 |
+| 每个字符遍历所有宏 | [Preprocessor.c](../../Re.KrtC/src/Compiler/Driver/Preprocessor.c) 一次扫描完整标识符，再查可扩容哈希索引；同时保护字符串、字符和注释，不再替换较长标识符内部的宏名 |
+| 标准库反复解析 | [StdlibCache.inc](../../Re.KrtC/src/Compiler/Pipeline/StdlibCache.inc) 缓存解析树；预加载标准库和语义分析期间的库导入共用缓存 |
+| 符号双重扫描 | [SymbolTable.c](../../Re.KrtC/src/Compiler/Frontend/Semantic/SymbolTable.c) 为每个作用域建立哈希索引，并按负载扩容全局索引；类内精确查找直接使用作用域链索引 |
+| 小文件线程和 Pipeline 开销 | [ParallelCompiler.c](../../Re.KrtC/src/Compiler/Driver/ParallelCompiler.c) 按批领取任务，每个工作线程复用一个 Pipeline；源文件总量不足 128 KiB 时顺序执行，不创建线程池 |
 | 重复 epilogue | 每个函数生成一份寄存器恢复、栈帧恢复和 `ret`，所有显式 `return` 跳到该位置 |
 | `_start` 后半段不可达 | `main` 正常返回，由 `_start` 执行自动退出序列 |
 | 零值加载过长 | 使用 `xor eax, eax` 等短指令；可补零扩展的非零立即数使用 32 位 `mov` |
-| 临时值全部落栈 | [KroRegisterPacking.inc](../../Re.KrtC/src/compiler/Backend/Kro/KroRegisterPacking.inc) 对基本块内的临时值按活跃区间分配、复用剩余寄存器 |
+| 临时值全部落栈 | [KroRegisterPacking.inc](../../Re.KrtC/src/Compiler/Backend/Kro/KroRegisterPacking.inc) 对基本块内的临时值按活跃区间分配、复用剩余寄存器 |
 | 参数先存栈再加载 | 可分配的整数参数从 ABI 入参寄存器直接转入保存值的寄存器；64 位参数占用完整寄存器，小整数仍可共享位段 |
 
 参数进入函数后存栈本身符合 AMD64 调用约定；本次优化减少这部分读写。寄存器分配仍会保存和恢复实际使用的 `RBX`、`R12`～`R15`。跨基本块的临时值、PHI、重复定义和寄存器不足时保留栈槽；本次没有启用实验性的 SSA 优化。

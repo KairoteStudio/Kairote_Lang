@@ -10,7 +10,7 @@
 - 不为无使用者的结果、已融合的比较条件分配栈槽；按实际存储量建立栈帧。参数和临时寄存器免于多余清零，含局部变量的打包寄存器仍初始化。
 - 函数按 16 字节对齐；末尾返回直接落入共享 epilogue，并正确处理 return 后的不可达 IR。
 
-实现见 [叶子返回](../../../Re.KrtC/src/compiler/Backend/Kro/KroLeafReturn.inc)、[整数指令](../../../Re.KrtC/src/compiler/Backend/Kro/KroInteger.inc)、[寄存器与栈规划](../../../Re.KrtC/src/compiler/Backend/Kro/KroRegisterPacking.inc) 和 [代码生成](../../../Re.KrtC/src/compiler/Backend/Kro/KroCodegen.c)。
+实现见 [叶子返回](../../../Re.KrtC/src/Compiler/Backend/Kro/KroLeafReturn.inc)、[整数指令](../../../Re.KrtC/src/Compiler/Backend/Kro/KroInteger.inc)、[寄存器与栈规划](../../../Re.KrtC/src/Compiler/Backend/Kro/KroRegisterPacking.inc) 和 [代码生成](../../../Re.KrtC/src/Compiler/Backend/Kro/KroCodegen.c)。
 
 2026-09-13 在本机 AMD Ryzen 9 8945HX 上固定逻辑 CPU 0，逐个进程轮换运行，每项十次。表中是完整十次的算术平均值，单位 ms；编译、进程启动和输出不在计时区间内。两侧都通过 syscall 读取 CLOCK_MONOTONIC，并逐次检查 Fib35 = 9227465、Fib40 = 102334155。
 

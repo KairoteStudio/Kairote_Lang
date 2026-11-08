@@ -139,7 +139,7 @@ def prepare(args):
               "source_sha256": {}, "commands": [], "workloads": {}, "cases": {}, "completed": False,
               "timing_policy": "One Kernel invocation, syscall CLOCK_MONOTONIC; excludes startup/compilation/output; serial rotated variants, all ten samples retained; an incorrect variant has no timing summary",
               "backend_source_sha256": {str(path.relative_to(ROOT)): digest(path)
-                                        for path in sorted((ROOT/"Re.KrtC/src/compiler/Backend/Kro").iterdir())
+                                        for path in sorted((ROOT/"Re.KrtC/src/Compiler/Backend/Kro").iterdir())
                                         if path.suffix in (".c", ".h", ".inc")},
               "compiler_source_sha256": {str(path.relative_to(ROOT)): digest(path)
                   for base in (ROOT/"Re.KrtC/src",ROOT/"Re.KrtC/Shared",ROOT/"ArkLink/src",ROOT/"ArkLink/include")

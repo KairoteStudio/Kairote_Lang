@@ -72,7 +72,7 @@ def prepare(args):
               "variant_extra_flags": variants, "commands": [], "binaries": {}, "machine_code": {},
               "operations": {}, "cases": {}, "source_sha256": {}, "completed": False,
               "backend_source_sha256": {str(path.relative_to(ROOT)): digest(path)
-                                        for path in sorted((ROOT / "Re.KrtC/src/compiler/Backend/Kro").iterdir())
+                                        for path in sorted((ROOT / "Re.KrtC/src/Compiler/Backend/Kro").iterdir())
                                         if path.suffix in (".c", ".h", ".inc")},
               "clock": "CLOCK_MONOTONIC via syscall on both sides",
               "timing_policy": "One fib(n), excluding compilation/startup/output; one CPU, serial rotating order; every sample retained",

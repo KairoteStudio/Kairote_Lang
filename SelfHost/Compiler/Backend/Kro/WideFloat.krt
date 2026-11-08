@@ -1,0 +1,69 @@
+// Integer magnitude -> IEEE bits: retain p bits and separate guard/sticky,
+// round nearest/even once, including fraction carry and binary32 overflow.
+bool KrtKroNativeWideFloat4Bits(KrtKroObject output, ref int32 pc) {
+    return KrtKroNativeCode(output, ref pc, 4451962456213832, 7) &&
+        KrtKroNativeCode(output, ref pc, 37515336739750020, 7) &&
+        KrtKroNativeCode(output, ref pc, 57065818626290898, 7) &&
+        KrtKroNativeCode(output, ref pc, 4301310614618499, 7) &&
+        KrtKroNativeCode(output, ref pc, 35492138763536573, 7) &&
+        KrtKroNativeCode(output, ref pc, 32873197727728993, 7) &&
+        KrtKroNativeCode(output, ref pc, 61028706076936206, 7) &&
+        KrtKroNativeCode(output, ref pc, 33154669342720833, 7) &&
+        KrtKroNativeCode(output, ref pc, 61028706076936434, 7) &&
+        KrtKroNativeCode(output, ref pc, 1255408291613811, 7) &&
+        KrtKroNativeCode(output, ref pc, 54323880289108392, 7) &&
+        KrtKroNativeCode(output, ref pc, 281474989475656, 7) &&
+        KrtKroNativeCode(output, ref pc, 58907467011078472, 7) &&
+        KrtKroNativeCode(output, ref pc, 36971233186629864, 7) &&
+        KrtKroNativeCode(output, ref pc, 1099402674113, 7) &&
+        KrtKroNativeCode(output, ref pc, 10440832512392448, 7) &&
+        KrtKroNativeCode(output, ref pc, 19360239404974079, 7) &&
+        KrtKroNativeCode(output, ref pc, 790608199689, 7) &&
+        KrtKroNativeCode(output, ref pc, 2792484812128128, 7) &&
+        KrtKroNativeCode(output, ref pc, 59932045912627703, 7) &&
+        KrtKroNativeCode(output, ref pc, 49201, 2);
+}
+
+bool KrtKroNativeWideFloat8Bits(KrtKroObject output, ref int32 pc) {
+    return KrtKroNativeCode(output, ref pc, 32880935103990088, 7) &&
+        KrtKroNativeCode(output, ref pc, 20276595675973758, 7) &&
+        KrtKroNativeCode(output, ref pc, 66217819410971919, 7) &&
+        KrtKroNativeCode(output, ref pc, 36963144556300292, 7) &&
+        KrtKroNativeCode(output, ref pc, 56630644343452905, 7) &&
+        KrtKroNativeCode(output, ref pc, 66095251960678911, 7) &&
+        KrtKroNativeCode(output, ref pc, 230361675649352, 7) &&
+        KrtKroNativeCode(output, ref pc, 66095255785949695, 7) &&
+        KrtKroNativeCode(output, ref pc, 37512091688030536, 7) &&
+        KrtKroNativeCode(output, ref pc, 971975392785865, 7) &&
+        KrtKroNativeCode(output, ref pc, 800084524872, 7) &&
+        KrtKroNativeCode(output, ref pc, 20266335762120704, 7) &&
+        KrtKroNativeCode(output, ref pc, 65532301889884217, 7) &&
+        KrtKroNativeCode(output, ref pc, 54466890361536328, 7) &&
+        KrtKroNativeCode(output, ref pc, 63544384741704703, 7) &&
+        KrtKroNativeCode(output, ref pc, 72057594033358900, 7) &&
+        KrtKroNativeCode(output, ref pc, 58583388278226943, 7) &&
+        KrtKroNativeCode(output, ref pc, 66357765702420808, 7) &&
+        KrtKroNativeCode(output, ref pc, 66393817591969545, 7) &&
+        KrtKroNativeCode(output, ref pc, 12595673, 3);
+}
+
+bool KrtKroNativeWideFloatToBits(KrtKroObject output, ref int32 pc, int32 mode, int32 width) {
+    if (width != 4 && width != 8) { return false; }
+    // Pop and unbox, accepting the all-zero default wide value.
+    if (!(KrtKroNativeCode(output, ref pc, 20276595373983832, 7) &&
+        KrtKroNativeCode(output, ref pc, 66147217735962763, 7) &&
+        KrtKroNativeCode(output, ref pc, 13869042938949892, 7) &&
+        KrtKroNativeCode(output, ref pc, 192, 1))) { return false; }
+    if (mode == 1) {
+        if (!KrtKroNativeCode(output,ref pc,0xd28548,3) || !KrtKroNativeCode(output,ref pc,0x890f,2)) { return false; }
+        int32 positive = pc;
+        if (!KrtKroNativeU32(output,ref pc,0) || !KrtKroNativeCode(output,ref pc,0xb849,2) ||
+            !KrtKroNativeU64(output,ref pc,width == 4 ? 2147483648 : -9223372036854775807 - 1) ||
+            !(KrtKroNativeCode(output, ref pc, 231461304727368, 7) &&
+        KrtKroNativeCode(output, ref pc, 14350152, 3)) ||
+            !KrtKroEmitTextU32(output,positive,pc-positive-4)) { return false; }
+    }
+    if (width == 4) { if (!KrtKroNativeWideFloat4Bits(output,ref pc)) { return false; } }
+    else { if (!KrtKroNativeWideFloat8Bits(output,ref pc)) { return false; } }
+    return KrtKroNativeByte(output,ref pc,80);
+}

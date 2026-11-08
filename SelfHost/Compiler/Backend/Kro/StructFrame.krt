@@ -1,0 +1,46 @@
+// Aggregate storage occupies an aligned arena below scalar slots and call
+// scratch storage. Field offsets grow forward from this address.
+bool KrtKroNativeAggregateAddress(KrtKroObject output, ref int32 pc, int32 frame, int64 offset, int64 size, int32 arena_bytes) {
+    if (offset < 0 || size <= 0 || offset > arena_bytes || size > arena_bytes-offset) { return false; }
+    return KrtKroNativeCode(output,ref pc,0x858d48,3) &&
+        KrtKroNativeU32(output,ref pc,(int32)offset-frame) && KrtKroNativeByte(output,ref pc,80);
+}
+
+bool KrtKroNativeAggregateZero(KrtKroObject output, ref int32 pc, int64 size, int64 alignment) {
+    if (size < 0 || size > 16777216 || alignment <= 0 || alignment > 16 || (alignment & (alignment-1)) != 0) { return false; }
+    // pop rdi; mov ecx,size; xor eax,eax; cld; rep stosb
+    return KrtKroNativeByte(output,ref pc,95) && KrtKroNativeByte(output,ref pc,185) &&
+        KrtKroNativeU32(output,ref pc,(int32)size) && KrtKroNativeCode(output,ref pc,0xaaf3fcc031,5);
+}
+
+bool KrtKroNativeAggregateCopy(KrtKroObject output, ref int32 pc, int64 size, int64 alignment) {
+    if (size < 0 || size > 16777216 || alignment <= 0 || alignment > 16 || (alignment & (alignment-1)) != 0) { return false; }
+    // Explicit memmove semantics also cover overlapping pointer lvalues.
+    if (!KrtKroNativeCode(output,ref pc,0x5f5e,2)) { return false; }
+    if (size == 0) { return true; }
+    if (!KrtKroNativeByte(output,ref pc,185) || !KrtKroNativeU32(output,ref pc,(int32)size) ||
+        !KrtKroNativeCode(output,ref pc,0xf73948,3) || !KrtKroNativeCode(output,ref pc,0x860f,2)) { return false; }
+    int32 before_source = pc;
+    if (!KrtKroNativeU32(output,ref pc,0) || !KrtKroNativeCode(output,ref pc,0x868d48,3) ||
+        !KrtKroNativeU32(output,ref pc,(int32)size) || !KrtKroNativeCode(output,ref pc,0xc73948,3) ||
+        !KrtKroNativeCode(output,ref pc,0x830f,2)) { return false; }
+    int32 after_source = pc;
+    if (!KrtKroNativeU32(output,ref pc,0) || !KrtKroNativeCode(output,ref pc,0xc68148,3) ||
+        !KrtKroNativeU32(output,ref pc,(int32)size-1) || !KrtKroNativeCode(output,ref pc,0xc78148,3) ||
+        !KrtKroNativeU32(output,ref pc,(int32)size-1) || !KrtKroNativeCode(output,ref pc,0xfca4f3fd,4) ||
+        !KrtKroNativeByte(output,ref pc,233)) { return false; }
+    int32 completed = pc;
+    if (!KrtKroNativeU32(output,ref pc,0) || !KrtKroEmitTextU32(output,before_source,pc-before_source-4) ||
+        !KrtKroEmitTextU32(output,after_source,pc-after_source-4) || !KrtKroNativeCode(output,ref pc,0xa4f3fc,3)) { return false; }
+    return KrtKroEmitTextU32(output,completed,pc-completed-4);
+}
+
+bool KrtKroNativeIncomingParameter(KrtKroObject output, ref int32 pc, int32 physical) {
+    if (physical < 0 || physical > 128) { return false; }
+    if (physical < 6) {
+        int32 move = physical == 0 ? 0xf88948 : physical == 1 ? 0xf08948 : physical == 2 ? 0xd08948 :
+            physical == 3 ? 0xc88948 : physical == 4 ? 0xc0894c : 0xc8894c;
+        return KrtKroNativeCode(output,ref pc,move,3);
+    }
+    return KrtKroNativeCode(output,ref pc,0x858b48,3) && KrtKroNativeU32(output,ref pc,16+(physical-6)*8);
+}

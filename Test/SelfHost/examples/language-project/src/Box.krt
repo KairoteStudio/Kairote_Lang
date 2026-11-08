@@ -1,0 +1,9 @@
+namespace Demo.Models;
+
+class Box<T> where T:struct {
+    T value;
+    public static int32 Count;
+
+    public Box(T initial) { value = initial; Count++; }
+    public T Get() { return value; }
+}

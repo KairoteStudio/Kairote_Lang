@@ -1,0 +1,3 @@
+int32 main() {
+    return HttpServer.Run(0, 0);
+}

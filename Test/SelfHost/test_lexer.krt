@@ -12,6 +12,19 @@ int32 main() {
         if (token.kind != KrtTokenKind.Integer || token.start != 4 || token.length != 3) { return 3; }
         KrtLexerNext(lexer, token);
         if (token.kind != KrtTokenKind.Eof || token.start != 7 || token.length != 0) { return 4; }
+        if (!KrtLexerInit(lexer, (byte*)(int64)"0b101 0B1 0b 0b102 0b10name", 27)) { return 5; }
+        KrtLexerNext(lexer, token);
+        if (token.kind != KrtTokenKind.Integer || token.start != 0 || token.length != 5) { return 6; }
+        KrtLexerNext(lexer, token);
+        if (token.kind != KrtTokenKind.Integer || token.start != 6 || token.length != 3) { return 7; }
+        KrtLexerNext(lexer, token);
+        if (token.kind != KrtTokenKind.Invalid || token.start != 10 || token.length != 2) { return 8; }
+        KrtLexerNext(lexer, token);
+        if (token.kind != KrtTokenKind.Invalid || token.start != 13 || token.length != 5) { return 9; }
+        KrtLexerNext(lexer, token);
+        if (token.kind != KrtTokenKind.Invalid || token.start != 19 || token.length != 8) { return 10; }
+        KrtLexerNext(lexer, token);
+        if (token.kind != KrtTokenKind.Eof || token.start != 27) { return 11; }
         delete token;
     }
     delete lexer;

@@ -132,7 +132,7 @@ if (!KrtKroEmitConstantHelperCall(real_call_unit, real_call_object) || real_call
     if (probe.left.child_count != 2) { return 30; }
     KrtIrFunction multi_ir = new KrtIrFunction();
     if (KrtIrLowerReturnFunction(probe, multi_ir)) { return 31; }
-    if (KrtCompileSource(two_returns, 36, multi)) { return 17; }
+    if (!KrtCompileSource(two_returns, 36, multi)) { return 17; }
     delete multi_ir;
     delete probe;
     delete probe_parser;

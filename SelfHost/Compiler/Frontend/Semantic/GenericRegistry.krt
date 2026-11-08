@@ -1,0 +1,106 @@
+uint64 KrtGenericTypeHash(KrtAstNode type, uint64 hash, int32 depth) {
+    if (type == null || depth > 64) { return (hash ^ 0) * 1099511628211; }
+    // Layout-derived widths and strides can settle after registration. Keep
+    // the bucket key nominal; exact type equality resolves these collisions.
+    hash = (hash ^ (uint64)(int64)type.native_type) * 1099511628211;
+    hash = (hash ^ (uint64)type.native_bits) * 1099511628211;
+    hash = (hash ^ type.native_pointee_nullable) * 1099511628211;
+    hash = (hash ^ (uint64)type.native_pointer_depth) * 1099511628211;
+    hash = (hash ^ (uint64)type.native_fixed_length) * 1099511628211;
+    if (type.native_element_type != null) { hash = KrtGenericTypeHash(type.native_element_type,hash,depth + 1); }
+    int32 flags = 0;
+    if (type.native_unsigned) { flags = flags | 1; }
+    if (type.native_array) { flags = flags | 2; }
+    if (type.native_string) { flags = flags | 4; }
+    if (type.native_boolean) { flags = flags | 8; }
+    if (type.native_wide) { flags = flags | 16; }
+    if (type.native_element_unsigned) { flags = flags | 32; }
+    if (type.native_element_boolean) { flags = flags | 64; }
+    if (type.native_element_string) { flags = flags | 128; }
+    if (type.native_void_pointer) { flags = flags | 256; }
+    if (type.native_character) { flags = flags | 512; }
+    if (type.native_element_character) { flags = flags | 1024; }
+    if (type.native_nullable) { flags = flags | 2048; }
+    flags = flags | (type.native_float << 16);
+    hash = (hash ^ (uint64)flags) * 1099511628211;
+    KrtAstNode signature = type.native_function_pointer;
+    if (signature == null) { return (hash ^ 0) * 1099511628211; }
+    hash = (hash ^ (uint64)(signature.parameter_count + 1)) * 1099511628211;
+    hash = (hash ^ (uint64)(signature.native_readonly ? 1 : 0)) * 1099511628211;
+    hash = KrtGenericTypeHash(signature.native_type,hash,depth + 1);
+    KrtAstNode parameter = signature.declarations;
+    while (parameter != null) {
+        hash = (hash ^ (uint64)(parameter.native_ref ? 1 : 0)) * 1099511628211;
+        hash = KrtGenericTypeHash(parameter,hash,depth + 1); parameter = parameter.next;
+    }
+    return hash;
+}
+
+uint64 KrtGenericHash(KrtAstNode declaration, KrtAstNode arguments) {
+    uint64 hash = ((uint64)(int64)declaration >> 3) ^ 14695981039346656037;
+    while (arguments != null) {
+        hash = KrtGenericTypeHash(arguments,hash,0); arguments = arguments.next;
+    }
+    return hash;
+}
+
+int32 KrtGenericRegistrySlot(KrtGenericRegistry registry, KrtAstNode declaration, KrtAstNode arguments) {
+    int32 slot = (int32)(KrtGenericHash(declaration,arguments) & (uint64)(registry.capacity - 1));
+    int32 probes = 0;
+    while (probes < registry.capacity) {
+        if (registry.states[slot] == 0 || (registry.declarations[slot] == declaration && KrtNativeTypeListEqual(registry.arguments[slot],arguments))) { return slot; }
+        slot = (slot + 1) & (registry.capacity - 1); probes = probes + 1;
+    }
+    return -1;
+}
+
+bool KrtGenericRegistryGrow(KrtGenericRegistry registry) {
+    int32 previous = registry.capacity; int32 capacity = previous * 2;
+    if (capacity == 0) { capacity = 256; }
+    if (capacity > 131072) { return false; }
+    KrtAstNode[] old_declarations = registry.declarations; KrtAstNode[] old_arguments = registry.arguments;
+    KrtAstNode[] old_instances = registry.instances; int32[] old_states = registry.states;
+    registry.capacity = capacity;
+    registry.declarations = new KrtAstNode[capacity]; registry.arguments = new KrtAstNode[capacity];
+    registry.instances = new KrtAstNode[capacity]; registry.states = new int32[capacity];
+    int32 index = 0;
+    while (index < previous) {
+        if (old_states[index] != 0) {
+            int32 slot = KrtGenericRegistrySlot(registry,old_declarations[index],old_arguments[index]);
+            if (slot < 0) { return false; }
+            registry.declarations[slot] = old_declarations[index]; registry.arguments[slot] = old_arguments[index];
+            registry.instances[slot] = old_instances[index]; registry.states[slot] = old_states[index];
+        }
+        index = index + 1;
+    }
+    if (previous != 0) { delete old_declarations; delete old_arguments; delete old_instances; delete old_states; }
+    return true;
+}
+
+KrtGenericRegistry KrtGenericRegistryFor(KrtAstNode module) {
+    if (module.native_generic_registry == null) {
+        module.native_generic_registry = new KrtGenericRegistry();
+        if (!KrtGenericRegistryGrow(module.native_generic_registry)) { return null; }
+    }
+    return module.native_generic_registry;
+}
+
+KrtAstNode KrtGenericRegistryFind(KrtAstNode module, KrtAstNode declaration, KrtAstNode arguments) {
+    KrtGenericRegistry registry = KrtGenericRegistryFor(module); if (registry == null) { return null; }
+    int32 slot = KrtGenericRegistrySlot(registry,declaration,arguments);
+    if (slot < 0 || registry.states[slot] != 2) { return null; }
+    return registry.instances[slot];
+}
+
+bool KrtGenericRegistryAdd(KrtAstNode module, KrtAstNode declaration, KrtAstNode arguments, KrtAstNode instance) {
+    KrtGenericRegistry registry = KrtGenericRegistryFor(module); if (registry == null) { return false; }
+    int32 slot = KrtGenericRegistrySlot(registry,declaration,arguments); if (slot < 0) { return false; }
+    if (registry.states[slot] != 0) { return registry.instances[slot] == instance; }
+    if ((registry.count + 1) * 2 >= registry.capacity) {
+        if (!KrtGenericRegistryGrow(registry)) { return false; }
+        slot = KrtGenericRegistrySlot(registry,declaration,arguments); if (slot < 0) { return false; }
+    }
+    registry.declarations[slot] = declaration; registry.arguments[slot] = arguments; registry.instances[slot] = instance;
+    registry.states[slot] = 2; registry.count = registry.count + 1; module.native_locals = module.native_locals + 1;
+    return true;
+}

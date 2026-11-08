@@ -58,7 +58,7 @@ static void tracking_free(void* allocation) {
 #define KRT_CALLOC(count, size) failing_calloc(count, size)
 #define KRT_REALLOC(previous, size) failing_realloc(previous, size)
 #define KRT_FREE(allocation) tracking_free(allocation)
-#include "../../Re.KrtC/src/compiler/Backend/X86/X86RegAlloc.c"
+#include "../../Re.KrtC/src/Compiler/Backend/X86/X86RegAlloc.c"
 
 #define malloc failing_malloc
 #define calloc failing_calloc

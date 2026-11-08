@@ -1,0 +1,20 @@
+// Diagnostic records are shared by compiler state and component fixtures.
+// Reporting and driver algorithms stay in ErrorReports.krt.
+enum KrtDiagnosticStage { Lexer = 0, Parser = 1, Names = 2, Types = 3, Generics = 4, Lowering = 5, Optimization = 6, Backend = 7 }
+
+class KrtDiagnosticRecord {
+    public string code;
+    public int32 code_length;
+    public int64 position;
+    public string message;
+    public KrtDiagnosticStage stage;
+    public KrtDiagnosticRecord next;
+}
+
+class KrtCompilerDiagnostics {
+    public KrtDiagnosticRecord head;
+    public KrtDiagnosticRecord tail;
+    public int32 count;
+    public int32 limit;
+    public KrtDiagnosticStage stage;
+}

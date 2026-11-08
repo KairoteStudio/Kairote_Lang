@@ -1,0 +1,125 @@
+// Decimal-to-binary conversion uses an exact rational and rounds once, ties-even.
+// Base-65536 limbs keep all intermediate arithmetic within signed 64 bits.
+int32 KrtFloatBigLength(int64[] words) {
+    int32 index = 255;
+    while (index >= 0 && words[index] == 0) { index = index - 1; }
+    if (index < 0) { return 0; }
+    int64 word = words[index]; int32 bits = 0;
+    while (word != 0) { word = word >> 1; bits = bits + 1; }
+    return index * 16 + bits;
+}
+
+bool KrtFloatBigMultiply(int64[] words, int32 factor, int32 addend) {
+    int64 carry = addend; int32 index = 0;
+    while (index < 256) {
+        int64 value = words[index] * factor + carry;
+        words[index] = value & 65535; carry = value >> 16; index = index + 1;
+    }
+    return carry == 0;
+}
+
+int64 KrtFloatBigDigit(int64[] words, int32 index, int32 shift) {
+    int32 whole = shift / 16; int32 part = shift % 16; int32 source_index = index - whole;
+    int64 value = 0;
+    if (source_index >= 0 && source_index < 256) { value = (words[source_index] << part) & 65535; }
+    if (part != 0 && source_index > 0 && source_index <= 256) { value = value | (words[source_index - 1] >> (16 - part)); }
+    return value;
+}
+
+int32 KrtFloatBigCompare(int64[] left, int64[] right, int32 shift) {
+    int32 left_bits = KrtFloatBigLength(left); int32 right_bits = KrtFloatBigLength(right);
+    if (right_bits != 0) { right_bits = right_bits + shift; }
+    if (left_bits < right_bits) { return -1; }
+    if (left_bits > right_bits) { return 1; }
+    int32 index = 255;
+    while (index >= 0) {
+        int64 other = KrtFloatBigDigit(right, index, shift);
+        if (left[index] < other) { return -1; }
+        if (left[index] > other) { return 1; }
+        index = index - 1;
+    }
+    return 0;
+}
+
+bool KrtFloatBigShift(int64[] words, int32 shift) {
+    if (shift < 0 || KrtFloatBigLength(words) + shift > 4096) { return false; }
+    int32 index = 255;
+    while (index >= 0) { words[index] = KrtFloatBigDigit(words, index, shift); index = index - 1; }
+    return true;
+}
+
+void KrtFloatBigSubtract(int64[] words, int64[] other, int32 shift) {
+    int32 index = 0; int64 borrow = 0;
+    while (index < 256) {
+        int64 value = words[index] - KrtFloatBigDigit(other, index, shift) - borrow;
+        borrow = 0;
+        if (value < 0) { value = value + 65536; borrow = 1; }
+        words[index] = value; index = index + 1;
+    }
+}
+
+bool KrtNativeFloatingBits(KrtAstNode expression, int64 source, ref int64 result) {
+    int64[] numerator = new int64[256]; int64[] denominator = new int64[256]; denominator[0] = 1;
+    int32 decimal_exponent = 0; bool fractional = false; int64 index = 0;
+    unsafe(using krt.mem;) {
+        byte* input = (byte*)source;
+        while (index < expression.length) {
+            int32 character = (int32)input[expression.start + index];
+            if (character == 46) { fractional = true; }
+            else if (character >= 48 && character <= 57) {
+                if (!KrtFloatBigMultiply(numerator, 10, character - 48)) { delete numerator; delete denominator; return false; }
+                if (fractional) { decimal_exponent = decimal_exponent - 1; }
+            } else if (character == 101 || character == 69) {
+                index = index + 1; int32 sign = 1; int32 exponent = 0;
+                if (index < expression.length && input[expression.start + index] == 45) { sign = -1; index = index + 1; }
+                else if (index < expression.length && input[expression.start + index] == 43) { index = index + 1; }
+                while (index < expression.length && input[expression.start + index] >= 48 && input[expression.start + index] <= 57) {
+                    if (exponent < 1000000) { exponent = exponent * 10 + input[expression.start + index] - 48; }
+                    index = index + 1;
+                }
+                decimal_exponent = decimal_exponent + exponent * sign; break;
+            } else { break; }
+            index = index + 1;
+        }
+    }
+    int32 fraction_bits = expression.native_float == 4 ? 23 : 52;
+    int32 bias = expression.native_float == 4 ? 127 : 1023;
+    int32 minimum = 1 - bias;
+    int64 infinity = expression.native_float == 4 ? 2139095040 : 9218868437227405312;
+    if (KrtFloatBigLength(numerator) == 0 || decimal_exponent < -2000) { result = 0; delete numerator; delete denominator; return true; }
+    if (decimal_exponent > 2000) { result = infinity; delete numerator; delete denominator; return true; }
+    while (decimal_exponent > 0) {
+        if (!KrtFloatBigMultiply(numerator, 10, 0)) { result = infinity; delete numerator; delete denominator; return true; }
+        decimal_exponent = decimal_exponent - 1;
+    }
+    while (decimal_exponent < 0) {
+        if (!KrtFloatBigMultiply(denominator, 10, 0)) { result = 0; delete numerator; delete denominator; return true; }
+        decimal_exponent = decimal_exponent + 1;
+    }
+    int32 exponent = KrtFloatBigLength(numerator) - KrtFloatBigLength(denominator);
+    if ((exponent >= 0 && KrtFloatBigCompare(numerator, denominator, exponent) < 0) ||
+        (exponent < 0 && KrtFloatBigCompare(denominator, numerator, -exponent) > 0)) { exponent = exponent - 1; }
+    if (exponent > bias) { result = infinity; delete numerator; delete denominator; return true; }
+    if (exponent < minimum - fraction_bits - 1) { result = 0; delete numerator; delete denominator; return true; }
+    int32 shift = fraction_bits - (exponent < minimum ? minimum : exponent);
+    bool shifted = shift >= 0 ? KrtFloatBigShift(numerator, shift) : KrtFloatBigShift(denominator, -shift);
+    if (!shifted) { delete numerator; delete denominator; return false; }
+    int64 quotient = 0;
+    int32 bit = KrtFloatBigLength(numerator) - KrtFloatBigLength(denominator);
+    if (bit > 53) { delete numerator; delete denominator; return false; }
+    while (bit >= 0) {
+        if (KrtFloatBigCompare(numerator, denominator, bit) >= 0) {
+            KrtFloatBigSubtract(numerator, denominator, bit); quotient = quotient | ((int64)1 << bit);
+        }
+        bit = bit - 1;
+    }
+    int32 halfway = KrtFloatBigCompare(denominator, numerator, 1);
+    if (halfway < 0 || (halfway == 0 && (quotient & 1) != 0)) { quotient = quotient + 1; }
+    if (exponent < minimum) { result = quotient; }
+    else {
+        if (quotient == ((int64)1 << (fraction_bits + 1))) { quotient = quotient >> 1; exponent = exponent + 1; }
+        if (exponent > bias) { result = infinity; }
+        else { result = ((int64)(exponent + bias) << fraction_bits) | (quotient - ((int64)1 << fraction_bits)); }
+    }
+    delete numerator; delete denominator; return true;
+}

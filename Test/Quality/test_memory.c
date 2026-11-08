@@ -1,5 +1,5 @@
 #include "Core/Memory/Arena.h"
-#include "compiler/Middle/Ir/IrSsa.h"
+#include "Compiler/Middle/Ir/IrSsa.h"
 #include <assert.h>
 #include <pthread.h>
 #include <stdio.h>

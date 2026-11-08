@@ -1,0 +1,7 @@
+function Configure(Project p) {
+    p.Name("DispatchDemo");
+    p.Type("console");
+    p.Sources("src/*.krt");
+    p.Output("bin/${config}/DispatchDemo");
+    p.Optimization("0");
+}

@@ -1,0 +1,223 @@
+// Public declaration interfaces and binary generic template bodies are read
+// from KRO itself. Source paths in the interface are provenance keys; loading
+// a module never opens those provider source files.
+bool KrtModulesFailure(int64 path,string detail){return KrtDriverAbiFailure("E_MODULE_METADATA",path,detail);}
+
+int64 KrtModulesCopy(int64 data,int64 length){
+    int64 copy=KrtDriverAlloc(length+1);if(copy<=0){return 0;}
+    unsafe(using krt.mem;){byte* input=(byte*)data;byte* output=(byte*)copy;int64 index=0;while(index<length){output[index]=input[index];index=index+1;}output[length]=0;}
+    return copy;
+}
+
+bool KrtModulesAppend(KrtSourceBundle bundle,int64 object_path,int64 path_data,int64 path_length,int64 source,int64 length){
+    int64 path=path_length>0?KrtModulesCopy(path_data,path_length):KrtDriverConcat(object_path,(int64)"::interface");
+    if(path<=0){return KrtModulesFailure(object_path,"unable to allocate interface provenance");}
+    KrtSourceFile previous=KrtSourcesFindFile(bundle,path);
+    if(previous!=null){
+        if(previous.imported_metadata&&!KrtDriverAbiEqual(previous.original,previous.length,source,length)){
+            return KrtModulesFailure(object_path,"repeated module declaration interfaces disagree");
+        }
+        return true;
+    }
+    if(bundle.count>=4096||length>16777216-bundle.total_bytes-12){return KrtModulesFailure(object_path,"module interfaces exceed the source compilation budget");}
+    int64 data=KrtModulesCopy(source,length);if(data<=0){return KrtModulesFailure(object_path,"unable to allocate module interface");}
+    KrtSourceFile file=new KrtSourceFile();file.path=path;file.original=data;file.transformed=data;file.length=length;
+    file.imported_metadata=true;file.module_authority=object_path;file.state=2;file.lexical_error=-1;
+    if(bundle.count>0){bundle.total_bytes=bundle.total_bytes+12;}
+    if(bundle.files==null){bundle.files=file;}else{bundle.order_tail.order_next=file;}
+    bundle.order_tail=file;file.next=bundle.loaded;bundle.loaded=file;
+    bundle.total_bytes=bundle.total_bytes+length;bundle.count=bundle.count+1;
+    return KrtSourcesScan(bundle,file);
+}
+
+bool KrtModulesReadMapped(KrtSourceBundle bundle,int64 path,KrtDriverBuffer object){
+    if(object.length<64||KrtDriverAbiWord(object.data,0)!=5198411||KrtDriverAbiWord(object.data,4)!=2){return KrtModulesFailure(path,"invalid KRO header");}
+    int64 text=KrtDriverAbiWord(object.data,16);int64 rodata=KrtDriverAbiWord(object.data,20);int64 data=KrtDriverAbiWord(object.data,24);
+    int64 count=KrtDriverAbiWord(object.data,48);int64 strings_length=KrtDriverAbiWord(object.data,52);int64 relocations=KrtDriverAbiWord(object.data,56);
+    int64 symbols=64+text+rodata+data;int64 strings=symbols+count*32+relocations*16;
+    if(count>1048576||relocations>4194304||!KrtDriverAbiRange(64,text+rodata+data,object.length)||
+       !KrtDriverAbiRange(symbols,count*32+relocations*16,object.length)||!KrtDriverAbiRange(strings,strings_length,object.length)){
+        return KrtModulesFailure(path,"KRO tables exceed object bounds");
+    }
+    int64 metadata=-1;int64 size=0;int64 index=0;
+    while(index<count){
+        int64 name=KrtDriverAbiSymbolName(object,symbols,strings,strings_length,index);if(name==0){return KrtModulesFailure(path,"invalid KRO symbol string");}
+        if(KrtDriverStringEqual(name,(int64)"_KRT_MODULE3_METADATA")){
+            int64 offset=KrtDriverAbiWord(object.data,symbols+index*32+4);size=KrtDriverAbiWord(object.data,symbols+index*32+8);
+            if(metadata>=0||KrtDriverAbiWord(object.data,symbols+index*32+12)!=2||KrtDriverAbiWord(object.data,symbols+index*32+16)!=0||KrtDriverAbiWord(object.data,symbols+index*32+20)!=2||!KrtDriverAbiRange(offset,size,rodata)){
+                return KrtModulesFailure(path,"module interface must be one local read-only symbol");
+            }
+            metadata=object.data+64+text+offset;
+        }
+        index=index+1;
+    }
+    if(metadata<0){return true;}
+    if(size<16||size>16777216||KrtDriverAbiWord(metadata,0)!=0x33444f4d||KrtDriverAbiWord(metadata,12)!=size){return KrtModulesFailure(path,"invalid module interface header");}
+    if(KrtDriverAbiWord(metadata,4)!=3){return KrtModulesFailure(path,"unsupported module interface version");}
+    int64 files=KrtDriverAbiWord(metadata,8);if(files>4096){return KrtModulesFailure(path,"module interface has too many files");}
+    int64 position=16;index=0;
+    while(index<files){
+        if(!KrtDriverAbiRange(position,8,size)){return KrtModulesFailure(path,"truncated module interface record");}
+        int64 path_length=KrtDriverAbiWord(metadata,position);int64 length=KrtDriverAbiWord(metadata,position+4);position=position+8;
+        if(path_length>4096||!KrtDriverAbiRange(position,path_length+length,size)){return KrtModulesFailure(path,"module interface record exceeds metadata bounds");}
+        unsafe(using krt.mem;){byte* name=(byte*)(metadata+position);int64 character=0;while(character<path_length){if(name[character]==0){return KrtModulesFailure(path,"module interface provenance contains a null byte");}character=character+1;}}
+        if(!KrtModulesAppend(bundle,path,metadata+position,path_length,metadata+position+path_length,length)){return false;}
+        position=position+path_length+length;index=index+1;
+    }
+    if(position!=size){return KrtModulesFailure(path,"trailing module interface bytes");}
+    return true;
+}
+
+bool KrtModulesRead(KrtSourceBundle bundle,int64 path){
+    KrtDriverBuffer object=new KrtDriverBuffer();if(!KrtDriverAbiReadBinary(path,object)){delete object;return KrtModulesFailure(path,"unable to map object interface");}
+    bool ok=KrtModulesReadMapped(bundle,path,object);syscall(11,object.data,object.length,0,0,0,0);delete object;return ok;
+}
+
+bool KrtModulesRebuild(KrtSourceBundle bundle){
+    bundle.data=KrtDriverAlloc(bundle.total_bytes+1);if(bundle.data<=0){return false;}
+    unsafe(using krt.mem;){
+        byte* output=(byte*)bundle.data;byte* separator=(byte*)(int64)"\nnamespace;\n";int64 offset=0;bool first=true;KrtSourceFile file=bundle.files;
+        while(file!=null){
+            if(!first){int64 part=0;while(part<12){output[offset]=separator[part];offset=offset+1;part=part+1;}}first=false;
+            file.start=offset;byte* input=(byte*)file.transformed;int64 index=0;while(index<file.length){output[offset]=input[index];offset=offset+1;index=index+1;}
+            file=file.order_next;
+        }
+        output[offset]=0;bundle.length=offset;
+    }
+    return true;
+}
+
+bool KrtModulesImport(KrtSourceBundle bundle,KrtDriverPath objects){
+    if(bundle==null||objects==null){return true;}
+    if(!KrtDriverAbiCheckContracts(objects,false)){return false;}
+    KrtDriverPath object=objects;bool changed=false;int32 count=bundle.count;
+    while(object!=null){if(!KrtModulesRead(bundle,object.value)){return false;}object=object.next;}
+    changed=bundle.count!=count;return !changed||bundle.data==0||KrtModulesRebuild(bundle);
+}
+
+class KrtModuleImportedType {
+    public KrtAstNode declaration;
+    public KrtLinkName name;
+    public uint64 hash;
+    public KrtModuleImportedType next;
+}
+
+bool KrtModulesTemplateEqual(KrtAstNode first,KrtAstNode second,int64 source){
+    KrtLexer left=new KrtLexer();KrtLexer right=new KrtLexer();KrtToken a=new KrtToken();KrtToken b=new KrtToken();
+    unsafe(using krt.mem;){if(!KrtLexerInit(left,(byte*)(source+first.start),first.length)||!KrtLexerInit(right,(byte*)(source+second.start),second.length)){return false;}}
+    while(true){
+        KrtLexerNext(left,a);KrtLexerNext(right,b);
+        if(a.kind!=b.kind||a.length!=b.length){return false;}
+        if(a.kind==KrtTokenKind.Eof){return true;}
+        if(!KrtDriverAbiEqual(source+first.start+a.start,a.length,source+second.start+b.start,b.length)){return false;}
+    }
+    return false;
+}
+
+// Imported public declarations describe the same nominal type independently
+// of the provider's source path. Layout contracts have already been checked;
+// keep one syntax declaration and its owner methods for semantic resolution.
+bool KrtModulesMergeImportedAst(KrtAstNode unit,int64 source){
+    int32 types=0;KrtAstNode type=unit.declarations;bool imports=false;
+    while(type!=null){types=types+1;if(type.native_imported){imports=true;}type=type.next;}
+    if(!imports){return true;}
+    int32 capacity=256;while(capacity<types*2){capacity=capacity*2;}
+    KrtModuleImportedType[] buckets=new KrtModuleImportedType[capacity];
+    KrtAstNode[] discarded=new KrtAstNode[capacity];type=unit.declarations;
+    while(type!=null){
+        if(KrtNativeAccessExported(type)){
+            KrtLinkName name=KrtLinkNameNew();KrtLinkDeclaration(name,type,source);
+            if(!name.valid){KrtDriverError("E_MODULE_METADATA","imported nominal name exceeds the supported size");return false;}
+            uint64 hash=14695981039346656037;int32 index=0;while(index<name.length){hash=(hash^(uint64)name.bytes[index])*1099511628211;index=index+1;}
+            int32 slot=(int32)(hash&(uint64)(capacity-1));KrtModuleImportedType entry=buckets[slot];
+            while(entry!=null&&(entry.hash!=hash||!KrtLinkNamesEqual(entry.name,name))){entry=entry.next;}
+            if(entry==null){entry=new KrtModuleImportedType();entry.declaration=type;entry.name=name;entry.hash=hash;entry.next=buckets[slot];buckets[slot]=entry;}
+            else if(type.native_imported||entry.declaration.native_imported){
+                KrtAstNode previous=entry.declaration;
+                if(previous.value!=type.value||(previous.native_generic_parameters==null)!=(type.native_generic_parameters==null)){
+                    KrtDriverError("E_ABI_LAYOUT","repeated imported types have different declaration kinds");return false;
+                }
+                if(type.native_generic_parameters!=null&&!KrtModulesTemplateEqual(previous,type,source)){
+                    KrtDriverError("E_MODULE_METADATA","repeated binary generic templates disagree");return false;
+                }
+                KrtAstNode removed=type;
+                if(previous.native_imported&&!type.native_imported){removed=previous;entry.declaration=type;}
+                int32 dropped=(int32)(((uint64)(int64)removed>>3)&(uint64)(capacity-1));while(discarded[dropped]!=null&&discarded[dropped]!=removed){dropped=(dropped+1)&(capacity-1);}discarded[dropped]=removed;
+            }
+        }
+        type=type.next;
+    }
+    KrtAstNode previous=null;type=unit.declarations;
+    while(type!=null){KrtAstNode next=type.next;int32 slot=(int32)(((uint64)(int64)type>>3)&(uint64)(capacity-1));while(discarded[slot]!=null&&discarded[slot]!=type){slot=(slot+1)&(capacity-1);}
+        if(discarded[slot]==type){if(previous==null){unit.declarations=next;}else{previous.next=next;}}
+        else{previous=type;}type=next;}
+    previous=null;KrtAstNode method=unit.left;
+    while(method!=null){KrtAstNode next=method.next;KrtAstNode owner=method.native_owner;bool removed=false;
+        if(owner!=null){int32 slot=(int32)(((uint64)(int64)owner>>3)&(uint64)(capacity-1));while(discarded[slot]!=null&&discarded[slot]!=owner){slot=(slot+1)&(capacity-1);}removed=discarded[slot]==owner;}
+        if(removed){if(previous==null){unit.left=next;}else{previous.next=next;}unit.child_count=unit.child_count-1;}else{previous=method;}method=next;}
+    int32 slot=0;while(slot<capacity){KrtModuleImportedType entry=buckets[slot];while(entry!=null){KrtModuleImportedType next=entry.next;delete entry.name.bytes;delete entry.name;delete entry;entry=next;}slot=slot+1;}
+    delete buckets;delete discarded;return true;
+}
+
+bool KrtModulesImportedPosition(int64 position){
+    if(KrtDriverActiveBundle==null){return false;}
+    KrtSourceFile file=KrtDriverActiveBundle.files;
+    while(file!=null){if(position>=file.start&&position<file.start+file.length){return file.imported_metadata;}file=file.order_next;}
+    return false;
+}
+
+int64 KrtModulesSourceAuthority(int64 position){
+    if(KrtDriverActiveBundle==null){return 0;}
+    KrtSourceFile file=KrtDriverActiveBundle.files;
+    while(file!=null){if(position>=file.start&&position<file.start+file.length){return file.path;}file=file.order_next;}
+    return 0;
+}
+
+bool KrtModulesSameModule(int64 first,int64 second){
+    if(KrtDriverActiveBundle==null){return true;}
+    int64 first_authority=0;int64 second_authority=0;KrtSourceFile file=KrtDriverActiveBundle.files;
+    while(file!=null){
+        if(first>=file.start&&first<file.start+file.length){first_authority=file.module_authority;}
+        if(second>=file.start&&second<file.start+file.length){second_authority=file.module_authority;}
+        file=file.order_next;
+    }
+    return first_authority==second_authority||(first_authority!=0&&second_authority!=0&&KrtDriverStringEqual(first_authority,second_authority));
+}
+
+bool KrtModulesMarkImportedAst(KrtAstNode unit){
+    if(KrtDriverActiveBundle==null){return true;}
+    bool imported=false;KrtSourceFile file=KrtDriverActiveBundle.files;
+    while(file!=null){if(file.imported_metadata){imported=true;break;}file=file.order_next;}
+    if(!imported){return true;}
+    int32 capacity=256;KrtAstNode[] stack=new KrtAstNode[capacity];int32 count=1;stack[0]=unit;int32 visited=0;
+    int32 seen_capacity=512;KrtAstNode[] seen=new KrtAstNode[seen_capacity];
+    while(count>0){
+        count=count-1;KrtAstNode node=stack[count];if(node==null){continue;}
+        int32 slot=(int32)(((uint64)(int64)node>>3)&(uint64)(seen_capacity-1));
+        while(seen[slot]!=null&&seen[slot]!=node){slot=(slot+1)&(seen_capacity-1);}
+        if(seen[slot]==node){continue;}
+        seen[slot]=node;
+        node.native_imported=KrtModulesImportedPosition(node.start);
+        visited=visited+1;if(visited>4194304){delete seen;delete stack;KrtDriverError("E_MODULE_METADATA","module syntax graph exceeds import marking budget");return false;}
+        if(visited>=seen_capacity/2){
+            int32 expanded_capacity=seen_capacity*2;KrtAstNode[] expanded_seen=new KrtAstNode[expanded_capacity];int32 entry=0;
+            while(entry<seen_capacity){
+                KrtAstNode previous=seen[entry];
+                if(previous!=null){int32 target=(int32)(((uint64)(int64)previous>>3)&(uint64)(expanded_capacity-1));while(expanded_seen[target]!=null){target=(target+1)&(expanded_capacity-1);}expanded_seen[target]=previous;}
+                entry=entry+1;
+            }
+            delete seen;seen=expanded_seen;seen_capacity=expanded_capacity;
+        }
+        if(count>capacity-16){
+            int32 size=capacity*2;KrtAstNode[] expanded=new KrtAstNode[size];int32 index=0;
+            while(index<count){expanded[index]=stack[index];index=index+1;}delete stack;stack=expanded;capacity=size;
+        }
+        stack[count]=node.left;count=count+1;stack[count]=node.right;count=count+1;
+        stack[count]=node.alternate;count=count+1;stack[count]=node.body;count=count+1;
+        stack[count]=node.declarations;count=count+1;stack[count]=node.next;count=count+1;
+        stack[count]=node.syntax_type;count=count+1;stack[count]=node.syntax_parameter_types;count=count+1;
+        stack[count]=node.native_generic_parameters;count=count+1;stack[count]=node.native_constraints;count=count+1;
+        stack[count]=node.native_base_call;count=count+1;
+    }
+    delete seen;delete stack;return true;
+}

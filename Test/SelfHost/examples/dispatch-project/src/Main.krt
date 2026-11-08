@@ -1,0 +1,31 @@
+import "Measurements.krt";
+using Demo.Dispatch;
+using System.Console;
+
+int32 main() {
+    Measurement measurement = new Reading(42);
+    IMeasurement view = measurement;
+    if (measurement.Read() != 42 || ReadValue(view) != 42) { return 1; }
+    if (view.Label() != "reading verified") { return 2; }
+    Console.WriteLine(view.Label());
+    delete measurement;
+
+    IValue[] values = [new Reading(40), new Reading(2)];
+    int32 total = 0;
+    foreach (IValue value in values) { total += value.Read(); delete value; }
+    delete values;
+    if (total != 42) { return 3; }
+    Console.WriteLine("interface collection verified");
+
+    bool caught = false;
+    bool cleaned = false;
+    try {
+        IValue error = new Reading(7);
+        throw error;
+    } catch (IMeasurement error) {
+        caught = error.Read() == 7;
+        delete error;
+    } finally { cleaned = true; }
+    if (!caught || !cleaned) { return 4; }
+    return 0;
+}

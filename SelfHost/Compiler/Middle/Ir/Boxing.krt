@@ -1,0 +1,140 @@
+// A box retains the ordinary allocation header used by Free. Its payload is
+// [exact runtime descriptor, value byte size, independently copied value].
+// Descriptor construction and matching are shared with object ABI dispatch.
+int32 KrtNativeBoxTemporary(KrtNativeModule module) {
+    int32 function_index = module.lower_function_index;
+    if (function_index < 0 || function_index >= module.function_count) { return -1; }
+    int32 slot = module.local_counts[function_index];
+    if (slot < 0 || slot >= 65535) { return -1; }
+    module.local_counts[function_index] = slot + 1;
+    return slot;
+}
+
+bool KrtNativeLowerBoxFault(KrtNativeModule module) {
+    // A failed checked conversion is catchable through the ordinary int32
+    // exception contract. It never reads payload bytes from an unmatched type.
+    KrtAstNode fault = KrtAstMake(KrtAstKind.Integer,0,0);
+    fault.native_width = 4; fault.native_bits = 32;
+    return KrtNativeEmit(module,(int32)KrtNativeOp.Const,-2147483647,0) >= 0 &&
+        KrtNativeLowerRuntimeExceptionType(fault,module) &&
+        KrtNativeEmit(module,(int32)KrtNativeOp.Throw,0,0) >= 0;
+}
+
+bool KrtNativeLowerBoxPayload(KrtNativeModule module, int32 pointer_slot, KrtAstNode target) {
+    if (pointer_slot < 0 || target == null ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,pointer_slot,0) < 0) { return false; }
+    if (KrtNativeReferenceObjectValue(target)) { return true; }
+    if (KrtNativeEmit(module,(int32)KrtNativeOp.Address,0,16) < 0) { return false; }
+    if (KrtNativeInlineValue(target)) { return true; }
+    return KrtNativeEmit(module,(int32)KrtNativeOp.Load,0,KrtNativeValueWidth(target)) >= 0 &&
+        KrtNativeNormalizeWide(module,target);
+}
+
+bool KrtNativeLowerBoxCreate(KrtNativeModule module, KrtAstNode original) {
+    int32 storage = KrtNativeBoxStorage(original);
+    if (storage <= 0 || storage > 16777216) { return false; }
+    int32 value_slot = KrtNativeBoxTemporary(module); int32 box_slot = KrtNativeBoxTemporary(module);
+    if (value_slot < 0 || box_slot < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,value_slot,0) < 0) { return false; }
+    // Null strings and array references stay null when converted to object.
+    // Inline arrays and zero-valued scalar values always have actual boxes.
+    bool nullable_reference = KrtNativeBoxReferenceWrapper(original);
+    int32 present = -1;
+    if (nullable_reference) {
+        if (KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,value_slot,0) < 0) { return false; }
+        present = KrtNativeEmit(module,(int32)KrtNativeOp.Branch,-1,-1);
+        if (present < 0) { return false; } module.args[present] = module.count;
+    }
+    if (KrtNativeEmit(module,(int32)KrtNativeOp.Const,storage + 16,0) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.Allocate,0,0) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,box_slot,0) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,box_slot,0) < 0) { return false; }
+    int32 allocated = KrtNativeEmit(module,(int32)KrtNativeOp.Branch,-1,-1);
+    if (allocated < 0 || !KrtNativeLowerDispatchTrap(module)) { return false; }
+    module.extra[allocated] = allocated + 1; module.args[allocated] = module.count;
+    if (KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,box_slot,0) < 0 ||
+        !KrtNativeLowerRuntimeDescriptor(original,module) ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.Store,0,8) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,box_slot,0) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.Address,0,8) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.Const,storage,0) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.Store,0,8) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,box_slot,0) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.Address,0,16) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,value_slot,0) < 0) { return false; }
+    if (KrtNativeInlineValue(original)) {
+        if (!KrtNativeLowerAggregateCopy(original,module)) { return false; }
+    } else {
+        KrtAstNode stored = KrtAstMake(KrtAstKind.Type,original.start,0);
+        KrtNativeCopyType(stored,original); stored.native_width = storage;
+        if (KrtNativeEmit(module,(int32)KrtNativeOp.Store,0,KrtNativeWidth(stored)) < 0) { return false; }
+    }
+    if (KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,box_slot,0) < 0) { return false; }
+    if (present >= 0) {
+        int32 done = KrtNativeEmit(module,(int32)KrtNativeOp.Jump,-1,0);
+        if (done < 0) { return false; }
+        module.extra[present] = module.count;
+        if (KrtNativeEmit(module,(int32)KrtNativeOp.Const,0,0) < 0) { return false; }
+        module.args[done] = module.count;
+    }
+    return true;
+}
+
+bool KrtNativeLowerUnbox(KrtNativeModule module, KrtAstNode target) {
+    int32 pointer_slot = KrtNativeBoxTemporary(module);
+    if (pointer_slot < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,pointer_slot,0) < 0) { return false; }
+    int32 present = -1;
+    bool nullable_reference = !KrtNativeInlineValue(target) &&
+        (KrtNativeReferenceObjectValue(target) || target.native_string || target.native_array ||
+            (target.native_function_pointer != null && target.native_nullable));
+    if (nullable_reference) {
+        if (KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,pointer_slot,0) < 0) { return false; }
+        present = KrtNativeEmit(module,(int32)KrtNativeOp.Branch,-1,-1);
+        if (present < 0) { return false; } module.args[present] = module.count;
+    }
+    bool exact = !KrtNativeReferenceObjectValue(target);
+    if (!KrtNativeLowerRuntimeMatch(module,pointer_slot,target,exact)) { return false; }
+    int32 matched = KrtNativeEmit(module,(int32)KrtNativeOp.Branch,-1,-1);
+    if (matched < 0 || !KrtNativeLowerBoxFault(module)) { return false; }
+    module.extra[matched] = matched + 1; module.args[matched] = module.count;
+    if (KrtNativeInlineValue(target)) {
+        if (!KrtNativeLowerAggregateFrame(target,module) ||
+            !KrtNativeLowerBoxPayload(module,pointer_slot,target) ||
+            !KrtNativeLowerAggregateCopy(target,module) ||
+            !KrtNativeLowerAggregateFrame(target,module)) { return false; }
+    } else if (!KrtNativeLowerBoxPayload(module,pointer_slot,target)) { return false; }
+    if (present >= 0) {
+        int32 done = KrtNativeEmit(module,(int32)KrtNativeOp.Jump,-1,0);
+        if (done < 0) { return false; }
+        module.extra[present] = module.count;
+        if (KrtNativeEmit(module,(int32)KrtNativeOp.Const,0,0) < 0) { return false; }
+        module.args[done] = module.count;
+    }
+    return true;
+}
+
+bool KrtNativeLowerBoxConversion(KrtNativeModule module, KrtAstNode original, KrtAstNode target) {
+    if (KrtNativeBoxingConversion(target,original)) { return KrtNativeLowerBoxCreate(module,original); }
+    if (KrtNativeUnboxingConversion(target,original)) { return KrtNativeLowerUnbox(module,target); }
+    // Class, interface, object and null conversions preserve the same reference.
+    return KrtNativeObjectConversion(target,original);
+}
+
+bool KrtNativeLowerObjectEquality(KrtAstNode expression, KrtAstNode ast, KrtNativeModule module, int64 source) {
+    // Null tests inspect reference presence. Statically typed class/interface
+    // references already have their original identity and need no unwrap.
+    if (expression.left.kind == KrtAstKind.Null || expression.right.kind == KrtAstKind.Null ||
+        (!KrtNativeObjectValue(expression.left) && !KrtNativeObjectValue(expression.right))) {
+        return KrtNativeLowerExpression(expression.left,ast,module,source) &&
+            KrtNativeLowerExpression(expression.right,ast,module,source) &&
+            KrtNativeEmit(module,(int32)KrtNativeOp.Compare,expression.op,0) >= 0;
+    }
+    int32 left = KrtNativeBoxTemporary(module); int32 right = KrtNativeBoxTemporary(module);
+    return left >= 0 && right >= 0 && KrtNativeLowerExpression(expression.left,ast,module,source) &&
+        KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,left,0) >= 0 &&
+        KrtNativeLowerExpression(expression.right,ast,module,source) &&
+        KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,right,0) >= 0 &&
+        KrtNativeLowerRuntimeObjectIdentity(module,left,expression.left) &&
+        KrtNativeLowerRuntimeObjectIdentity(module,right,expression.right) &&
+        KrtNativeEmit(module,(int32)KrtNativeOp.Compare,expression.op,0) >= 0;
+}

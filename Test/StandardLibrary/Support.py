@@ -9,7 +9,13 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPILER = Path(os.environ.get("KRTC", ROOT / "Re.KrtC/build/KrtC")).resolve()
+LINKER = os.environ.get("KRT_STDLIB_LINKER")
 LEVELS = tuple(int(value) for value in os.environ.get("KRT_STDLIB_TEST_LEVELS", "0,1,2,3").split(","))
+
+
+def compiler_command(*arguments):
+    linker_flags = ["--linker", str(Path(LINKER).resolve())] if LINKER else []
+    return [str(COMPILER), *linker_flags, *map(str, arguments)]
 
 
 def disable_core_dump():
@@ -31,7 +37,7 @@ class LibraryTestCase(unittest.TestCase):
             for level in LEVELS if levels is None else levels:
                 with self.subTest(optimization=level):
                     binary = work / f"ProgramO{level}"
-                    built = subprocess.run([str(COMPILER), f"-O{level}", str(source_path), "-o", str(binary)],
+                    built = subprocess.run(compiler_command(f"-O{level}", source_path, "-o", binary),
                                            cwd=work, capture_output=True, text=True, timeout=60)
                     self.assertEqual(built.returncode, 0, built.stdout + built.stderr + source)
                     self.assertNotIn("AddressSanitizer", built.stderr)

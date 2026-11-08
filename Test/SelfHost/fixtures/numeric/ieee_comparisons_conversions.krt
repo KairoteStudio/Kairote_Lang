@@ -1,0 +1,22 @@
+float64 id(float64 x) { return x; }
+void bump(ref float32 x) { x += 0.5; }
+int32 main() {
+ float64 zero=0.0; float64 negative=-zero;
+ if(negative || !zero!=true) {return 1;}
+ if(negative==false ? false : true) {return 2;}
+ float64 nan=zero/zero;
+ if(nan==nan || nan<1 || nan<=1 || nan>1 || nan>=1) {return 3;}
+ if(!(nan!=nan) || !nan) {return 4;}
+ float64 inf=1.0/zero; if(inf<=1e300 || -inf>=-1e300) {return 5;}
+ if(5.5%2.0!=1.5 || -5.5%2.0!=-1.5) {return 6;}
+ float32 f=0.5f; bump(ref f); if(f!=1.0) {return 7;}
+ uint64 wide=(uint64)-1; float64 wd=wide;
+ if(wd<1.8e19 || wd>1.9e19) {return 8;}
+ uint64 half=(uint64)1e19; if(half!=10000000000000000000) {return 9;}
+ if((int64)-3.75!=-3 || (uint32)4294967295.0!=4294967295) {return 10;}
+ if(.5+1.25e1+2E-1<13.19 || .5+1.25e1+2E-1>13.21) {return 11;}
+ float32 a=16777216.0f; if(a+1.0f!=a) {return 12;}
+ if((true ? 1 : 2.5)!=1.0 || (false ? 1 : 2.5)!=2.5) {return 13;}
+ if(id(3)!=3.0) {return 14;}
+ return 0;
+}

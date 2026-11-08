@@ -1,0 +1,7 @@
+function Configure(Project p) {
+    p.Name("LanguageDemo");
+    p.Type("console");
+    p.Sources("src/*.krt");
+    p.Output("bin/${config}/LanguageDemo");
+    p.Optimization("0");
+}

@@ -1,0 +1,53 @@
+class KrtParserDiagnostic {
+    public int64 position;
+    public KrtTokenKind actual;
+    public KrtTokenKind expected;
+    public string message;
+    public KrtParserDiagnostic next;
+}
+
+class KrtParser {
+    public KrtLexer lexer;
+    public KrtToken token;
+    public int32 errors;
+    public int64 error_start;
+    public KrtAstNode native_scope;
+    public KrtAstNode last_type;
+    public KrtAstNode syntax_scope;
+    public int32 type_depth;
+    public KrtUsingScope current_using_scope;
+    public KrtParserDiagnostic diagnostics;
+    public KrtParserDiagnostic diagnostic_tail;
+}
+
+void KrtParserInit(KrtParser parser, KrtLexer lexer, KrtToken token) {
+    parser.lexer = lexer; parser.token = token; parser.errors = 0; parser.error_start = -1;
+    parser.diagnostics = null; parser.diagnostic_tail = null;
+    parser.current_using_scope = null;parser.native_scope=null;parser.last_type=null;parser.syntax_scope=null;parser.type_depth=0;
+    KrtLexerNext(lexer, token);
+}
+
+void KrtParserRecordExpected(KrtParser parser, KrtTokenKind expected, string message) {
+    if (parser.errors >= 64 || (parser.diagnostic_tail != null && parser.diagnostic_tail.position == parser.token.start)) { return; }
+    if (parser.errors == 0) { parser.error_start = parser.token.start; }
+    KrtParserDiagnostic diagnostic = new KrtParserDiagnostic();
+    diagnostic.position = parser.token.start; diagnostic.actual = parser.token.kind;
+    diagnostic.expected = expected; diagnostic.message = message;
+    if (parser.diagnostics == null) { parser.diagnostics = diagnostic; }
+    else { parser.diagnostic_tail.next = diagnostic; }
+    parser.diagnostic_tail = diagnostic; parser.errors = parser.errors + 1;
+}
+
+void KrtParserRecordError(KrtParser parser) {
+    KrtParserRecordExpected(parser, KrtTokenKind.Unknown, "invalid syntax");
+}
+
+bool KrtParserAccept(KrtParser parser, KrtTokenKind kind) {
+    if (parser.token.kind != kind) { return false; }
+    KrtLexerNext(parser.lexer, parser.token); return true;
+}
+
+bool KrtParserExpect(KrtParser parser, KrtTokenKind kind) {
+    if (KrtParserAccept(parser, kind)) { return true; }
+    KrtParserRecordExpected(parser, kind, "expected token"); return false;
+}

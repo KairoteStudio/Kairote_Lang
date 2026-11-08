@@ -1,0 +1,200 @@
+class KrtSsaAllocation {
+    public int32[] registers; public int32[] spills; public int32[] frame_counts;
+}
+
+KrtSsaAllocation KrtSsaAllocate(KrtSsaModule ssa) {
+    KrtSsaAllocation allocation = new KrtSsaAllocation();
+    allocation.registers = new int32[ssa.count]; allocation.spills = new int32[ssa.count];
+    allocation.frame_counts = new int32[ssa.function_count];
+    int32 function_index = 0;
+    while (function_index < ssa.function_count) {
+        int32 first = ssa.starts[function_index]; int32 last = ssa.ends[function_index]; int32 values = last-first;
+        int32 first_block = ssa.function_blocks[function_index]; int32 blocks = ssa.function_block_counts[function_index];
+        int32[] begin = new int32[values]; int32[] end = new int32[values];
+        int32 value = first;
+        while (value < last) {
+            begin[value-first] = ssa.ops[value] == 101 ? ssa.block_starts[ssa.value_blocks[value]] : value;
+            end[value-first] = value; value = value+1;
+        }
+        int32 words = (values+63)/64;
+        bool enabled = KrtDriverOptimization > 0 && !ssa.handlers[function_index] && (int64)blocks*words <= 4194304;
+        if (enabled) {
+            uint64[] definitions = new uint64[blocks*words]; uint64[] uses = new uint64[blocks*words];
+            uint64[] edges = new uint64[blocks*words]; uint64[] live_in = new uint64[blocks*words]; uint64[] live_out = new uint64[blocks*words];
+            int32 block = first_block;
+            while (block < first_block+blocks) {
+                value = ssa.block_starts[block];
+                while (value < ssa.block_ends[block]) {
+                    if (ssa.results[value]) {
+                        int32 relative = value-first; int32 cell = (block-first_block)*words+relative/64;
+                        definitions[cell] = definitions[cell] | ((uint64)1 << (relative%64));
+                    }
+                    int32 operand = 0;
+                    while (operand < ssa.operand_counts[value]) {
+                        int32 position = ssa.operand_starts[value]+operand; int32 incoming = ssa.operands[position]; int32 relative = incoming-first;
+                        uint64 mask = (uint64)1 << (relative%64);
+                        if (ssa.ops[value] == 101) {
+                            int32 predecessor = ssa.phi_predecessors[position]; int32 cell = (predecessor-first_block)*words+relative/64;
+                            edges[cell] = edges[cell] | mask;
+                            if (ssa.block_ends[predecessor]-1 > end[relative]) { end[relative] = ssa.block_ends[predecessor]-1; }
+                        } else {
+                            int32 cell = (block-first_block)*words+relative/64;
+                            if ((definitions[cell] & mask) == 0) { uses[cell] = uses[cell] | mask; }
+                            if (value > end[relative]) { end[relative] = value; }
+                        }
+                        operand = operand+1;
+                    }
+                    value = value+1;
+                }
+                block = block+1;
+            }
+            bool changed = true;
+            while (changed) {
+                changed = false; block = first_block+blocks-1;
+                while (block >= first_block) {
+                    int32 word = 0;
+                    while (word < words) {
+                        int32 cell = (block-first_block)*words+word; uint64 outgoing = edges[cell];
+                        if (ssa.block_left[block] >= 0) { outgoing = outgoing | live_in[(ssa.block_left[block]-first_block)*words+word]; }
+                        if (ssa.block_right[block] >= 0) { outgoing = outgoing | live_in[(ssa.block_right[block]-first_block)*words+word]; }
+                        uint64 incoming = uses[cell] | (outgoing & ~definitions[cell]);
+                        if (incoming != live_in[cell] || outgoing != live_out[cell]) { live_in[cell] = incoming; live_out[cell] = outgoing; changed = true; }
+                        word = word+1;
+                    }
+                    block = block-1;
+                }
+            }
+            value = first;
+            while (value < last) {
+                int32 relative = value-first; uint64 mask = (uint64)1 << (relative%64); block = first_block;
+                while (block < first_block+blocks) {
+                    int32 cell = (block-first_block)*words+relative/64;
+                    if ((live_in[cell] & mask) != 0 && ssa.block_starts[block] < begin[relative]) { begin[relative] = ssa.block_starts[block]; }
+                    if ((live_out[cell] & mask) != 0 && ssa.block_ends[block]-1 > end[relative]) { end[relative] = ssa.block_ends[block]-1; }
+                    block = block+1;
+                }
+                value = value+1;
+            }
+            delete definitions; delete uses; delete edges; delete live_in; delete live_out;
+            // Bucket intervals by their live-range start, then apply linear
+            // scan. A shorter interval can evict the active value ending last.
+            int32[] buckets = new int32[values]; int32[] next = new int32[values];
+            int32 relative = 0; while (relative < values) { buckets[relative] = -1; next[relative] = -1; relative = relative+1; }
+            value = first;
+            while (value < last) {
+                if (ssa.results[value] && ssa.uses[value] > 0) {
+                    int32 start = begin[value-first]-first; next[value-first] = buckets[start]; buckets[start] = value;
+                }
+                value = value+1;
+            }
+            int32 one = -1; int32 two = -1; relative = 0;
+            while (relative < values) {
+                value = buckets[relative];
+                while (value >= 0) {
+                    int32 position = first+relative;
+                    if (one >= 0 && end[one-first] < position) { one = -1; }
+                    if (two >= 0 && end[two-first] < position) { two = -1; }
+                    int32 register_index = 0;
+                    if (one < 0) { register_index = 1; }
+                    else if (two < 0) { register_index = 2; }
+                    else {
+                        int32 victim = end[one-first] > end[two-first] ? one : two;
+                        if (end[victim-first] > end[value-first]) { register_index = allocation.registers[victim]; allocation.registers[victim] = 0; }
+                    }
+                    if (register_index > 0) {
+                        allocation.registers[value] = register_index;
+                        if (register_index == 1) { one = value; } else { two = value; }
+                    }
+                    value = next[value-first];
+                }
+                relative = relative+1;
+            }
+            delete buckets; delete next;
+        }
+        int32 frame = ssa.source.local_counts[function_index]; value = first;
+        while (value < last) {
+            if (ssa.results[value] && ssa.uses[value] > 0 && allocation.registers[value] == 0) { allocation.spills[value] = frame; frame = frame+1; }
+            value = value+1;
+        }
+        allocation.frame_counts[function_index] = frame;
+        delete begin; delete end; function_index = function_index+1;
+    }
+    return allocation;
+}
+
+bool KrtKroSsaLoad(KrtSsaModule ssa, KrtSsaAllocation allocation, KrtKroObject output, ref int32 pc, int32 value) {
+    if (value < 0 || value >= ssa.count || !ssa.results[value]) { return false; }
+    int32 register_index = allocation.registers[value];
+    if (register_index > 0) { return KrtKroNativeByte(output,ref pc,65) && KrtKroNativeByte(output,ref pc,register_index == 1 ? 84 : 85); }
+    return KrtKroNativeFrameLoad(output,ref pc,allocation.spills[value]);
+}
+
+bool KrtKroSsaStore(KrtSsaModule ssa, KrtSsaAllocation allocation, KrtKroObject output, ref int32 pc, int32 value) {
+    if (ssa.uses[value] == 0) { return true; }
+    int32 register_index = allocation.registers[value];
+    if (register_index > 0) { return KrtKroNativeCode(output,ref pc,register_index == 1 ? 0xc48949 : 0xc58949,3); }
+    return KrtKroNativeFrameStore(output,ref pc,allocation.spills[value]);
+}
+
+bool KrtKroSsaEdge(KrtSsaModule ssa, KrtSsaAllocation allocation, KrtKroObject output, ref int32 pc, int32 predecessor, int32 target) {
+    if (target < 0 || target >= ssa.block_count) { return false; }
+    int32 first = ssa.block_phis[target]; int32 last = first+ssa.block_phi_counts[target]; int32 value = first;
+    // Read all incoming values before writing destinations, including cycles.
+    while (value < last) {
+        if (ssa.ops[value] == 101 && ssa.uses[value] > 0) {
+            int32 operand = 0; bool found = false;
+            while (operand < ssa.operand_counts[value]) {
+                int32 position = ssa.operand_starts[value]+operand;
+                if (ssa.phi_predecessors[position] == predecessor) { if (!KrtKroSsaLoad(ssa,allocation,output,ref pc,ssa.operands[position])) { return false; } found = true; break; }
+                operand = operand+1;
+            }
+            if (!found) { return false; }
+        }
+        value = value+1;
+    }
+    value = last-1;
+    while (value >= first) {
+        if (ssa.ops[value] == 101 && ssa.uses[value] > 0 && (!KrtKroNativeByte(output,ref pc,88) || !KrtKroSsaStore(ssa,allocation,output,ref pc,value))) { return false; }
+        value = value-1;
+    }
+    return true;
+}
+
+bool KrtKroSsaRead(KrtSsaModule ssa, KrtSsaAllocation allocation, KrtKroObject output, ref int32 pc, int32 value) {
+    if (value < 0 || value >= ssa.count || !ssa.results[value]) { return false; }
+    int32 register_index = allocation.registers[value];
+    if (register_index > 0) { return KrtKroNativeCode(output,ref pc,register_index == 1 ? 0xe0894c : 0xe8894c,3); }
+    int32 displacement = -8*(allocation.spills[value]+1);
+    return KrtKroNativeCode(output,ref pc,0x858b48,3) && KrtKroNativeU32(output,ref pc,displacement);
+}
+
+bool KrtKroSsaScalarOp(int32 op) {
+    return op == 1 || op == 2 || op == 3 || (op >= 4 && op <= 16) || op == 28 || op == 31 || op == 100;
+}
+
+bool KrtKroSsaScalar(KrtSsaModule ssa, KrtSsaAllocation allocation, KrtKroObject output, ref int32 pc, int32 value) {
+    int32 op = ssa.ops[value]; int32 operands = ssa.operand_counts[value]; int32 start = ssa.operand_starts[value];
+    if (operands > 1) {
+        if (!KrtKroSsaRead(ssa,allocation,output,ref pc,ssa.operands[start+1]) || !KrtKroNativeCode(output,ref pc,0xc38948,3)) { return false; }
+    }
+    if (operands > 0 && !KrtKroSsaRead(ssa,allocation,output,ref pc,ssa.operands[start])) { return false; }
+    if (op == 1) { if (!KrtKroNativeCode(output,ref pc,0xb848,2) || !KrtKroNativeU64(output,ref pc,ssa.args[value])) { return false; } }
+    else if (op == 2 || op == 100) {
+        if (!KrtKroNativeCode(output,ref pc,0x858b48,3) || !KrtKroNativeU32(output,ref pc,-8*((int32)ssa.args[value]+1))) { return false; }
+    } else if (op == 3) { return KrtKroNativeFrameStore(output,ref pc,(int32)ssa.args[value]); }
+    else if (op >= 4 && op <= 13) { if (!KrtKroNativeBinaryResult(output,ref pc,op,ssa.extra[value] != 0,false)) { return false; } }
+    else if (op == 14 || op == 15) { if (!KrtKroNativeCode(output,ref pc,0xf748,2) || !KrtKroNativeByte(output,ref pc,op == 14 ? 216 : 208)) { return false; } }
+    else if (op == 16) {
+        int32 condition = 149; int64 comparison = ssa.args[value]; bool is_unsigned = ssa.extra[value] != 0;
+        if (comparison == 61) { condition = 148; }
+        else if (comparison == 60) { condition = is_unsigned ? 146 : 156; }
+        else if (comparison == 62) { condition = is_unsigned ? 151 : 159; }
+        else if (comparison == 102) { condition = is_unsigned ? 150 : 158; }
+        else if (comparison == 103) { condition = is_unsigned ? 147 : 157; }
+        if (!KrtKroNativeCode(output,ref pc,0xd83948,3) || !KrtKroNativeByte(output,ref pc,15) || !KrtKroNativeByte(output,ref pc,condition) || !KrtKroNativeByte(output,ref pc,192) || !KrtKroNativeCode(output,ref pc,0xc0b60f,3)) { return false; }
+    } else if (op == 28) { if (!KrtKroNativeTemporaryCast(output,ref pc,(int32)ssa.args[value])) { return false; } }
+    else if (op == 31) {
+        if (!KrtKroNativeCode(output,ref pc,0xc08548,3) || !KrtKroNativeCode(output,ref pc,0xc0940f,3) || !KrtKroNativeCode(output,ref pc,0xc0b60f,3)) { return false; }
+    }
+    return KrtKroSsaStore(ssa,allocation,output,ref pc,value);
+}

@@ -6,7 +6,7 @@ Kairote编译器采用经典的三段式架构设计：
 
 ### 0.1 编译器架构层次
 ```
-源代码 (.krt) 
+源代码 (.krt)
     ↓
 前端 (Frontend) - 词法分析、语法分析、语义分析
     ↓
@@ -18,29 +18,31 @@ Kairote编译器采用经典的三段式架构设计：
 ```
 
 ### 0.2 核心模块划分
-- **compiler/frontend/**: 前端处理模块
+- **Re.KrtC/src/Compiler/Frontend/**: 前端处理模块
   - `Lexer/`: 词法分析器 (Tokenizer.c)
   - `Parser/`: 语法分析器 (Parser.c, Ast.c)
   - `Semantic/`: 语义分析器 (SemanticAnalyzer.c, SymbolTable.c, Generics.c)
-- **compiler/middle/**: 中端处理模块
-  - `ir/`: 中间表示定义与基础操作 (ir.c, ir_optimizer.c)
-  - `codegen/`: IR生成与优化 (ir_gen.c, optimizer.c)
-- **compiler/backend/**: 后端处理模块
-  - `x86/`: x86架构代码生成 (x86_codegen.c)
-- **compiler/driver/**: 驱动与项目管理
-  - `compiler.c`: 主编译器驱动
-  - `project.c`: 项目管理
-  - `preprocessor.c`: 预处理
-  - `parallel_compiler.c`: 并行编译支持
-- **compiler/pipeline/**: 编译流程协调
-  - `compiler_pipeline.c`: 编译流程控制
-- **core/**: 基础工具库
-  - `memory/`: 内存管理 (allocator.c, smart_ptr.c, leak_detector.c)
-  - `utils/`: 工具函数 (error.c, logger.c, string.c, path.c)
-  - `platform/`: 平台抽象 (thread_pool.c)
-- **runtime/**: 运行时支持
-  - `runtime.c`: 运行时库
-  - `interpreter.c`: 简单解释器（后期将被AOT替代）
+- **Re.KrtC/src/Compiler/Middle/**: 中端处理模块
+  - `Ir/`: 中间表示定义与优化 (Ir.c, IrOptimizer.c)
+  - `Codegen/`: IR生成 (IrGen.c)
+- **Re.KrtC/src/Compiler/Backend/**: 后端处理模块
+  - `X86/`: x86架构代码生成 (X86Codegen.c)
+  - `Kro/`: KRO目标文件代码生成 (KroCodegen.c)
+  - `Vm/`: 虚拟机代码生成 (VmCodegen.c)
+- **Re.KrtC/src/Compiler/Driver/**: 驱动与项目管理
+  - `Compiler.c`: 主编译器驱动
+  - `Project.c`: 项目管理
+  - `Preprocessor.c`: 预处理
+  - `ParallelCompiler.c`: 并行编译支持
+- **Re.KrtC/src/Compiler/Pipeline/**: 编译流程协调
+  - `CompilerPipeline.c`: 编译流程控制
+- **Re.KrtC/src/Core/**: 基础工具库
+  - `Memory/`: 内存管理 (Allocator.c, SmartPtr.c, LeakDetector.c)
+  - `Utils/`: 工具函数 (Error.c, Logger.c, KrtString.c, Path.c)
+  - `Platform/`: 平台抽象 (ThreadPool.c)
+- **Re.KrtC/src/Runtime/Krt/**: Kairote运行时源代码
+- **SelfHost/**: 自举编译器与工程驱动
+- **Test/**: 分类测试、规范检查与性能回归
 
 ### 0.3 当前开发重点
 - **Kro目标文件后端**
@@ -66,13 +68,13 @@ int function_name(int param) {
 }
 
 // 错误的风格
-int function_name(int param) 
+int function_name(int param)
 {
-    if (condition) 
+    if (condition)
     {
         do_something();
     }
-    else 
+    else
     {
         do_something_else();
     }
@@ -150,14 +152,16 @@ int function_name(int param)
   - 正确: `Test/test_console_simple.krt`
   - 错误: `test_console_simple.krt` (放在根目录)
 - **分类**: 按功能分类放置
-  - 语法测试: `Test/syntax/`
-  - 功能测试: `Test/features/`
-  - 集成测试: `Test/integration/`
+  - 语法测试: `Test/SyntaxAudit/`
+  - 功能测试: `Test/IntegerWidths/`、`Test/Pointers/`、`Test/StandardLibrary/`
+  - 自举与集成测试: `Test/SelfHost/`
+  - 质量与性能测试: `Test/Quality/`、`Test/Performance/`
 
 ### 2.2 禁止行为
 - 禁止在根目录创建测试文件
 - 禁止在src目录中创建测试文件
 - 禁止将临时文件提交到版本库
+- 构建缓存、实验产物和日志放在忽略的 `build/` 目录；根目录历史实验产物可归档到 `build/Artifacts/`。
 
 ## 3. 编译器开发规范
 
@@ -224,7 +228,7 @@ Kairote编译器使用自定义的错误输出格式，不是传统的C语言编
 
 #### 3.2.4 错误报告宏使用
 
-错误报告宏定义在 `src/core/utils/krt_common.h` 中，使用方法如下：
+错误报告宏定义在 `Re.KrtC/src/Core/Utils/KrtCommon.h` 中，使用方法如下：
 
 ```c
 // 基础错误报告
@@ -268,8 +272,8 @@ const char* KrtStrerror(KrtErrorCode code);
 
 #### 3.2.6 内存错误处理
 - **分配失败**: 所有内存分配必须检查返回值
-- **内存泄漏**: 使用泄漏检测器 (src/core/memory/leak_detector.c)
-- **双重释放**: 使用智能指针防止 (src/core/memory/smart_ptr.c)
+- **内存泄漏**: 使用泄漏检测器 (Re.KrtC/src/Core/Memory/LeakDetector.c)
+- **双重释放**: 使用智能指针防止 (Re.KrtC/src/Core/Memory/SmartPtr.c)
 
 #### 3.2.7 错误处理最佳实践
 1. **编译期错误**: 使用 `KrtError` 或 `KrtError_LOC` 报告非致命错误
@@ -281,7 +285,7 @@ const char* KrtStrerror(KrtErrorCode code);
 
 #### 3.3.1 AST节点定义
 ```c
-// AST节点类型枚举 (src/compiler/frontend/parser/ast.h)
+// AST节点类型枚举示意 (Re.KrtC/src/Compiler/Frontend/Parser/Ast.h)
 typedef enum {
     KRT_AST_PROGRAM,
     KRT_AST_FUNCTION_DECLARATION,
@@ -321,28 +325,28 @@ typedef struct KrtAstNode {
 
 #### 3.3.3 中间表示(IR)规范
 ```c
-// IR指令类型 (src/compiler/middle/ir/ir.h)
+// IR指令类型示意 (Re.KrtC/src/Compiler/Middle/Ir/Ir.h)
 typedef enum {
     // 内存操作
     KRT_IR_LOAD,
     KRT_IR_STORE,
     KRT_IR_ALLOC,
-    
+
     // 算术运算
     KRT_IR_ADD,
     KRT_IR_SUB,
     KRT_IR_MUL,
     KRT_IR_DIV,
-    
+
     // 控制流
     KRT_IR_JUMP,
     KRT_IR_BRANCH,
     KRT_IR_RETURN,
-    
+
     // 函数调用
     KRT_IR_CALL,
     KRT_IR_PARAM,
-    
+
     // ... 更多IR指令
 } KrtIROpcode;
 ```
@@ -366,9 +370,9 @@ typedef enum {
 - **循环优化**: 循环不变量外提等
 
 ### 3.4 内存管理规范
-- **统一分配**: 使用统一的内存分配器 (src/core/memory/allocator.c)
-- **智能指针**: 使用智能指针防止内存泄漏 (src/core/memory/smart_ptr.c)
-- **泄漏检测**: 启用内存泄漏检测 (src/core/memory/leak_detector.c)
+- **统一分配**: 使用统一的内存分配器 (Re.KrtC/src/Core/Memory/Allocator.c)
+- **智能指针**: 使用智能指针防止内存泄漏 (Re.KrtC/src/Core/Memory/SmartPtr.c)
+- **泄漏检测**: 启用内存泄漏检测 (Re.KrtC/src/Core/Memory/LeakDetector.c)
 - **错误检查**: 内存分配失败必须检查并处理
 - **及时释放**: 及时释放不再使用的内存，避免内存碎片
 
@@ -393,7 +397,8 @@ typedef enum {
 
 ### 4.4 编译器本体构建
 - **编译命令**: `cd Re.KrtC && zig build`
-- **依赖库**: 无外部依赖，仅依赖标准库
+- **构建依赖**: Zig 0.16.0、仓库内 ArkLink 静态库，以及系统 `libm`、`libpthread`。先运行 `cmake -S ArkLink -B ArkLink/build && cmake --build ArkLink/build`。
+- **CMake入口**: 根目录运行 `cmake -S . -B build && cmake --build build`，统一构建 ArkLink 与 Re.KrtC。
 
 ## 5. 提交规范
 
@@ -472,7 +477,7 @@ int function_name(int param1, const char* param2);
 ### 8.3 文档位置
 - **API文档**: 头文件中，接口声明上方
 - **实现文档**: 源文件中，复杂函数上方
-- **架构文档**: `docs/DEV-DOC/` 目录下
+- **架构文档**: `Docs/` 目录下，按 `KrtC/`、`ArkLink/`、`SelfHost/` 分类
 
 ## 9. 性能基准
 

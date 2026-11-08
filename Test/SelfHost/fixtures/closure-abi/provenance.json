@@ -1,0 +1,48 @@
+{
+  "complete": true,
+  "purpose": "Actual pre-closure callback objects use fn ABI and must be rejected by fn2 consumers",
+  "compiler_sha256": "0a321ed3962220a309d5d9c69f8cbc6af08d3ffc00e2d21b773ab4a81abba859",
+  "linker_sha256": "eaf610b4190a2799f050a7b58053bcebfd559bc79017414100d8192bf41ecd5b",
+  "source": "LegacyApply.krt",
+  "source_sha256": "ce5df90d0afb6c48d987202187d00a21696d74a8b5d07b606508350f1e5f322f",
+  "environment": {
+    "PATH": "",
+    "KAIROTE_ROOT": "/home/mnsjtxy/Kairote_Lang"
+  },
+  "objects": [
+    {
+      "level": 0,
+      "hex_path": "legacy-callback-o0.kro.hex",
+      "object_sha256": "09fb34ac23aa441bed85a3e1496225f9fe847d6af87907c986383a42614e93b3",
+      "object_size": 365,
+      "argv": [
+        "/home/mnsjtxy/Kairote_Lang/build/selfhost-closures-design/baseline/compiler",
+        "--linker",
+        "/home/mnsjtxy/Kairote_Lang/build/selfhost-closures-design/baseline/ArkLink",
+        "/home/mnsjtxy/Kairote_Lang/Test/SelfHost/fixtures/closure-abi/LegacyApply.krt",
+        "-O0",
+        "-c",
+        "-o",
+        "/home/mnsjtxy/Kairote_Lang/build/selfhost-closures-design/legacy-abi/legacy-o0.kro"
+      ],
+      "exit_code": 0
+    },
+    {
+      "level": 2,
+      "hex_path": "legacy-callback-o2.kro.hex",
+      "object_sha256": "d59d5cee0648a8b036a7947bbe194ed8d0e136bfdb216a4a8789ca0b7204e3b2",
+      "object_size": 317,
+      "argv": [
+        "/home/mnsjtxy/Kairote_Lang/build/selfhost-closures-design/baseline/compiler",
+        "--linker",
+        "/home/mnsjtxy/Kairote_Lang/build/selfhost-closures-design/baseline/ArkLink",
+        "/home/mnsjtxy/Kairote_Lang/Test/SelfHost/fixtures/closure-abi/LegacyApply.krt",
+        "-O2",
+        "-c",
+        "-o",
+        "/home/mnsjtxy/Kairote_Lang/build/selfhost-closures-design/legacy-abi/legacy-o2.kro"
+      ],
+      "exit_code": 0
+    }
+  ]
+}

@@ -12,6 +12,20 @@ def header(body):
 
 
 class StandardsChecks(unittest.TestCase):
+    def test_naming_migrations_retain_the_baseline(self):
+        original = {"Re.KrtC/src/compiler/Driver/Compiler.h",
+                    "Re.KrtC/stub_include/ArkLink/Arklink.h"}
+        self.assertEqual(standards.baseline_name("Re.KrtC/src/Compiler/Driver/Compiler.h", original),
+                         "Re.KrtC/src/compiler/Driver/Compiler.h")
+        self.assertEqual(standards.baseline_name("Re.KrtC/StubInclude/ArkLink/Arklink.h", original),
+                         "Re.KrtC/stub_include/ArkLink/Arklink.h")
+        self.assertIsNone(standards.baseline_name("Re.KrtC/src/Compiler/New.h", original))
+
+    def test_ambiguous_migrations_do_not_hide_new_interfaces(self):
+        original = {"Module/FooBar.h", "Module/foo_bar.h"}
+        self.assertIsNone(standards.baseline_name("Module/Foobar.h", original))
+        self.assertEqual(standards.baseline_name("Module/FooBar.h", original), "Module/FooBar.h")
+
     def check_rules(self, source, baseline="", suffix=".h"):
         path = standards.ROOT / ("Re.KrtC/src/StandardsFixture" + suffix)
         return standards.check_rules(path, source, baseline)
@@ -148,6 +162,14 @@ static int (*choose_callback(void))(int) { return callback_variable; }
 ''')
         self.assertEqual([item.name for item in standards.declarations(source)], ["KrtSelect", "choose_callback"])
         self.assertEqual(self.check_rules(source), ([], []))
+
+    def test_strict_lengths_reject_existing_oversized_functions(self):
+        body = "static int large_function(void) {\n" + "    /* body */\n" * 500 + "    return 0;\n}\n"
+        path = standards.ROOT / "Re.KrtC/src/StandardsFixture.c"
+        findings, reports = standards.check_rules(path, body, body, strict_lengths=True)
+        self.assertEqual(len(findings), 1)
+        self.assertIn("503 lines", findings[0])
+        self.assertEqual(reports, [])
 
     def test_commented_include_guards_do_not_satisfy_the_rule(self):
         findings, _ = self.check_rules("/* #ifndef KRT_TEST_H\n#define KRT_TEST_H\n#endif */\n")

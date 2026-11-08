@@ -16,6 +16,7 @@ typedef struct ArkResolverSymbol {
     ArkSymbolVisibility visibility;
     ArkSectionBuffer* section;
     uint32_t section_index;
+    int defined; /* Section indexes are zero based; zero is a valid definition. */
     uint32_t value;
     uint32_t size;
     int32_t import_id;
@@ -35,6 +36,9 @@ typedef struct ArkResolverReloc {
     int64_t addend;
     uint32_t target_rva;
     uint32_t symbol_rva;
+    /* PE RVAs stay 32 bit; resolved ELF virtual addresses are full width. */
+    uint64_t symbol_address;
+    int symbol_address_resolved;
 } ArkResolverReloc;
 
 typedef struct ArkImportModule {

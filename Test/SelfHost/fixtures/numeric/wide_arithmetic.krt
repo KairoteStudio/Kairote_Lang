@@ -1,0 +1,18 @@
+int128 id(int128 x) {return x;}
+class WideBox {public int128 x;}
+int32 main() {
+ int128 x=(int128)1<<100;
+ int128 y=36893488147419103232;
+ if(x<=y || x>>100!=1 || y>>65!=1) {return 1;}
+ if(x+y-x!=y || (x+7)%y!=7 || x/y!=34359738368) {return 2;}
+ if((-x)/y!=-34359738368 || (-x-7)%y!=-7) {return 3;}
+ uint128 high=340282366920938463463374607431768211455;
+ if(high>>127!=1 || high/3!=113427455640312821154458202477256070485 || high%3!=0) {return 4;}
+ if((uint128)0-high!=1 || ~high!=0) {return 5;}
+ int128[] a=new int128[3]; a[0]=-y; a[1]=x; a[2]=a[0];
+ if(a[0]!=-y || a[1]!=x || a[2]!=-y) {return 6;}
+ if(id(x)!=x) {return 7;}
+ WideBox b=new WideBox(); if(b.x!=0) {return 8;} b.x=x; if(b.x!=x) {return 9;}
+ x+=7; x*=3; x-=21; x/=3; if(x!=(int128)1<<100) {return 10;}
+ delete a; delete b; return 0;
+}

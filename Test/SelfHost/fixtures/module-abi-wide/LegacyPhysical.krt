@@ -1,0 +1,5 @@
+namespace LegacyPhysical;
+public struct Tag{int32 value;}
+uint128 Echo(uint128 value,Tag tag){return value+(uint128)tag.value;}
+void Touch(ref uint128 value,Tag tag){value+=(uint128)tag.value;}
+uint128 Through(fn(uint128)->uint128 callback,uint128 value,Tag tag){return callback(value)+(uint128)tag.value;}

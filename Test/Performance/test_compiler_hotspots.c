@@ -1,7 +1,7 @@
-#include "compiler/Driver/Preprocessor.h"
-#include "compiler/Frontend/Semantic/SymbolTable.h"
-#include "compiler/Pipeline/CompilerPipeline.h"
-#include "compiler/Driver/ParallelCompiler.h"
+#include "Compiler/Driver/Preprocessor.h"
+#include "Compiler/Frontend/Semantic/SymbolTable.h"
+#include "Compiler/Pipeline/CompilerPipeline.h"
+#include "Compiler/Driver/ParallelCompiler.h"
 #include <assert.h>
 #include <pthread.h>
 #include <stdio.h>

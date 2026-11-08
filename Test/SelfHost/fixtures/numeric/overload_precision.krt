@@ -1,0 +1,1 @@
+float32 f(float32 x) { return x+1; } float64 f(float64 x) { return x+2; } int32 main() { if(f(1.0f)!=2.0 || f(1.0)!=3.0) {return 1;} return 0;}

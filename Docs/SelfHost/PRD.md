@@ -68,11 +68,11 @@ KrtLink(Objects, LinkOptions) -> Executable
 目录划分：
 
 ```text
-Frontend/Lexer
-Frontend/Parser
-Frontend/Ast
-Frontend/Semantic
-Frontend/Diagnostics
+Compiler/Frontend/Lexer
+Compiler/Frontend/Parser
+Compiler/Frontend/Ast
+Compiler/Frontend/Semantic
+Compiler/Frontend/Diagnostics
 ```
 
 Lexer 只负责 Token 和源码位置；Parser 只负责 AST；Semantic 负责符号表、类型推导、名称解析、可变性、返回路径和控制流检查。各阶段不得直接调用 Kro writer。
@@ -112,18 +112,19 @@ IR 验证器在每次优化前后运行，检查 SSA 定义唯一性、基本块
 
 ```text
 SelfHost/
-├── Driver/
-├── Frontend/
-│   ├── Lexer/
-│   ├── Parser/
-│   └── Semantic/
-├── Middle/
-│   ├── Ir/
-│   └── Optimize/
-├── Backend/
-│   └── Kro/
-├── Runtime/
-└── Main.krt
+├── Compiler/
+│   ├── Driver/
+│   ├── Frontend/
+│   │   ├── Lexer/
+│   │   ├── Parser/
+│   │   └── Semantic/
+│   ├── Middle/
+│   │   └── Ir/
+│   └── Backend/
+│       ├── Kro/
+│       └── Vm/
+├── Main.krt
+└── README.md
 ```
 
 模块间只通过显式类型和接口通信。禁止重新引入单文件转译器、字符串拼接式代码生成器或依赖 C 语法作为后端协议。

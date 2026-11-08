@@ -1,14 +1,49 @@
 import os
 import json
 import hashlib
+import re
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
 
+from Test.SelfHost.Bootstrap import ARKLINK, KRTC
+
 ROOT = Path(__file__).resolve().parents[2]
-KRTC = Path(os.environ.get("KRTC", ROOT / "Re.KrtC/build/KrtC")).resolve()
-ARKLINK = Path(os.environ.get("ARKLINK", ROOT / "ArkLink/build/ArkLink")).resolve()
+
+
+def compiler_prelude(parts):
+    sources = {path: path.read_text() for path in (ROOT / 'SelfHost').rglob('*.krt')
+               if path.name != 'Main.krt'}
+    # Fixture modules use the actual component definitions, including AST field
+    # types and their transitive helper calls. Ignore identifiers in comments
+    # and literals so fixture strings do not introduce compiler dependencies.
+    code = {path: re.sub(r'//[^\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'',
+                         ' ', text) for path, text in sources.items()}
+    providers = {}
+    for path, text in code.items():
+        declarations = re.findall(r'\b(?:class|struct|enum)\s+([A-Za-z_]\w*)', text)
+        declarations += re.findall(
+            r'(?m)^(?:static\s+)?[A-Za-z_]\w*(?:\s*(?:\*|\?|\[\]))*\s+([A-Za-z_]\w*)\s*(?:\(|=|;)', text)
+        for name in declarations:
+            providers.setdefault(name, set()).add(path)
+    selected = {ROOT / 'SelfHost' / part for part in parts}
+    if any('Compiler/Frontend/Parser/' in part for part in parts):
+        selected.update((ROOT / 'SelfHost/Compiler/Frontend/Parser').glob('*.krt'))
+    if any('NativeBinding.krt' in part or part == 'Compiler/Frontend/Semantic/Semantic.krt' for part in parts):
+        selected.update(path for path in (ROOT / 'SelfHost').rglob('*.krt') if path.name != 'Main.krt')
+    if any('Compiler/Driver/Compiler.krt' in part for part in parts):
+        selected.add(ROOT / 'SelfHost/Compiler/Backend/Kro/Library.krt')
+        selected.update((ROOT / 'SelfHost/Compiler/Driver').glob('*.krt'))
+    pending = list(selected)
+    while pending:
+        path = pending.pop()
+        for name in set(re.findall(r'\b[A-Za-z_]\w*\b', code[path])):
+            for dependency in providers.get(name, ()):
+                if dependency not in selected:
+                    selected.add(dependency)
+                    pending.append(dependency)
+    return '\n'.join(sources[path] for path in sorted(selected))
 
 class ContractTests(unittest.TestCase):
     def test_stage1_bootstrap_probe(self):
@@ -114,11 +149,11 @@ class ContractTests(unittest.TestCase):
 
     def test_local_binding(self):
         parts = [
-            'Frontend/Lexer/Token.krt', 'Frontend/Lexer/Lexer.krt',
-            'Frontend/Parser/Ast.krt', 'Frontend/Parser/Parser.krt',
-            'Middle/Ir/Ir.krt', 'Frontend/Semantic/Semantic.krt',
+            'Compiler/Frontend/Lexer/Token.krt', 'Compiler/Frontend/Lexer/Lexer.krt',
+            'Compiler/Frontend/Parser/Ast.krt', 'Compiler/Frontend/Parser/Parser.krt', 'Compiler/Frontend/Parser/Names.krt',
+            'Compiler/Middle/Ir/Ir.krt', 'Compiler/Middle/Ir/Floating.krt', 'Compiler/Middle/Ir/Exceptions.krt', 'Compiler/Frontend/Semantic/Semantic.krt', 'Compiler/Frontend/Semantic/NativeBinding.krt', 'Compiler/Frontend/Semantic/Names.krt', 'Compiler/Frontend/Semantic/Generics.krt', 'Compiler/Frontend/Semantic/Exceptions.krt', 'Compiler/Frontend/Semantic/Floating.krt',
         ]
-        prelude = '\n'.join((ROOT / 'SelfHost' / part).read_text() for part in parts)
+        prelude = compiler_prelude(parts)
         cases = [
             ('int32 main() { int32 x = 5; int32 y = 9; return y; }', True, 1),
             ('int32 main() { int32 x = 5; int32 y = 9; return x; }', True, 0),
@@ -162,11 +197,11 @@ int32 main() {{
 
     def test_pointer_index_frontend_contract(self):
         parts = [
-            'Frontend/Lexer/Token.krt', 'Frontend/Lexer/Lexer.krt',
-            'Frontend/Parser/Ast.krt', 'Frontend/Parser/Parser.krt',
-            'Middle/Ir/Ir.krt', 'Frontend/Semantic/Semantic.krt',
+            'Compiler/Frontend/Lexer/Token.krt', 'Compiler/Frontend/Lexer/Lexer.krt',
+            'Compiler/Frontend/Parser/Ast.krt', 'Compiler/Frontend/Parser/Parser.krt', 'Compiler/Frontend/Parser/Names.krt',
+            'Compiler/Middle/Ir/Ir.krt', 'Compiler/Middle/Ir/Floating.krt', 'Compiler/Middle/Ir/Exceptions.krt', 'Compiler/Frontend/Semantic/Semantic.krt', 'Compiler/Frontend/Semantic/NativeBinding.krt', 'Compiler/Frontend/Semantic/Names.krt', 'Compiler/Frontend/Semantic/Generics.krt', 'Compiler/Frontend/Semantic/Exceptions.krt', 'Compiler/Frontend/Semantic/Floating.krt',
         ]
-        prelude = '\n'.join((ROOT / 'SelfHost' / part).read_text() for part in parts)
+        prelude = compiler_prelude(parts)
         text = 'int32 main() { byte* p = stackalloc byte[4]; p[0] = 1; return p[0]; }'
         with tempfile.TemporaryDirectory(prefix='krt-index-') as directory:
             work = Path(directory)
@@ -206,11 +241,11 @@ int32 main() {{
 
     def test_multi_function_main_ordering_contract(self):
         parts = [
-            'Frontend/Lexer/Token.krt', 'Frontend/Lexer/Lexer.krt',
-            'Frontend/Parser/Ast.krt', 'Frontend/Parser/Parser.krt',
-            'Frontend/Semantic/Semantic.krt',
+            'Compiler/Frontend/Lexer/Token.krt', 'Compiler/Frontend/Lexer/Lexer.krt',
+            'Compiler/Frontend/Parser/Ast.krt', 'Compiler/Frontend/Parser/Parser.krt', 'Compiler/Frontend/Parser/Names.krt',
+            'Compiler/Frontend/Semantic/Semantic.krt',
         ]
-        prelude = '\n'.join((ROOT / 'SelfHost' / part).read_text() for part in parts)
+        prelude = compiler_prelude(parts)
         text = 'using System; namespace Demo; int32 main() { return 0; } int32 alpha() { return 1; } int32 beta() { return 2; }'
         with tempfile.TemporaryDirectory(prefix='krt-order-') as directory:
             work = Path(directory)
@@ -239,10 +274,10 @@ int32 main() {{
 
     def test_bitwise_and_shift_expression_contract(self):
         parts = [
-            'Frontend/Lexer/Token.krt', 'Frontend/Lexer/Lexer.krt',
-            'Frontend/Parser/Ast.krt', 'Frontend/Parser/Parser.krt',
+            'Compiler/Frontend/Lexer/Token.krt', 'Compiler/Frontend/Lexer/Lexer.krt',
+            'Compiler/Frontend/Parser/Ast.krt', 'Compiler/Frontend/Parser/Parser.krt', 'Compiler/Frontend/Parser/Names.krt',
         ]
-        prelude = '\n'.join((ROOT / 'SelfHost' / part).read_text() for part in parts)
+        prelude = compiler_prelude(parts)
         source_text = 'int32 main() { return 1 | 2 ^ 3 & 4 << 1; }'
         main = f'''
 int32 main() {{
@@ -269,11 +304,11 @@ int32 main() {{
 
     def test_multiple_parameter_binding_contract(self):
         parts = [
-            'Frontend/Lexer/Token.krt', 'Frontend/Lexer/Lexer.krt',
-            'Frontend/Parser/Ast.krt', 'Frontend/Parser/Parser.krt',
-            'Frontend/Semantic/Semantic.krt',
+            'Compiler/Frontend/Lexer/Token.krt', 'Compiler/Frontend/Lexer/Lexer.krt',
+            'Compiler/Frontend/Parser/Ast.krt', 'Compiler/Frontend/Parser/Parser.krt', 'Compiler/Frontend/Parser/Names.krt',
+            'Compiler/Frontend/Semantic/Semantic.krt',
         ]
-        prelude = '\n'.join((ROOT / 'SelfHost' / part).read_text() for part in parts)
+        prelude = compiler_prelude(parts)
         text = 'int32 sum(int32 left, int32 right) { return right; } int32 main() { return sum(1, 2); }'
         with tempfile.TemporaryDirectory(prefix='krt-params-') as directory:
             work = Path(directory)
@@ -299,11 +334,11 @@ int32 main() {{
 
     def test_large_function_module_contract(self):
         parts = [
-            'Frontend/Lexer/Token.krt', 'Frontend/Lexer/Lexer.krt',
-            'Frontend/Parser/Ast.krt', 'Frontend/Parser/Parser.krt',
-            'Frontend/Semantic/Semantic.krt',
+            'Compiler/Frontend/Lexer/Token.krt', 'Compiler/Frontend/Lexer/Lexer.krt',
+            'Compiler/Frontend/Parser/Ast.krt', 'Compiler/Frontend/Parser/Parser.krt', 'Compiler/Frontend/Parser/Names.krt',
+            'Compiler/Frontend/Semantic/Semantic.krt',
         ]
-        prelude = '\n'.join((ROOT / 'SelfHost' / part).read_text() for part in parts)
+        prelude = compiler_prelude(parts)
         text = ' '.join(f'int32 f{i}() {{ return {i}; }}' for i in range(40)) + ' int32 main() { return 0; }'
         with tempfile.TemporaryDirectory(prefix='krt-large-module-') as directory:
             work = Path(directory)
@@ -328,11 +363,11 @@ int32 main() {{
 
     def test_void_unsafe_loop_control_contract(self):
         parts = [
-            'Frontend/Lexer/Token.krt', 'Frontend/Lexer/Lexer.krt',
-            'Frontend/Parser/Ast.krt', 'Frontend/Parser/Parser.krt',
-            'Frontend/Semantic/Semantic.krt',
+            'Compiler/Frontend/Lexer/Token.krt', 'Compiler/Frontend/Lexer/Lexer.krt',
+            'Compiler/Frontend/Parser/Ast.krt', 'Compiler/Frontend/Parser/Parser.krt', 'Compiler/Frontend/Parser/Names.krt',
+            'Compiler/Frontend/Semantic/Semantic.krt',
         ]
-        prelude = '\n'.join((ROOT / 'SelfHost' / part).read_text() for part in parts)
+        prelude = compiler_prelude(parts)
         text = 'void worker(int32 value) { unsafe(using krt.mem;) { while (true) { break; } } return; }'
         with tempfile.TemporaryDirectory(prefix='krt-void-control-') as directory:
             work = Path(directory)
@@ -356,17 +391,8 @@ int32 main() {{
             self.assertEqual(subprocess.run([str(binary)], timeout=10).returncode, 0)
 
     def test_frontend_ir_backend_contracts_compile_together(self):
-        parts = [
-            "SelfHost/Frontend/Lexer/Token.krt",
-            "SelfHost/Frontend/Lexer/Lexer.krt",
-            "SelfHost/Frontend/Parser/Ast.krt",
-            "SelfHost/Frontend/Parser/Parser.krt",
-            "SelfHost/Middle/Ir/Ir.krt",
-            "SelfHost/Frontend/Semantic/Semantic.krt",
-            "SelfHost/Backend/Kro/KroBackend.krt",
-            "SelfHost/Driver/Compiler.krt",
-            "Test/SelfHost/test_contract.krt",
-        ]
+        parts = [str(path.relative_to(ROOT)) for path in sorted((ROOT / "SelfHost").rglob("*.krt")) if path.name != "Main.krt"]
+        parts.append("Test/SelfHost/test_contract.krt")
         with tempfile.TemporaryDirectory(prefix="krt-contract-") as directory:
             work = Path(directory)
             source = work / "Contract.krt"

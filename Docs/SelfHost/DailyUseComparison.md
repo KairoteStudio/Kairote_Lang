@@ -1,0 +1,131 @@
+# SelfHost 与 Re.KrtC 的日常使用对比
+
+2026-09-29：本轮把构造函数、foreach、数组字面量、命名空间、浮点、泛型、异常和工程构建接入原生编译链。随后继续补齐泛型静态字段、where 约束、单类继承与基类异常捕获、原生函数跨 KRO 链接，以及虚方法、抽象类和接口。日常程序可以组合使用这些能力；完整语言一致性仍需逐项验收。
+
+2026-10-01：命令行、源码依赖、位置映射、工程配置、缓存和链接调用迁入 Kairote 编译器，应用入口直接执行原生二进制。原生优化接入整数常量与转换折叠、常量分支简化和安全的直接自身尾调用消除，支持 `-O0..3`，默认 `-O2`。Python 保留在自举和验证脚本中。
+
+后续恢复了结构化类型 AST 前瞻与多错误恢复、SSA CFG/phi 和寄存器分配、泛型实例注册表、继承路径栈、using frame、递归类型推断与完整类型身份的名称修饰；工程编译使用原生 worker 并行执行。函数式内置转换、完整 `stackalloc` 元素类型和命名参数也已接入。命名参数正确重排并保留源码求值顺序；Re.KrtC 当前忽略参数名的行为在前端审计中另有记录。
+
+2026-10-02：后续补入内联结构体和固定数组值语义、结构体 ABI2 完整布局契约，以及指针元素布局、空值层、直接和间接调用的统一匹配。验证包含真实 HTTP 服务、结构体快照和独立对象链接。文中 2026-10-01 的数量及哈希是历史快照，当前版本需读取重新生成的报告。
+
+## 可复现命令
+
+```sh
+python3 Test/SelfHost/Bootstrap.py
+SELFHOST_COMPILER="$PWD/build/selfhost/stage2/program" python3 -m unittest discover -s Test/SelfHost
+python3 Test/SelfHost/RunStandardLibrary.py
+python3 Test/SelfHost/CompareDaily.py --work build/selfhost-comparison/current --fail-on-wrong
+./SelfHost/krtc build Test/SelfHost/examples/language-project
+./Test/SelfHost/examples/language-project/bin/release/LanguageDemo
+```
+
+LanguageDemo 是实际的多文件工程，包含泛型构造、浮点数组、foreach、标准库调用、跨函数抛出异常及 finally 清理，同时验证具体泛型类型的静态计数、struct 约束和派生异常的基类捕获；预期输出 `average verified` 和 `empty input`，退出码为 0。
+
+`Test/SelfHost/examples/dispatch-project` 的 DispatchDemo 进一步组合抽象基类、虚方法、base 调用、接口继承、泛型接口约束、接口数组及接口类型的异常捕获。使用同样的 build 命令后，输出 `reading verified` 和 `interface collection verified`，退出码为 0。
+
+Kairote 原生驱动处理源码依赖、配置、缓存、位置映射、产物发布和链接调用；类型绑定、泛型实例化、异常展开、浮点和整数机器码、KRO 数据与符号也在原生编译器内生成。`SelfHost/krtc` 直接执行该二进制，测试脚本负责构造测试输入和记录结果。
+
+## 本轮补充内容
+
+| 需求 | 已接通的执行路径 | 当前边界 |
+| --- | --- | --- |
+| 构造函数与派发 | 两种构造声明、重载、参数/ref、字段初始化、单类继承、基类构造链；虚方法、抽象类和泛型类中的虚方法 | 派发枚举模块内具体类型；多个类基类、方法级泛型虚派发和跨模块虚表未实现；非虚方法按静态接收者类型选择 |
+| 接口 | 多接口实现、接口多继承与泛型接口、精确签名匹配、接口引用调用、数组及异常捕获 | 尚无默认方法和显式接口实现；访问规则见 [AccessControl.md](AccessControl.md) |
+| foreach | 数组、字符串和通用迭代器，var/显式类型、一次求值、嵌套、break/continue，退出时 Dispose；yield 生成惰性游标 | 字符串按 UTF-8 字节遍历；游标和生成器所有权见 [Iterators.md](Iterators.md) |
+| 数组字面量 | `[...]`、初始化表达式中的 `{...}`、推断/上下文类型、空数组、函数返回值、对象和字符串元素 | 没有锯齿数组和边界检查 |
+| 命名空间 | 文件级/块级/嵌套 namespace、限定类型/函数/全局量、using、类型与命名空间别名、局部优先级和歧义检测 | 模块文件路径与声明命名空间可不同；独立对象的可见性由导出与 ABI 契约约束 |
+| 标准库 | 原有 Console、Sys、Math、Convert、Memory、Array、String、StringBuilder 通过正常源码加载；增加 System.Exception | 以原有契约套件和新增专项测试为证据，不把一次导入成功当作全库语义证明 |
+| 浮点与整数 | IEEE float32/float64 字面量、算术/比较/转换、数组/字段/ref/调用；2–128 偶数位宽整数，按声明精度截断和符号扩展；宽整数使用独立值副本和固定帧临时区 | 内部调用约定及版本兼容见 [WideValues.md](WideValues.md) |
+| 泛型 | 类、函数与方法，显式参数/已有推断规则、嵌套实例、ref/数组、按具体类型隔离的静态字段，以及 class/struct/unmanaged/new()/基类/接口/类型参数约束；KRO 携带二进制模板声明和依赖 | 全部推断规则尚未完成；实例数有限；跨对象模板契约见 [ModuleAbi.md](ModuleAbi.md) |
+| 结构体 | 内联布局、自然对齐、固定数组、值复制、ref、隐藏结果槽、泛型值与只读接收者；ABI2 完整布局契约、接口实现及装箱 | 不支持结构体继承；详见 [Structs.md](Structs.md) 与 [Boxing.md](Boxing.md) |
+| 异常 | throw、多个 typed catch、基类捕获、实际对象类型保留、结构体与宽整数载荷、rethrow、跨函数展开、finally 各种出口；跨 KRO 身份一致 | 用户拥有的对象需手动释放；未捕获退出码 70 |
+| 全局量和回调 | 可变全局量/静态字段、跨模块共享初始化保护、类型化函数指针、自由函数/静态方法取址及间接调用、共享词法捕获及逃逸闭包 | 保存的闭包需要 delete；具体所有权见 [Closures.md](Closures.md) |
+| 工程构建 | new/build/check/clean、Configure(Project p)/JSON、通配符、配置变量、依赖/工具哈希缓存、真实 extern 函数跨 KRO 链接、失败保留原产物 | 原生 ABI、独立链接及工程类型的具体边界见 [Projects.md](Projects.md) |
+
+Math 的 checked power 实现改为显式检查乘法边界，避免依赖更宽的中间类型；标准库原有契约保持不变。数组和对象使用兼容的 16 字节分配头，`delete` 实际执行 munmap。数值专项另含独立整数预期和浮点位模式检查。
+
+ArkLink 也修复了两处实际链接问题：命令行曾只保留最后一个输入对象；未定义符号曾被误认为第 0 段的有效定义。现在收集全部输入，并对缺少定义的引用返回链接错误。新增测试直接执行分别编译的产物，并检查真实符号、重定位、对象输入顺序和失败保留旧产物。
+
+后续检查又修复了原生 `_KRT1$` 强符号重复定义随输入顺序静默选取实现的问题，两种输入顺序均报链接错误，并保留已有输出。当时类/接口跨模块签名仍使用局部符号；当前命名类型、对象派发及二进制泛型模板使用 [ABI3 契约](ModuleAbi.md)。整数异常身份按声明位宽区分，`int30` 不再被 `int32` 捕获，对象字段也不会因 8 字节存储槽被误判为 int64。
+
+## 差分验收方法
+
+`CompareDaily.py` 仍使用原来的 62 项固定用例，包含合法和非法程序。期望输出与退出码独立定义，Re.KrtC 只是比较对象。SelfHost 和 Re 均使用 `-O2`，两者的优化实现不同。报告保留命令、stdout/stderr、超时、产物、编译器/启动器/库源码哈希；测试期间工具或源码变化会令 `complete` 为 false。SelfHost 计时直接调用原生编译器。
+
+`--fail-on-wrong` 检查错算、崩溃、超时、错误产物和非法接受。明确拒绝的合法用例另行统计，不能算作能力已支持。`.Length` 属性与 `.Length()` 方法分别测试；目前两种编译器都拒绝这两个 Length 方法形式。
+
+早期版本的证据仍保存在 `build/selfhost-comparison/baseline/report.json`（旧编译器）和 `build/selfhost-comparison/final/report.json`（本轮语言扩展前）。固定集合中的正确执行项分别为 10 和 34；这些是历史数据，不能用作当前版本通过率。
+
+2026-10-01 的 Stage2 曾重新运行固定集合；当次报告为 `complete: true`，其编译器和源码哈希在当次运行前后保持一致。原 `current` 输出目录会被后续运行覆盖，下表保留当次历史计数：
+
+| 62 项用例的历史结果 | SelfHost 快照 | Re.KrtC 快照 |
+| --- | ---: | ---: |
+| 正确执行合法程序 | 43 | 40 |
+| 正确拒绝非法程序 | 17 | 8 |
+| 拒绝合法用例 | 2 | 3 |
+| 生成程序但结果错误 | 0 | 2 |
+| 错误接受非法程序 | 0 | 8 |
+| 编译器崩溃 | 0 | 1 |
+| 编译/执行超时 | 0 | 0 |
+
+SelfHost 的两项拒绝都是 `.Length()` 方法形式；对应的 `.Length` 属性正常执行。Re 的错值来自数组/字符串 Length 属性用例，崩溃来自未结束的块注释。这些结果只描述这个固定集合，不是完整语言的通过率。
+
+该次标准库记录为 59/59 项通过；默认标准库报告目录会被后续运行覆盖，此处计数仅描述历史记录。空文件和纯注释文件能够生成对象并参与并行工程链接，无入口的可执行文件仍报告 `E_MODULE`，失败保留已有输出。
+
+该次针对同一 Stage2 运行的 SelfHost 套件记录为 363/363 项通过，进程正常退出；其默认日志路径同样可能被后续运行覆盖。
+
+该次自举使用原始 80 个 `.krt` 文件，Stage 2、3、4 的 KRO 逐字节一致，SHA-256 为 `572571ce2367041e493517448ee5f563f9351b6506c42fca1ec431106fec0628`；Stage 2 和 Stage 3 各 77 项原生 CLI 测试通过，输入快照 SHA-256 为 `2eae0011671d0bd1e9d443b1c668fdf7d63002406a613bd00612a657c70fb143`。这些数量和哈希不对应当前源码。`build/selfhost/report.json` 会在重新自举时更新；只有 `complete: true` 且源码、工具及验收输入哈希匹配的报告才能证明当前生成链。
+
+## 2026-10-02 冻结版本验收
+
+该历史冻结版本修复上下文数组字面量的逐元素转换和完整类型重载排序、递归元素空值检查、布局完成前后的泛型注册表查找、不可达语句的语义检查与 IR 出口，以及种子编译器的字段、this、new、null 和数值三元表达式。Parser 探针使用真实组件依赖闭包，七个共享状态记录保留完整声明。以下 `candidate7`、`selfhost-final-validation` 数量和哈希属于 2026-10-02 的归档验收，不是后续闭包版本或本轮三个组件的完成证据。
+
+| 验收范围 | 实际结果 | 保留的报告 |
+| --- | --- | --- |
+| 原始编译器源码自举 | 89 个源码文件；Stage 2/3/4 KRO 字节固定点；三代各 46 个执行探针；两代各 33 个诊断双跑一致；两代各 188 项原生验收通过，无跳过 | 当时的 `build/selfhost/report.json`；冻结副本 `build/selfhost-final-validation/fresh-bootstrap-complete-report.json` |
+| 完整 SelfHost 套件 | 482/482 项，无跳过，811.875 秒 | `build/selfhost-final-validation/candidate7-full-report.json` 和同目录完整日志 |
+| 原有标准库契约 | 59/59 项，报告使用 O0，输入前后一致 | `build/selfhost-final-validation/stage2-standard-library/report.json` |
+| 原有 62 项日常集合 | 43 项正确执行、17 项正确拒绝、2 项 Length 方法形式拒绝；无错值、非法接受、崩溃或超时 | `build/selfhost-final-validation/stage2-daily/report.json` |
+| 指针与间接调用矩阵 | 原生和 VM 的 O0–O3 共 2584 个断言通过，其中 136 次正确执行、2448 次诊断与产物检查 | `build/selfhost-final-validation/candidate7-pointer-arguments-report.json` |
+
+该历史套件使用的冻结候选与当时新生成的默认 Stage 2 具有相同 ELF SHA-256：`f099d5155be623675d0654aa9dcfcd436d579b887cc769a75bfd15087e963eca`。完整套件的 198 个源码、测试、示例、库和工具输入前后逐文件一致，输入快照 SHA-256 为 `5ea690bca48c7641b90ac3de04fe6be1228c3a654a1d274aed31593fce7014e4`。真实 HTTP 测试运行 GET、404、分片请求、无效请求及连接清理；结构体专项包含值复制、布局、指针步长与独立对象链接。
+
+当次生成的 Stage 2/3/4 KRO SHA-256 均为 `4553dde2bac6227678f369c7ff9d25145c976bca1ea86554c40c7fcfd2b70dc4`。当时的自举报告为 `complete: true`，该快照的 89 个源码和 489 个记录产物的哈希已逐文件核对。归档汇总报告 `build/selfhost-final-validation/report.json` 记录当次验收范围、报告哈希和剩余边界；验收通过的结论限于这些实际检查。
+
+递归和迭代 Fibonacci 的原有性能样本各运行三次，两种编译器均正确执行；报告保存原始源码、命令、产物哈希和独立预期。优化依据通用 IR 规则，编译器中没有按程序名称选择的替换路径。
+
+两个并发验收曾触发完整组件后端测试的原有 60 秒超时；同一测试单独运行 59.466 秒通过。首次沙箱验收另有真实 socket bind 限制，相关失败日志与报告完整保留。最终顺序复验保留原有时限并运行全部原生用例，Stage 2 和 Stage 3 分别在 87.696 秒、87.417 秒通过完整的 188 项验收。大模块编译存在接近测试时限的实际性能风险，需要进一步测量和通用优化。
+
+## 2026-10-04 开发快照
+
+当前 SelfHost 有 112 个 `.krt` 源文件，已加入通用迭代器与惰性生成器、结构体接口装箱、精确类型检查和跨模块 ABI3。KRO 元数据包含公开声明与开放泛型模板，消费模块无须保留提供方源码；类、接口、枚举、装箱载荷和方法派发共用完整规范身份。宽整数参数、返回、捕获与运算采用 16 字节值存储和函数帧临时空间。语义与所有权见 [Iterators.md](Iterators.md)、[Boxing.md](Boxing.md)、[ModuleAbi.md](ModuleAbi.md) 和 [WideValues.md](WideValues.md)。
+
+候选 10 已由候选 9f 编译全部 112 个 SelfHost 源文件产生；构建命令、源码快照及资源数据保存在 `build/selfhost-types/candidate10/report.json`。装箱专项的 26 份成功程序执行 208 次，13 份错误程序重复编译 416 次；正式报告为 `build/selfhost-boxing/formal-candidate10/report.json`。同一候选通过新增 5 项与原有 13 项 VM 测试，以及 12 个实际 HTTP 服务进程的 96 次请求。这些是保存快照的专项结果，不证明全部语言与 Re.KrtC 等价。
+
+候选 14 的全部 112 个源码已由候选 13 自编译。本轮完成报告为 `build/selfhost-types/final14/completion.json`；它核对源码、编译器、链接器、输入及日志 SHA，并记录以下实际结果：
+
+| 门禁 | 结果 |
+| --- | --- |
+| 完整 SelfHost 套件 | 688 项，5098.470 秒，零失败、零跳过，输入哈希不变 |
+| 标准库 | 59 项覆盖 O0–O3，零失败、零跳过，输入哈希不变 |
+| 全新自举的 Stage 2 / Stage 3 原生验收 | 各 448 项，分别 644.382 / 636.020 秒，零失败、零跳过 |
+| Stage 2 / Stage 3 / Stage 4-check KRO | 固定点 `70f64291157e24073d1a34837f7387fbe7e25be3ae2716a7e8d310bc4b7173ab` |
+| 闭包、生成器、装箱游标、宽整数、类型化异常的资源验收 | 三轮共 60 个 Native/VM、O0/O2 进程；每进程测量 25,000 轮，所有 VmRSS/VmSize 增量为零 |
+| 旧编译器与最终 Stage 2 的 ABI2 双向混合链接 | O0–O3、两种链接顺序的 16 次执行通过，8 对完整 927 字节 manifest 一致 |
+
+完整套件及两代原生验收包含实际 HTTP 服务器、结构体和装箱路由测试。ArkLink 的 6 个组件在 ASan/UBSan 下通过，并通过 18 项 NativeQuality 验收；链接器源码与被测产物 SHA 已核对。各门禁和资源记录保留在完成报告及其引用的独立报告中。这些结果不证明全部语言与 Re.KrtC 等价。
+
+全部门禁通过后，默认编译器已切换到本轮全新自举的 Stage 2，原生程序 SHA 为 `dd7c5df6c233644dd302283bc180df3011b1766277736711cfbe79359be10af5`；默认 ArkLink SHA 为 `2774e36fa6e0e2cb2070ffe23bae516672fc2b369a8e004da245cae20aa2f45c`。`build/selfhost-types/final14/default-installation/report.json` 保存切换前后身份和旧工具位置。随后在空 PATH 下通过 `SelfHost/krtc` 编译并执行行项目金额程序，验证结构体复制、装箱解箱、自定义 `IEnumerator<int32>` 及正常/提前退出的 Dispose，实际输出 `63`；记录为 `build/selfhost-types/default-entry-smoke14/executed.json`。入口脚本仍直接执行原生编译器。
+
+`final10` 的未完成报告及其失败和总时限证据继续保留；历史或专项结果不替代本轮最终验收。
+
+## 仍需补充
+
+1. 全部类型推断、方法级泛型虚派发、接口默认方法和显式接口实现；已有闭包、结构体接口、装箱及接口约束不能替代完整类型系统。
+2. 通用 C/外部 ABI、共享库和包管理。Kairote 模块已支持跨模块命名身份、二进制泛型模板和带保护的动态全局初始化；普通具体结构体的 ABI2 契约保持兼容，新的直接宽整数边界采用带物理约定标记的 ABI3。
+3. 数组边界检查、统一分配器及长期内存管理。小对象逐个 mmap，拼接字符串仍需安排手动所有权；宽整数运算临时值随函数帧退出释放。装箱对象、保存的闭包、序列及游标按各自所有权契约管理。
+4. 更多 SSA 优化、调试信息和其他平台。当前原生机器码面向 Linux x86-64，KRO 后端直接消费 SSA，已有常量折叠、死值消除、分支简化、直接自身尾调用消除、受限内联，以及基于活跃性的寄存器分配。
+5. 更细的诊断。参数数量、可写 ref、数组三元类型、不可空赋值、泛型约束和未定义方法已分别报告，部分名称/类型/未实现能力仍共用 E_LOWER。
+6. 容量：源码与全部导入合计 16 MiB、最多 128 参数（含接收者）、16384 个具体函数；泛型注册表动态扩容，仍受容量上限约束。
+
+之前文档的编译/运行耗时属于旧编译器样本，不能当作迁移后版本的性能。当前性能样本随差分报告保存；CLI 计时包含原生进程启动和链接，运行计时包含进程启动，不能直接等同于编译核心吞吐量。

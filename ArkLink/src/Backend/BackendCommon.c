@@ -466,7 +466,8 @@ void ark_reloc_process_all(ArkResolverReloc* relocs, size_t count, ArkRelocApply
         ArkRelocProcessor proc = {0};
         proc.target_section = reloc->section_index;
         proc.offset = reloc->offset;
-        proc.symbol_value = reloc->symbol_rva ? reloc->symbol_rva : (reloc->symbol ? reloc->symbol->value : 0);
+        proc.symbol_value = reloc->symbol_address_resolved ? reloc->symbol_address :
+            (reloc->symbol_rva ? reloc->symbol_rva : (reloc->symbol ? reloc->symbol->value : 0));
         proc.addend = reloc->addend;
 
         switch (reloc->type) {

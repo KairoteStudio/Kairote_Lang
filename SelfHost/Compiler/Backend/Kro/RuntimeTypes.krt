@@ -1,0 +1,128 @@
+// Runtime records have stable symbols for every relocated address. A consumer
+// can share a descriptor without importing the defining module's machine code.
+class KrtKroRuntimeSymbol {
+    public int32 offset;
+    public int32 symbol;
+    public KrtKroRuntimeSymbol next;
+}
+
+bool KrtKroRuntimeAddress(KrtNativeModule module,KrtKroObject output,ref int32 pc,int32 type) {
+    if (type < 0 || type >= module.runtime_type_count || module.runtime_code_count >= module.count) { return false; }
+    if (module.runtime_code_offsets == null) {
+        module.runtime_code_offsets = new int32[module.count]; module.runtime_code_targets = new int32[module.count];
+    }
+    if (!KrtKroNativeCode(output,ref pc,0x058d48,3)) { return false; }
+    int32 index = module.runtime_code_count; module.runtime_code_offsets[index] = pc; module.runtime_code_targets[index] = type;
+    module.runtime_code_count = index+1;
+    return KrtKroNativeU32(output,ref pc,0) && KrtKroNativeByte(output,ref pc,80);
+}
+
+int32 KrtKroRuntimeAddSymbol(KrtKroObject output,KrtLinkName name,int32 offset,int32 size,int32 section,int32 binding,ref int32 position) {
+    if (name == null || !name.valid || name.length < 1 || name.length > 1048576) { return -1; }
+    int32 index = output.symbol_count;
+    KrtKroLibrarySymbol(output,index,position,offset,size,section);
+    KrtKroLibraryWord(output.symbol_bytes,index*32+16,binding);
+    if (section == 0) { KrtKroLibraryWord(output.symbol_bytes,index*32+20,1); }
+    int32 character = 0;
+    while (character < name.length) { output.string_bytes[position] = name.bytes[character]; character = character+1; position = position+1; }
+    output.string_bytes[position] = 0; position = position+1; output.symbol_count = index+1; return index;
+}
+
+KrtLinkName KrtKroRuntimeName(KrtAbiBytes identity,int32 letter) {
+    KrtLinkName name = KrtModuleDescriptorName(identity);
+    if (name.valid) { name.bytes[4] = (byte)letter; }
+    return name;
+}
+
+KrtKroRuntimeSymbol KrtKroRuntimeMap(KrtKroRuntimeSymbol head,int32 offset,int32 symbol) {
+    KrtKroRuntimeSymbol item = new KrtKroRuntimeSymbol(); item.offset = offset; item.symbol = symbol; item.next = head; return item;
+}
+int32 KrtKroRuntimeFind(KrtKroRuntimeSymbol head,int32 offset) {
+    while (head != null) { if (head.offset == offset) { return head.symbol; } head = head.next; } return -1;
+}
+
+bool KrtKroRuntimeDescriptors(KrtNativeModule module,KrtAstNode ast,int64 source,KrtKroObject output) {
+    if (module.runtime_type_count == 0) { return module.runtime_code_count == 0; }
+    if (module.runtime_bytes == null || module.runtime_length < 0 || module.runtime_length > 16777216) { return false; }
+    int32 symbols_added = module.runtime_type_count*4; int64 names_added = 0;
+    KrtNativeRuntimeType record = module.runtime_types;
+    while (record != null) {
+        names_added = names_added + (int64)(record.identity.count*2+16)*4;
+        KrtNativeRuntimeMethod method = record.methods;
+        while (method != null) {
+            symbols_added = symbols_added+2;
+            KrtLinkName implementation = KrtModuleImplementationName(method.target,ast,source);
+            if (!implementation.valid) { return false; }
+            names_added = names_added + method.identity.count*2+16 + implementation.length+1;
+            method = method.next;
+        }
+        record = record.next;
+    }
+    int32 old_symbols = output.symbol_count; int32 old_names = output.strtab_size;
+    if (symbols_added > 1048576-old_symbols || names_added > 67108864-old_names || output.rodata_size > 67108864-module.runtime_length-15) { return false; }
+    byte[] symbols = new byte[(old_symbols+symbols_added)*32+1]; int32 index = 0;
+    while (index < old_symbols*32) { symbols[index] = output.symbol_bytes[index]; index = index+1; }
+    byte[] names = new byte[(int32)names_added+old_names+1]; index = 0;
+    while (index < old_names) { names[index] = output.string_bytes[index]; index = index+1; }
+    delete output.symbol_bytes; delete output.string_bytes; output.symbol_bytes = symbols; output.string_bytes = names;
+    int32 blob_base = (output.rodata_size+15)&-16; byte[] rodata = new byte[blob_base+module.runtime_length]; index = 0;
+    while (index < output.rodata_size) { rodata[index] = output.rodata_bytes[index]; index = index+1; }
+    index = 0; while (index < module.runtime_length) { rodata[blob_base+index] = module.runtime_bytes[index]; index = index+1; }
+    delete output.rodata_bytes; output.rodata_bytes = rodata; output.rodata_size = blob_base+module.runtime_length;
+    int32 position = old_names; int32[] descriptor_symbols = new int32[module.runtime_type_count];
+    KrtKroRuntimeSymbol addresses = null; KrtKroRuntimeSymbol functions = null;
+    record = module.runtime_types;
+    while (record != null) {
+        int32 symbol = KrtKroRuntimeAddSymbol(output,KrtModuleDescriptorName(record.identity),blob_base+record.offset,96,2,2,ref position);
+        if (symbol < 0) { return false; } descriptor_symbols[record.index] = symbol;
+        symbol = KrtKroRuntimeAddSymbol(output,KrtKroRuntimeName(record.identity,75),blob_base+record.key_offset,record.identity.count,2,2,ref position);
+        if (symbol < 0) { return false; } addresses = KrtKroRuntimeMap(addresses,record.key_offset,symbol);
+        int32 interface_count = (int32)KrtNativeRuntimeRead(module.runtime_bytes,record.offset+56);
+        if (interface_count > 0) {
+            symbol = KrtKroRuntimeAddSymbol(output,KrtKroRuntimeName(record.identity,73),blob_base+record.interfaces_offset,interface_count*8,2,2,ref position);
+            if (symbol < 0) { return false; } addresses = KrtKroRuntimeMap(addresses,record.interfaces_offset,symbol);
+        }
+        int32 method_count = 0; KrtNativeRuntimeMethod method = record.methods;
+        while (method != null) { method_count = method_count+1; method = method.next; }
+        if (method_count > 0) {
+            symbol = KrtKroRuntimeAddSymbol(output,KrtKroRuntimeName(record.identity,77),blob_base+record.methods_offset,method_count*40,2,2,ref position);
+            if (symbol < 0) { return false; } addresses = KrtKroRuntimeMap(addresses,record.methods_offset,symbol);
+        }
+        method = record.methods; index = 0;
+        while (method != null) {
+            symbol = KrtKroRuntimeAddSymbol(output,KrtKroRuntimeName(method.identity,75),blob_base+method.key_offset,method.identity.count,2,2,ref position);
+            if (symbol < 0) { return false; } addresses = KrtKroRuntimeMap(addresses,method.key_offset,symbol);
+            int32 target = (int32)method.target.value; int32 section = target < 0 ? 0 : 1;
+            int32 offset = target < 0 ? 0 : module.function_offsets[target];
+            int32 size = target < 0 ? 0 : module.function_sizes[target];
+            symbol = KrtKroRuntimeAddSymbol(output,KrtModuleImplementationName(method.target,ast,source),offset,size,section,target < 0 ? 1 : 2,ref position);
+            if (symbol < 0) { return false; } functions = KrtKroRuntimeMap(functions,record.methods_offset+index*40+24,symbol);
+            method = method.next; index = index+1;
+        }
+        record = record.next;
+    }
+    int32 previous_text = output.text_reloc_count; int32 previous_data = output.rodata_reloc_count;
+    int32 text_count = previous_text+module.runtime_code_count;
+    int32 data_count = previous_data+module.runtime_relocation_count;
+    byte[] relocations = new byte[(text_count+data_count)*16+1]; index = 0;
+    while (index < previous_text*16) { relocations[index] = output.text_relocation_bytes[index]; index = index+1; }
+    index = 0;
+    while (index < module.runtime_code_count) {
+        int32 site = (previous_text+index)*16;
+        KrtKroLibraryWord(relocations,site,module.runtime_code_offsets[index]);
+        KrtKroLibraryWord(relocations,site+4,descriptor_symbols[module.runtime_code_targets[index]]);
+        KrtKroLibraryWord(relocations,site+8,3); index = index+1;
+    }
+    index = 0; while (index < previous_data*16) { relocations[text_count*16+index] = output.text_relocation_bytes[previous_text*16+index]; index = index+1; }
+    index = text_count+previous_data; KrtNativeRuntimeRelocation relocation = module.runtime_relocations;
+    while (relocation != null) {
+        int32 symbol = relocation.kind == 0 ? KrtKroRuntimeFind(addresses,relocation.target) :
+            (relocation.kind == 1 ? descriptor_symbols[relocation.target] : KrtKroRuntimeFind(functions,relocation.offset));
+        if (symbol < 0) { return false; }
+        KrtKroLibraryWord(relocations,index*16,blob_base+relocation.offset); KrtKroLibraryWord(relocations,index*16+4,symbol);
+        KrtKroLibraryWord(relocations,index*16+8,1); index = index+1; relocation = relocation.next;
+    }
+    delete output.text_relocation_bytes; output.text_relocation_bytes = relocations;
+    output.strtab_size = position; output.text_reloc_count = text_count; output.rodata_reloc_count = data_count;
+    output.total_reloc_count = text_count+data_count; output.relocation_count = output.total_reloc_count; return true;
+}

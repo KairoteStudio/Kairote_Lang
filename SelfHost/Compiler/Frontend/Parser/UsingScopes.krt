@@ -1,0 +1,42 @@
+// Imports remain in the frame that declares them. Child namespaces inherit
+// through parent links, while siblings and file boundaries keep distinct frames.
+class KrtUsingScope {
+    public KrtUsingScope parent;
+    public KrtAstNode imports;
+    public KrtAstNode namespace_scope;
+    public int64 source_start;
+}
+
+KrtUsingScope KrtParserUsingScope(KrtUsingScope parent, KrtAstNode namespace_scope, int64 start) {
+    KrtUsingScope scope = new KrtUsingScope(); scope.parent = parent;
+    scope.namespace_scope = namespace_scope; scope.source_start = start;
+    if (namespace_scope != null) { namespace_scope.native_using_scope = scope; }
+    return scope;
+}
+
+void KrtParserMarkUsingScope(KrtAstNode node, KrtUsingScope scope) {
+    if (node == null) { return; }
+    KrtUsingScope sibling_scope=scope;
+    if(node.native_using_scope!=null){scope=node.native_using_scope;}else{node.native_using_scope=scope;}
+    KrtParserMarkUsingScope(node.syntax_type,scope);KrtParserMarkUsingScope(node.syntax_parameter_types,scope);
+    KrtParserMarkUsingScope(node.syntax_array_size,scope);KrtParserMarkUsingScope(node.syntax_permissions,scope);
+    KrtParserMarkUsingScope(node.native_constraints,scope);
+    KrtParserMarkUsingScope(node.native_base_call, scope);
+    KrtParserMarkUsingScope(node.left, scope); KrtParserMarkUsingScope(node.right, scope);
+    KrtParserMarkUsingScope(node.alternate, scope); KrtParserMarkUsingScope(node.body, scope);
+    KrtParserMarkUsingScope(node.declarations, scope); KrtParserMarkUsingScope(node.next, sibling_scope);
+}
+
+KrtAstNode KrtParserParseUsingStatement(KrtParser parser) {
+    int64 start=parser.token.start;KrtLexerNext(parser.lexer,parser.token);
+    KrtAstNode imported=KrtParserNamePath(parser);
+    if(imported!=null&&KrtParserTokenText(parser,61)){
+        KrtLexerNext(parser.lexer,parser.token);KrtAstNode target=KrtParserNamePath(parser);
+        if(target!=null){target.type_start=imported.name_start;target.type_length=imported.name_length;}imported=target;
+    }
+    KrtAstNode directive=KrtAstMake(KrtAstKind.UsingDirective,start,0);directive.left=imported;
+    if(imported==null||!KrtParserExpect(parser,KrtTokenKind.Semicolon)){return directive;}
+    if(parser.current_using_scope==null){parser.current_using_scope=KrtParserUsingScope(null,null,start);}
+    imported.next=parser.current_using_scope.imports;parser.current_using_scope.imports=imported;
+    directive.native_using_scope=parser.current_using_scope;directive.length=parser.token.start-start;return directive;
+}

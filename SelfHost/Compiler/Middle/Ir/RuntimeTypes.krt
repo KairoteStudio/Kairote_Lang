@@ -1,0 +1,148 @@
+// Runtime searches use ordinary validated IR, including exact byte comparison.
+// Native and VM execute the same lookup algorithm and receiver adjustment.
+bool KrtNativeRuntimeLoad(KrtNativeModule module,int32 slot,int32 offset) {
+    return KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,slot,0) >= 0 &&
+        KrtNativeEmit(module,(int32)KrtNativeOp.Address,0,offset) >= 0 &&
+        KrtNativeEmit(module,(int32)KrtNativeOp.Load,0,8) >= 0;
+}
+bool KrtNativeLowerRuntimeDescriptor(KrtAstNode type,KrtNativeModule module) {
+    KrtNativeRuntimeType record = KrtNativeRuntimeRegister(module,type);
+    return record != null && KrtNativeEmit(module,(int32)KrtNativeOp.RuntimeDescriptor,record.index,0) >= 0;
+}
+bool KrtNativeRuntimePatch(KrtNativeModule module,int32 patch,int32 target) {
+    if (patch < 0 || patch >= module.count || target < 0) { return false; }
+    module.args[patch] = target; return true;
+}
+
+bool KrtNativeLowerRuntimeKeyEqual(KrtNativeModule module,int32 first,int32 second) {
+    // Both records start with hash, byte count and key pointer.
+    int32 position = KrtNativeBoxTemporary(module); int32 length = KrtNativeBoxTemporary(module);
+    int32 left = KrtNativeBoxTemporary(module); int32 right = KrtNativeBoxTemporary(module);
+    if (position < 0 || length < 0 || left < 0 || right < 0 ||
+        !KrtNativeRuntimeLoad(module,first,0) || !KrtNativeRuntimeLoad(module,second,0) ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.Compare,61,0) < 0) { return false; }
+    int32 hash = KrtNativeEmit(module,(int32)KrtNativeOp.Branch,-1,-1);
+    if (hash < 0) { return false; } module.args[hash] = module.count;
+    if (!KrtNativeRuntimeLoad(module,first,8) || KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,length,0) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,length,0) < 0 || !KrtNativeRuntimeLoad(module,second,8) ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.Compare,61,0) < 0) { return false; }
+    int32 same_length = KrtNativeEmit(module,(int32)KrtNativeOp.Branch,-1,-1);
+    if (same_length < 0) { return false; } module.args[same_length] = module.count;
+    if (!KrtNativeRuntimeLoad(module,first,16) || KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,left,0) < 0 ||
+        !KrtNativeRuntimeLoad(module,second,16) || KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,right,0) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,left,0) < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,right,0) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.Compare,61,0) < 0) { return false; }
+    int32 interned = KrtNativeEmit(module,(int32)KrtNativeOp.Branch,-1,-1);
+    if (interned < 0) { return false; } module.extra[interned] = module.count;
+    if (KrtNativeEmit(module,(int32)KrtNativeOp.Const,0,0) < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,position,0) < 0) { return false; }
+    int32 loop = module.count;
+    if (KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,position,0) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,length,0) < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.Compare,60,0) < 0) { return false; }
+    int32 remaining = KrtNativeEmit(module,(int32)KrtNativeOp.Branch,-1,-1);
+    if (remaining < 0) { return false; } module.args[remaining] = module.count;
+    if (KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,left,0) < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,position,0) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.Add,0,0) < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.Load,0,1) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,right,0) < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,position,0) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.Add,0,0) < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.Load,0,1) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.Compare,61,0) < 0) { return false; }
+    int32 character = KrtNativeEmit(module,(int32)KrtNativeOp.Branch,-1,-1);
+    if (character < 0) { return false; } module.args[character] = module.count;
+    if (KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,position,0) < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.Const,1,0) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.Add,0,0) < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,position,0) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.Jump,loop,0) < 0) { return false; }
+    int32 success = module.count; module.extra[remaining] = success; module.args[interned] = success;
+    if (KrtNativeEmit(module,(int32)KrtNativeOp.Const,1,0) < 0) { return false; }
+    int32 done = KrtNativeEmit(module,(int32)KrtNativeOp.Jump,-1,0);
+    int32 failure = module.count; module.extra[hash] = failure; module.extra[same_length] = failure; module.extra[character] = failure;
+    if (done < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.Const,0,0) < 0) { return false; }
+    return KrtNativeRuntimePatch(module,done,module.count);
+}
+
+bool KrtNativeLowerRuntimeDescriptorMatch(KrtNativeModule module,int32 descriptor_slot,KrtAstNode target,bool exact) {
+    int32 expected = KrtNativeBoxTemporary(module); int32 current = KrtNativeBoxTemporary(module);
+    int32 table = KrtNativeBoxTemporary(module); int32 count = KrtNativeBoxTemporary(module); int32 position = KrtNativeBoxTemporary(module);
+    if (expected < 0 || current < 0 || table < 0 || count < 0 || position < 0 ||
+        !KrtNativeLowerRuntimeDescriptor(target,module) || KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,expected,0) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,descriptor_slot,0) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,current,0) < 0) { return false; }
+    int32 loop = module.count;
+    if (KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,current,0) < 0) { return false; }
+    int32 present = KrtNativeEmit(module,(int32)KrtNativeOp.Branch,-1,-1);
+    if (present < 0) { return false; } module.args[present] = module.count;
+    if (KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,current,0) < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,expected,0) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.Compare,61,0) < 0) { return false; }
+    int32 identical = KrtNativeEmit(module,(int32)KrtNativeOp.Branch,-1,-1);
+    if (identical < 0) { return false; } module.extra[identical] = module.count;
+    if (!KrtNativeLowerRuntimeKeyEqual(module,current,expected)) { return false; }
+    int32 matched = KrtNativeEmit(module,(int32)KrtNativeOp.Branch,-1,-1);
+    if (matched < 0) { return false; } module.extra[matched] = module.count;
+    int32 exhausted = -1; int32 interface_match = -1;
+    if (!exact) {
+        if (!KrtNativeRuntimeLoad(module,current,56) || KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,count,0) < 0 ||
+            !KrtNativeRuntimeLoad(module,current,64) || KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,table,0) < 0 ||
+            KrtNativeEmit(module,(int32)KrtNativeOp.Const,0,0) < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,position,0) < 0) { return false; }
+        int32 interface_loop = module.count;
+        if (KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,position,0) < 0 ||
+            KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,count,0) < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.Compare,60,0) < 0) { return false; }
+        exhausted = KrtNativeEmit(module,(int32)KrtNativeOp.Branch,-1,-1);
+        if (exhausted < 0) { return false; } module.args[exhausted] = module.count;
+        int32 candidate = KrtNativeBoxTemporary(module);
+        if (candidate < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,table,0) < 0 ||
+            KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,position,0) < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.Const,8,0) < 0 ||
+            KrtNativeEmit(module,(int32)KrtNativeOp.Mul,0,0) < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.Add,0,0) < 0 ||
+            KrtNativeEmit(module,(int32)KrtNativeOp.Load,0,8) < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,candidate,0) < 0 ||
+            !KrtNativeLowerRuntimeKeyEqual(module,candidate,expected)) { return false; }
+        interface_match = KrtNativeEmit(module,(int32)KrtNativeOp.Branch,-1,-1);
+        if (interface_match < 0) { return false; } module.extra[interface_match] = module.count;
+        if (KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,position,0) < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.Const,1,0) < 0 ||
+            KrtNativeEmit(module,(int32)KrtNativeOp.Add,0,0) < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,position,0) < 0 ||
+            KrtNativeEmit(module,(int32)KrtNativeOp.Jump,interface_loop,0) < 0) { return false; }
+        module.extra[exhausted] = module.count;
+        if (!KrtNativeRuntimeLoad(module,current,48) || KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,current,0) < 0 ||
+            KrtNativeEmit(module,(int32)KrtNativeOp.Jump,loop,0) < 0) { return false; }
+    }
+    int32 failure = module.count; module.extra[present] = failure;
+    if (exact) { module.extra[matched] = failure; }
+    if (KrtNativeEmit(module,(int32)KrtNativeOp.Const,0,0) < 0) { return false; }
+    int32 done = KrtNativeEmit(module,(int32)KrtNativeOp.Jump,-1,0);
+    module.args[matched] = module.count; module.args[identical] = module.count; if (interface_match >= 0) { module.args[interface_match] = module.count; }
+    if (done < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.Const,1,0) < 0) { return false; }
+    return KrtNativeRuntimePatch(module,done,module.count);
+}
+
+bool KrtNativeLowerRuntimeMatch(KrtNativeModule module,int32 pointer_slot,KrtAstNode target,bool exact) {
+    if (KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,pointer_slot,0) < 0) { return false; }
+    int32 present = KrtNativeEmit(module,(int32)KrtNativeOp.Branch,-1,-1);
+    if (present < 0) { return false; } module.args[present] = module.count;
+    if (KrtNativeObjectValue(target) && !exact) {
+        if (KrtNativeEmit(module,(int32)KrtNativeOp.Const,1,0) < 0) { return false; }
+    } else {
+        int32 descriptor = KrtNativeBoxTemporary(module);
+        if (descriptor < 0 || !KrtNativeRuntimeLoad(module,pointer_slot,0) ||
+            KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,descriptor,0) < 0 ||
+            !KrtNativeLowerRuntimeDescriptorMatch(module,descriptor,target,exact)) { return false; }
+    }
+    int32 done = KrtNativeEmit(module,(int32)KrtNativeOp.Jump,-1,0);
+    module.extra[present] = module.count;
+    if (done < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.Const,0,0) < 0) { return false; }
+    return KrtNativeRuntimePatch(module,done,module.count);
+}
+
+bool KrtNativeLowerRuntimeObjectIdentity(KrtNativeModule module,int32 pointer_slot,KrtAstNode type) {
+    if (KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,pointer_slot,0) < 0) { return false; }
+    // Only an erased object can contain a shallow reference wrapper. Class
+    // and interface references already carry the original object address.
+    if (!KrtNativeObjectValue(type)) { return true; }
+    int32 present = KrtNativeEmit(module,(int32)KrtNativeOp.Branch,-1,-1);
+    if (present < 0) { return false; } module.args[present] = module.count;
+    if (!KrtNativeRuntimeLoad(module,pointer_slot,0) || KrtNativeEmit(module,(int32)KrtNativeOp.Address,0,88) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.Load,0,8) < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.Const,1,0) < 0 ||
+        KrtNativeEmit(module,(int32)KrtNativeOp.And,0,0) < 0) { return false; }
+    int32 wrapper = KrtNativeEmit(module,(int32)KrtNativeOp.Branch,-1,-1);
+    if (wrapper < 0) { return false; } module.args[wrapper] = module.count;
+    if (!KrtNativeRuntimeLoad(module,pointer_slot,16)) { return false; }
+    int32 done = KrtNativeEmit(module,(int32)KrtNativeOp.Jump,-1,0);
+    module.extra[wrapper] = module.count; module.extra[present] = module.count;
+    if (done < 0 || KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,pointer_slot,0) < 0) { return false; }
+    return KrtNativeRuntimePatch(module,done,module.count);
+}

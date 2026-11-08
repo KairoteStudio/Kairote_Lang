@@ -1,0 +1,122 @@
+// This index narrows only the simple-name scan. Scope, access, receiver and
+// overload ranking remain the responsibility of each lookup caller.
+uint64 KrtNativeFunctionNameHash(int64 source, int64 start, int64 length) {
+    uint64 hash = 14695981039346656037; int64 index = 0;
+    unsafe(using krt.mem;) {
+        byte* bytes = (byte*)source;
+        while (index < length) {
+            hash = (hash ^ (uint64)bytes[start + index]) * 1099511628211;
+            index = index + 1;
+        }
+    }
+    return hash;
+}
+
+int32 KrtNativeFunctionBucketSlot(KrtNativeFunctionIndex index, int64 source,
+    int64 start, int64 length, uint64 hash) {
+    int32 slot = (int32)(hash & (uint64)(index.capacity - 1)); int32 probes = 0;
+    while (probes < index.capacity) {
+        KrtNativeFunctionBucket bucket = index.buckets[slot];
+        if (bucket == null || (bucket.hash == hash &&
+            KrtSemanticSameName(source,start,length,bucket.name_start,bucket.name_length))) { return slot; }
+        slot = (slot + 1) & (index.capacity - 1); probes = probes + 1;
+    }
+    return -1;
+}
+
+bool KrtNativeFunctionIndexGrow(KrtNativeFunctionIndex index) {
+    int32 previous = index.capacity; int32 capacity = previous == 0 ? 256 : previous * 2;
+    if (capacity > 65536) { index.ok = false; return false; }
+    KrtNativeFunctionBucket[] expanded = new KrtNativeFunctionBucket[capacity];
+    if (expanded == null) { index.ok = false; return false; }
+    KrtNativeFunctionBucket[] old = index.buckets;
+    int32 item = 0;
+    while (item < previous) {
+        KrtNativeFunctionBucket bucket = old[item];
+        if (bucket != null) {
+            int32 slot = (int32)(bucket.hash & (uint64)(capacity - 1));
+            while (expanded[slot] != null) { slot = (slot + 1) & (capacity - 1); }
+            expanded[slot] = bucket;
+        }
+        item = item + 1;
+    }
+    index.capacity = capacity; index.buckets = expanded;
+    if (previous != 0) { delete old; }
+    return true;
+}
+
+bool KrtNativeFunctionIndexAppend(KrtNativeFunctionIndex index, KrtAstNode declaration, int64 source) {
+    uint64 hash = KrtNativeFunctionNameHash(source,declaration.name_start,declaration.name_length);
+    int32 slot = KrtNativeFunctionBucketSlot(index,source,declaration.name_start,declaration.name_length,hash);
+    if (slot < 0) { index.ok = false; return false; }
+    KrtNativeFunctionBucket bucket = index.buckets[slot];
+    if (bucket == null) {
+        if ((index.name_count + 1) * 2 >= index.capacity) {
+            if (!KrtNativeFunctionIndexGrow(index)) { return false; }
+            slot = KrtNativeFunctionBucketSlot(index,source,declaration.name_start,declaration.name_length,hash);
+            if (slot < 0) { index.ok = false; return false; }
+        }
+        bucket = new KrtNativeFunctionBucket();
+        if (bucket == null) { index.ok = false; return false; }
+        bucket.hash = hash;
+        bucket.name_start = declaration.name_start; bucket.name_length = declaration.name_length;
+        index.buckets[slot] = bucket; index.name_count = index.name_count + 1;
+    }
+    KrtNativeFunctionEntry entry = new KrtNativeFunctionEntry();
+    if (entry == null) { index.ok = false; return false; }
+    entry.declaration = declaration;
+    if (bucket.last == null) { bucket.first = entry; } else { bucket.last.next = entry; }
+    bucket.last = entry; return true;
+}
+
+// Generic resolution appends functions to module.left. Index only the unseen
+// tail, including append operations performed while a candidate is examined.
+bool KrtNativeFunctionIndexSynchronize(KrtAstNode module, int64 source) {
+    if (module.native_function_index == null) {
+        module.native_function_index = new KrtNativeFunctionIndex();
+        if (module.native_function_index == null) { return false; }
+        module.native_function_index.ok = true;
+        if (!KrtNativeFunctionIndexGrow(module.native_function_index)) { return false; }
+    }
+    KrtNativeFunctionIndex index = module.native_function_index;
+    if (!index.ok) { return false; }
+    KrtAstNode declaration = index.last_indexed_function == null ? module.left : index.last_indexed_function.next;
+    while (declaration != null) {
+        if (!KrtNativeFunctionIndexAppend(index,declaration,source)) { return false; }
+        index.last_indexed_function = declaration; declaration = declaration.next;
+    }
+    return true;
+}
+
+KrtNativeFunctionEntry KrtNativeFunctionCandidates(KrtAstNode module, int64 source, int64 start, int64 length) {
+    if (!KrtNativeFunctionIndexSynchronize(module,source)) { return null; }
+    KrtNativeFunctionIndex index = module.native_function_index;
+    uint64 hash = KrtNativeFunctionNameHash(source,start,length);
+    int32 slot = KrtNativeFunctionBucketSlot(index,source,start,length,hash);
+    if (slot < 0 || index.buckets[slot] == null) { return null; }
+    return index.buckets[slot].first;
+}
+
+KrtNativeFunctionEntry KrtNativeFunctionCandidateNext(KrtNativeFunctionEntry entry, KrtAstNode module, int64 source) {
+    if (!KrtNativeFunctionIndexSynchronize(module,source)) { return null; }
+    return entry.next;
+}
+
+void KrtNativeFunctionIndexInvalidate(KrtAstNode module) {
+    KrtNativeFunctionIndex index = module.native_function_index;
+    module.native_function_index = null;
+    if (index == null) { return; }
+    int32 slot = 0;
+    while (slot < index.capacity) {
+        KrtNativeFunctionBucket bucket = index.buckets[slot];
+        if (bucket != null) {
+            KrtNativeFunctionEntry entry = bucket.first;
+            while (entry != null) {
+                KrtNativeFunctionEntry next = entry.next; delete entry; entry = next;
+            }
+            delete bucket;
+        }
+        slot = slot + 1;
+    }
+    delete index.buckets; delete index;
+}
