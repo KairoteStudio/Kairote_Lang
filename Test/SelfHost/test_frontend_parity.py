@@ -56,13 +56,13 @@ CASES = {
 }
 
 SOURCE_REFERENCES = {
-    "switch": ["Re.KrtC/src/Compiler/Frontend/Parser/ParserStatement.c:parser_parse_switch_statement", "Re.KrtC/src/Compiler/Middle/Codegen/IrGen.c:irgen_stmt_switch_statement", "SelfHost/Frontend/Semantic/Switch.krt", "SelfHost/Middle/Ir/Switch.krt"],
-    "struct": ["Re.KrtC/src/Compiler/Frontend/Parser/ParserAdvanced.c:parser_parse_class_declaration", "SelfHost/Middle/Ir/Ir.krt:KrtNativeLowerModule"],
-    "lambda": ["Re.KrtC/src/Compiler/Middle/Codegen/IrGen.c:irgen_expr_lambda_expression", "SelfHost/Frontend/Parser/Parser.krt:KrtParserParsePrimary"],
-    "access": ["Re.KrtC/src/Compiler/Frontend/Semantic/SemanticAnalyzer.c:AST_ACCESS_MODIFIER", "SelfHost/Frontend/Semantic/NativeBinding.krt:KrtNativeBindExpression"],
-    "literals": ["Re.KrtC/src/Compiler/Frontend/Lexer/Tokenizer.c:lexer_read_number", "Re.KrtC/src/Compiler/Frontend/Lexer/Tokenizer.c:lexer_read_char", "SelfHost/Frontend/Lexer/Lexer.krt:KrtLexerNext", "SelfHost/Frontend/Parser/Parser.krt:KrtParserParsePrimary"],
-    "meta_and_nullable": ["Re.KrtC/src/Compiler/Frontend/Parser/ParserExpression.c:parser_parse_primary", "Re.KrtC/src/Compiler/Frontend/Parser/ParserStatement.c:parser_parse_statement", "Re.KrtC/src/Compiler/Middle/Codegen/IrGen.c:AST_DEFAULT_EXPRESSION/AST_NULL_COALESCING", "SelfHost/Frontend/Semantic/NativeBinding.krt:KrtNativeBindExpression"],
-    "lock_fixed_yield_await": ["Re.KrtC/src/Compiler/Frontend/Parser/ParserStatement.c:parser_parse_statement", "Re.KrtC/src/Compiler/Middle/Codegen/IrGen.c:irgen_stmt_lock_statement/irgen_stmt_fixed_statement", "SelfHost/Frontend/Parser/Parser.krt:KrtParserParseStatement"],
+    "switch": ["Re.KrtC/src/Compiler/Frontend/Parser/ParserStatement.c:parser_parse_switch_statement", "Re.KrtC/src/Compiler/Middle/Codegen/IrGen.c:irgen_stmt_switch_statement", "SelfHost/Compiler/Frontend/Semantic/Switch.krt", "SelfHost/Compiler/Middle/Ir/Switch.krt"],
+    "struct": ["Re.KrtC/src/Compiler/Frontend/Parser/ParserAdvanced.c:parser_parse_class_declaration", "SelfHost/Compiler/Middle/Ir/Ir.krt:KrtNativeLowerModule"],
+    "lambda": ["Re.KrtC/src/Compiler/Middle/Codegen/IrGen.c:irgen_expr_lambda_expression", "SelfHost/Compiler/Frontend/Parser/Parser.krt:KrtParserParsePrimary"],
+    "access": ["Re.KrtC/src/Compiler/Frontend/Semantic/SemanticAnalyzer.c:AST_ACCESS_MODIFIER", "SelfHost/Compiler/Frontend/Semantic/NativeBinding.krt:KrtNativeBindExpression"],
+    "literals": ["Re.KrtC/src/Compiler/Frontend/Lexer/Tokenizer.c:lexer_read_number", "Re.KrtC/src/Compiler/Frontend/Lexer/Tokenizer.c:lexer_read_char", "SelfHost/Compiler/Frontend/Lexer/Lexer.krt:KrtLexerNext", "SelfHost/Compiler/Frontend/Parser/Parser.krt:KrtParserParsePrimary"],
+    "meta_and_nullable": ["Re.KrtC/src/Compiler/Frontend/Parser/ParserExpression.c:parser_parse_primary", "Re.KrtC/src/Compiler/Frontend/Parser/ParserStatement.c:parser_parse_statement", "Re.KrtC/src/Compiler/Middle/Codegen/IrGen.c:AST_DEFAULT_EXPRESSION/AST_NULL_COALESCING", "SelfHost/Compiler/Frontend/Semantic/NativeBinding.krt:KrtNativeBindExpression"],
+    "lock_fixed_yield_await": ["Re.KrtC/src/Compiler/Frontend/Parser/ParserStatement.c:parser_parse_statement", "Re.KrtC/src/Compiler/Middle/Codegen/IrGen.c:irgen_stmt_lock_statement/irgen_stmt_fixed_statement", "SelfHost/Compiler/Frontend/Parser/Parser.krt:KrtParserParseStatement"],
 }
 
 

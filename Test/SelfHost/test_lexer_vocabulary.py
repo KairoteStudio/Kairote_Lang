@@ -54,7 +54,7 @@ def harness(items, category):
     # This helper checks kind and category separately: keyword spellings retain
     # a word category, while the public kind must report the exact seed enum.
     return "\n".join((ROOT / path).read_text() for path in
-                     ("SelfHost/Frontend/Lexer/Token.krt", "SelfHost/Frontend/Lexer/Lexer.krt")) + f"""
+                     ("SelfHost/Compiler/Frontend/Lexer/Token.krt", "SelfHost/Compiler/Frontend/Lexer/Lexer.krt")) + f"""
 bool expect(KrtLexer lexer,KrtToken token,int32 kind,int32 category,int64 start,int64 length){{
 KrtLexerNext(lexer,token);int32 bits=KrtTokenIntegerBits(token.kind);if(bits!=0 && !KrtLexerWordEqual(lexer.source,token.start,token.length,"int",3) && !KrtLexerWordEqual(lexer.source,token.start,token.length,"byte",4) && !KrtLexerWordEqual(lexer.source,token.start,token.length,"usize",5) && !KrtLexerWordEqual(lexer.source,token.start,token.length,"long",4) && lexer_integer_type_bits(lexer.source,token.start,token.length)!=bits){{return false;}}return (int32)token.kind==kind && (int32)token.category==category && token.start==start && token.length==length;}}
 int32 main(){{KrtLexer lexer=new KrtLexer();KrtToken token=new KrtToken();
@@ -113,7 +113,7 @@ class LexerVocabularyTests(unittest.TestCase):
 
     def test_literals_unknown_bytes_and_recovery(self):
         source = "\n".join((ROOT / path).read_text() for path in
-                           ("SelfHost/Frontend/Lexer/Token.krt", "SelfHost/Frontend/Lexer/Lexer.krt")) + r'''
+                           ("SelfHost/Compiler/Frontend/Lexer/Token.krt", "SelfHost/Compiler/Frontend/Lexer/Lexer.krt")) + r'''
 int32 main(){KrtLexer lexer=new KrtLexer();KrtToken token=new KrtToken();
 unsafe(using krt.mem;){KrtLexerInit(lexer,(byte*)(int64)"1 1.5 \"text\" 'a' @ if",21);}
 KrtLexerNext(lexer,token);if(token.kind!=KrtTokenKind.Number || token.category!=KrtTokenCategory.Integer){return 1;}

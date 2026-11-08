@@ -28,13 +28,13 @@ def compiler_prelude(parts):
         for name in declarations:
             providers.setdefault(name, set()).add(path)
     selected = {ROOT / 'SelfHost' / part for part in parts}
-    if any('Frontend/Parser/' in part for part in parts):
-        selected.update((ROOT / 'SelfHost/Frontend/Parser').glob('*.krt'))
-    if any('NativeBinding.krt' in part or part == 'Frontend/Semantic/Semantic.krt' for part in parts):
+    if any('Compiler/Frontend/Parser/' in part for part in parts):
+        selected.update((ROOT / 'SelfHost/Compiler/Frontend/Parser').glob('*.krt'))
+    if any('NativeBinding.krt' in part or part == 'Compiler/Frontend/Semantic/Semantic.krt' for part in parts):
         selected.update(path for path in (ROOT / 'SelfHost').rglob('*.krt') if path.name != 'Main.krt')
-    if any('Driver/Compiler.krt' in part for part in parts):
-        selected.add(ROOT / 'SelfHost/Backend/Kro/Library.krt')
-        selected.update((ROOT / 'SelfHost/Driver').glob('*.krt'))
+    if any('Compiler/Driver/Compiler.krt' in part for part in parts):
+        selected.add(ROOT / 'SelfHost/Compiler/Backend/Kro/Library.krt')
+        selected.update((ROOT / 'SelfHost/Compiler/Driver').glob('*.krt'))
     pending = list(selected)
     while pending:
         path = pending.pop()
@@ -149,9 +149,9 @@ class ContractTests(unittest.TestCase):
 
     def test_local_binding(self):
         parts = [
-            'Frontend/Lexer/Token.krt', 'Frontend/Lexer/Lexer.krt',
-            'Frontend/Parser/Ast.krt', 'Frontend/Parser/Parser.krt', 'Frontend/Parser/Names.krt',
-            'Middle/Ir/Ir.krt', 'Middle/Ir/Floating.krt', 'Middle/Ir/Exceptions.krt', 'Frontend/Semantic/Semantic.krt', 'Frontend/Semantic/NativeBinding.krt', 'Frontend/Semantic/Names.krt', 'Frontend/Semantic/Generics.krt', 'Frontend/Semantic/Exceptions.krt', 'Frontend/Semantic/Floating.krt',
+            'Compiler/Frontend/Lexer/Token.krt', 'Compiler/Frontend/Lexer/Lexer.krt',
+            'Compiler/Frontend/Parser/Ast.krt', 'Compiler/Frontend/Parser/Parser.krt', 'Compiler/Frontend/Parser/Names.krt',
+            'Compiler/Middle/Ir/Ir.krt', 'Compiler/Middle/Ir/Floating.krt', 'Compiler/Middle/Ir/Exceptions.krt', 'Compiler/Frontend/Semantic/Semantic.krt', 'Compiler/Frontend/Semantic/NativeBinding.krt', 'Compiler/Frontend/Semantic/Names.krt', 'Compiler/Frontend/Semantic/Generics.krt', 'Compiler/Frontend/Semantic/Exceptions.krt', 'Compiler/Frontend/Semantic/Floating.krt',
         ]
         prelude = compiler_prelude(parts)
         cases = [
@@ -197,9 +197,9 @@ int32 main() {{
 
     def test_pointer_index_frontend_contract(self):
         parts = [
-            'Frontend/Lexer/Token.krt', 'Frontend/Lexer/Lexer.krt',
-            'Frontend/Parser/Ast.krt', 'Frontend/Parser/Parser.krt', 'Frontend/Parser/Names.krt',
-            'Middle/Ir/Ir.krt', 'Middle/Ir/Floating.krt', 'Middle/Ir/Exceptions.krt', 'Frontend/Semantic/Semantic.krt', 'Frontend/Semantic/NativeBinding.krt', 'Frontend/Semantic/Names.krt', 'Frontend/Semantic/Generics.krt', 'Frontend/Semantic/Exceptions.krt', 'Frontend/Semantic/Floating.krt',
+            'Compiler/Frontend/Lexer/Token.krt', 'Compiler/Frontend/Lexer/Lexer.krt',
+            'Compiler/Frontend/Parser/Ast.krt', 'Compiler/Frontend/Parser/Parser.krt', 'Compiler/Frontend/Parser/Names.krt',
+            'Compiler/Middle/Ir/Ir.krt', 'Compiler/Middle/Ir/Floating.krt', 'Compiler/Middle/Ir/Exceptions.krt', 'Compiler/Frontend/Semantic/Semantic.krt', 'Compiler/Frontend/Semantic/NativeBinding.krt', 'Compiler/Frontend/Semantic/Names.krt', 'Compiler/Frontend/Semantic/Generics.krt', 'Compiler/Frontend/Semantic/Exceptions.krt', 'Compiler/Frontend/Semantic/Floating.krt',
         ]
         prelude = compiler_prelude(parts)
         text = 'int32 main() { byte* p = stackalloc byte[4]; p[0] = 1; return p[0]; }'
@@ -241,9 +241,9 @@ int32 main() {{
 
     def test_multi_function_main_ordering_contract(self):
         parts = [
-            'Frontend/Lexer/Token.krt', 'Frontend/Lexer/Lexer.krt',
-            'Frontend/Parser/Ast.krt', 'Frontend/Parser/Parser.krt', 'Frontend/Parser/Names.krt',
-            'Frontend/Semantic/Semantic.krt',
+            'Compiler/Frontend/Lexer/Token.krt', 'Compiler/Frontend/Lexer/Lexer.krt',
+            'Compiler/Frontend/Parser/Ast.krt', 'Compiler/Frontend/Parser/Parser.krt', 'Compiler/Frontend/Parser/Names.krt',
+            'Compiler/Frontend/Semantic/Semantic.krt',
         ]
         prelude = compiler_prelude(parts)
         text = 'using System; namespace Demo; int32 main() { return 0; } int32 alpha() { return 1; } int32 beta() { return 2; }'
@@ -274,8 +274,8 @@ int32 main() {{
 
     def test_bitwise_and_shift_expression_contract(self):
         parts = [
-            'Frontend/Lexer/Token.krt', 'Frontend/Lexer/Lexer.krt',
-            'Frontend/Parser/Ast.krt', 'Frontend/Parser/Parser.krt', 'Frontend/Parser/Names.krt',
+            'Compiler/Frontend/Lexer/Token.krt', 'Compiler/Frontend/Lexer/Lexer.krt',
+            'Compiler/Frontend/Parser/Ast.krt', 'Compiler/Frontend/Parser/Parser.krt', 'Compiler/Frontend/Parser/Names.krt',
         ]
         prelude = compiler_prelude(parts)
         source_text = 'int32 main() { return 1 | 2 ^ 3 & 4 << 1; }'
@@ -304,9 +304,9 @@ int32 main() {{
 
     def test_multiple_parameter_binding_contract(self):
         parts = [
-            'Frontend/Lexer/Token.krt', 'Frontend/Lexer/Lexer.krt',
-            'Frontend/Parser/Ast.krt', 'Frontend/Parser/Parser.krt', 'Frontend/Parser/Names.krt',
-            'Frontend/Semantic/Semantic.krt',
+            'Compiler/Frontend/Lexer/Token.krt', 'Compiler/Frontend/Lexer/Lexer.krt',
+            'Compiler/Frontend/Parser/Ast.krt', 'Compiler/Frontend/Parser/Parser.krt', 'Compiler/Frontend/Parser/Names.krt',
+            'Compiler/Frontend/Semantic/Semantic.krt',
         ]
         prelude = compiler_prelude(parts)
         text = 'int32 sum(int32 left, int32 right) { return right; } int32 main() { return sum(1, 2); }'
@@ -334,9 +334,9 @@ int32 main() {{
 
     def test_large_function_module_contract(self):
         parts = [
-            'Frontend/Lexer/Token.krt', 'Frontend/Lexer/Lexer.krt',
-            'Frontend/Parser/Ast.krt', 'Frontend/Parser/Parser.krt', 'Frontend/Parser/Names.krt',
-            'Frontend/Semantic/Semantic.krt',
+            'Compiler/Frontend/Lexer/Token.krt', 'Compiler/Frontend/Lexer/Lexer.krt',
+            'Compiler/Frontend/Parser/Ast.krt', 'Compiler/Frontend/Parser/Parser.krt', 'Compiler/Frontend/Parser/Names.krt',
+            'Compiler/Frontend/Semantic/Semantic.krt',
         ]
         prelude = compiler_prelude(parts)
         text = ' '.join(f'int32 f{i}() {{ return {i}; }}' for i in range(40)) + ' int32 main() { return 0; }'
@@ -363,9 +363,9 @@ int32 main() {{
 
     def test_void_unsafe_loop_control_contract(self):
         parts = [
-            'Frontend/Lexer/Token.krt', 'Frontend/Lexer/Lexer.krt',
-            'Frontend/Parser/Ast.krt', 'Frontend/Parser/Parser.krt', 'Frontend/Parser/Names.krt',
-            'Frontend/Semantic/Semantic.krt',
+            'Compiler/Frontend/Lexer/Token.krt', 'Compiler/Frontend/Lexer/Lexer.krt',
+            'Compiler/Frontend/Parser/Ast.krt', 'Compiler/Frontend/Parser/Parser.krt', 'Compiler/Frontend/Parser/Names.krt',
+            'Compiler/Frontend/Semantic/Semantic.krt',
         ]
         prelude = compiler_prelude(parts)
         text = 'void worker(int32 value) { unsafe(using krt.mem;) { while (true) { break; } } return; }'

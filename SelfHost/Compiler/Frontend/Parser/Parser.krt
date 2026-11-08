@@ -272,6 +272,14 @@ KrtAstNode KrtParserParsePrimary(KrtParser parser) {
                     else if (value == 97) { value = 7; }
                     else if (value == 98) { value = 8; }
                     else if (value == 102) { value = 12; }
+                    else if (value == 120 || value == 88) {
+                        value = 0; int64 index = token.start + 3; int32 digits = 0;
+                        while (index < token.start + token.length - 1 && digits < 2) {
+                            int64 part = lexer_hex_digit(source[index]);
+                            if (part < 0) { break; }
+                            value = value * 16 + part; index = index + 1; digits = digits + 1;
+                        }
+                    }
                 }
             } else {
                 if (token.length > 2 && source[token.start] == 48 && (source[token.start + 1] == 120 || source[token.start + 1] == 88)) { radix = 16; digit = 2; }

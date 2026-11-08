@@ -4,6 +4,10 @@ Kairote 编写的 Linux x86-64 编译器直接生成 KRO，再由 ArkLink 链接
 
 这说明已实现的编译器能够完整自举。与 Re.KrtC 的语言、优化和独立链接能力是否一致，需要分别验收，不能由自举成功推导。
 
+## 源码布局
+
+编译器源码位于 `SelfHost/Compiler/`，按 `Driver/`、`Frontend/`、`Middle/`、`Backend/` 分层，与 `Re.KrtC/src/Compiler/` 使用相同的顶层目录结构。两个实现的文件粒度不要求一一对应：自举版按 Kairote 模块拆分，C 版有些实现集中在 `.c` 文件或 `.inc` 文件中。`SelfHost/Main.krt` 是编译器入口。
+
 ## 运行自举
 
 在仓库根目录执行：
