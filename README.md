@@ -85,6 +85,8 @@ cd Re.KrtC
 zig build
 ```
 
+构建产物会同时安装标准库源码：`Re.KrtC/build/KrtC` 与同级的 `Re.KrtC/stdlib/`。部署时保持二者的相对布局（例如 `prefix/bin/krtc` 与 `prefix/stdlib/`）；`krtc new console MyApp` 会将其复制到 `MyApp/libs/System/`。项目中的 `using` 仅从该项目的 `libs/` 解析。
+
 > 编译器依赖 `libarklink`。如果 `../ArkLink/build/libarklink.a` 不存在，需先构建 ArkLink：
 > ```bash
 > cd ../ArkLink && cmake -S . -B build && cmake --build build

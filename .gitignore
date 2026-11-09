@@ -47,6 +47,7 @@ Re.KrtC/version.json
 zig-out/
 .zig-out/
 build/
+/Re.KrtC/stdlib/
 todo.md
 */todo.md
 TODO.md

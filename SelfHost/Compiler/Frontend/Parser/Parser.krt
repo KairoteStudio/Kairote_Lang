@@ -200,7 +200,6 @@ KrtParser KrtParserFork(KrtParser parser) {
 
 void KrtParserCommit(KrtParser parser, KrtParser probe) {
     parser.lexer.position = probe.lexer.position; parser.lexer.line = probe.lexer.line; parser.lexer.column = probe.lexer.column;
-    parser.lexer.token_kind = probe.lexer.token_kind; parser.lexer.token_start = probe.lexer.token_start; parser.lexer.token_length = probe.lexer.token_length;
     parser.token.kind = probe.token.kind; parser.token.category = probe.token.category;
     parser.token.start = probe.token.start; parser.token.length = probe.token.length;
     parser.token.line = probe.token.line; parser.token.column = probe.token.column; parser.token.error = probe.token.error;

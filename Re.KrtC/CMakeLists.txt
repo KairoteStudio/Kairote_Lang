@@ -22,3 +22,12 @@ target_compile_options(KrtC PRIVATE -Wall -Wextra -Wformat=2 -Wshadow
     -Werror=unused-variable -Werror=unused-function -Werror=unused-parameter
     -Werror=unused-but-set-variable -Werror=implicit-function-declaration)
 target_link_libraries(KrtC PRIVATE arklink Threads::Threads m)
+
+add_custom_command(TARGET KrtC POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:KrtC>/../stdlib"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/../libs/System"
+            "$<TARGET_FILE_DIR:KrtC>/../stdlib")
+
+install(TARGETS KrtC RUNTIME DESTINATION bin)
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../libs/System/" DESTINATION stdlib
+        FILES_MATCHING PATTERN "*.krt")

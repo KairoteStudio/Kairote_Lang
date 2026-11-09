@@ -40,6 +40,7 @@ typedef struct SemanticAnalyzer {
     int using_capacity;
     char* input_file_path;
     char* libs_path;
+    ASTNode* program_ast;
     void* pipeline;
     KrtErrorReport* error_report;
 } SemanticAnalyzer;

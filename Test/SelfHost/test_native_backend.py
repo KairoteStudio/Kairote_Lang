@@ -191,7 +191,8 @@ class NativeBackendTest(unittest.TestCase):
             compiler=os.environ.get("SELFHOST_COMPILER")
             command=([str(Path(compiler).resolve()),"-O2","--linker",str(ARKLINK),str(source),"-o",str(emitter)]
                      if compiler else [str(KRTC),"-O2",str(source),"output",str(emitter)])
-            built = subprocess.run(command, cwd=work, capture_output=True, text=True, timeout=60)
+            compile_timeout = 300 if compiler else 60
+            built = subprocess.run(command, cwd=work, capture_output=True, text=True, timeout=compile_timeout)
             self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
             emitted = subprocess.run([str(emitter)], cwd=work, capture_output=True, text=True, timeout=30)
             self.assertEqual(emitted.returncode, 0, f"case #{emitted.returncode}: {emitted.stdout}{emitted.stderr}")

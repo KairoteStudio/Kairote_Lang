@@ -708,6 +708,8 @@ KrtProjectKrtConfig* KrtProjectKrtLoad(const char* path) {
         return NULL;
     }
     config->type = KRT_PROJ_TYPE_CONSOLE;
+    /* Project source files share a namespace by default, like C# projects. */
+    config->compile_together = true;
     extract_base_dir(config, path);
 
     KrtProjEval ev;

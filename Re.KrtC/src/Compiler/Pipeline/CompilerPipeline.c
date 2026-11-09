@@ -555,42 +555,6 @@ int KrtCompilePipelineExecute(KrtCompilePipeline* pipeline, const char* input_fi
         return 0;
     }
 
-    {
-        char exe_dir[1024];
-#ifdef _WIN32
-        GetModuleFileNameA(NULL, exe_dir, sizeof(exe_dir));
-        char* last_sep = strrchr(exe_dir, '\\');
-        if (last_sep) {
-            *last_sep = '\0';
-        }
-#else
-        ssize_t len = readlink("/proc/self/exe", exe_dir, sizeof(exe_dir) - 1);
-        if (len != -1) {
-            exe_dir[len] = '\0';
-            char* last_sep = strrchr(exe_dir, '/');
-            if (last_sep) {
-                *last_sep = '\0';
-            }
-        } else {
-            strcpy(exe_dir, ".");
-        }
-#endif
-
-        char stdlib_path[1024];
-        char exe_dir_truncated[1010];
-        strncpy(exe_dir_truncated, exe_dir, sizeof(exe_dir_truncated) - 1);
-        exe_dir_truncated[sizeof(exe_dir_truncated) - 1] = '\0';
-        snprintf(stdlib_path, sizeof(stdlib_path), "%s" KRT_PATH_SEP_STR ".." KRT_PATH_SEP_STR "stdlib",
-                 exe_dir_truncated);
-
-        struct stat stdlib_stat;
-        if (stat(stdlib_path, &stdlib_stat) == 0 && (stdlib_stat.st_mode & S_IFDIR)) {
-            if (!KrtCompilePipelineLoadStandardLibrary(pipeline, stdlib_path)) {
-                return 0;
-            }
-        }
-    }
-
     if (!KrtCompilePipelineSemantic(pipeline)) {
         return 0;
     }

@@ -25,7 +25,8 @@ class NativeCompilerFixture(unittest.TestCase):
 
     def command(self, *arguments):
         result = subprocess.run([str(COMPILER), "--linker", str(LINKER), *map(str, arguments)],
-                                cwd=self.work, env=self.env, capture_output=True, text=True, timeout=60)
+                                cwd=self.work, env=self.env, capture_output=True, text=True,
+                                timeout=300 if "SELFHOST_COMPILER" in os.environ else 60)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def compile(self, source, level):

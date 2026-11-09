@@ -33,6 +33,7 @@ void KrtPlatformConsoleSetUtf8(KrtPlatform* platform);
 
 int KrtPlatformExecuteCommand(KrtPlatform* platform, const char* command);
 
+/** Return a new abstraction for the host platform. The caller owns the result. */
 KrtPlatform* KrtPlatformGetCurrent(void);
 
 #endif

@@ -286,6 +286,82 @@ void semantic_analyzer_collect_exports(SemanticAnalyzer* analyzer, ASTNode* ast)
     }
 }
 
+static void semantic_analyzer_set_project_libs_path(SemanticAnalyzer* analyzer) {
+    if (!analyzer || !analyzer->input_file_path) {
+        return;
+    }
+
+    char project_root[PATH_MAX];
+    snprintf(project_root, sizeof(project_root), "%s", analyzer->input_file_path);
+    char* file_name = strrchr(project_root, '/');
+    if (!file_name) {
+        snprintf(project_root, sizeof(project_root), ".");
+    } else if (file_name == project_root) {
+        project_root[1] = '\0';
+    } else {
+        *file_name = '\0';
+    }
+
+    char search[PATH_MAX];
+    snprintf(search, sizeof(search), "%s", project_root);
+    bool found_project_manifest = false;
+    for (;;) {
+        char manifest[PATH_MAX];
+        int manifest_length = snprintf(manifest, sizeof(manifest), "%s/project.krt", search);
+        struct stat st;
+        if (manifest_length >= 0 && (size_t)manifest_length < sizeof(manifest) &&
+            stat(manifest, &st) == 0 && S_ISREG(st.st_mode)) {
+            snprintf(project_root, sizeof(project_root), "%s", search);
+            found_project_manifest = true;
+            break;
+        }
+
+        if (strcmp(search, "/") == 0) {
+            break;
+        }
+        char* parent = strrchr(search, '/');
+        if (!parent) {
+            break;
+        }
+        if (parent == search) {
+            search[1] = '\0';
+        } else {
+            *parent = '\0';
+        }
+    }
+
+    /* Imported sources do not normally carry a project.krt of their own.  When
+     * compiling such a source, retain the library root that contains it rather
+     * than treating (for example) libs/System as a new project root. */
+    if (!found_project_manifest) {
+        char* library_component = NULL;
+        for (char* component = strstr(project_root, "/libs/"); component != NULL;
+             component = strstr(component + 1, "/libs/")) {
+            library_component = component;
+        }
+        if (library_component) {
+            *library_component = '\0';
+        } else {
+            size_t root_length = strlen(project_root);
+            if (root_length >= 5 && strcmp(project_root + root_length - 5, "/libs") == 0) {
+                if (root_length == 5) {
+                    project_root[1] = '\0';
+                } else {
+                    project_root[root_length - 5] = '\0';
+                }
+            }
+        }
+    }
+
+    char libs_path[PATH_MAX];
+    int libs_length = strcmp(project_root, "/") == 0
+                          ? snprintf(libs_path, sizeof(libs_path), "/libs")
+                          : snprintf(libs_path, sizeof(libs_path), "%s/libs", project_root);
+    if (libs_length >= 0 && (size_t)libs_length < sizeof(libs_path)) {
+        analyzer->libs_path = KRT_STRDUP(libs_path);
+    }
+}
+
 void semantic_analyzer_set_input_file(SemanticAnalyzer* analyzer, const char* file_path) {
     if (!analyzer) {
         return;
@@ -318,43 +394,7 @@ void semantic_analyzer_set_input_file(SemanticAnalyzer* analyzer, const char* fi
             }
         }
 
-        analyzer->libs_path = NULL;
-
-        char search[PATH_MAX];
-        snprintf(search, sizeof(search), "%s", analyzer->input_file_path);
-
-        while (search[0]) {
-            char* last_slash = strrchr(search, '/');
-            if (!last_slash) {
-                break;
-            }
-
-            int dir_len = (int)(last_slash - search);
-            if (dir_len == 0) {
-                char candidate[16];
-                snprintf(candidate, sizeof(candidate), "/libs");
-                struct stat st;
-                if (stat(candidate, &st) == 0 && S_ISDIR(st.st_mode)) {
-                    analyzer->libs_path = KRT_STRDUP(candidate);
-                }
-                break;
-            }
-
-            char candidate[PATH_MAX];
-            snprintf(candidate, sizeof(candidate), "%.*s/libs", dir_len, search);
-
-            struct stat st;
-            if (stat(candidate, &st) == 0 && S_ISDIR(st.st_mode)) {
-                analyzer->libs_path = KRT_STRDUP(candidate);
-                break;
-            }
-
-            search[dir_len] = '\0';
-        }
-
-        if (!analyzer->libs_path) {
-            analyzer->libs_path = KRT_STRDUP("libs");
-        }
+        semantic_analyzer_set_project_libs_path(analyzer);
     }
 }
 
@@ -740,8 +780,16 @@ static KrtTokenType semantic_analyzer_infer_expression_type(SemanticAnalyzer* an
         return KrtTokenIntegerCommon(left, right);
     }
     case AST_BINARY_OPERATION: {
+        KrtTokenType op = expr->data.binary_op.operator;
+        if (op == TOKEN_EQUAL || op == TOKEN_NOT_EQUAL || op == TOKEN_LESS || op == TOKEN_GREATER ||
+            op == TOKEN_LESS_EQUAL || op == TOKEN_GREATER_EQUAL || op == TOKEN_AND || op == TOKEN_OR) {
+            return TOKEN_BOOL;
+        }
         KrtTokenType left = semantic_analyzer_infer_expression_type(analyzer, expr->data.binary_op.left);
         KrtTokenType right = semantic_analyzer_infer_expression_type(analyzer, expr->data.binary_op.right);
+        if (op == TOKEN_ASSIGN) {
+            return left;
+        }
         if (left == TOKEN_FLOAT64 || right == TOKEN_FLOAT64) {
             return TOKEN_FLOAT64;
         }
@@ -751,7 +799,7 @@ static KrtTokenType semantic_analyzer_infer_expression_type(SemanticAnalyzer* an
         if (left == TOKEN_STRING || right == TOKEN_STRING) {
             return TOKEN_STRING;
         }
-        if (expr->data.binary_op.operator == TOKEN_LSHIFT || expr->data.binary_op.operator == TOKEN_RSHIFT) {
+        if (op == TOKEN_LSHIFT || op == TOKEN_RSHIFT) {
             return left;
         }
         return KrtTokenIntegerCommon(left, right);
@@ -3272,6 +3320,7 @@ SemanticAnalysisResult* semantic_analyzer_analyze(SemanticAnalyzer* analyzer, AS
 
     analyzer->error_count = 0;
     analyzer->warning_count = 0;
+    analyzer->program_ast = ast;
     if (!semantic_expand_types(analyzer, ast)) {
         result->success = false;
     }
@@ -3478,6 +3527,56 @@ static char* resolve_using_path(char** path_parts, int path_length, bool* is_wil
     }
 
     return resolved;
+}
+
+static bool namespace_matches_using(const char* namespace_name, const UsingDirective* directive) {
+    if (!namespace_name || !directive || !directive->namespace_path || directive->path_length <= 0) {
+        return false;
+    }
+
+    const char* current = namespace_name;
+    for (int i = 0; i < directive->path_length; i++) {
+        const char* part = directive->namespace_path[i];
+        if (!part || strcmp(part, "*") == 0) {
+            return false;
+        }
+        size_t length = strlen(part);
+        if (strncmp(current, part, length) != 0) {
+            return false;
+        }
+        current += length;
+        if (i + 1 < directive->path_length) {
+            if (*current != '.') {
+                return false;
+            }
+            current++;
+        }
+    }
+    return *current == '\0' || *current == '.';
+}
+
+static bool ast_declares_namespace(const ASTNode* node, const UsingDirective* directive) {
+    if (!node) {
+        return false;
+    }
+    if (node->type == AST_PROGRAM || node->type == AST_BLOCK) {
+        for (int i = 0; i < node->data.block.statement_count; i++) {
+            if (ast_declares_namespace(node->data.block.statements[i], directive)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    if (node->type == AST_NAMESPACE_DECLARATION) {
+        return namespace_matches_using(node->data.namespace_decl.name, directive) ||
+               ast_declares_namespace(node->data.namespace_decl.body, directive);
+    }
+    return false;
+}
+
+static bool semantic_analyzer_using_is_project_namespace(const SemanticAnalyzer* analyzer,
+                                                          const UsingDirective* directive) {
+    return analyzer && ast_declares_namespace(analyzer->program_ast, directive);
 }
 
 static char* try_file_path(const char* path) {
@@ -3725,27 +3824,28 @@ static void import_namespace_folder(SemanticAnalyzer* analyzer, const char* fold
         return;
     }
 
-    char cmd[1024];
-    snprintf(cmd, sizeof(cmd), "ls '%s'/*.krt 2>/dev/null", folder_path);
-
-    FILE* pipe = popen(cmd, "r");
-    if (!pipe) {
+    DIR* directory = opendir(folder_path);
+    if (!directory) {
         return;
     }
 
-    char line[512];
-    while (fgets(line, sizeof(line), pipe)) {
-        int len = (int)strlen(line);
-        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r' || line[len - 1] == ' ')) {
-            line[--len] = '\0';
+    struct dirent* entry;
+    while ((entry = readdir(directory)) != NULL) {
+        const char* name = entry->d_name;
+        size_t length = strlen(name);
+        if (name[0] == '.' || length <= 4 || strcmp(name + length - 4, ".krt") != 0) {
+            continue;
         }
 
-        if (len > 0) {
-            import_krt_file(analyzer, line);
+        char path[PATH_MAX];
+        int path_length = snprintf(path, sizeof(path), "%s/%s", folder_path, name);
+        struct stat st;
+        if (path_length >= 0 && (size_t)path_length < sizeof(path) && stat(path, &st) == 0 && S_ISREG(st.st_mode)) {
+            import_krt_file(analyzer, path);
         }
     }
 
-    pclose(pipe);
+    closedir(directory);
 }
 
 bool semantic_analyzer_analyze_dependencies(SemanticAnalyzer* analyzer) {
@@ -3760,6 +3860,9 @@ bool semantic_analyzer_analyze_dependencies(SemanticAnalyzer* analyzer) {
         if (!directive || !directive->namespace_path || directive->path_length == 0) {
             continue;
         }
+        if (semantic_analyzer_using_is_project_namespace(analyzer, directive)) {
+            continue;
+        }
         bool is_wildcard = false;
         char* relative_path = resolve_using_path(directive->namespace_path, directive->path_length, &is_wildcard);
         if (!relative_path) {
@@ -3767,7 +3870,7 @@ bool semantic_analyzer_analyze_dependencies(SemanticAnalyzer* analyzer) {
             continue;
         }
 
-        const char* libs_dir = analyzer->libs_path ? analyzer->libs_path : "libs";
+        const char* libs_dir = analyzer->libs_path ? analyzer->libs_path : "./libs";
         char folder_path_resolved[1024];
         snprintf(folder_path_resolved, sizeof(folder_path_resolved), "%s/%s", libs_dir, relative_path);
 
@@ -3789,7 +3892,8 @@ bool semantic_analyzer_analyze_dependencies(SemanticAnalyzer* analyzer) {
         char* file_path = try_file_path(file_path_with_ext);
 
         if (!file_path) {
-            semantic_analyzer_add_error(analyzer, "Using: cannot find '%s'", relative_path);
+            semantic_analyzer_add_error(analyzer, "Using: cannot find '%s' in project libraries '%s'", relative_path,
+                                        libs_dir);
             KRT_FREE(relative_path);
             success = false;
             continue;

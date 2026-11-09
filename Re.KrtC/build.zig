@@ -109,7 +109,14 @@ pub fn build(b: *std.Build) void {
     krtc_module.addLibraryPath(b.path("../ArkLink/build"));
 
     const krtc_install = b.addInstallFile(krtc.getEmittedBin(), "../build/KrtC");
+    const stdlib_install = b.addInstallDirectory(.{
+        .source_dir = b.path("../libs/System"),
+        .install_dir = .prefix,
+        .install_subdir = "../stdlib",
+        .include_extensions = &.{".krt"},
+    });
     b.getInstallStep().dependOn(&krtc_install.step);
+    b.getInstallStep().dependOn(&stdlib_install.step);
 
     const run_krtc_cmd = b.addRunArtifact(krtc);
     run_krtc_cmd.step.dependOn(&krtc_install.step);

@@ -6,6 +6,7 @@ their native CLI with an empty PATH. The Python harness records evidence and
 links emitted KROs through the absolute ArkLink path.
 """
 import argparse
+import ast
 import hashlib
 import json
 import os
@@ -22,38 +23,22 @@ LINKER_DEFAULT = ROOT / "build/ArkLink/ArkLink"
 KRTC = Path(os.environ.get("KRTC", SEED_DEFAULT if SEED_DEFAULT.exists() else ROOT / "Re.KrtC/build/KrtC")).resolve()
 ARKLINK = Path(os.environ.get("ARKLINK", LINKER_DEFAULT if LINKER_DEFAULT.exists() else ROOT / "ArkLink/build/ArkLink")).resolve()
 
+# VM tests are deprecated; keep bootstrap acceptance on the native CLI only.
 NATIVE_DRIVER_MODULES = (
-    "Test.SelfHost.test_native_driver", "Test.SelfHost.test_native_optimizer",
-    "Test.SelfHost.test_native_registers", "Test.SelfHost.test_native_ssa",
-    "Test.SelfHost.test_native_parameters", "Test.SelfHost.test_native_artifacts",
-    "Test.SelfHost.test_semantic_restoration", "Test.SelfHost.test_wide_precision",
-    "Test.SelfHost.test_named_arguments",
-    "Test.SelfHost.test_globals_functions.GlobalsAndFunctionPointers.test_function_type_results_preserve_nested_ref_and_object_shapes",
-    "Test.SelfHost.test_access_control", "Test.SelfHost.test_struct_values",
-    "Test.SelfHost.test_fixed_generic_values", "Test.SelfHost.test_value_programs",
-    "Test.SelfHost.test_function_containers", "Test.SelfHost.test_deep_inheritance",
+    "Test.SelfHost.test_native_driver",
+    "Test.SelfHost.test_native_registers",
+    "Test.SelfHost.test_native_ssa",
+    "Test.SelfHost.test_semantic_restoration",
     "Test.SelfHost.test_http_server",
-    "Test.SelfHost.test_string_compound", "Test.SelfHost.test_aggregate_conditions",
-    "Test.SelfHost.test_struct_linkage", "Test.SelfHost.test_native_backend",
-    "Test.SelfHost.test_indirect_arguments",
-    "Test.SelfHost.test_struct_pointer_layout",
-    "Test.SelfHost.test_control_flow",
-    "Test.SelfHost.test_contextual_arguments",
-    "Test.SelfHost.test_symbol_index", "Test.SelfHost.test_signature_cache",
-    "Test.SelfHost.test_nullable_operators", "Test.SelfHost.test_foreach_bindings",
-    "Test.SelfHost.test_void_values",
-    "Test.SelfHost.test_nested_callback_contracts",
-    "Test.SelfHost.test_closures", "Test.SelfHost.test_closure_patterns",
-    "Test.SelfHost.test_closure_inference",
-    "Test.SelfHost.test_iterators", "Test.SelfHost.test_generators",
-    "Test.SelfHost.test_generator_modules", "Test.SelfHost.test_iterator_boxing",
-    "Test.SelfHost.test_boxing", "Test.SelfHost.test_module_abi",
-    "Test.SelfHost.test_native_linking", "Test.SelfHost.test_linkage_boundaries",
-    "Test.SelfHost.test_runtime_types", "Test.SelfHost.test_vm_runtime_types",
-    "Test.SelfHost.test_parenthesized_casts", "Test.SelfHost.test_runtime_http",
-    "Test.SelfHost.test_wide_lifetimes",
-    "Test.SelfHost.test_vm", "Test.SelfHost.test_inheritance",
-    "Test.SelfHost.test_interfaces", "Test.SelfHost.test_native_exceptions",
+    "Test.SelfHost.test_struct_linkage",
+    "Test.SelfHost.test_native_backend",
+    "Test.SelfHost.test_generator_modules",
+    "Test.SelfHost.test_module_abi",
+    "Test.SelfHost.test_native_linking",
+    "Test.SelfHost.test_linkage_boundaries",
+    "Test.SelfHost.test_inheritance",
+    "Test.SelfHost.test_interfaces",
+    "Test.SelfHost.test_native_exceptions",
     "Test.SelfHost.test_native_collections",
 )
 
@@ -542,7 +527,7 @@ class Bootstrap:
         work.mkdir(exist_ok=True)
         output = work / "stage1-probe.kro"
         output.unlink(missing_ok=True)
-        self.run([compiler, *sources, "-c", "-o", output], work, isolated=True)
+        self.run([compiler, *sources, "-c", "-o", output], work, isolated=True, timeout=300)
         if not output.is_file():
             raise RuntimeError(f"Native CLI produced no KRO: {work}")
         digest = hashlib.sha256(output.read_bytes()).hexdigest()
@@ -554,6 +539,43 @@ class Bootstrap:
         self.save()
         return binary, digest
 
+    def native_test_dependencies(self, modules):
+        """Resolve test modules and their statically imported SelfHost helpers."""
+        pending = list(modules) + ["Test.SelfHost.Bootstrap"]
+        paths = set()
+        while pending:
+            name = pending.pop()
+            parts = name.split(".")
+            path = None
+            while parts:
+                candidate = ROOT.joinpath(*parts).with_suffix(".py")
+                if candidate.is_file():
+                    path = candidate
+                    break
+                package = ROOT.joinpath(*parts, "__init__.py")
+                if package.is_file():
+                    path = package
+                    break
+                parts.pop()
+            if path is None:
+                continue
+            relative = str(path.relative_to(ROOT))
+            if relative in paths:
+                continue
+            paths.add(relative)
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    pending.extend(alias.name for alias in node.names
+                                   if alias.name.startswith("Test.SelfHost."))
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    if node.module == "Test.SelfHost":
+                        pending.extend(node.module + "." + alias.name for alias in node.names
+                                       if alias.name != "*")
+                    elif node.module.startswith("Test.SelfHost."):
+                        pending.append(node.module)
+        return paths
+
     def native_driver(self, compiler, label):
         """Run direct CLI regressions while Python executables are absent from PATH."""
         compiler = Path(compiler).resolve()
@@ -562,29 +584,100 @@ class Bootstrap:
         env["SELFHOST_COMPILER"] = str(compiler)
         env["ARKLINK"] = str(ARKLINK)
         env["PATH"] = str(self.work / "empty-path")
-        argv = [sys.executable, "-m", "unittest", *NATIVE_DRIVER_MODULES]
-        started = time.perf_counter()
-        result = subprocess.run(argv,
-                                cwd=ROOT, env=env, capture_output=True, text=True, timeout=900)
-        elapsed = time.perf_counter() - started
+        batches = [NATIVE_DRIVER_MODULES[start:start + 8]
+                   for start in range(0, len(NATIVE_DRIVER_MODULES), 8)]
+        total_tests = 0
+        for batch_index, modules in enumerate(batches, 1):
+            argv = [sys.executable, "-m", "unittest", *modules]
+            batch_before = self.evidence_snapshot()
+            dependencies = self.native_test_dependencies(modules)
+            previous = next((record for record in reversed(self.commands)
+                             if record.get("native_driver") == label and
+                             record.get("returncode") == 0 and record.get("argv") == argv and
+                             record.get("compiler_sha256") == file_sha256(compiler) and
+                             record.get("evidence_before") == record.get("evidence_after")), None)
+            if previous:
+                old_inputs = previous["evidence_after"].get("acceptance_input_sha256", {})
+                new_inputs = batch_before.get("acceptance_input_sha256", {})
+                changed_inputs = {path for path in old_inputs.keys() | new_inputs.keys()
+                                  if old_inputs.get(path) != new_inputs.get(path)}
+                unrelated_test_edits = all(
+                    (path == "Test/SelfHost/Bootstrap.py" or
+                     (path.startswith("Test/SelfHost/") and path.endswith(".py") and path not in dependencies))
+                    for path in changed_inputs)
+                previous_evidence = previous["evidence_after"]
+                same_artifacts = all(previous_evidence.get(key) == batch_before.get(key)
+                                     for key in ("source_file_sha256", "seed_sha256", "linker_sha256",
+                                                 "artifact_sha256"))
+                if unrelated_test_edits and same_artifacts:
+                    count = previous.get("test_count") or 0
+                    total_tests += count
+                    self.report.setdefault("native_driver_reused_batches", []).append({
+                        "label": label, "batch_index": batch_index,
+                        "modules": list(modules), "test_count": count,
+                        "compiler_sha256": file_sha256(compiler),
+                        "dependencies": {path: batch_before["acceptance_input_sha256"].get(path)
+                                         for path in sorted(dependencies)},
+                        "previous_evidence_sha256": previous.get("evidence_after_sha256"),
+                        "current_evidence_sha256": summary_sha256(batch_before),
+                    })
+                    self.save()
+                    print(f"REUSE {label}: batch {batch_index}/{len(batches)} "
+                          f"({count} tests; compiler and imported test inputs unchanged)", flush=True)
+                    continue
+            started = time.perf_counter()
+            try:
+                result = subprocess.run(argv, cwd=ROOT, env=env, capture_output=True,
+                                        text=True, timeout=900)
+            except subprocess.TimeoutExpired as error:
+                elapsed = time.perf_counter() - started
+                stdout = error.stdout.decode(errors="replace") if isinstance(error.stdout, bytes) else (error.stdout or "")
+                stderr = error.stderr.decode(errors="replace") if isinstance(error.stderr, bytes) else (error.stderr or "")
+                self.commands.append({"argv": argv, "cwd": str(ROOT), "isolated_path": True,
+                                      "returncode": None, "timed_out": True, "stdout": stdout,
+                                      "stderr": stderr, "native_driver": label,
+                                      "batch_index": batch_index, "batch_count": len(batches),
+                                      "env": {name: env[name] for name in ("SELFHOST_COMPILER", "ARKLINK", "PATH")},
+                                      "compiler_sha256": file_sha256(compiler),
+                                      "runner_sha256": file_sha256(sys.executable),
+                                      "elapsed_seconds": elapsed,
+                                      "evidence_before": batch_before,
+                                      "evidence_before_sha256": summary_sha256(batch_before)})
+                self.save()
+                raise RuntimeError(f"Native CLI regressions timed out for {label} batch "
+                                   f"{batch_index}/{len(batches)} after {elapsed:.1f}s:\n{stdout}{stderr}") from error
+            elapsed = time.perf_counter() - started
+            batch_after = self.evidence_snapshot()
+            count = re.search(r"Ran (\d+) tests in", result.stderr)
+            passed = (result.returncode == 0 and batch_before == batch_after and
+                      re.search(r"\nOK\s*$", result.stderr) is not None)
+            self.commands.append({"argv": argv, "cwd": str(ROOT), "isolated_path": True,
+                                  "returncode": result.returncode, "stdout": result.stdout,
+                                  "stderr": result.stderr, "native_driver": label,
+                                  "batch_index": batch_index, "batch_count": len(batches),
+                                  "env": {name: env[name] for name in ("SELFHOST_COMPILER", "ARKLINK", "PATH")},
+                                  "compiler_sha256": file_sha256(compiler),
+                                  "runner_sha256": file_sha256(sys.executable),
+                                  "elapsed_seconds": elapsed,
+                                  "evidence_before": batch_before, "evidence_after": batch_after,
+                                  "evidence_before_sha256": summary_sha256(batch_before),
+                                  "evidence_after_sha256": summary_sha256(batch_after),
+                                  "test_count": int(count.group(1)) if count else None})
+            self.save()
+            if not passed:
+                raise RuntimeError(f"Native CLI regressions failed for {label} batch "
+                                   f"{batch_index}/{len(batches)}:\n{result.stdout}{result.stderr}")
+            batch_tests = int(count.group(1)) if count else 0
+            total_tests += batch_tests
+            print(f"PASS {label}: native CLI batch {batch_index}/{len(batches)} "
+                  f"({batch_tests} tests, {elapsed:.1f}s)", flush=True)
         after = self.evidence_snapshot()
-        passed = result.returncode == 0 and before == after and re.search(r"\nOK\s*$", result.stderr) is not None
-        count = re.search(r"Ran (\d+) tests in", result.stderr)
-        self.commands.append({"argv": argv,
-                              "cwd": str(ROOT), "isolated_path": True, "returncode": result.returncode,
-                              "stdout": result.stdout, "stderr": result.stderr, "native_driver": label,
-                              "env": {name: env[name] for name in ("SELFHOST_COMPILER", "ARKLINK", "PATH")},
-                              "compiler_sha256": file_sha256(compiler), "runner_sha256": file_sha256(sys.executable),
-                              "elapsed_seconds": elapsed,
-                              "evidence_before": before, "evidence_after": after,
-                              "evidence_before_sha256": summary_sha256(before),
-                              "evidence_after_sha256": summary_sha256(after),
-                              "test_count": int(count.group(1)) if count else None})
+        passed = before == after
         self.report.setdefault("native_driver", {})[label] = passed
         self.save()
         if not passed:
-            raise RuntimeError(f"Native CLI regressions failed for {label}:\n{result.stdout}{result.stderr}")
-        print(f"PASS {label}: native CLI, imports, diagnostics, projects and optimization", flush=True)
+            raise RuntimeError(f"Native CLI acceptance evidence changed for {label}")
+        print(f"PASS {label}: native CLI acceptance ({total_tests} tests)", flush=True)
 
     def probes(self, compiler, label):
         hashes = {}

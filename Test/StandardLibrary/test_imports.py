@@ -29,6 +29,41 @@ class LibraryImports(LibraryTestCase):
                     self.assertNotIn("AddressSanitizer", result.stderr)
                     self.assertNotIn("runtime error:", result.stderr)
 
+    def test_using_is_scoped_to_the_current_project_libs_directory(self):
+        with tempfile.TemporaryDirectory(prefix="kairote-library-root-") as directory:
+            work = Path(directory)
+            parent = work / "parent"
+            shutil.copytree(ROOT / "libs", parent / "libs", ignore=shutil.ignore_patterns("*.kro", "*.o"))
+            source_dir = parent / "project" / "src"
+            source_dir.mkdir(parents=True)
+            source = source_dir / "main.krt"
+            source.write_text('''using System.Console;
+int32 main() { Console.WriteLine("must not use parent libs"); return 0; }
+''')
+
+            result = subprocess.run(compiler_command(source, "-o", source_dir / "Program"), cwd=source_dir,
+                                    capture_output=True, text=True, timeout=30)
+            output = result.stdout + result.stderr
+            self.assertGreater(result.returncode, 0, output)
+            self.assertIn(f"project libraries '{source_dir / 'libs'}'", output)
+
+    def test_project_namespace_using_does_not_require_a_library_directory(self):
+        with tempfile.TemporaryDirectory(prefix="kairote-project-namespace-") as directory:
+            work = Path(directory)
+            (work / "project.krt").write_text("function Configure(Project p) {}\n")
+            source = work / "main.krt"
+            source.write_text('''using App.Internal;
+namespace App.Internal;
+int32 main() { return 0; }
+''')
+
+            program = work / "Program"
+            result = subprocess.run(compiler_command(source, "-o", program), cwd=work, capture_output=True,
+                                    text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            executed = subprocess.run([str(program)], capture_output=True, timeout=10)
+            self.assertEqual(executed.returncode, 0, executed.stderr)
+
     def test_single_class_import_keeps_transitive_implementations(self):
         self.run_source('''
 using System.Convert;

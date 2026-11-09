@@ -194,6 +194,48 @@ static void write_file_if_possible(const char* path, const char* content) {
     fclose(fp);
 }
 
+static int resolve_bundled_stdlib(char* result, size_t result_size) {
+    if (!result || result_size == 0) {
+        return 0;
+    }
+
+    char exe_dir[KRT_MAX_PATH - 32];
+#ifdef _WIN32
+    GetModuleFileNameA(NULL, exe_dir, sizeof(exe_dir));
+    exe_dir[sizeof(exe_dir) - 1] = '\0';
+    char* last_sep = strrchr(exe_dir, '\\');
+    if (last_sep) {
+        *last_sep = '\0';
+    }
+#else
+    ssize_t len = readlink("/proc/self/exe", exe_dir, sizeof(exe_dir) - 1);
+    if (len < 0) {
+        return 0;
+    }
+    exe_dir[len] = '\0';
+    char* last_sep = strrchr(exe_dir, '/');
+    if (last_sep) {
+        *last_sep = '\0';
+    }
+#endif
+
+    const char* candidates[] = {
+        ".." KRT_PATH_SEPARATOR_STR "stdlib",
+        "stdlib",
+        ".." KRT_PATH_SEPARATOR_STR ".." KRT_PATH_SEPARATOR_STR "libs" KRT_PATH_SEPARATOR_STR "System",
+    };
+    for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
+        char candidate[KRT_MAX_PATH];
+        join_path(candidate, sizeof(candidate), exe_dir, candidates[i]);
+        struct stat st;
+        if (stat(candidate, &st) == 0 && S_ISDIR(st.st_mode)) {
+            snprintf(result, result_size, "%s", candidate);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 KrtProject* KrtProjCreate(const char* name, KrtProjectType type) {
     KrtProject* project = KRT_CALLOC(1, sizeof(KrtProject));
     if (!project) {
@@ -359,12 +401,19 @@ int KrtProjCreateTemplate(KrtProject* project, const char* output_dir) {
         project->project_root = KRT_STRDUP(output_dir);
     }
 
+    char stdlib_src[KRT_MAX_PATH];
+    if (!resolve_bundled_stdlib(stdlib_src, sizeof(stdlib_src))) {
+        KrtError("无法找到捆绑标准库；期望安装目录同级的 stdlib/");
+        return 0;
+    }
+
     typedef struct {
         const char* name;
         const char* content;
     } TemplateFile;
 
-    static const TemplateFile console_templates[] = {{"main.krt", "function main() {\n"
+    static const TemplateFile console_templates[] = {{"main.krt", "using System;\n\n"
+                                                                  "function main() {\n"
                                                                   "    print(\"Hello, Kairote Lang!\");\n"
                                                                   "}\n"}};
 
@@ -374,7 +423,8 @@ int KrtProjCreateTemplate(KrtProject* project, const char* output_dir) {
                                                      {"exports.krt", "function export_symbols() {\n"
                                                                      "}\n"}};
 
-    static const TemplateFile web_templates[] = {{"app.krt", "function handle_request() {\n"
+    static const TemplateFile web_templates[] = {{"app.krt", "using System;\n\n"
+                                                             "function handle_request() {\n"
                                                              "    print(\"HTTP/1.1 200 OK\\r\\n\");\n"
                                                              "    print(\"Content-Type: text/html\\r\\n\\r\\n\");\n"
                                                              "    print(\"<h1>Hello from Kairote Lang Web!</h1>\");\n"
@@ -464,6 +514,7 @@ int KrtProjCreateTemplate(KrtProject* project, const char* output_dir) {
             fprintf(pk, "    p.Name(\"%s\");\n", proj_name);
             fprintf(pk, "    p.Type(\"%s\");\n", type_str);
             fprintf(pk, "    p.Output(\"%s\");\n", proj_name);
+            fprintf(pk, "    p.CompileTogether(true);\n");
             if (sources_buf[0] != '\0') {
                 size_t slen = strlen(sources_buf);
                 while (slen > 0 && (sources_buf[slen - 1] == ' ' || sources_buf[slen - 1] == '\t')) {
@@ -488,40 +539,13 @@ int KrtProjCreateTemplate(KrtProject* project, const char* output_dir) {
         }
     }
 
-    char exe_dir[KRT_MAX_PATH - 32];
-    char stdlib_src[KRT_MAX_PATH];
     char stdlib_dst[KRT_MAX_PATH];
-
-#ifdef _WIN32
-    GetModuleFileNameA(NULL, exe_dir, sizeof(exe_dir));
-    exe_dir[sizeof(exe_dir) - 1] = '\0';
-    char* last_sep = strrchr(exe_dir, '\\');
-    if (last_sep) {
-        *last_sep = '\0';
-    }
-#else
-    ssize_t len = readlink("/proc/self/exe", exe_dir, sizeof(exe_dir) - 1);
-    if (len != -1) {
-        exe_dir[len] = '\0';
-        char* last_sep = strrchr(exe_dir, '/');
-        if (last_sep) {
-            *last_sep = '\0';
-        }
-    } else {
-        strcpy(exe_dir, ".");
-    }
-#endif
-
-    snprintf(stdlib_src, sizeof(stdlib_src), "%s%c..%cstdlib", exe_dir, path_separator(), path_separator());
-    struct stat stdlib_stat;
-    if (stat(stdlib_src, &stdlib_stat) != 0 || !(stdlib_stat.st_mode & S_IFDIR)) {
-
-        snprintf(stdlib_src, sizeof(stdlib_src), "%s%cstdlib", exe_dir, path_separator());
-    }
-
-    if (stat(stdlib_src, &stdlib_stat) == 0 && (stdlib_stat.st_mode & S_IFDIR)) {
-        snprintf(stdlib_dst, sizeof(stdlib_dst), "%s%cstdlib", output_dir, path_separator());
-        copy_directory_recursive(stdlib_src, stdlib_dst);
+    char project_libs[KRT_MAX_PATH];
+    join_path(project_libs, sizeof(project_libs), output_dir, "libs");
+    join_path(stdlib_dst, sizeof(stdlib_dst), project_libs, "System");
+    if (create_directory_recursive(stdlib_dst) != 0 || copy_directory_recursive(stdlib_src, stdlib_dst) != 0) {
+        KrtError("无法复制标准库到项目目录: %s", stdlib_dst);
+        return 0;
     }
 
     return 1;

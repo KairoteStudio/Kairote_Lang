@@ -43,10 +43,12 @@ static bool pointer_assignable(SemanticAnalyzer* analyzer, ASTNode* node, KrtSou
         bool target_string = target.token == TOKEN_STRING || target.token == TOKEN_TYPE_STRING;
         bool value_string = value.token == TOKEN_STRING || value.token == TOKEN_TYPE_STRING;
         bool null_to_string = value.token == TOKEN_NULL && target_string;
+        bool null_to_class = value.token == TOKEN_NULL && target.token == TOKEN_IDENTIFIER;
         if (target_string != value_string && !null_to_string) {
             return pointer_error(analyzer, node, "Cannot convert between string and non-string values implicitly");
         }
         if ((target.token == TOKEN_IDENTIFIER || value.token == TOKEN_IDENTIFIER) &&
+            !null_to_class &&
             (target.token != value.token || (target.type_name && value.type_name &&
                                               strcmp(target.type_name, value.type_name)))) {
             return pointer_error(analyzer, node, "Incompatible value types");

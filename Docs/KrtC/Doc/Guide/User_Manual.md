@@ -76,6 +76,21 @@ build/Re.KrtC/KrtC build path/to/project.krt
 
 C 版项目解析器只执行其实现过的配置调用；不能把 SelfHost 的项目字段或行为自动套用到 C 版。实际支持项以 `Re.KrtC/src/Compiler/Driver/ProjectKrt.c` 和 `Re.KrtC/src/Main.c` 为准。
 
+## 项目库与 `using`
+
+`using` 只从当前项目的 `libs/` 目录解析，不会从父目录、运行命令所在目录或编译器安装目录回退搜索。库名与目录一一对应：`using System.Console;` 加载 `libs/System/Console.krt`，`using System;` 加载 `libs/System/` 中的源码。项目自身声明的命名空间按项目源码处理，不需要在 `libs/` 中重复一份；项目默认会合并编译全部源码，使这种行为与 C# 项目一致。
+
+`KrtC new console Name` 创建项目时会把安装目录同级的 `stdlib/` 复制为 `Name/libs/System/`；新模板已经包含 `using System;`。安装布局应为：
+
+```text
+prefix/
+├── bin/KrtC
+└── stdlib/
+    ├── Console.krt
+    ├── Sys.krt
+    └── ...
+```
+
 ## 数组
 
 ```krt

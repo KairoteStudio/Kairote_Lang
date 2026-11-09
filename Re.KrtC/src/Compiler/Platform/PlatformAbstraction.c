@@ -226,9 +226,5 @@ int KrtPlatformExecuteCommand(KrtPlatform* platform, const char* command) {
 }
 
 KrtPlatform* KrtPlatformGetCurrent(void) {
-    static KrtPlatform* current_platform = NULL;
-    if (!current_platform) {
-        current_platform = KrtPlatformCreate(KRT_PLATFORM_DEFAULT);
-    }
-    return current_platform;
+    return KrtPlatformCreate(KRT_PLATFORM_DEFAULT);
 }
