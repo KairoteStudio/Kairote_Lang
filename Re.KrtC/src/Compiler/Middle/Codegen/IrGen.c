@@ -12,6 +12,8 @@
 #include "../../Frontend/Semantic/SymbolTable.h"
 #include "../../Frontend/Semantic/NameMangling.h"
 
+#define KRT_IRGEN_HEAP_HEADER_SIZE 16
+
 static KrtIRValue krt_ir_generate_expression(KrtIRBuilder* builder, ASTNode* expr);
 static void krt_ir_generate_statement(KrtIRBuilder* builder, ASTNode* stmt);
 static void krt_ir_generate_block(KrtIRBuilder* builder, ASTNode* block);
@@ -61,6 +63,10 @@ static KrtTokenType irgen_array_expression_element_type(KrtIRBuilder* builder, A
     }
     if (expr->type == AST_NEW_ARRAY_EXPRESSION) {
         return expr->data.new_array_expr.type_token;
+    }
+    if (expr->type == AST_ARRAY_LITERAL && expr->data.array_literal.element_count > 0 &&
+        expr->data.array_literal.elements && expr->data.array_literal.elements[0]) {
+        return KrtSourceStorage(expr->data.array_literal.elements[0]->resolved_type);
     }
     if (expr->type == AST_MEMBER_ACCESS && expr->data.member_access.resolved_is_array) {
         return expr->resolved_type.token;
@@ -115,6 +121,45 @@ static int irgen_array_element_size(KrtIRBuilder* builder, ASTNode* array_expr) 
     return irgen_size_from_token(irgen_array_element_type(builder, array_expr));
 }
 
+static KrtIRValue irgen_checked_array_index(KrtIRBuilder* builder, KrtIRValue base, KrtIRValue index,
+                                            ASTNode* array_expr, ASTNode* index_expr) {
+    if (irgen_array_expression_element_type(builder, array_expr) == TOKEN_EOF) {
+        return KrtIrCast(builder, index, TOKEN_UINT64);
+    }
+
+    KrtTokenType index_type = KrtSourceStorage(index_expr->resolved_type);
+    bool is_unsigned = KrtTokenIsUnsigned(index_type) || index_type == TOKEN_CHAR || index_type == TOKEN_BOOL;
+    KrtTokenType compare_type = is_unsigned ? TOKEN_UINT128 : TOKEN_INT128;
+    KrtIRValue wide_index = KrtIrCast(builder, index, compare_type);
+
+    char fail_label[64], valid_label[64];
+    int id = builder->label_counter++;
+    snprintf(fail_label, sizeof(fail_label), "array_bounds_fail_%d", id);
+    snprintf(valid_label, sizeof(valid_label), "array_bounds_valid_%d", id);
+    KrtIRBasicBlock* fail = KrtIrBlockCreate(builder, fail_label);
+    KrtIRBasicBlock* valid = KrtIrBlockCreate(builder, valid_label);
+
+    KrtIRValue in_bounds;
+    if (!is_unsigned) {
+        KrtIRValue nonnegative = KrtIrCompare(builder, KRT_IR_GE, wide_index, KrtIrInteger(0, TOKEN_INT128));
+        KrtIRValue length = KrtIrCast(builder, KrtIrLoadPtr(builder, base, -KRT_IRGEN_HEAP_HEADER_SIZE), compare_type);
+        KrtIRValue below_length = KrtIrCompare(builder, KRT_IR_LT, wide_index, length);
+        in_bounds = KrtIrAnd(builder, nonnegative, below_length);
+    } else {
+        KrtIRValue length = KrtIrCast(builder, KrtIrLoadPtr(builder, base, -KRT_IRGEN_HEAP_HEADER_SIZE), compare_type);
+        in_bounds = KrtIrCompare(builder, KRT_IR_LT, wide_index, length);
+    }
+    KrtIrBranch(builder, in_bounds, valid, fail);
+
+    KrtIrBlockSetCurrent(builder, fail);
+    KrtIRValue exit_status[1] = {KrtIrImm(builder, 70)};
+    KrtIrSyscall(builder, KrtIrImm(builder, 60), exit_status, 1);
+    KrtIrJump(builder, fail);
+
+    KrtIrBlockSetCurrent(builder, valid);
+    return KrtIrCast(builder, wide_index, TOKEN_UINT64);
+}
+
 static int irgen_is_syscall_method(const char* class_name, const char* method_name) {
     return class_name && method_name && strcmp(class_name, "Sys") == 0 && strcmp(method_name, "syscall") == 0;
 }
@@ -130,7 +175,6 @@ static _Thread_local KrtGenericContext g_generic_context = {NULL, 0};
 #define KRT_IRGEN_NAME_BUFFER_SIZE 256
 #define KRT_IRGEN_MAX_MANGLE_PARAMS 32
 #define KRT_IRGEN_POINTER_SIZE 8
-#define KRT_IRGEN_HEAP_HEADER_SIZE 16
 #define KRT_IRGEN_DEFAULT_ARRAY_CAPACITY 10
 #define KRT_IRGEN_NAMESPACE_STACK_INIT 8
 #define KRT_IRGEN_CLASS_STACK_INIT 8
@@ -1812,10 +1856,11 @@ static KrtIRValue irgen_expr_array_literal(KrtIRBuilder* builder, ASTNode* expr)
 }
 static KrtIRValue irgen_expr_array_access(KrtIRBuilder* builder, ASTNode* expr) {
     int element_size = irgen_array_element_size(builder, expr->data.array_access.array);
-    KrtIRValue base =
-        KrtIrCast(builder, krt_ir_generate_expression(builder, expr->data.array_access.array), TOKEN_UINT64);
-    KrtIRValue index =
-        KrtIrCast(builder, krt_ir_generate_expression(builder, expr->data.array_access.index), TOKEN_UINT64);
+    ASTNode* array_expr = expr->data.array_access.array;
+    ASTNode* index_expr = expr->data.array_access.index;
+    KrtIRValue base = KrtIrCast(builder, krt_ir_generate_expression(builder, array_expr), TOKEN_UINT64);
+    KrtIRValue index = krt_ir_generate_expression(builder, index_expr);
+    index = irgen_checked_array_index(builder, base, index, array_expr, index_expr);
     KrtIRValue offset = index;
     if (element_size != 1) {
         offset = KrtIrMul(builder, index, KrtIrInteger(element_size, TOKEN_UINT64));
@@ -1981,10 +2026,11 @@ static KrtIRValue irgen_address(KrtIRBuilder* builder, ASTNode* operand) {
         return krt_ir_generate_expression(builder, operand->data.pointer_deref.pointer);
     }
     if (operand->type == AST_ARRAY_ACCESS) {
-        KrtIRValue base =
-            KrtIrCast(builder, krt_ir_generate_expression(builder, operand->data.array_access.array), TOKEN_UINT64);
-        KrtIRValue index = krt_ir_generate_expression(builder, operand->data.array_access.index);
-        index = KrtIrCast(builder, index, TOKEN_UINT64);
+        ASTNode* array_expr = operand->data.array_access.array;
+        ASTNode* index_expr = operand->data.array_access.index;
+        KrtIRValue base = KrtIrCast(builder, krt_ir_generate_expression(builder, array_expr), TOKEN_UINT64);
+        KrtIRValue index = krt_ir_generate_expression(builder, index_expr);
+        index = irgen_checked_array_index(builder, base, index, array_expr, index_expr);
         return KrtIrAdd(
             builder, KrtIrCast(builder, base, TOKEN_UINT64),
             KrtIrMul(builder, index,
@@ -2290,11 +2336,12 @@ static void irgen_stmt_compound_assignment(KrtIRBuilder* builder, ASTNode* stmt)
     return;
 }
 static void irgen_stmt_array_assignment(KrtIRBuilder* builder, ASTNode* stmt) {
-    int element_size = irgen_array_element_size(builder, stmt->data.array_assignment.array);
-    KrtIRValue base =
-        KrtIrCast(builder, krt_ir_generate_expression(builder, stmt->data.array_assignment.array), TOKEN_UINT64);
-    KrtIRValue index =
-        KrtIrCast(builder, krt_ir_generate_expression(builder, stmt->data.array_assignment.index), TOKEN_UINT64);
+    ASTNode* array_expr = stmt->data.array_assignment.array;
+    ASTNode* index_expr = stmt->data.array_assignment.index;
+    int element_size = irgen_array_element_size(builder, array_expr);
+    KrtIRValue base = KrtIrCast(builder, krt_ir_generate_expression(builder, array_expr), TOKEN_UINT64);
+    KrtIRValue index = krt_ir_generate_expression(builder, index_expr);
+    index = irgen_checked_array_index(builder, base, index, array_expr, index_expr);
     KrtIRValue value = krt_ir_generate_expression(builder, stmt->data.array_assignment.value);
     KrtTokenType element_type = irgen_array_element_type(builder, stmt->data.array_assignment.array);
     if (KrtTokenIntegerBits(element_type) || irgen_is_float_token(element_type)) {

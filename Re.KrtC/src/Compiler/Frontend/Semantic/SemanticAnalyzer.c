@@ -1465,6 +1465,15 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
         bool array_ok = semantic_analyzer_analyze_expression(analyzer, expr->data.array_access.array);
         bool index_ok = semantic_analyzer_analyze_expression(analyzer, expr->data.array_access.index);
 
+        if (index_ok) {
+            KrtSourceType index_type = expr->data.array_access.index->resolved_type;
+            if (KrtSourceIsPointer(index_type) || !KrtTokenIntegerBits(KrtSourceStorage(index_type))) {
+                semantic_analyzer_add_error_at(analyzer, expr->data.array_access.index,
+                                               "Array index must be an integer");
+                return false;
+            }
+        }
+
         if (array_ok && expr->data.array_access.array->type == AST_IDENTIFIER) {
             const char* array_name = expr->data.array_access.array->data.identifier_name;
             SymbolEntry* symbol = symbol_table_lookup(analyzer->symbol_table, array_name);

@@ -54,6 +54,7 @@ NATIVE_DRIVER_MODULES = (
     "Test.SelfHost.test_wide_lifetimes",
     "Test.SelfHost.test_vm", "Test.SelfHost.test_inheritance",
     "Test.SelfHost.test_interfaces", "Test.SelfHost.test_native_exceptions",
+    "Test.SelfHost.test_native_collections",
 )
 
 
@@ -452,7 +453,7 @@ class Bootstrap:
             with tempfile.TemporaryDirectory(prefix="resume-seed-", dir=self.work) as directory:
                 cwd = Path(directory)
                 binary = cwd / "stage1"
-                self.run([KRTC, "-O2", self.work / "Compiler.krt", "output", binary], cwd)
+                self.run([KRTC, "-O2", self.work / "Compiler.krt", "output", binary], cwd, timeout=300)
                 if (file_sha256(binary) != file_sha256(self.work / "stage1") or
                         file_sha256(cwd / "Compiler.kro") != file_sha256(self.work / "Compiler.kro")):
                     raise RuntimeError("Saved seed executable or KRO differs from isolated Stage 0 replay")
@@ -510,7 +511,7 @@ class Bootstrap:
 
     def seed(self):
         binary = self.work / "stage1"
-        self.run([KRTC, "-O2", self.work / "Compiler.krt", "output", binary], self.work)
+        self.run([KRTC, "-O2", self.work / "Compiler.krt", "output", binary], self.work, timeout=300)
         binary.chmod(0o755)
         self.record_artifacts(self.work / "Compiler.krt", self.work / "Compiler.kro", binary)
         self.save()

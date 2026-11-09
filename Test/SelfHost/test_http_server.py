@@ -30,6 +30,7 @@ class HttpServerTests(unittest.TestCase):
                         f'int32 main(){{return HttpServer.Run(0,{connection_limit});}}')
         output = main.with_suffix('')
         result = subprocess.run([str(COMPILER), str(SERVER), str(main), f'-O{level}',
+                                 '-I', str(ROOT / 'libs'),
                                  '--linker', str(LINKER), '-o', str(output)],
                                 cwd=self.work, env=self.env, capture_output=True, text=True, timeout=60)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

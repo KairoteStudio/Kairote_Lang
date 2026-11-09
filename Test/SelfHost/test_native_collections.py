@@ -67,6 +67,50 @@ int32 main() {
 }
 ''')
 
+    def test_array_bounds_checks_and_single_evaluation(self):
+        self.check('array-bounds-valid', '''
+int32 next(ref int32 count) { count++; return count-1; }
+void increment(ref int32 value) { value++; }
+int32 main() {
+    int32[] values=[17, 42]; int32 count=0;
+    int32 first=values[next(ref count)];
+    values[next(ref count)]=first;
+    values[0]+=1; increment(ref values[1]);
+    int32 result=count==2 && values[0]==18 && values[1]==18 ? 0 : 1;
+    delete values; return result;
+}
+''')
+        self.check('array-bounds-negative-read',
+                   'int32 main() { int32[] values=[17]; int32 index=-1; return values[index]; }', 70)
+        self.check('array-bounds-end-read',
+                   'int32 main() { int32[] values=[17]; return values[1]; }', 70)
+        self.check('array-bounds-literal-end-read',
+                   'int32 main() { return [17][1]; }', 70)
+        self.check('array-bounds-negative-write',
+                   'int32 main() { int32[] values=[17]; values[-1]=42; return 0; }', 70)
+        self.check('array-bounds-end-write',
+                   'int32 main() { int32[] values=[17]; values[1]=42; return 0; }', 70)
+        self.check('array-bounds-end-compound',
+                   'int32 main() { int32[] values=[17]; values[1]+=1; return 0; }', 70)
+        self.check('array-bounds-end-ref',
+                   'void set(ref int32 value) { value=42; } '
+                   'int32 main() { int32[] values=[17]; set(ref values[1]); return 0; }', 70)
+
+    def test_fixed_array_bounds_checks(self):
+        self.check('fixed-array-bounds-valid', '''
+struct Buffer { int32 values[2]; }
+int32 main() {
+    Buffer buffer=default(Buffer); buffer.values[1]=42;
+    return buffer.values[1]==42 ? 0 : 1;
+}
+''')
+        self.check('fixed-array-bounds-end', '''
+struct Buffer { int32 values[2]; }
+int32 main() {
+    Buffer buffer=default(Buffer); return buffer.values[2];
+}
+''', 70)
+
     def test_array_literal_evaluation_order_and_objects(self):
         self.check('array-order', '''
 class Box { public int32 n; public Box(int32 x) { n=x; } }
