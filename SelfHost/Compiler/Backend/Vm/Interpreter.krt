@@ -512,7 +512,7 @@ int64 KrtVmAllocate(KrtVmState state, int64 count, int64 stride, bool temporary)
     if (stride > 0) { bytes = count * stride; }
     if (bytes > 9223372036854775807 - 16) { return 0; }
     int64 size = bytes + 16;
-    int64 data = syscall(9,0,size,3,34,-1,0); if (data < 0) { return 0; }
+    int64 data = KrtPlatformCall(9,0,size,3,34,-1,0); if (data < 0) { return 0; }
     KrtVmWrite(data,0,count,8); KrtVmWrite(data,8,size,8);
     KrtVmRegion region = KrtVmAddRegion(state,data,size);
     if (temporary && state.frame != null) {
@@ -528,7 +528,7 @@ void KrtVmFree(KrtVmState state, int64 pointer) {
     while (region != null) {
         if (region.live && region.data == pointer - 16) {
             if (region.immutable) { state.failed=true; return; }
-            syscall(11,region.data,region.length,0,0,0,0); KrtVmForgetAllocations(state,region); KrtVmRemoveRegion(state,region); return;
+            KrtPlatformCall(11,region.data,region.length,0,0,0,0); KrtVmForgetAllocations(state,region); KrtVmRemoveRegion(state,region); return;
         }
         region = region.next;
     }
@@ -584,7 +584,7 @@ KrtVmFrame KrtVmEnter(KrtVmState state, int32 function_index, int32 arity, KrtVm
     frame.aggregate_size = module.function_frame_bytes[function_index];
     int64 wide_bytes=0;if(state.wide_inline){wide_bytes=state.wide_layout.sizes[function_index];}
     frame.locals_size = scalar_bytes + frame.aggregate_size + wide_bytes + 30; if (frame.locals_size == 0) { frame.locals_size = 8; }
-    frame.locals = syscall(9,0,frame.locals_size,3,34,-1,0); if (frame.locals < 0) { state.failed = true; delete frame; return null; }
+    frame.locals = KrtPlatformCall(9,0,frame.locals_size,3,34,-1,0); if (frame.locals < 0) { state.failed = true; delete frame; return null; }
     frame.region = KrtVmAddRegion(state,frame.locals,frame.locals_size);
     frame.region.references = frame.region.references + 1;
     frame.aggregate_base = (frame.locals + scalar_bytes + 15) & -16;
@@ -604,10 +604,10 @@ void KrtVmLeave(KrtVmState state, KrtVmFrame frame) {
     KrtVmAllocation allocation = frame.allocations;
     while (allocation != null) {
         KrtVmAllocation next = allocation.next;
-        if (allocation.region.live) { syscall(11,allocation.data,allocation.length,0,0,0,0); KrtVmRemoveRegion(state,allocation.region); }
+        if (allocation.region.live) { KrtPlatformCall(11,allocation.data,allocation.length,0,0,0,0); KrtVmRemoveRegion(state,allocation.region); }
         KrtVmReleaseRegion(allocation.region); delete allocation; allocation = next;
     }
-    if (frame.region.live) { syscall(11,frame.locals,frame.locals_size,0,0,0,0); KrtVmRemoveRegion(state,frame.region); }
+    if (frame.region.live) { KrtPlatformCall(11,frame.locals,frame.locals_size,0,0,0,0); KrtVmRemoveRegion(state,frame.region); }
     KrtVmReleaseRegion(frame.region); state.frames = state.frames - 1; delete frame;
 }
 
@@ -615,8 +615,8 @@ void KrtVmDispose(KrtVmState state) {
     while (state.frame != null) { KrtVmFrame removed = state.frame; state.frame = removed.previous; KrtVmLeave(state,removed); }
     while (state.handler != null) { KrtVmHandler removed = state.handler; state.handler = removed.previous; delete removed; }
     while (state.regions != null) { KrtVmRemoveRegion(state,state.regions); }
-    if (state.globals != 0) { syscall(11,state.globals,(int64)state.module.global_count * 8,0,0,0,0); }
-    if (state.stack != 0) { syscall(11,state.stack,2097152,0,0,0,0); }
+    if (state.globals != 0) { KrtPlatformCall(11,state.globals,(int64)state.module.global_count * 8,0,0,0,0); }
+    if (state.stack != 0) { KrtPlatformCall(11,state.stack,2097152,0,0,0,0); }
     if(state.wide_layout!=null){delete state.wide_layout.offsets;delete state.wide_layout.sizes;delete state.wide_layout;}
     delete state;
 }
@@ -637,7 +637,7 @@ void KrtVmForgetMemory(KrtVmState state, int64 start, int64 length) {
 }
 
 int64 KrtVmSystemCall(KrtVmState state, int64[] arguments, int32 arity) {
-    int64 result = syscall(arguments[0],arguments[1],arguments[2],arguments[3],arguments[4],arguments[5],arguments[6]);
+    int64 result = KrtPlatformCall(arguments[0],arguments[1],arguments[2],arguments[3],arguments[4],arguments[5],arguments[6]);
     if (arguments[0] == 9 && arity >= 3 && result >= 0 && arguments[2] > 0) {
         if (arity >= 5 && (arguments[4] & 16) != 0) {
             int64 length = arguments[2]; if (length < 9223372036854771712) { length = (length + 4095) & -4096; }
@@ -662,7 +662,7 @@ int32 KrtVmExecuteVersion(KrtNativeModule module, int32 version) {
     state.wide_inline=version>=6;
     if(state.wide_inline){
         state.wide_layout=KrtVmMakeWideLayout(module);
-        if(state.wide_layout==null){if(state.stack!=0){syscall(11,state.stack,2097152,0,0,0,0);}delete state;return 1;}
+        if(state.wide_layout==null){if(state.stack!=0){KrtPlatformCall(11,state.stack,2097152,0,0,0,0);}delete state;return 1;}
     }
     if (state.stack == 0) { delete state; return 1; }
     if (module.data_length > 0) { KrtVmAddRegion(state,module.data,module.data_length); }
@@ -878,21 +878,21 @@ int32 KrtVmExecuteVersion(KrtNativeModule module, int32 version) {
 
 bool KrtVmReadArtifact(int64 path, KrtDriverBuffer artifact) {
     artifact.ok = false;
-    int64 descriptor = syscall(2,path,0,0,0,0,0); if (descriptor < 0) { return false; }
+    int64 descriptor = KrtPlatformCall(2,path,0,0,0,0,0); if (descriptor < 0) { return false; }
     unsafe(using krt.mem;) {
         byte* information = stackalloc byte[144];
-        if (syscall(5,descriptor,(int64)information,0,0,0,0) != 0 || (KrtVmRead((int64)information,24,4) & 61440) != 32768) { syscall(3,descriptor,0,0,0,0,0); return false; }
+        if (KrtPlatformCall(5,descriptor,(int64)information,0,0,0,0) != 0 || (KrtVmRead((int64)information,24,4) & 61440) != 32768) { KrtPlatformCall(3,descriptor,0,0,0,0,0); return false; }
         int64 size = KrtVmRead((int64)information,48,8);
-        if (size < 10 || size > 67108864) { syscall(3,descriptor,0,0,0,0,0); return false; }
-        int64 data = KrtDriverAlloc(size); if (data == 0) { syscall(3,descriptor,0,0,0,0,0); return false; }
+        if (size < 10 || size > 67108864) { KrtPlatformCall(3,descriptor,0,0,0,0,0); return false; }
+        int64 data = KrtDriverAlloc(size); if (data == 0) { KrtPlatformCall(3,descriptor,0,0,0,0,0); return false; }
         int64 read = 0;
         while (read < size) {
-            int64 count = syscall(0,descriptor,data + read,size - read,0,0,0);
-            if (count == -4) { continue; } if (count <= 0) { syscall(3,descriptor,0,0,0,0,0); return false; } read = read + count;
+            int64 count = KrtPlatformCall(0,descriptor,data + read,size - read,0,0,0);
+            if (count == -4) { continue; } if (count <= 0) { KrtPlatformCall(3,descriptor,0,0,0,0,0); return false; } read = read + count;
         }
-        byte extra = 0; int64 end = syscall(0,descriptor,(int64)&extra,1,0,0,0);
-        while (end == -4) { end = syscall(0,descriptor,(int64)&extra,1,0,0,0); }
-        syscall(3,descriptor,0,0,0,0,0); if (end != 0) { return false; }
+        byte extra = 0; int64 end = KrtPlatformCall(0,descriptor,(int64)&extra,1,0,0,0);
+        while (end == -4) { end = KrtPlatformCall(0,descriptor,(int64)&extra,1,0,0,0); }
+        KrtPlatformCall(3,descriptor,0,0,0,0,0); if (end != 0) { return false; }
         artifact.data = data; artifact.length = size; artifact.ok = true; return true;
     }
 }
@@ -907,11 +907,11 @@ int32 KrtVmRun(int64 path) {
     if (version == 1) { return KrtVmRunV1(artifact); }
     KrtNativeModule module = new KrtNativeModule();
     if ((version < 2 || version > 6) || !KrtVmReadV2(artifact,module)) {
-        if(module.runtime_pointer!=0){syscall(11,module.runtime_pointer,module.runtime_length,0,0,0,0);}
+        if(module.runtime_pointer!=0){KrtPlatformCall(11,module.runtime_pointer,module.runtime_length,0,0,0,0);}
         KrtDriverError("E_VM","invalid or unsupported bytecode file"); return 1;
     }
     int32 result=KrtVmExecuteVersion(module,(int32)version);
-    if(module.runtime_pointer!=0){syscall(11,module.runtime_pointer,module.runtime_length,0,0,0,0);module.runtime_pointer=0;}
+    if(module.runtime_pointer!=0){KrtPlatformCall(11,module.runtime_pointer,module.runtime_length,0,0,0,0);module.runtime_pointer=0;}
     return result;
 }
 

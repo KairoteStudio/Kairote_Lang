@@ -1,4 +1,6 @@
-// Every generated compiler runs its own source loader and project driver.
-int32 main() {
+// MiniOS ELF entry provides command-line/ARG1 and environment pointers in rdi/rsi.
+// Linux retains its existing /proc-based argument/environment path.
+int32 main(int64 arguments, int64 environment) {
+    if (__krt_target_minios()) { KrtMiniOSArguments = arguments; KrtMiniOSEnvironment = environment; }
     return KrtDriverMain();
 }

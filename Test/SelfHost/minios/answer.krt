@@ -1,0 +1,22 @@
+int32 main(int64 arguments, int64 environment) {
+    unsafe(using krt.mem;) {
+        uint32* header = (uint32*)arguments;
+        if (header[0] != 0x41524731 || header[1] != 4) { return 1; }
+        uint16* offsets = (uint16*)(arguments + 8);
+        byte* bytes = (byte*)(arguments + 1032);
+        if (bytes[offsets[1] + 5] != 32 || bytes[offsets[3]] != 228 || bytes[offsets[3] + 3] != 230 || bytes[offsets[3] + 6] != 0) { return 9; }
+        if (bytes[offsets[2]] != 0) { return 2; }
+        int64 file = syscall(18,(int64)"/home/port-test.txt",577,0,0,0,0);
+        if (file < 0) { return 3; }
+        if (syscall(1,file,(int64)"data",4,0,0,0) != 4) { return 4; }
+        syscall(16,file,0,0,0,0,0);
+        file = syscall(18,(int64)"/home/port-test.txt",0,0,0,0,0);
+        if (file < 0) { return 5; }
+        byte* buffer = stackalloc byte[4];
+        if (syscall(2,file,(int64)buffer,4,0,0,0) != 4) { return 6; }
+        syscall(16,file,0,0,0,0,0);
+        if (buffer[0] != 100 || buffer[3] != 97) { return 7; }
+        syscall(1,1,(int64)"minios-answer: 42\n",18,0,0,0);
+        return 42;
+    }
+}

@@ -417,6 +417,13 @@ bool KrtNativeBindCall(KrtAstNode node, KrtNativeBinding binding) {
             field = field.next;
         }
     }
+    if (!explicit_member && KrtNativeSpanWord(binding.source,name_start,name_length,"__krt_target_minios")) {
+        if (node.parameter_count != 0) { return KrtNativeBindingError(binding,node); }
+        node.kind = KrtAstKind.Boolean; node.value = KrtDriverArtifactTarget != 4 && KrtDriverPlatformTarget == 2 ? 1 : 0;
+        node.left = null; node.right = null;
+        node.native_width = 1; node.native_bits = 8; node.native_boolean = true; node.native_unsigned = true;
+        return true;
+    }
     KrtAstNode argument = node.right;
     while (argument != null) {
         if (!KrtNativeBindCallArgument(argument, binding)) { return false; }

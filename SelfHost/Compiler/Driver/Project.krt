@@ -47,16 +47,16 @@ uint64 KrtProjectHashString(uint64 hash, int64 value) {
 }
 uint64 KrtProjectFileHash(int64 path) {
     if (!KrtDriverFileExists(path)) { return 0; }
-    int64 descriptor = syscall(2,path,0,0,0,0,0); if (descriptor < 0) { return 0; }
-    int64 data = KrtDriverAlloc(8192); if (data == 0) { syscall(3,descriptor,0,0,0,0,0); return 0; }
+    int64 descriptor = KrtPlatformCall(2,path,0,0,0,0,0); if (descriptor < 0) { return 0; }
+    int64 data = KrtDriverAlloc(8192); if (data == 0) { KrtPlatformCall(3,descriptor,0,0,0,0,0); return 0; }
     uint64 hash = 14695981039346656037;
     while (true) {
-        int64 count = syscall(0,descriptor,data,8192,0,0,0);
+        int64 count = KrtPlatformCall(0,descriptor,data,8192,0,0,0);
         if (count == -4) { continue; }
-        if (count < 0) { syscall(3,descriptor,0,0,0,0,0); return 0; }
+        if (count < 0) { KrtPlatformCall(3,descriptor,0,0,0,0,0); return 0; }
         if (count == 0) { break; } hash = KrtProjectHashBytes(hash,data,count);
     }
-    syscall(3,descriptor,0,0,0,0,0); return hash;
+    KrtPlatformCall(3,descriptor,0,0,0,0,0); return hash;
 }
 int64 KrtProjectHex(uint64 value) {
     int64 result = KrtDriverAlloc(17);
@@ -334,6 +334,7 @@ uint64 KrtProjectBuildKey(KrtProject project, KrtDriverOptions options, KrtSourc
     KrtDriverPath directory = options.includes; while (directory != null) { hash = KrtProjectHashString(hash,directory.value); directory = directory.next; }
     KrtSourceFile file = bundle.files; while (file != null) { hash = KrtProjectHashString(hash,file.path); hash = KrtProjectHashBytes(hash,file.original,file.length); file = file.order_next; }
     KrtDriverPath objects = project.objects; while (objects != null) { hash = KrtProjectHashString(hash,objects.value); hash = (hash ^ KrtProjectFileHash(objects.value))*1099511628211; objects = objects.next; }
+    hash = (hash ^ (int64)KrtDriverPlatformTarget) * 1099511628211;
     hash = KrtProjectHashString(hash,options.compiler); hash = (hash ^ KrtProjectFileHash(options.compiler))*1099511628211;
     if (!options.object_mode) { hash = KrtProjectHashString(hash,options.linker); hash = (hash ^ KrtProjectFileHash(options.linker))*1099511628211; }
     return hash;
@@ -395,7 +396,7 @@ int32 KrtProjectBuild(KrtProject project, KrtDriverOptions original) {
         KrtDriverPrint((string)KrtProjectCat((int64)"up-to-date: ",KrtProjectCat(options.output,(int64)"\n"))); return 0;
     }
     if (!KrtDriverMakeDirectories(cache)) { KrtDriverError("E_OUTPUT","unable to create project cache"); return 1; }
-    int64 output = options.output; int64 temporary = KrtDriverJoinPath(cache,KrtProjectCat((int64)".build-",KrtProjectDecimal(syscall(39,0,0,0,0,0,0))));
+    int64 output = options.output; int64 temporary = KrtDriverJoinPath(cache,KrtProjectCat((int64)".build-",KrtProjectDecimal(KrtPlatformCall(39,0,0,0,0,0,0))));
     if (!KrtDriverMakeDirectories(temporary)) { KrtDriverError("E_OUTPUT","unable to create project build directory"); return 1; }
     int64 candidate = KrtDriverJoinPath(temporary,(int64)"artifact"); options.output = candidate;
     if (retained != 0) { options.retained_output = KrtDriverJoinPath(temporary,(int64)"retained.kro"); }

@@ -1173,6 +1173,19 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
         return true;
 
     case AST_CALL:
+        /* Stage0 emits existing Linux/Windows platforms only. Recognize the
+         * native compiler's target query without an unresolved runtime call. */
+        if (!expr->data.call.object && expr->data.call.name &&
+            !strcmp(expr->data.call.name, "__krt_target_minios")) {
+            if (expr->data.call.argument_count != 0) {
+                semantic_analyzer_add_error_at(analyzer, expr, "__krt_target_minios expects no arguments");
+                return false;
+            }
+            expr->type = AST_BOOLEAN;
+            expr->data.boolean_value = 0;
+            expr->resolved_type = (KrtSourceType){.token = TOKEN_BOOL};
+            return true;
+        }
         return semantic_analyzer_analyze_function_call(analyzer, expr);
 
     case AST_ASSIGNMENT: {

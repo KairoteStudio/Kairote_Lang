@@ -71,10 +71,10 @@ bool KrtCompileSourceToFd(string source, int32 source_length, int64 file_descrip
 }
 
 bool KrtCompileSourceToPath(string source, int32 source_length, string path) {
-    int64 file_descriptor = syscall(2, (int64)path, 577, 420, 0, 0, 0);
+    int64 file_descriptor = KrtPlatformCall(2, (int64)path, 577, 420, 0, 0, 0);
     if (file_descriptor < 0) { return false; }
     bool result = KrtCompileSourceToFd(source, source_length, file_descriptor);
-    syscall(3, file_descriptor, 0, 0, 0, 0, 0);
+    KrtPlatformCall(3, file_descriptor, 0, 0, 0, 0, 0);
     return result;
 }
 
@@ -193,8 +193,8 @@ void KrtDiagnosticWrite(string code, int32 code_length, int64 position, string m
         KrtSourcesDiagnosticDetails(KrtDriverActiveBundle, code, code_length, position, message);
         return;
     }
-    syscall(1, 2, (int64)code, code_length, 0, 0, 0);
-    syscall(1, 2, (int64)" at byte ", 9, 0, 0, 0);
+    KrtPlatformCall(1, 2, (int64)code, code_length, 0, 0, 0);
+    KrtPlatformCall(1, 2, (int64)" at byte ", 9, 0, 0, 0);
     unsafe(using krt.mem;) {
         byte* digits = stackalloc byte[24];
         int32 index = 23; digits[index] = 10;
@@ -205,7 +205,7 @@ void KrtDiagnosticWrite(string code, int32 code_length, int64 position, string m
             position = position / 10;
             if (position == 0) { break; }
         }
-        syscall(1, 2, (int64)(digits + index), 24 - index, 0, 0, 0);
+        KrtPlatformCall(1, 2, (int64)(digits + index), 24 - index, 0, 0, 0);
     }
 }
 
@@ -215,9 +215,9 @@ bool KrtCompilePath(string input_path, string output_path) {
     if (!KrtDriverReadFile((int64)input_path,source)) { KrtDiagnostic("E_INPUT",7,0); return false; }
     if (source.length < 0 || source.length > 16777216) { KrtDiagnostic("E_SIZE",6,source.length); return false; }
     KrtKroObject object = new KrtKroObject();
-    int64 library_marker = syscall(2,(int64)"library.mode",0,0,0,0,0);
+    int64 library_marker = KrtPlatformCall(2,(int64)"library.mode",0,0,0,0,0);
     bool library_mode = library_marker >= 0;
-    if (library_mode) { syscall(3,library_marker,0,0,0,0,0); }
+    if (library_mode) { KrtPlatformCall(3,library_marker,0,0,0,0,0); }
     if (!KrtCompileNativeSourceMode((string)source.data,(int32)source.length,object,library_mode)) { return false; }
     if (!KrtKroWriteObjectToPath(object,output_path)) { KrtDiagnostic("E_OUTPUT",8,0); return false; }
     return true;

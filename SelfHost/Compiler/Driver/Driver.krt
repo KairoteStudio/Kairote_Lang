@@ -40,10 +40,10 @@ int64 KrtDriverAbiSymbolName(KrtDriverBuffer object,int64 symbols,int64 strings,
 }
 // Objects use a checked mapping, independently of the source-reader budget.
 bool KrtDriverAbiReadBinary(int64 path,KrtDriverBuffer buffer){
-    int64 descriptor=syscall(2,path,0,0,0,0,0);if(descriptor<0){return false;}
-    int64 length=syscall(8,descriptor,0,2,0,0,0);
-    if(length<=0||length>1073741824){syscall(3,descriptor,0,0,0,0,0);return false;}
-    int64 data=syscall(9,0,length,1,2,descriptor,0);syscall(3,descriptor,0,0,0,0,0);
+    int64 descriptor=KrtPlatformCall(2,path,0,0,0,0,0);if(descriptor<0){return false;}
+    int64 length=KrtPlatformCall(8,descriptor,0,2,0,0,0);
+    if(length<=0||length>1073741824){KrtPlatformCall(3,descriptor,0,0,0,0,0);return false;}
+    int64 data=KrtPlatformCall(9,0,length,1,2,descriptor,0);KrtPlatformCall(3,descriptor,0,0,0,0,0);
     if(data<0&&data>=-4095){return false;}buffer.data=data;buffer.length=length;buffer.ok=true;return true;
 }
 bool KrtDriverAbiInsert(KrtDriverAbiState state,KrtDriverAbiRecord record){
@@ -183,7 +183,7 @@ bool KrtDriverAbiRead(int64 path,KrtDriverAbiState state){
 }
 void KrtDriverAbiDispose(KrtDriverAbiState state){
     KrtDriverAbiRecord record=state.records;while(record!=null){KrtDriverAbiRecord next=record.next;delete record;record=next;}
-    KrtDriverAbiMapping mapping=state.mappings;while(mapping!=null){KrtDriverAbiMapping next=mapping.next;syscall(11,mapping.data,mapping.length,0,0,0,0);delete mapping;mapping=next;}
+    KrtDriverAbiMapping mapping=state.mappings;while(mapping!=null){KrtDriverAbiMapping next=mapping.next;KrtPlatformCall(11,mapping.data,mapping.length,0,0,0,0);delete mapping;mapping=next;}
     if(state.buckets!=null){delete state.buckets;}delete state;
 }
 bool KrtDriverAbiCheckContracts(KrtDriverPath objects,bool require_definitions){
@@ -201,6 +201,8 @@ bool KrtDriverAbiValidate(KrtDriverPath objects){return KrtDriverAbiCheckContrac
 // ===== Artifact output =====
 // Text artifacts are emitted directly by the native compiler.
 static int32 KrtDriverArtifactTarget = 0;
+// Output ABI is independent of the platform running this compiler.
+static int32 KrtDriverPlatformTarget = 0;
 static KrtDriverBuffer KrtDriverLastVm = null;
 
 bool KrtArtifactText(int64 descriptor, string text) {
@@ -267,9 +269,9 @@ bool KrtArtifactWriteIr(KrtNativeModule module, int64 descriptor) {
 }
 
 bool KrtArtifactIr(KrtNativeModule module, int64 path) {
-    int64 descriptor = syscall(2,path,577,420,0,0,0); if (descriptor < 0) { return false; }
+    int64 descriptor = KrtPlatformCall(2,path,577,420,0,0,0); if (descriptor < 0) { return false; }
     bool result = KrtArtifactWriteIr(module,descriptor);
-    if (syscall(3,descriptor,0,0,0,0,0) != 0) { result = false; }
+    if (KrtPlatformCall(3,descriptor,0,0,0,0,0) != 0) { result = false; }
     return result;
 }
 
@@ -293,7 +295,7 @@ int64 KrtArtifactSymbol(KrtKroObject object, int32 symbol_index) {
 
 bool KrtArtifactAssembly(KrtKroObject object, KrtNativeModule module, int64 path) {
     if (object == null || module == null || object.text_words == null) { return false; }
-    int64 descriptor = syscall(2,path,577,420,0,0,0); if (descriptor < 0) { return false; }
+    int64 descriptor = KrtPlatformCall(2,path,577,420,0,0,0); if (descriptor < 0) { return false; }
     bool ok = KrtArtifactText(descriptor,"# Kairote x86-64 native code; assemble with GNU as.\n.section .text\n");
     int32[] labels = new int32[object.text_size+1]; int32 function_index = 0;
     while (function_index < module.function_count) {
@@ -341,7 +343,7 @@ bool KrtArtifactAssembly(KrtKroObject object, KrtNativeModule module, int64 path
             ok = KrtDriverWriteAll(descriptor,(int64)line,length);
         }
     }
-    delete labels; if (syscall(3,descriptor,0,0,0,0,0) != 0) { ok=false; }
+    delete labels; if (KrtPlatformCall(3,descriptor,0,0,0,0,0) != 0) { ok=false; }
     return ok;
 }
 
@@ -394,6 +396,7 @@ bool KrtDriverParseArguments(KrtDriverPath arguments, KrtDriverOptions options) 
     if (!KrtDriverFileExists(options.linker)) { options.linker = KrtDriverJoinPath(repository,(int64)"ArkLink/build/ArkLink"); }
     options.configuration = KrtDriverGetEnv("KRT_CONFIG");
     if (KrtDriverStringLength(options.configuration) == 0) { options.configuration = (int64)"release"; }
+    KrtDriverPlatformTarget = __krt_target_minios() ? 2 : 0;
     bool literal = false;
     while (arguments != null) {
         int64 word = arguments.value;
@@ -417,6 +420,14 @@ bool KrtDriverParseArguments(KrtDriverPath arguments, KrtDriverOptions options) 
                 if (level < 0 || level > 3) { KrtDriverError("E_OPTION","optimization level must be -O0, -O1, -O2 or -O3"); return false; }
                 options.optimization = level; options.optimization_set = true;
             } arguments = arguments.next; continue;
+        }
+        if (!literal && KrtDriverWord(word,"--platform")) {
+            if (arguments.next == null) { KrtDriverError("E_OPTION","expected a platform"); return false; }
+            arguments = arguments.next;
+            if (KrtDriverWord(arguments.value,"minios-x64")) { KrtDriverPlatformTarget = 2; }
+            else if (KrtDriverWord(arguments.value,"linux-x64")) { KrtDriverPlatformTarget = 0; }
+            else { KrtDriverError("E_OPTION","platform must be linux-x64 or minios-x64"); return false; }
+            arguments = arguments.next; continue;
         }
         bool output = !literal && (KrtDriverWord(word,"-o") || KrtDriverWord(word,"--output") || KrtDriverWord(word,"output"));
         bool include = !literal && (KrtDriverWord(word,"-I") || KrtDriverWord(word,"--include"));
@@ -480,7 +491,7 @@ int32 KrtDriverJobs(int64 value) {
 }
 
 void KrtDriverUsage() {
-    KrtDriverPrint("Usage: KrtProject [options] source.krt ...\n       KrtProject new TYPE DIRECTORY [--name NAME]\n       KrtProject build|check|clean [PROJECT] [--config NAME]\n       KrtProject run-vm BYTECODE\n\nhelp / --help    version / --version\n-O0 / -O1 / -O2 / -O3  Optimization level, default -O2\ntarget exe|ir|asm|vm|eo   -o / output PATH   -c Emit KRO object\n-j N / --jobs N  Parallel project compilation, default 8\n--keep-temp  Preserve intermediate files    --show-ir / --ir\n--check  Validate only    -I PATH  Module directory\n--linker PATH    --compiler PATH    --rebuild\n");
+    KrtDriverPrint("Usage: KrtProject [options] source.krt ...\n       KrtProject new TYPE DIRECTORY [--name NAME]\n       KrtProject build|check|clean [PROJECT] [--config NAME]\n       KrtProject run-vm BYTECODE\n\nhelp / --help    version / --version\n-O0 / -O1 / -O2 / -O3  Optimization level, default -O2\ntarget exe|ir|asm|vm|eo   -o / output PATH   -c Emit KRO object\n-j N / --jobs N  Parallel project compilation, default 8\n--keep-temp  Preserve intermediate files    --show-ir / --ir\n--check  Validate only    -I PATH  Module directory\n--linker PATH    --compiler PATH    --rebuild\n--platform linux-x64|minios-x64  Native output syscall ABI\n");
 }
 bool KrtDriverIsProjectPath(int64 path) {
     if (KrtDriverIsDirectory(path)) { return true; }
@@ -489,6 +500,7 @@ bool KrtDriverIsProjectPath(int64 path) {
 }
 
 int32 KrtDriverMain() {
+    KrtDriverPlatformTarget = __krt_target_minios() ? 2 : 0;
     KrtDriverPath arguments = KrtDriverArguments();
     if (arguments == null) { KrtDriverError("E_DRIVER","unable to read process arguments"); return 1; }
     // Keep the original object contract available to native test harnesses.
@@ -590,7 +602,7 @@ bool KrtModulesReadMapped(KrtSourceBundle bundle,int64 path,KrtDriverBuffer obje
 
 bool KrtModulesRead(KrtSourceBundle bundle,int64 path){
     KrtDriverBuffer object=new KrtDriverBuffer();if(!KrtDriverAbiReadBinary(path,object)){delete object;return KrtModulesFailure(path,"unable to map object interface");}
-    bool ok=KrtModulesReadMapped(bundle,path,object);syscall(11,object.data,object.length,0,0,0,0);delete object;return ok;
+    bool ok=KrtModulesReadMapped(bundle,path,object);KrtPlatformCall(11,object.data,object.length,0,0,0,0);delete object;return ok;
 }
 
 bool KrtModulesRebuild(KrtSourceBundle bundle){
@@ -766,15 +778,15 @@ bool KrtDriverDeferredCode(int64 code) {
 }
 
 void KrtDriverCompileWorker(KrtDriverCompileTask task) {
-    int64 log = syscall(2,task.log_path,577,384,0,0,0);
-    if (log < 0) { syscall(60,3,0,0,0,0,0); return; }
-    if (syscall(33,log,2,0,0,0,0) < 0 || syscall(33,log,1,0,0,0,0) < 0) { syscall(60,3,0,0,0,0,0); return; }
-    if (log != 1 && log != 2) { syscall(3,log,0,0,0,0,0); }
+    int64 log = KrtPlatformCall(2,task.log_path,577,384,0,0,0);
+    if (log < 0) { KrtPlatformCall(60,3,0,0,0,0,0); return; }
+    if (KrtPlatformCall(33,log,2,0,0,0,0) < 0 || KrtPlatformCall(33,log,1,0,0,0,0) < 0) { KrtPlatformCall(60,3,0,0,0,0,0); return; }
+    if (log != 1 && log != 2) { KrtPlatformCall(3,log,0,0,0,0,0); }
     KrtDriverLastErrorCode = 0; KrtDriverQuiet = false; task.options.quiet = false;
     int32 status = KrtDriverCompile(task.options); int32 result = 2;
     if (status == 0 && KrtDriverFileExists(task.options.output)) { result = 0; }
     else if (status != 0 && KrtDriverDeferredCode(KrtDriverLastErrorCode)) { result = 1; }
-    syscall(60,result,0,0,0,0,0);
+    KrtPlatformCall(60,result,0,0,0,0,0);
 }
 
 void KrtDriverWorkerDiagnostic(KrtDriverCompileTask task) {
@@ -797,14 +809,14 @@ bool KrtDriverParallelCompile(KrtDriverCompileTask tasks, int32 jobs) {
     KrtDriverCompileTask pending = tasks; int32 active = 0; bool ok = true;
     while (pending != null || active > 0) {
         while (ok && pending != null && active < jobs) {
-            int64 pid = syscall(57,0,0,0,0,0,0);
-            if (pid == 0) { KrtDriverCompileWorker(pending); syscall(60,2,0,0,0,0,0); return false; }
+            int64 pid = KrtPlatformCall(57,0,0,0,0,0,0);
+            if (pid == 0) { KrtDriverCompileWorker(pending); KrtPlatformCall(60,2,0,0,0,0,0); return false; }
             if (pid < 0) { KrtDriverError("E_WORKER","unable to fork compilation worker"); ok = false; break; }
             pending.pid = pid; pending.status = -2; pending = pending.next; active = active + 1;
         }
         if (active == 0) { break; }
         int32 status = 0; int64 waited = 0;
-        unsafe(using krt.mem;) { waited = syscall(61,-1,(int64)&status,0,0,0,0); }
+        unsafe(using krt.mem;) { waited = KrtPlatformCall(61,-1,(int64)&status,0,0,0,0); }
         if (waited == -4) { continue; }
         if (waited < 0) { KrtDriverError("E_WORKER","unable to wait for compilation worker"); ok = false; break; }
         task = tasks; while (task != null && task.pid != waited) { task = task.next; }
@@ -820,7 +832,7 @@ bool KrtDriverParallelCompile(KrtDriverCompileTask tasks, int32 jobs) {
         while (task != null) {
             if (task.status == -2) {
                 int32 status = 0; int64 waited = 0;
-                unsafe(using krt.mem;) { waited = syscall(61,task.pid,(int64)&status,0,0,0,0); while (waited == -4) { waited = syscall(61,task.pid,(int64)&status,0,0,0,0); } }
+                unsafe(using krt.mem;) { waited = KrtPlatformCall(61,task.pid,(int64)&status,0,0,0,0); while (waited == -4) { waited = KrtPlatformCall(61,task.pid,(int64)&status,0,0,0,0); } }
                 if (waited < 0) { task.status = 2; }
                 else if ((status & 127) != 0) { task.status = -(status & 127); }
                 else { task.status = (status >> 8) & 255; }
@@ -887,7 +899,7 @@ class KrtSourceBundle {
 static KrtSourceBundle KrtDriverActiveBundle = null;
 
 void KrtSourcesWrite(string value) {
-    syscall(1, 2, (int64)value, KrtDriverStringLength((int64)value), 0, 0, 0);
+    KrtPlatformCall(1, 2, (int64)value, KrtDriverStringLength((int64)value), 0, 0, 0);
 }
 
 void KrtSourcesWriteNumber(int64 value) {
@@ -901,7 +913,7 @@ void KrtSourcesWriteNumber(int64 value) {
             value = value / 10;
             if (value == 0) { break; }
         }
-        syscall(1, 2, (int64)(digits + index), 24 - index, 0, 0, 0);
+        KrtPlatformCall(1, 2, (int64)(digits + index), 24 - index, 0, 0, 0);
     }
 }
 
@@ -918,7 +930,7 @@ void KrtSourcesLocation(KrtSourceFile file, int64 position) {
             index = index + 1;
         }
     }
-    syscall(1, 2, file.path, KrtDriverStringLength(file.path), 0, 0, 0);
+    KrtPlatformCall(1, 2, file.path, KrtDriverStringLength(file.path), 0, 0, 0);
     KrtSourcesWrite(":"); KrtSourcesWriteNumber(line);
     KrtSourcesWrite(":"); KrtSourcesWriteNumber(column);
 }
@@ -938,14 +950,14 @@ void KrtSourcesDiagnostic(KrtSourceBundle bundle, string code, int32 code_length
 void KrtSourcesDiagnosticDetails(KrtSourceBundle bundle, string code, int32 code_length, int64 position, string message) {
     KrtSourceFile selected = bundle.files;
     if (selected == null) {
-        syscall(1, 2, (int64)code, code_length, 0, 0, 0);
+        KrtPlatformCall(1, 2, (int64)code, code_length, 0, 0, 0);
         KrtSourcesWrite(" at byte "); KrtSourcesWriteNumber(position); KrtSourcesWrite("\n");
         return;
     }
     KrtSourceFile file = selected.order_next;
     while (file != null && file.start <= position) { selected = file; file = file.order_next; }
     KrtSourcesLocation(selected, position - selected.start);
-    KrtSourcesWrite(": "); syscall(1, 2, (int64)code, code_length, 0, 0, 0);
+    KrtSourcesWrite(": "); KrtPlatformCall(1, 2, (int64)code, code_length, 0, 0, 0);
     KrtSourcesWrite(": ");
     if (message != null) { KrtSourcesWrite(message); }
     else if (KrtDriverStringEqual((int64)code, (int64)"E_PARSE")) { KrtSourcesWrite("invalid syntax"); }
@@ -1267,9 +1279,9 @@ bool KrtSourcesVisit(KrtSourceBundle bundle, KrtSourceFile file) {
         }
         if (matches == null && (directive.quoted || !KrtSourcesHasName(bundle, directive.name))) {
             KrtSourcesLocation(file, directive.position); KrtSourcesWrite(": E_IMPORT: cannot find module '");
-            syscall(1, 2, directive.name, KrtDriverStringLength(directive.name), 0, 0, 0);
+            KrtPlatformCall(1, 2, directive.name, KrtDriverStringLength(directive.name), 0, 0, 0);
             if (directive.wildcard) { KrtSourcesWrite(".*"); }
-            KrtSourcesWrite("' ("); syscall(1, 2, relative, KrtDriverStringLength(relative), 0, 0, 0); KrtSourcesWrite(")\n");
+            KrtSourcesWrite("' ("); KrtPlatformCall(1, 2, relative, KrtDriverStringLength(relative), 0, 0, 0); KrtSourcesWrite(")\n");
             return false;
         }
         // Index every unit in a directory before traversing its edges, so
