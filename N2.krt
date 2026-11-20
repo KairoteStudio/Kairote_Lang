@@ -1,0 +1,2 @@
+unsafe(using krt.mem, Zzz.NoSuch;) { let x = 1; }
+function main() { }

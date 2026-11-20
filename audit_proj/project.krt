@@ -1,0 +1,7 @@
+function Configure(Project p) {
+    p.Name("AuditProj");
+    p.Type("console");
+    p.Sources("src/*.krt");
+    p.Output("bin/AuditProj");
+    p.Libraries("Console");
+}

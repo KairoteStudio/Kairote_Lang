@@ -1,0 +1,11 @@
+[KrtProj.debug] name='AuditProj' out='bin/AuditProj' type=0
+[KrtProj.debug]   src[0]=src/Main.krt
+[KrtProj.debug]   lib[0]=Console
+[31m1[0m error, [33m0[0m warnings
+  krt_project_aggregate_7.krt(4,24): [31merror: Undefined function: Console__Write[0m
+   [90m   4 |[0m     Console.Write("hi");
+     [90m|[0m                        [31m^[0m
+> compile audit_proj/obj/krt_project_aggregate_7.krt FAILED
+
+BUILD FAILED in 0.0s
+1 tasks: 1 executed, 1 failed
