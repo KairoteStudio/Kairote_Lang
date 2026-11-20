@@ -3,6 +3,14 @@
 #include <string.h>
 #include <stdio.h>
 #include <sys/stat.h>
+#include <errno.h>
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <spawn.h>
+#include <sys/wait.h>
+extern char** environ;
+#endif
 #include "../../Core/Utils/Path.h"
 #include "ArkLinkIntegration.h"
 
@@ -24,6 +32,29 @@ static void collect_compile_error(CompileTask* task, const char* error_msg) {
     task->error_message = KRT_STRDUP(error_msg);
 }
 
+static int run_nasm(const char* format, const char* input, const char* output) {
+    char* arguments[] = {"nasm", "-f", (char*)format, (char*)input, "-o", (char*)output, NULL};
+#ifdef _WIN32
+    intptr_t result = _spawnvp(_P_WAIT, "nasm", (const char* const*)arguments);
+    return result == 0 ? 0 : -1;
+#else
+    pid_t child = 0;
+    int spawn_error = posix_spawnp(&child, "nasm", NULL, NULL, arguments, environ);
+    if (spawn_error != 0) {
+        return -1;
+    }
+    int status = 0;
+    pid_t waited;
+    do {
+        waited = waitpid(child, &status, 0);
+    } while (waited < 0 && errno == EINTR);
+    if (waited != child || !WIFEXITED(status)) {
+        return -1;
+    }
+    return WEXITSTATUS(status);
+#endif
+}
+
 static void compile_task(CompileTask* task, KrtCompilePipeline* pipeline) {
     double start_time = KrtTimeNowSeconds();
     task->has_object_code = false;
@@ -39,12 +70,9 @@ static void compile_task(CompileTask* task, KrtCompilePipeline* pipeline) {
         task->has_object_code = result == 1 && pipeline->compiler && pipeline->compiler->has_object_code;
 
         if (result == 1 && task->has_object_code && task->obj_file) {
-            char assemble_cmd[1024];
             KrtPlatformType platform = compiler->config ? compiler->config->platform : KRT_CONFIG_PLATFORM_WINDOWS;
-
-            snprintf(assemble_cmd, sizeof(assemble_cmd), "nasm -f %s %s -o %s",
-                     platform == KRT_CONFIG_PLATFORM_WINDOWS ? "win64" : "elf64", task->output_file, task->obj_file);
-            int assemble_res = system(assemble_cmd);
+            int assemble_res = run_nasm(platform == KRT_CONFIG_PLATFORM_WINDOWS ? "win64" : "elf64",
+                                        task->output_file, task->obj_file);
             if (assemble_res != 0) {
                 result = -1;
                 char error_msg[512];
@@ -184,6 +212,13 @@ int ParallelCompilerAddFile(ParallelCompiler* compiler, const char* input_file, 
     task->input_file = KRT_STRDUP(input_file);
     task->output_file = KRT_STRDUP(output_file);
     task->obj_file = obj_file ? KRT_STRDUP(obj_file) : NULL;
+    if (!task->input_file || !task->output_file || (obj_file && !task->obj_file)) {
+        KRT_FREE(task->input_file);
+        KRT_FREE(task->output_file);
+        KRT_FREE(task->obj_file);
+        KRT_FREE(task);
+        return -1;
+    }
     task->target_type = target_type;
     task->show_ir = show_ir;
     task->result = -1;
@@ -192,14 +227,25 @@ int ParallelCompilerAddFile(ParallelCompiler* compiler, const char* input_file, 
     task->duration = 0.0;
     task->compiler_context = compiler;
 
-    compiler->tasks = (CompileTask**)KRT_REALLOC(compiler->tasks, (compiler->task_count + 1) * sizeof(CompileTask*));
-    if (!compiler->tasks) {
+    if ((size_t)compiler->task_count >= (size_t)-1 / sizeof(*compiler->tasks)) {
         KRT_FREE(task->input_file);
         KRT_FREE(task->output_file);
+        KRT_FREE(task->obj_file);
         KRT_FREE(task);
         return -1;
     }
 
+    CompileTask** expanded_tasks =
+        (CompileTask**)KRT_REALLOC(compiler->tasks, (size_t)(compiler->task_count + 1) * sizeof(*compiler->tasks));
+    if (!expanded_tasks) {
+        KRT_FREE(task->input_file);
+        KRT_FREE(task->output_file);
+        KRT_FREE(task->obj_file);
+        KRT_FREE(task);
+        return -1;
+    }
+
+    compiler->tasks = expanded_tasks;
     compiler->tasks[compiler->task_count] = task;
     compiler->task_count++;
 

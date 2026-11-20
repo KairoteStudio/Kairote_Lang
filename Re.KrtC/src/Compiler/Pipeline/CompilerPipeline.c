@@ -10,6 +10,8 @@
 #include <stdio.h>
 #include <time.h>
 #include <sys/stat.h>
+#include <limits.h>
+#include <stdint.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -34,83 +36,6 @@ static void load_standard_macros(Preprocessor* preprocessor) {
     PreprocessorAddMacro(preprocessor, "println", "Console.WriteLine");
     PreprocessorAddMacro(preprocessor, "print", "Console.Write");
     PreprocessorAddMacro(preprocessor, "print_int", "Console.WriteInt");
-}
-
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <dirent.h>
-#include <sys/stat.h>
-#endif
-
-static int scan_stdlib_directory(const char* dir_path, char** file_list, int max_files, int* file_count) {
-#ifdef _WIN32
-    char search_path[1024];
-    snprintf(search_path, sizeof(search_path), "%s\\*", dir_path);
-
-    WIN32_FIND_DATAA find_data;
-    HANDLE hFind = FindFirstFileA(search_path, &find_data);
-
-    if (hFind == INVALID_HANDLE_VALUE) {
-        return 0;
-    }
-
-    do {
-        if (strcmp(find_data.cFileName, ".") == 0 || strcmp(find_data.cFileName, "..") == 0) {
-            continue;
-        }
-
-        char full_path[1024];
-        snprintf(full_path, sizeof(full_path), "%s\\%s", dir_path, find_data.cFileName);
-
-        if (find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-            scan_stdlib_directory(full_path, file_list, max_files, file_count);
-        } else {
-            int len = strlen(find_data.cFileName);
-            if (len > 4 && strcmp(find_data.cFileName + len - 4, ".krt") == 0) {
-                if (*file_count < max_files) {
-                    file_list[*file_count] = KRT_STRDUP(full_path);
-                    (*file_count)++;
-                }
-            }
-        }
-    } while (FindNextFileA(hFind, &find_data));
-
-    FindClose(hFind);
-#else
-    DIR* dir = opendir(dir_path);
-    if (!dir) {
-        return 0;
-    }
-
-    struct dirent* entry;
-    while ((entry = readdir(dir)) != NULL) {
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
-            continue;
-        }
-
-        char full_path[1024];
-        snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, entry->d_name);
-
-        struct stat st;
-        if (stat(full_path, &st) == 0) {
-            if (S_ISDIR(st.st_mode)) {
-                scan_stdlib_directory(full_path, file_list, max_files, file_count);
-            } else {
-                int len = strlen(entry->d_name);
-                if (len > 4 && strcmp(entry->d_name + len - 4, ".krt") == 0) {
-                    if (*file_count < max_files) {
-                        file_list[*file_count] = KRT_STRDUP(full_path);
-                        (*file_count)++;
-                    }
-                }
-            }
-        }
-    }
-
-    closedir(dir);
-#endif
-    return 1;
 }
 
 #include "StdlibCache.inc"
@@ -719,28 +644,38 @@ void KrtCompilePipelinePrintErrorReport(KrtCompilePipeline* pipeline) {
     fflush(stderr);
 }
 
-void KrtCompilePipelineAddImportedFile(KrtCompilePipeline* pipeline, const char* file_path) {
+bool KrtCompilePipelineAddImportedFile(KrtCompilePipeline* pipeline, const char* file_path) {
     if (!pipeline || !file_path) {
-        return;
+        return false;
     }
 
     for (int i = 0; i < pipeline->imported_file_count; i++) {
         if (strcmp(pipeline->imported_files[i], file_path) == 0) {
-            return;
+            return true;
         }
     }
 
     if (pipeline->imported_file_count >= pipeline->imported_file_capacity) {
+        if (pipeline->imported_file_capacity > INT_MAX / 2 ||
+            (size_t)(pipeline->imported_file_capacity == 0 ? 8 : pipeline->imported_file_capacity * 2) >
+                SIZE_MAX / sizeof(*pipeline->imported_files)) {
+            return false;
+        }
         int new_capacity = pipeline->imported_file_capacity == 0 ? 8 : pipeline->imported_file_capacity * 2;
         char** new_files = (char**)KRT_REALLOC(pipeline->imported_files, new_capacity * sizeof(char*));
         if (!new_files) {
-            return;
+            return false;
         }
         pipeline->imported_files = new_files;
         pipeline->imported_file_capacity = new_capacity;
     }
 
-    pipeline->imported_files[pipeline->imported_file_count++] = KRT_STRDUP(file_path);
+    char* copy = KRT_STRDUP(file_path);
+    if (!copy) {
+        return false;
+    }
+    pipeline->imported_files[pipeline->imported_file_count++] = copy;
+    return true;
 }
 
 char** KrtCompilePipelineGetImportedFiles(KrtCompilePipeline* pipeline, int* count) {

@@ -65,8 +65,6 @@ KrtCompilePipeline* KrtCompilePipelineCreate(KrtConfig* config, KrtPlatform* pla
 void KrtCompilePipelineDestroy(KrtCompilePipeline* pipeline);
 /** Release per-file state while retaining the borrowed configuration and platform for reuse. */
 void KrtCompilePipelineReset(KrtCompilePipeline* pipeline);
-/** Append private clones of standard-library declarations; return 1 on success and 0 on failure. */
-int KrtCompilePipelineLoadStandardLibrary(KrtCompilePipeline* pipeline, const char* directory);
 /** Clear the process-wide parsed-library cache and counters under its mutex. */
 void KrtStdlibCacheClear(void);
 /** Read cache counters atomically; either output pointer may be NULL. */
@@ -87,7 +85,7 @@ const char* KrtCompilePipelineGetError(KrtCompilePipeline* pipeline);
 const char* KrtCompilePipelineGetFailedStageName(KrtCompilePipeline* pipeline);
 KrtCompileStageResult* KrtCompilePipelineGetStageResults(KrtCompilePipeline* pipeline, int* count);
 double KrtCompilePipelineGetTotalDuration(KrtCompilePipeline* pipeline);
-void KrtCompilePipelineAddImportedFile(KrtCompilePipeline* pipeline, const char* file_path);
+bool KrtCompilePipelineAddImportedFile(KrtCompilePipeline* pipeline, const char* file_path);
 char** KrtCompilePipelineGetImportedFiles(KrtCompilePipeline* pipeline, int* count);
 void KrtCompilePipelinePrintErrorReport(KrtCompilePipeline* pipeline);
 

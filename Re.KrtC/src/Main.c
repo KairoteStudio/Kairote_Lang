@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <stdint.h>
 #include <time.h>
 #include <stdarg.h>
 #include "Core/Core.h"
@@ -63,7 +64,7 @@ static const char* project_name_from_type(const char* type) {
     return "console";
 }
 
-static void create_project(const char* name, const char* type) {
+static int create_project(const char* name, const char* type) {
     KrtProjectType ptype = KRT_PROJ_TYPE_CONSOLE;
     if (type && (strcmp(type, "lib") == 0 || strcmp(type, "library") == 0 || strcmp(type, "dll") == 0)) {
         ptype = KRT_PROJ_TYPE_LIBRARY;
@@ -73,12 +74,16 @@ static void create_project(const char* name, const char* type) {
         ptype = KRT_PROJ_TYPE_SYSTEM;
     }
     KrtProject* project = KrtProjCreate(name, ptype);
-    if (project) {
-        KrtProjCreateTemplate(project, name);
-        KrtProjDestroy(project);
-    } else {
+    if (!project) {
+        KrtError("项目创建失败!");
+        return 0;
+    }
+    int created = KrtProjCreateTemplate(project, name);
+    KrtProjDestroy(project);
+    if (!created) {
         KrtError("项目创建失败!");
     }
+    return created;
 }
 
 typedef enum {
@@ -573,6 +578,14 @@ static int compile_multiple_files(const char** input_files, int input_count, con
         return compile_single_file(input_files[0], output_file, target_type, show_ir, keep_temp, optimization_level);
     }
 
+    /* This path links one KRO module per input.  Do not silently turn an
+     * unsupported request such as `target ir` into an executable build. */
+    if (target_type != KRT_TARGET_CMD_EXE && target_type != KRT_TARGET_CMD_BUILD &&
+        target_type != KRT_TARGET_CMD_KRO) {
+        KrtError("Multiple source files support only executable or eo targets");
+        return 1;
+    }
+
     KrtConfig* config = KrtConfigCreate();
     if (!config) {
         KrtError("Failed to create config");
@@ -595,10 +608,17 @@ static int compile_multiple_files(const char** input_files, int input_count, con
         char file_base[KRT_MAX_PATH];
         KrtPathGetFilename(input_files[0], file_base, sizeof(file_base));
         KrtPathRemoveExtension(file_base, file_base, sizeof(file_base));
-        char file_base_truncated[1010];
-        strncpy(file_base_truncated, file_base, sizeof(file_base_truncated) - 1);
-        file_base_truncated[sizeof(file_base_truncated) - 1] = '\0';
-        snprintf(default_output, sizeof(default_output), "%s.kro", file_base_truncated);
+#ifdef _WIN32
+        int output_length = snprintf(default_output, sizeof(default_output), "%s.exe", file_base);
+#else
+        int output_length = snprintf(default_output, sizeof(default_output), "%s", file_base);
+#endif
+        if (output_length < 0 || (size_t)output_length >= sizeof(default_output)) {
+            KrtError("Default output path is too long");
+            KrtConfigDestroy(config);
+            KrtPlatformDestroy(platform);
+            return 1;
+        }
         output_file = default_output;
     }
 
@@ -627,28 +647,45 @@ static int compile_multiple_files(const char** input_files, int input_count, con
             continue;
         }
 
-        fseek(fp, 0, SEEK_END);
+        if (fseek(fp, 0, SEEK_END) != 0) {
+            KrtError("Cannot seek in file: %s", input_files[i]);
+            fclose(fp);
+            continue;
+        }
         long file_size = ftell(fp);
-        rewind(fp);
-
-        char* source = (char*)malloc(file_size + 1);
-        if (!source) {
+        if (file_size < 0 || (uintmax_t)file_size >= (uintmax_t)SIZE_MAX || fseek(fp, 0, SEEK_SET) != 0) {
+            KrtError("Cannot determine file size: %s", input_files[i]);
             fclose(fp);
             continue;
         }
 
-        fread(source, 1, file_size, fp);
-        source[file_size] = '\0';
+        char* source = (char*)malloc((size_t)file_size + 1);
+        if (!source) {
+            KrtError("Cannot allocate memory for source file: %s", input_files[i]);
+            fclose(fp);
+            continue;
+        }
+
+        size_t bytes_read = fread(source, 1, (size_t)file_size, fp);
+        if (bytes_read != (size_t)file_size || ferror(fp)) {
+            KrtError("Cannot read complete file: %s", input_files[i]);
+            free(source);
+            fclose(fp);
+            continue;
+        }
+        source[(size_t)file_size] = '\0';
         fclose(fp);
 
         Lexer* lexer = lexer_create(source);
         if (!lexer) {
+            KrtError("Cannot create lexer for file: %s", input_files[i]);
             free(source);
             continue;
         }
 
         Parser* parser = parser_create(lexer);
         if (!parser) {
+            KrtError("Cannot create parser for file: %s", input_files[i]);
             free(source);
             lexer_destroy(lexer);
             continue;
@@ -656,6 +693,7 @@ static int compile_multiple_files(const char** input_files, int input_count, con
 
         ASTNode* ast = parser_parse(parser);
         if (!ast) {
+            KrtError("Cannot parse file: %s", input_files[i]);
             free(source);
             lexer_destroy(lexer);
             parser_destroy(parser);
@@ -679,6 +717,20 @@ static int compile_multiple_files(const char** input_files, int input_count, con
         return 1;
     }
 
+    if (parsed_count != input_count) {
+        for (int i = 0; i < parsed_count; i++) {
+            free(parsed_files[i].source);
+            lexer_destroy(parsed_files[i].lexer);
+            parser_destroy(parsed_files[i].parser);
+        }
+        KrtError("Build preparation failed: %d of %d source files parsed", parsed_count, input_count);
+        free(parsed_files);
+        free(kro_files);
+        KrtConfigDestroy(config);
+        KrtPlatformDestroy(platform);
+        return 1;
+    }
+
     SemanticAnalyzer* shared_analyzer = semantic_analyzer_create();
     if (!shared_analyzer) {
         for (int i = 0; i < parsed_count; i++) {
@@ -694,6 +746,9 @@ static int compile_multiple_files(const char** input_files, int input_count, con
     }
 
     for (int i = 0; i < parsed_count; i++) {
+        /* Make project-local signatures visible independently of command-line
+         * file order.  Entries are registered as forward references and are
+         * completed when their owning file is analyzed. */
         semantic_analyzer_collect_exports(shared_analyzer, parsed_files[i].ast);
     }
 
@@ -703,8 +758,11 @@ static int compile_multiple_files(const char** input_files, int input_count, con
         const char* input_file = input_files[i];
 
         char file_dir[KRT_MAX_PATH];
-        strncpy(file_dir, input_file, sizeof(file_dir) - 1);
-        file_dir[sizeof(file_dir) - 1] = '\0';
+        int directory_length = snprintf(file_dir, sizeof(file_dir), "%s", input_file);
+        if (directory_length < 0 || (size_t)directory_length >= sizeof(file_dir)) {
+            KrtError("Input path is too long: %s", input_file);
+            continue;
+        }
         char* last_slash = strrchr(file_dir, '/');
         if (last_slash) {
             *last_slash = '\0';
@@ -718,16 +776,21 @@ static int compile_multiple_files(const char** input_files, int input_count, con
 
         kro_files[i] = (char*)malloc(KRT_MAX_PATH);
         if (!kro_files[i]) {
+            KrtError("Cannot allocate intermediate output path for: %s", input_file);
             continue;
         }
 
-        char file_base_truncated[1010];
-        strncpy(file_base_truncated, file_base, sizeof(file_base_truncated) - 1);
-        file_base_truncated[sizeof(file_base_truncated) - 1] = '\0';
-        snprintf(kro_files[i], KRT_MAX_PATH, "%s/%s.kro", file_dir, file_base_truncated);
+        int output_length = snprintf(kro_files[i], KRT_MAX_PATH, "%s/%s.kro", file_dir, file_base);
+        if (output_length < 0 || (size_t)output_length >= KRT_MAX_PATH) {
+            KrtError("Intermediate output path is too long for: %s", input_file);
+            free(kro_files[i]);
+            kro_files[i] = NULL;
+            continue;
+        }
 
         KrtCompilePipeline* pipeline = KrtCompilePipelineCreate(config, platform);
         if (!pipeline) {
+            KrtError("Failed to create compiler pipeline for: %s", input_file);
             free(kro_files[i]);
             kro_files[i] = NULL;
             continue;
@@ -771,7 +834,17 @@ static int compile_multiple_files(const char** input_files, int input_count, con
     }
 
     int total_obj_count = success_count;
-    const char** obj_files = (const char**)malloc(total_obj_count * sizeof(const char*));
+    if ((size_t)total_obj_count > SIZE_MAX / sizeof(const char*)) {
+        KrtError("Too many object files to link");
+        for (int i = 0; i < input_count; i++) {
+            free(kro_files[i]);
+        }
+        free(kro_files);
+        KrtConfigDestroy(config);
+        KrtPlatformDestroy(platform);
+        return 1;
+    }
+    const char** obj_files = (const char**)malloc((size_t)total_obj_count * sizeof(const char*));
     if (!obj_files) {
         for (int i = 0; i < input_count; i++) {
             if (kro_files[i]) {
@@ -790,18 +863,28 @@ static int compile_multiple_files(const char** input_files, int input_count, con
             obj_files[obj_idx++] = kro_files[i];
         }
     }
+    if (obj_idx != success_count) {
+        KrtError("Build failed: one or more compiled object files are missing");
+    }
 
     char exe_output[KRT_MAX_PATH];
-    char out_file_base[KRT_MAX_PATH];
-    KrtPathGetFilename(output_file, out_file_base, sizeof(out_file_base));
-    KrtPathRemoveExtension(out_file_base, out_file_base, sizeof(out_file_base));
-    char out_base_truncated[1010];
-    strncpy(out_base_truncated, out_file_base, sizeof(out_base_truncated) - 1);
-    out_base_truncated[sizeof(out_base_truncated) - 1] = '\0';
-    snprintf(exe_output, sizeof(exe_output), "%s.exe", out_base_truncated);
+    /* `-o` is a complete output path, not a basename.  In particular, do
+     * not discard its directory or invent a platform extension here. */
+    int exe_length = snprintf(exe_output, sizeof(exe_output), "%s", output_file);
+    if (exe_length < 0 || (size_t)exe_length >= sizeof(exe_output)) {
+        KrtError("Executable output path is too long");
+        for (int i = 0; i < input_count; i++) {
+            free(kro_files[i]);
+        }
+        free(kro_files);
+        free(obj_files);
+        KrtConfigDestroy(config);
+        KrtPlatformDestroy(platform);
+        return 1;
+    }
 
-    int link_result = 0;
-    if (obj_idx > 0) {
+    int link_result = obj_idx == success_count ? 0 : -1;
+    if (link_result == 0 && obj_idx > 0) {
         link_result = KrtArkLinkLinkObjects(obj_files, obj_idx, exe_output, config);
     }
 
@@ -1291,11 +1374,11 @@ int main(int argc, char* argv[]) {
     if (options.create_project) {
         const char* project_name =
             options.input_file ? options.input_file : project_name_from_type(options.project_type);
-        create_project(project_name, options.project_type);
+        int created = create_project(project_name, options.project_type);
         KrtBuildSummarySetDuration(KrtGetTime() - total_start);
         KrtPrintBuildSummary();
         KrtOutputCacheCleanup();
-        return 0;
+        return created ? 0 : 1;
     }
 
     if (options.target_type == KRT_TARGET_CMD_VERSION) {

@@ -320,6 +320,15 @@ Write(42);return Read()==42&&Calls()==1?0:2;}''')
         self.assertFalse(self.output.exists())
         self.assertTrue(self.source.is_file())
 
+    def test_compile_together_false_compiles_units_then_links_them(self):
+        self.path.write_text('''function Configure(Project p) {
+            p.Name("demo"); p.Sources("main.krt"); p.CompileTogether(false); p.Output("bin/demo");
+        }''')
+        self.ok(self.command('check'), 'checked:')
+        self.ok(self.command('build'), 'built:')
+        self.executes(17)
+        self.assertTrue((self.work / 'obj/main.kro').is_file())
+
     def test_source_configuration_compiler_and_linker_invalidate_cache(self):
         compiler, linker = self.work / 'compiler', self.work / 'linker'
         shutil.copy2(COMPILER, compiler)

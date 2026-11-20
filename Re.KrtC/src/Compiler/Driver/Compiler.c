@@ -6,6 +6,15 @@
 #include "../Backend/Kro/KroCodegen.h"
 
 KrtCompiler* KrtCompilerCreate(const char* output_filename, KrtTargetPlatform target) {
+    if (!output_filename || output_filename[0] == '\0') {
+        KrtError("Output file path is empty");
+        return NULL;
+    }
+    if (target == KRT_TARGET_WASM) {
+        KrtError("WebAssembly backend is not implemented");
+        return NULL;
+    }
+
     KrtCompiler* compiler = (KrtCompiler*)KRT_MALLOC(sizeof(KrtCompiler));
     if (!compiler) {
         return NULL;
@@ -209,8 +218,9 @@ bool KrtCompilerCompile(KrtCompiler* compiler, ASTNode* ast, void* semantic_anal
         KrtX86Generate(compiler->output_file, ir_builder->module);
         break;
     case KRT_TARGET_WASM:
-        fprintf(compiler->output_file, "; WASAS 生成尚未实现\n");
-        break;
+        KrtError("WebAssembly backend is not implemented");
+        KrtIrBuilderDestroy(ir_builder);
+        return false;
     case KRT_TARGET_VM_BYTECODE: {
         KrtVmCodegenGenerate(ir_builder->module, &compiler->last_chunk);
 

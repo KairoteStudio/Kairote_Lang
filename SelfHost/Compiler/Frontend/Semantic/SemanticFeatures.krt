@@ -802,6 +802,8 @@ KrtAstNode KrtNativeClosureInferShape(KrtAstNode lambda, KrtNativeBinding bindin
 // Its source body is bound once, using the same locals, captures and types as
 // an ordinary function. Generated methods expose the ordinary iterator ABI.
 class KrtNativeGeneratorPlan {
+    public KrtNativeGeneratorPlan release_next;
+    public bool destroy_mark;
     public KrtAstNode factory;
     public KrtAstNode body;
     public KrtAstNode sequence_type;
@@ -973,6 +975,8 @@ KrtAstNode KrtNativeGeneratorMethod(KrtAstNode owner, KrtAstNode requirement, Kr
     method.syntax_modifiers = 1; method.parameter_count = 1;
     method.parameter_starts = new int64[128]; method.parameter_lengths = new int64[128];
     method.parameter_type_starts = new int64[128]; method.parameter_type_lengths = new int64[128]; method.parameter_refs = new bool[128];
+    method.owns_parameter_starts = true; method.owns_parameter_lengths = true;
+    method.owns_parameter_type_starts = true; method.owns_parameter_type_lengths = true; method.owns_parameter_refs = true;
     method.parameter_starts[0] = owner.name_start; method.parameter_type_starts[0] = owner.name_start; method.parameter_type_lengths[0] = owner.name_length;
     method.native_generator = plan; method.native_generator_role = role;
     method.native_bound = true; method.native_locals = 2;

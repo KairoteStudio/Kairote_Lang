@@ -343,6 +343,7 @@ bool KrtNativeBindFunctionAddress(KrtAstNode node, KrtNativeBinding binding) {
     signature.parameter_refs = selected.parameter_refs; signature.native_scope = selected.native_scope; signature.native_context = selected.native_context;
     if(selected.native_owner!=null&&selected.native_owner.value==2&&!selected.native_static){
         signature.parameter_refs=new bool[selected.parameter_count];int32 index=0;
+        signature.owns_parameter_refs=true;
         while(index<selected.parameter_count){signature.parameter_refs[index]=selected.parameter_refs[index];index=index+1;}
         signature.parameter_refs[0]=true;
     }

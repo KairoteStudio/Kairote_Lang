@@ -64,6 +64,41 @@ int32 main() { return 0; }
             executed = subprocess.run([str(program)], capture_output=True, timeout=10)
             self.assertEqual(executed.returncode, 0, executed.stderr)
 
+    def test_project_namespace_index_spans_explicit_source_files(self):
+        with tempfile.TemporaryDirectory(prefix="kairote-project-namespace-sources-") as directory:
+            work = Path(directory)
+            namespace_source = work / "namespace.krt"
+            main_source = work / "main.krt"
+            namespace_source.write_text("namespace App.Internal; class Value {}\n")
+            main_source.write_text("using App.Internal; int32 main() { return 0; }\n")
+
+            program = work / "Program"
+            result = subprocess.run(compiler_command(namespace_source, main_source, "-o", program), cwd=work,
+                                    capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            executed = subprocess.run([str(program)], capture_output=True, timeout=10)
+            self.assertEqual(executed.returncode, 0, executed.stderr)
+
+    def test_multiple_sources_reject_unimplemented_non_executable_targets(self):
+        with tempfile.TemporaryDirectory(prefix="kairote-multiple-source-target-") as directory:
+            work = Path(directory)
+            first = work / "first.krt"
+            second = work / "second.krt"
+            output = work / "requested-output"
+            first.write_text("int32 helper() { return 0; }\n")
+            second.write_text("int32 main() { return helper(); }\n")
+            output.write_text("previous output")
+
+            for target in ("ir", "asm"):
+                with self.subTest(target=target):
+                    result = subprocess.run(
+                        compiler_command("target", target, first, second, "-o", output), cwd=work,
+                        capture_output=True, text=True, timeout=30)
+                    self.assertGreater(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn("Multiple source files support only executable or eo targets",
+                                  result.stdout + result.stderr)
+                    self.assertEqual(output.read_text(), "previous output")
+
     def test_single_class_import_keeps_transitive_implementations(self):
         self.run_source('''
 using System.Convert;
@@ -305,6 +340,7 @@ static uint128 retained_wide = (uint128)18446744073709551623;
             (work / "project.krt").write_text('''function Configure() {
     Name("DataUnits");
     Output("Program");
+    CompileTogether(false);
     Sources("Main.krt", "Data.krt");
 }
 ''')

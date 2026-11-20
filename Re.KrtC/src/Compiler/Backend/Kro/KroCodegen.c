@@ -160,6 +160,23 @@ static void emit_load_from_stack(KROCodegenContext* ctx, int offset, int dst_reg
     }
 }
 
+/* rsp-relative slots are used for per-call argument staging. */
+static void emit_store_to_rsp(KROCodegenContext* ctx, int offset, int src_reg) {
+    emit_byte(ctx, 0x48 | (src_reg >= 8 ? 0x04 : 0));
+    emit_byte(ctx, 0x89);
+    emit_byte(ctx, 0x84 | ((src_reg & 0x7) << 3));
+    emit_byte(ctx, 0x24);
+    emit_u32(ctx, (uint32_t)offset);
+}
+
+static void emit_load_from_rsp(KROCodegenContext* ctx, int offset, int dst_reg) {
+    emit_byte(ctx, 0x48 | (dst_reg >= 8 ? 0x04 : 0));
+    emit_byte(ctx, 0x8B);
+    emit_byte(ctx, 0x84 | ((dst_reg & 0x7) << 3));
+    emit_byte(ctx, 0x24);
+    emit_u32(ctx, (uint32_t)offset);
+}
+
 static void emit_byte(KROCodegenContext* ctx, uint8_t byte) {
     uint8_t data = byte;
     kro_write_code(ctx->writer, &data, 1);
@@ -679,6 +696,32 @@ static void emit_load_value_to_reg(KROCodegenContext* ctx, KrtIRValue* value, in
     }
 }
 
+/*
+ * Save values already assigned to physical registers before a call changes
+ * any ABI argument register.  Returning false means the normal loader must
+ * materialize the value in a later pass, after all register-backed values
+ * have been preserved.
+ */
+static bool is_register_backed_value(KROCodegenContext* ctx, KrtIRValue* value, int words) {
+    if (!ctx || !value || value->type != KRT_IR_VALUE_TEMP) {
+        return false;
+    }
+    KROTempSlot* slot = find_temp_location(ctx, value->data.index);
+    return slot && slot->reg_low >= 0 && (words == 1 || slot->reg_high >= 0);
+}
+
+static bool emit_stage_register_backed_value(KROCodegenContext* ctx, KrtIRValue* value, int words, int offset) {
+    if (!is_register_backed_value(ctx, value, words)) {
+        return false;
+    }
+    KROTempSlot* slot = find_temp_location(ctx, value->data.index);
+    emit_store_to_rsp(ctx, offset, slot->reg_low);
+    if (words == 2) {
+        emit_store_to_rsp(ctx, offset + 8, slot->reg_high);
+    }
+    return true;
+}
+
 /* Sized integer loads also handle values modified through byte-pointer aliases. */
 #include "KroInteger.inc"
 #include "KroRegisterPacking.inc"
@@ -899,56 +942,96 @@ static void generate_instruction(KROCodegenContext* ctx, KrtIRInst* inst) {
         }
 
         int arg_count = inst->operand_count - 1;
-        int reg_index = 0, stack_words = 0;
+        int reg_index = 0, stack_words = 0, staging_words = indirect ? 1 : 0;
         for (int i = 0; i < arg_count; i++) {
             int words = KrtTokenIntegerBits(inst->operands[i + 1].value_type) > 64 ? 2 : 1;
+            staging_words += words;
             if (reg_index + words <= g_arg_reg_count) {
                 reg_index += words;
             } else {
                 stack_words += words;
             }
         }
-        int outgoing = (stack_words * 8 + KRT_KRO_SHADOW_SPACE_SIZE + 15) & ~15;
+        int staging_offset = KRT_KRO_SHADOW_SPACE_SIZE + stack_words * 8;
+        int outgoing = (staging_offset + staging_words * 8 + 15) & ~15;
         if (outgoing) {
             emit_bytes(ctx, (const uint8_t*)"\x48\x81\xEC", 3);
             emit_u32(ctx, outgoing);
         }
+
+        /*
+         * Argument locations can be the same registers that the platform ABI
+         * uses for earlier arguments.  Preserve every register-backed value
+         * first, then materialize the remaining values, and only afterwards
+         * load the ABI registers.  This makes argument order independent of
+         * register allocation.
+         */
+        int stage_offset = staging_offset;
+        for (int i = 0; i < arg_count; i++) {
+            KrtIRValue* arg = &inst->operands[i + 1];
+            int words = KrtTokenIntegerBits(arg->value_type) > 64 ? 2 : 1;
+            emit_stage_register_backed_value(ctx, arg, words, stage_offset);
+            stage_offset += words * 8;
+        }
+        if (indirect) {
+            emit_stage_register_backed_value(ctx, &inst->operands[0], 1, stage_offset);
+        }
+
+        stage_offset = staging_offset;
+        for (int i = 0; i < arg_count; i++) {
+            KrtIRValue* arg = &inst->operands[i + 1];
+            int words = KrtTokenIntegerBits(arg->value_type) > 64 ? 2 : 1;
+            if (!is_register_backed_value(ctx, arg, words)) {
+                emit_load_pair(ctx, arg, KRT_REG_RAX, KRT_REG_RDX);
+                emit_store_to_rsp(ctx, stage_offset, KRT_REG_RAX);
+                if (words == 2) {
+                    emit_store_to_rsp(ctx, stage_offset + 8, KRT_REG_RDX);
+                }
+            }
+            stage_offset += words * 8;
+        }
+        if (indirect && !is_register_backed_value(ctx, &inst->operands[0], 1)) {
+            emit_load_value_to_reg(ctx, &inst->operands[0], KRT_REG_RAX);
+            emit_store_to_rsp(ctx, stage_offset, KRT_REG_RAX);
+        }
+
         reg_index = 0;
         int stack_offset = KRT_KRO_SHADOW_SPACE_SIZE;
+        stage_offset = staging_offset;
         for (int i = 0; i < arg_count; i++) {
             KrtIRValue* arg = &inst->operands[i + 1];
             int words = KrtTokenIntegerBits(arg->value_type) > 64 ? 2 : 1;
             if (reg_index + words <= g_arg_reg_count) {
                 reg_index += words;
-                continue;
+            } else {
+                emit_load_from_rsp(ctx, stage_offset, KRT_REG_RAX);
+                emit_store_to_rsp(ctx, stack_offset, KRT_REG_RAX);
+                if (words == 2) {
+                    emit_load_from_rsp(ctx, stage_offset + 8, KRT_REG_RAX);
+                    emit_store_to_rsp(ctx, stack_offset + 8, KRT_REG_RAX);
+                }
+                stack_offset += words * 8;
             }
-            emit_load_pair(ctx, arg, KRT_REG_RAX, KRT_REG_RDX);
-            emit_bytes(ctx, (const uint8_t*)"\x48\x89\x84\x24", 4);
-            emit_u32(ctx, stack_offset);
-            if (words == 2) {
-                emit_bytes(ctx, (const uint8_t*)"\x48\x89\x94\x24", 4);
-                emit_u32(ctx, stack_offset + 8);
-            }
-            stack_offset += words * 8;
+            stage_offset += words * 8;
         }
         reg_index = 0;
+        stage_offset = staging_offset;
         for (int i = 0; i < arg_count; i++) {
             KrtIRValue* arg = &inst->operands[i + 1];
             int words = KrtTokenIntegerBits(arg->value_type) > 64 ? 2 : 1;
-            if (reg_index + words > g_arg_reg_count) {
-                continue;
+            if (reg_index + words <= g_arg_reg_count) {
+                emit_load_from_rsp(ctx, stage_offset, g_arg_regs[reg_index]);
+                if (words == 2) {
+                    emit_load_from_rsp(ctx, stage_offset + 8, g_arg_regs[reg_index + 1]);
+                }
+                reg_index += words;
             }
-            if (words == 2) {
-                emit_load_pair(ctx, arg, g_arg_regs[reg_index], g_arg_regs[reg_index + 1]);
-            } else {
-                emit_load_value_to_reg(ctx, arg, g_arg_regs[reg_index]);
-            }
-            reg_index += words;
+            stage_offset += words * 8;
         }
 
         int32_t local_sym_idx = kro_find_symbol(ctx->writer, func_name);
         if (indirect) {
-            emit_load_value_to_reg(ctx, &inst->operands[0], KRT_REG_R11);
+            emit_load_from_rsp(ctx, stage_offset, KRT_REG_R11);
             emit_bytes(ctx, (const uint8_t*)"\x41\xFF\xD3", 3); /* call r11 */
         } else if (local_sym_idx >= 0) {
             emit_call_local(ctx, func_name);

@@ -1,5 +1,340 @@
 // Stage-0 callable compiler entry point. It owns the pipeline but emits no C.
 static KrtNativeModule KrtDriverLastModule = null;
+class KrtCompileWorkspace {
+    public KrtLexer lexer;
+    public KrtToken token;
+    public KrtParser parser;
+    public KrtAstNode unit;
+    public KrtNativeModule module;
+}
+class KrtCompileAstQueue {
+    public KrtAstNode[] nodes;
+    public int32 count;
+    public int32 capacity;
+    public bool ok;
+    public KrtUsingScope scopes;
+    public KrtNativeSignatureCache signatures;
+    public KrtNativeGeneratorPlan generators;
+    public KrtNativeCapture captures;
+    public KrtNativeCellOwner cell_owners;
+}
+static KrtCompileWorkspace KrtDriverLastWorkspace = null;
+
+void KrtCompileReleaseAbiBytes(KrtAbiBytes bytes) {
+    if (bytes == null) { return; }
+    if (bytes.data != null) { delete bytes.data; }
+    delete bytes;
+}
+
+void KrtCompileReleaseSsa(KrtSsaModule ssa) {
+    if (ssa == null) { return; }
+    delete ssa.ops; delete ssa.args; delete ssa.extra;
+    delete ssa.types; delete ssa.widths; delete ssa.results;
+    delete ssa.semantic_types; delete ssa.semantic_widths;
+    delete ssa.operand_starts; delete ssa.operand_counts; delete ssa.operands;
+    delete ssa.phi_predecessors; delete ssa.uses; delete ssa.value_blocks;
+    delete ssa.starts; delete ssa.ends; delete ssa.function_blocks; delete ssa.function_block_counts;
+    delete ssa.block_starts; delete ssa.block_ends; delete ssa.block_phis; delete ssa.block_phi_counts;
+    delete ssa.block_functions; delete ssa.block_left; delete ssa.block_right; delete ssa.handlers;
+    delete ssa;
+}
+
+void KrtCompileReleaseModule(KrtNativeModule module) {
+    if (module == null) { return; }
+    KrtCompileReleaseSsa(module.ssa); module.ssa = null;
+    if (module.runtime_build_keys != null) {
+        int32 bucket = 0;
+        while (bucket < 4096) {
+            KrtNativeRuntimeKey key = module.runtime_build_keys[bucket];
+            while (key != null) { KrtNativeRuntimeKey next = key.next; delete key; key = next; }
+            bucket = bucket + 1;
+        }
+        delete module.runtime_build_keys; module.runtime_build_keys = null;
+    }
+    if (module.runtime_build_bytes != null) {
+        delete module.runtime_build_bytes.data; delete module.runtime_build_bytes;
+        module.runtime_build_bytes = null;
+    }
+    KrtNativeRuntimeType runtime_type = module.runtime_types;
+    while (runtime_type != null) {
+        KrtNativeRuntimeType next_type = runtime_type.next;
+        KrtNativeRuntimeMethod method = runtime_type.methods;
+        while (method != null) {
+            KrtNativeRuntimeMethod next_method = method.next;
+            KrtCompileReleaseAbiBytes(method.identity);
+            delete method; method = next_method;
+        }
+        KrtCompileReleaseAbiBytes(runtime_type.identity);
+        delete runtime_type; runtime_type = next_type;
+    }
+    KrtNativeRuntimeRelocation relocation = module.runtime_relocations;
+    while (relocation != null) {
+        KrtNativeRuntimeRelocation next = relocation.next; delete relocation; relocation = next;
+    }
+    KrtNativeExceptionFrame frame = module.allocated_exception_frames;
+    while (frame != null) {
+        KrtNativeExceptionFrame next = frame.allocated_next; delete frame; frame = next;
+    }
+    delete module.runtime_buckets; delete module.runtime_bytes; delete module.runtime_offsets;
+    delete module.runtime_code_offsets; delete module.runtime_code_targets;
+    delete module.ops; delete module.args; delete module.extra;
+    delete module.starts; delete module.local_counts; delete module.parameter_counts;
+    delete module.aggregate_return_sizes; delete module.aggregate_return_alignments;
+    delete module.hidden_result_slots; delete module.function_frame_bytes;
+    delete module.global_entries; delete module.global_reloc_offsets; delete module.global_reloc_slots;
+    delete module.function_offsets; delete module.function_sizes; delete module.external_used;
+    delete module.external_reloc_offsets; delete module.external_reloc_targets;
+    delete module.function_name_starts; delete module.function_name_lengths; delete module.data_storage;
+    delete module;
+}
+
+void KrtCompileReleaseAstState(KrtAstNode unit) {
+    if (unit == null) { return; }
+    KrtNativeFunctionIndexInvalidate(unit);
+    KrtGenericRegistry registry = unit.native_generic_registry;
+    if (registry != null) {
+        delete registry.declarations; delete registry.arguments; delete registry.instances; delete registry.states;
+        delete registry;
+        unit.native_generic_registry = null;
+    }
+    KrtNativeGlobalState globals = unit.native_globals;
+    if (globals != null) {
+        KrtNativeGlobalEntry entry = globals.first;
+        while (entry != null) {
+            KrtNativeGlobalEntry next = entry.next;
+            if (entry.symbol_name != null) { delete entry.symbol_name.bytes; delete entry.symbol_name; }
+            if (entry.guard_name != null && entry.guard_name != entry.symbol_name) { delete entry.guard_name.bytes; delete entry.guard_name; }
+            if (entry.initializer_name != null) { delete entry.initializer_name.bytes; delete entry.initializer_name; }
+            if (entry.module_guard && entry.declaration != null) { delete entry.declaration; }
+            delete entry; entry = next;
+        }
+        delete globals;
+        unit.native_globals = null;
+    }
+    KrtInheritanceStack inheritance = unit.native_inheritance_stack;
+    if (inheritance != null) {
+        delete inheritance.types; delete inheritance.cycle_types; delete inheritance;
+        unit.native_inheritance_stack = null;
+    }
+    unit.native_function_index = null;
+}
+
+bool KrtCompileAstPush(KrtCompileAstQueue queue, KrtAstNode node) {
+    if (!queue.ok || node == null || node.native_destroy_mark) { return queue.ok; }
+    node.native_destroy_mark = true;
+    if (queue.count == queue.capacity) {
+        if (queue.capacity > 16777216) { node.native_destroy_mark = false; queue.ok = false; return false; }
+        int32 capacity = queue.capacity == 0 ? 128 : queue.capacity * 2;
+        KrtAstNode[] expanded = new KrtAstNode[capacity];
+        if (expanded == null) { node.native_destroy_mark = false; queue.ok = false; return false; }
+        int32 index = 0;
+        while (index < queue.count) { expanded[index] = queue.nodes[index]; index = index + 1; }
+        delete queue.nodes; queue.nodes = expanded; queue.capacity = capacity;
+    }
+    queue.nodes[queue.count] = node; queue.count = queue.count + 1; return true;
+}
+
+void KrtCompileAstQueueScope(KrtCompileAstQueue queue, KrtUsingScope scope) {
+    while (queue.ok && scope != null && !scope.destroy_mark) {
+        scope.destroy_mark = true; scope.release_next = queue.scopes; queue.scopes = scope;
+        KrtCompileAstPush(queue,scope.imports); KrtCompileAstPush(queue,scope.namespace_scope);
+        scope = scope.parent;
+    }
+}
+
+void KrtCompileAstQueueSignature(KrtCompileAstQueue queue, KrtNativeSignatureCache signature) {
+    if (!queue.ok || signature == null || signature.destroy_mark) { return; }
+    signature.destroy_mark = true; signature.release_next = queue.signatures; queue.signatures = signature;
+    KrtCompileAstPush(queue,signature.module); KrtCompileAstPush(queue,signature.scope);
+    KrtCompileAstPush(queue,signature.context); KrtCompileAstPush(queue,signature.owner); KrtCompileAstPush(queue,signature.result);
+    KrtCompileAstQueueScope(queue,signature.using_scope);
+    int32 index = 0;
+    while (queue.ok && signature.parameters != null && index < signature.parameter_count) {
+        KrtCompileAstPush(queue,signature.parameters[index]); index = index + 1;
+    }
+}
+
+void KrtCompileAstQueueGenerator(KrtCompileAstQueue queue, KrtNativeGeneratorPlan generator) {
+    if (!queue.ok || generator == null || generator.destroy_mark) { return; }
+    generator.destroy_mark = true; generator.release_next = queue.generators; queue.generators = generator;
+    KrtCompileAstPush(queue,generator.factory); KrtCompileAstPush(queue,generator.body);
+    KrtCompileAstPush(queue,generator.sequence_type); KrtCompileAstPush(queue,generator.cursor_type);
+    KrtCompileAstPush(queue,generator.enumerable_type); KrtCompileAstPush(queue,generator.enumerator_type);
+    KrtCompileAstPush(queue,generator.element_type); KrtCompileAstPush(queue,generator.get_method);
+    KrtCompileAstPush(queue,generator.move_method); KrtCompileAstPush(queue,generator.current_method);
+    KrtCompileAstPush(queue,generator.dispose_method); KrtCompileAstPush(queue,generator.get_requirement);
+    KrtCompileAstPush(queue,generator.move_requirement); KrtCompileAstPush(queue,generator.current_requirement);
+    KrtCompileAstPush(queue,generator.dispose_requirement); KrtCompileAstPush(queue,generator.parameters);
+}
+
+void KrtCompileAstQueueCapture(KrtCompileAstQueue queue, KrtNativeCapture capture) {
+    while (queue.ok && capture != null && !capture.destroy_mark) {
+        capture.destroy_mark = true; capture.release_next = queue.captures; queue.captures = capture;
+        KrtCompileAstPush(queue,capture.provider); KrtCompileAstPush(queue,capture.declaration);
+        capture = capture.next;
+    }
+}
+
+void KrtCompileAstQueueCellOwners(KrtCompileAstQueue queue, KrtNativeCellOwner owner) {
+    while (queue.ok && owner != null && !owner.destroy_mark) {
+        owner.destroy_mark = true; owner.release_next = queue.cell_owners; queue.cell_owners = owner;
+        KrtCompileAstPush(queue,owner.declaration); owner = owner.next;
+    }
+}
+
+void KrtCompileAstReleaseMarks(KrtCompileAstQueue queue) {
+    int32 index = 0;
+    while (index < queue.count) { queue.nodes[index].native_destroy_mark = false; index = index + 1; }
+    KrtUsingScope scope = queue.scopes;
+    while (scope != null) { KrtUsingScope next = scope.release_next; scope.destroy_mark = false; scope.release_next = null; scope = next; }
+    KrtNativeSignatureCache signature = queue.signatures;
+    while (signature != null) { KrtNativeSignatureCache next = signature.release_next; signature.destroy_mark = false; signature.release_next = null; signature = next; }
+    KrtNativeGeneratorPlan generator = queue.generators;
+    while (generator != null) { KrtNativeGeneratorPlan next = generator.release_next; generator.destroy_mark = false; generator.release_next = null; generator = next; }
+    KrtNativeCapture capture = queue.captures;
+    while (capture != null) { KrtNativeCapture next = capture.release_next; capture.destroy_mark = false; capture.release_next = null; capture = next; }
+    KrtNativeCellOwner owner = queue.cell_owners;
+    while (owner != null) { KrtNativeCellOwner next = owner.release_next; owner.destroy_mark = false; owner.release_next = null; owner = next; }
+    delete queue.nodes; delete queue;
+}
+
+bool KrtCompileReleaseAstGraph(KrtAstNode root, KrtNativeModule module, KrtUsingScope parser_scope) {
+    KrtCompileAstQueue queue = new KrtCompileAstQueue();
+    if (queue == null) { return false; }
+    queue.ok = true; KrtCompileAstPush(queue,root);
+    KrtCompileAstQueueScope(queue,parser_scope);
+    if (module != null) {
+        KrtCompileAstPush(queue,module.ast); KrtCompileAstPush(queue,module.function_ast);
+        KrtCompileAstPush(queue,module.external_head); KrtCompileAstQueueGenerator(queue,module.generator);
+        KrtNativeExceptionFrame allocated_frame = module.allocated_exception_frames;
+        while (queue.ok && allocated_frame != null) {
+            KrtCompileAstPush(queue,allocated_frame.finally_body); allocated_frame = allocated_frame.allocated_next;
+        }
+    }
+    if (root != null) {
+        KrtGenericRegistry registry = root.native_generic_registry;
+        if (registry != null) {
+            int32 slot = 0;
+            while (queue.ok && slot < registry.capacity) {
+                if (registry.declarations != null) { KrtCompileAstPush(queue,registry.declarations[slot]); }
+                if (registry.arguments != null) { KrtCompileAstPush(queue,registry.arguments[slot]); }
+                if (registry.instances != null) { KrtCompileAstPush(queue,registry.instances[slot]); }
+                slot = slot + 1;
+            }
+        }
+        KrtNativeGlobalState globals = root.native_globals;
+        if (globals != null) {
+            KrtCompileAstPush(queue,globals.initializer);
+            KrtNativeGlobalEntry entry = globals.first;
+            while (queue.ok && entry != null) {
+                if (!entry.module_guard) { KrtCompileAstPush(queue,entry.declaration); }
+                KrtCompileAstPush(queue,entry.owner); KrtCompileAstPush(queue,entry.assignment); entry = entry.next;
+            }
+        }
+        KrtInheritanceStack inheritance = root.native_inheritance_stack;
+        if (inheritance != null) {
+            int32 index = 0;
+            while (queue.ok && inheritance.types != null && index < inheritance.depth) { KrtCompileAstPush(queue,inheritance.types[index]); index = index + 1; }
+            index = 0;
+            while (queue.ok && inheritance.cycle_types != null && index < inheritance.cycle_depth) { KrtCompileAstPush(queue,inheritance.cycle_types[index]); index = index + 1; }
+        }
+        KrtNativeFunctionIndex function_index = root.native_function_index;
+        if (function_index != null) {
+            int32 slot = 0;
+            while (queue.ok && function_index.buckets != null && slot < function_index.capacity) {
+                KrtNativeFunctionBucket bucket = function_index.buckets[slot];
+                if (bucket != null) {
+                    KrtNativeFunctionEntry entry = bucket.first;
+                    while (queue.ok && entry != null) { KrtCompileAstPush(queue,entry.declaration); entry = entry.next; }
+                }
+                slot = slot + 1;
+            }
+        }
+    }
+    KrtNativeRuntimeType runtime_type = module == null ? null : module.runtime_types;
+    while (runtime_type != null && queue.ok) { KrtCompileAstPush(queue,runtime_type.shape); runtime_type = runtime_type.next; }
+    int32 index = 0;
+    while (queue.ok && index < queue.count) {
+        KrtAstNode node = queue.nodes[index]; index = index + 1;
+        KrtCompileAstPush(queue,node.left); KrtCompileAstPush(queue,node.right); KrtCompileAstPush(queue,node.next);
+        KrtCompileAstPush(queue,node.alternate); KrtCompileAstPush(queue,node.body); KrtCompileAstPush(queue,node.declarations);
+        KrtCompileAstPush(queue,node.native_member_first); KrtCompileAstPush(queue,node.native_member_next);
+        KrtCompileAstPush(queue,node.syntax_type); KrtCompileAstPush(queue,node.syntax_suffixes);
+        KrtCompileAstPush(queue,node.syntax_array_size); KrtCompileAstPush(queue,node.syntax_parameter_types);
+        KrtCompileAstPush(queue,node.syntax_permissions); KrtCompileAstPush(queue,node.syntax_declarations);
+        KrtCompileAstPush(queue,node.native_type); KrtCompileAstPush(queue,node.native_element_type);
+        KrtCompileAstPush(queue,node.native_object_type); KrtCompileAstPush(queue,node.native_function_pointer);
+        KrtCompileAstPush(queue,node.native_scope); KrtCompileAstPush(queue,node.native_generic_parameters);
+        KrtCompileAstPush(queue,node.native_constraints); KrtCompileAstPush(queue,node.native_type_arguments);
+        KrtCompileAstPush(queue,node.native_generic_origin); KrtCompileAstPush(queue,node.native_instances);
+        KrtCompileAstPush(queue,node.native_owner); KrtCompileAstPush(queue,node.native_target);
+        KrtCompileAstPush(queue,node.native_external_next); KrtCompileAstPush(queue,node.native_base);
+        KrtCompileAstPush(queue,node.native_interfaces); KrtCompileAstPush(queue,node.native_base_call);
+        KrtCompileAstPush(queue,node.native_dispatch_slot); KrtCompileAstPush(queue,node.native_variable);
+        KrtCompileAstPush(queue,node.native_lexical_block); KrtCompileAstPush(queue,node.native_lexical_function);
+        KrtCompileAstPush(queue,node.native_closure_signature); KrtCompileAstPush(queue,node.native_closure_expected_type);
+        KrtCompileAstPush(queue,node.native_context);
+        KrtCompileAstQueueScope(queue,node.native_using_scope);
+        KrtCompileAstQueueSignature(queue,node.native_signature_cache);
+        KrtCompileAstQueueGenerator(queue,node.native_generator);
+        KrtCompileAstQueueCapture(queue,node.native_captures);
+        KrtCompileAstQueueCellOwners(queue,node.native_cell_owners);
+    }
+    if (!queue.ok) { KrtCompileAstReleaseMarks(queue); return false; }
+    KrtCompileReleaseAstState(root);
+
+    KrtNativeSignatureCache signature = queue.signatures;
+    while (signature != null) {
+        KrtNativeSignatureCache next = signature.release_next;
+        delete signature.parameters; delete signature.parameter_starts; delete signature.parameter_lengths;
+        delete signature; signature = next;
+    }
+    KrtUsingScope scope = queue.scopes;
+    while (scope != null) { KrtUsingScope next = scope.release_next; delete scope; scope = next; }
+    KrtNativeGeneratorPlan generator = queue.generators;
+    while (generator != null) {
+        KrtNativeGeneratorPlan next = generator.release_next;
+        KrtNativeGeneratorResume resume = generator.resumes;
+        while (resume != null) { KrtNativeGeneratorResume following = resume.next; delete resume; resume = following; }
+        delete generator; generator = next;
+    }
+    KrtNativeCapture capture = queue.captures;
+    while (capture != null) { KrtNativeCapture next = capture.release_next; delete capture; capture = next; }
+    KrtNativeCellOwner owner = queue.cell_owners;
+    while (owner != null) { KrtNativeCellOwner next = owner.release_next; delete owner; owner = next; }
+    index = 0;
+    while (index < queue.count) {
+        KrtAstNode node = queue.nodes[index]; index = index + 1;
+        if (node.owns_parameter_starts) { delete node.parameter_starts; }
+        if (node.owns_parameter_lengths) { delete node.parameter_lengths; }
+        if (node.owns_parameter_type_starts) { delete node.parameter_type_starts; }
+        if (node.owns_parameter_type_lengths) { delete node.parameter_type_lengths; }
+        if (node.owns_parameter_refs) { delete node.parameter_refs; }
+        delete node;
+    }
+    delete queue.nodes; delete queue; return true;
+}
+
+void KrtCompileWorkspaceRelease(KrtCompileWorkspace workspace) {
+    if (workspace == null) { return; }
+    if (KrtDriverLastModule == workspace.module) { KrtDriverLastModule = null; }
+    if (workspace.parser != null) {
+        KrtParserDiagnostic diagnostic = workspace.parser.diagnostics;
+        while (diagnostic != null) {
+            KrtParserDiagnostic next = diagnostic.next; delete diagnostic; diagnostic = next;
+        }
+    }
+    KrtUsingScope parser_scope = workspace.parser == null ? null : workspace.parser.current_using_scope;
+    if (!KrtCompileReleaseAstGraph(workspace.unit,workspace.module,parser_scope)) {
+        KrtCompileReleaseAstState(workspace.unit);
+    }
+    KrtCompileReleaseModule(workspace.module);
+    if (workspace.parser != null) { delete workspace.parser; }
+    if (workspace.token != null) { delete workspace.token; }
+    if (workspace.lexer != null) { delete workspace.lexer; }
+    delete workspace;
+}
+
 bool KrtCompileSource(string source, int32 source_length, KrtKroObject output) {
     KrtLexer lexer = new KrtLexer();
     KrtToken token = new KrtToken();
@@ -7,7 +342,9 @@ bool KrtCompileSource(string source, int32 source_length, KrtKroObject output) {
     KrtIrFunction ir_function = new KrtIrFunction();
     bool ok = false;
     unsafe(using krt.mem;) {
-        if (!KrtLexerInit(lexer, (byte*)(int64)source, source_length)) { return false; }
+        if (!KrtLexerInit(lexer, (byte*)(int64)source, source_length)) {
+            delete ir_function; delete parser; delete token; delete lexer; return false;
+        }
     }
     KrtParserInit(parser, lexer, token);
     KrtAstNode compilation_unit = KrtParserParseCompilationUnit(parser);
@@ -94,6 +431,19 @@ bool KrtCompileNativeSourceMode(string source, int32 source_length, KrtKroObject
 }
 
 bool KrtCompileNativeSourceModeCore(string source, int32 source_length, KrtKroObject output, bool library_mode) {
+    if (KrtDriverLastWorkspace != null) {
+        KrtCompileWorkspaceRelease(KrtDriverLastWorkspace);
+        KrtDriverLastWorkspace = null;
+    }
+    KrtCompileWorkspace workspace = new KrtCompileWorkspace();
+    bool result = KrtCompileNativeSourceModeCoreRun(source, source_length, output, library_mode, workspace);
+    if (result) { KrtDriverLastWorkspace = workspace; }
+    else { KrtCompileWorkspaceRelease(workspace); }
+    return result;
+}
+
+bool KrtCompileNativeSourceModeCoreRun(string source, int32 source_length, KrtKroObject output, bool library_mode,
+                                       KrtCompileWorkspace workspace) {
     int32 original_length = source_length;
     bool print_runtime = KrtPrintRuntimeRequired((int64)source,source_length);
     if (print_runtime) {
@@ -102,15 +452,16 @@ bool KrtCompileNativeSourceModeCore(string source, int32 source_length, KrtKroOb
         if (extended == 0) { return false; }
         source = (string)extended; source_length = (int32)KrtDriverStringLength(extended);
     }
-    KrtLexer lexer = new KrtLexer();
-    KrtToken token = new KrtToken();
-    KrtParser parser = new KrtParser();
-    KrtNativeModule native_module = new KrtNativeModule();
+    KrtLexer lexer = new KrtLexer(); workspace.lexer = lexer;
+    KrtToken token = new KrtToken(); workspace.token = token;
+    KrtParser parser = new KrtParser(); workspace.parser = parser;
+    KrtNativeModule native_module = new KrtNativeModule(); workspace.module = native_module;
     unsafe(using krt.mem;) {
         if (!KrtLexerInit(lexer, (byte*)(int64)source, source_length)) { return false; }
     }
     KrtParserInit(parser, lexer, token);
     KrtAstNode unit = KrtParserParseCompilationUnit(parser);
+    workspace.unit = unit;
     if (print_runtime) {
         KrtAstNode helper = unit.left;
         while (helper != null) { if (helper.start >= original_length) { helper.op = 241; } helper = helper.next; }
