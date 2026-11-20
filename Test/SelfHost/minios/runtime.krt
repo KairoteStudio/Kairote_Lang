@@ -1,0 +1,59 @@
+using System.Sys;
+int32 main(int64 arguments, int64 environment) {
+    unsafe(using krt.mem;) {
+        uint32* header = (uint32*)arguments;
+        if (header[0] != 0x41524731 || header[1] != 4) { return 1; }
+        uint16* offsets = (uint16*)(arguments + 8);
+        byte* bytes = (byte*)(arguments + 1032);
+        if (bytes[offsets[2]] != 0) { return 2; }
+        int64 file = Sys.Syscall(2,(int64)"/home/port-test.txt",577,0,0,0,0);
+        if (file < 0) { return 3; }
+        if (Sys.Syscall(1,file,(int64)"data",4,0,0,0) != 4) { return 4; }
+        Sys.Syscall(3,file,0,0,0,0,0);
+        file = Sys.Syscall(2,(int64)"/home/port-test.txt",0,0,0,0,0);
+        if (file < 0) { return 5; }
+        byte* buffer = stackalloc byte[4];
+        if (Sys.Syscall(0,file,(int64)buffer,4,0,0,0) != 4) { return 6; }
+        Sys.Syscall(3,file,0,0,0,0,0);
+        if (buffer[0] != 100 || buffer[3] != 97) { return 7; }
+        int64 memory = Sys.Syscall(9,0,12288,3,0x22,-1,0);
+        if (memory < 0) { return 20; }
+        ((byte*)memory)[0] = 77;
+        if (Sys.Syscall(11,memory,12288,0,0,0,0) != 0) { return 21; }
+        int64 fixed_map = Sys.Syscall(9,memory+4096,4096,3,0x32,-1,0);
+        if (fixed_map != memory+4096 || ((byte*)fixed_map)[0] != 0) { return 22; }
+        Sys.Syscall(11,fixed_map,4096,0,0,0,0);
+        if (Sys.Syscall(9,0,4096,3,0x21,-1,0) != -22) { return 23; }
+        if (Sys.Syscall(9,0,4096,3,0x1022,-1,0) != -38) { return 24; }
+        file = Sys.Syscall(2,(int64)"/home/port-test.txt",2,0,0,0,0);
+        int64 shared = Sys.Syscall(9,0,4096,3,1,file,0);
+        if (shared < 0) { return 25; }
+        Sys.Syscall(3,file,0,0,0,0,0);
+        ((byte*)shared)[0] = 100;
+        int64 child_pid = Sys.Syscall(57,0,0,0,0,0,0);
+        if (child_pid < 0) { return 26; }
+        if (child_pid == 0) { ((byte*)shared)[0] = 90; Sys.Exit(0); }
+        int32* wait_status = stackalloc int32[1]; wait_status[0] = -1;
+        if (Sys.Syscall(61,child_pid,(int64)wait_status,0,0,0,0) != child_pid || wait_status[0] != 0) { return 27; }
+        if (((byte*)shared)[0] != 90) { return 28; }
+        Sys.Syscall(11,shared,4096,0,0,0,0);
+        Sys.Syscall(1,1,(int64)"MMAP-PRIVATE-FIXED-SHARED-PASS\n",31,0,0,0);
+        Sys.Syscall(1,1,(int64)"minios-answer: 42\n",18,0,0,0);
+        string formatted = Sys.InternalInt32ToString(42);
+        byte* number = (byte*)(int64)formatted;
+        if (number[0] != 52 || number[1] != 50 || number[2] != 0) { return 8; }
+        Sys.Syscall(11,(int64)formatted,3,0,0,0,0);
+        int64* too_many = stackalloc int64[514];
+        int32 index = 0;
+        while (index < 513) { too_many[index] = (int64)"x"; index = index + 1; }
+        too_many[513] = 0;
+        if (Sys.Syscall(59,(int64)"/bin/missing",(int64)too_many,0,0,0,0) != -7) { return 10; }
+        if (Sys.Syscall(99999,0,0,0,0,0,0) != -38) { return 11; }
+        if (bytes[offsets[1]] == 99) { return 42; }
+        int64* child = stackalloc int64[5];
+        child[0] = (int64)"/bin/krtc"; child[1] = (int64)"child argument";
+        child[2] = (int64)""; child[3] = (int64)"中文"; child[4] = 0;
+        Sys.Syscall(59,(int64)"/bin/krtc",(int64)child,0,0,0,0);
+        return 12;
+    }
+}

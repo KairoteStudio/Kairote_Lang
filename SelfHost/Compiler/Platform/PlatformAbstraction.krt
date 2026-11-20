@@ -22,7 +22,7 @@ int64 KrtDriverAlloc(int64 size) {
     if (KrtDriverPool == 0 || KrtDriverPool + size > KrtDriverPoolEnd) {
         int64 capacity = size > 1048576 ? size : 1048576;
         capacity = (capacity + 4095) & -4096;
-        int64 memory = syscall(9, 0, capacity, 3, 34, -1, 0);
+        int64 memory = KrtPlatformCall(9, 0, capacity, 3, 34, -1, 0);
         if (memory < 0) { return 0; }
         KrtDriverPool = memory; KrtDriverPoolEnd = memory + capacity;
     }
@@ -122,7 +122,7 @@ bool KrtDriverContains(KrtDriverPath list, int64 value) {
 bool KrtDriverWriteAll(int64 descriptor, int64 data, int64 length) {
     int64 written = 0;
     while (written < length) {
-        int64 count = syscall(1, descriptor, data + written, length - written, 0, 0, 0);
+        int64 count = KrtPlatformCall(1, descriptor, data + written, length - written, 0, 0, 0);
         if (count == -4) { continue; }
         if (count <= 0) { return false; }
         written = written + count;
@@ -142,44 +142,44 @@ void KrtDriverError(string code, string detail) {
 
 bool KrtDriverReadFile(int64 path, KrtDriverBuffer buffer) {
     buffer.ok = false; buffer.data = 0; buffer.length = 0;
-    int64 descriptor = syscall(2, path, 0, 0, 0, 0, 0);
+    int64 descriptor = KrtPlatformCall(2, path, 0, 0, 0, 0, 0);
     if (descriptor < 0) { return false; }
     int64 capacity = 8192; int64 data = KrtDriverAlloc(capacity + 1); int64 length = 0;
-    if (data == 0) { syscall(3, descriptor, 0, 0, 0, 0, 0); return false; }
+    if (data == 0) { KrtPlatformCall(3, descriptor, 0, 0, 0, 0, 0); return false; }
     while (true) {
         if (length == capacity) {
-            if (capacity >= 33554432) { syscall(3, descriptor, 0, 0, 0, 0, 0); return false; }
+            if (capacity >= 33554432) { KrtPlatformCall(3, descriptor, 0, 0, 0, 0, 0); return false; }
             int64 next = KrtDriverAlloc(capacity * 2 + 1);
-            if (next == 0) { syscall(3, descriptor, 0, 0, 0, 0, 0); return false; }
+            if (next == 0) { KrtPlatformCall(3, descriptor, 0, 0, 0, 0, 0); return false; }
             unsafe(using krt.mem;) {
                 byte* old = (byte*)data; byte* target = (byte*)next; int64 index = 0;
                 while (index < length) { target[index] = old[index]; index = index + 1; }
             }
             data = next; capacity = capacity * 2;
         }
-        int64 count = syscall(0, descriptor, data + length, capacity - length, 0, 0, 0);
+        int64 count = KrtPlatformCall(0, descriptor, data + length, capacity - length, 0, 0, 0);
         if (count == -4) { continue; }
-        if (count < 0) { syscall(3, descriptor, 0, 0, 0, 0, 0); return false; }
+        if (count < 0) { KrtPlatformCall(3, descriptor, 0, 0, 0, 0, 0); return false; }
         if (count == 0) { break; }
         length = length + count;
     }
-    syscall(3, descriptor, 0, 0, 0, 0, 0);
+    KrtPlatformCall(3, descriptor, 0, 0, 0, 0, 0);
     unsafe(using krt.mem;) { ((byte*)data)[length] = 0; }
     buffer.data = data; buffer.length = length; buffer.ok = true; return true;
 }
 
 bool KrtDriverWriteFile(int64 path, int64 data, int64 length) {
-    int64 descriptor = syscall(2, path, 577, 420, 0, 0, 0);
+    int64 descriptor = KrtPlatformCall(2, path, 577, 420, 0, 0, 0);
     if (descriptor < 0) { return false; }
     bool ok = KrtDriverWriteAll(descriptor, data, length);
-    if (syscall(3, descriptor, 0, 0, 0, 0, 0) != 0) { ok = false; }
+    if (KrtPlatformCall(3, descriptor, 0, 0, 0, 0, 0) != 0) { ok = false; }
     return ok;
 }
 
 int32 KrtDriverFileMode(int64 path, bool follow) {
     unsafe(using krt.mem;) {
         byte* information = stackalloc byte[144];
-        int64 result = follow ? syscall(4, path, (int64)information, 0, 0, 0, 0) : syscall(6, path, (int64)information, 0, 0, 0, 0);
+        int64 result = follow ? KrtPlatformCall(4, path, (int64)information, 0, 0, 0, 0) : KrtPlatformCall(6, path, (int64)information, 0, 0, 0, 0);
         if (result != 0) { return 0; }
         return (int32)((uint32*)(information + 24))[0];
     }
@@ -191,7 +191,7 @@ int64 KrtDriverPlatform() { return (int64)"linux"; }
 
 int64 KrtDriverCurrentDirectory() {
     int64 buffer = KrtDriverAlloc(16384);
-    if (buffer == 0 || syscall(79, buffer, 16384, 0, 0, 0, 0) < 0) { return 0; }
+    if (buffer == 0 || KrtPlatformCall(79, buffer, 16384, 0, 0, 0, 0) < 0) { return 0; }
     return buffer;
 }
 
@@ -251,7 +251,7 @@ int64 KrtDriverAbsolutePath(int64 path) {
                     int64 prefix = KrtDriverCopyString(current, position);
                     if ((KrtDriverFileMode(prefix, false) & 61440) == 40960) {
                         int64 target = KrtDriverAlloc(16384);
-                        int64 count = syscall(89, prefix, target, 16383, 0, 0, 0);
+                        int64 count = KrtPlatformCall(89, prefix, target, 16383, 0, 0, 0);
                         if (count < 0) { return 0; }
                         ((byte*)target)[count] = 0;
                         int64 resolved = KrtDriverJoinPath(KrtDriverDirectory(prefix), target);
@@ -295,13 +295,13 @@ int64 KrtDriverStem(int64 path) {
 }
 
 KrtDriverPath KrtDriverListEntries(int64 directory) {
-    int64 descriptor = syscall(2, directory, 65536, 0, 0, 0, 0);
+    int64 descriptor = KrtPlatformCall(2, directory, 65536, 0, 0, 0, 0);
     if (descriptor < 0) { return null; }
     KrtDriverPath list = null;
     unsafe(using krt.mem;) {
         byte* buffer = stackalloc byte[8192];
         while (true) {
-            int64 count = syscall(217, descriptor, (int64)buffer, 8192, 0, 0, 0);
+            int64 count = KrtPlatformCall(217, descriptor, (int64)buffer, 8192, 0, 0, 0);
             if (count == -4) { continue; }
             if (count <= 0) { break; }
             int64 offset = 0;
@@ -323,7 +323,7 @@ KrtDriverPath KrtDriverListEntries(int64 directory) {
             }
         }
     }
-    syscall(3, descriptor, 0, 0, 0, 0, 0);
+    KrtPlatformCall(3, descriptor, 0, 0, 0, 0, 0);
     return list;
 }
 
@@ -354,7 +354,7 @@ bool KrtDriverMakeDirectories(int64 path) {
         while (position <= length) {
             if (position == length || text[position] == 47) {
                 int64 prefix = KrtDriverCopyString(absolute, position);
-                int64 result = syscall(83, prefix, 493, 0, 0, 0, 0);
+                int64 result = KrtPlatformCall(83, prefix, 493, 0, 0, 0, 0);
                 if (result != 0 && !KrtDriverIsDirectory(prefix)) { return false; }
             }
             position = position + 1;
@@ -363,13 +363,13 @@ bool KrtDriverMakeDirectories(int64 path) {
     return true;
 }
 
-bool KrtDriverRemoveFile(int64 path) { int64 result = syscall(87, path, 0, 0, 0, 0, 0); return result == 0 || result == -2; }
+bool KrtDriverRemoveFile(int64 path) { int64 result = KrtPlatformCall(87, path, 0, 0, 0, 0, 0); return result == 0 || result == -2; }
 
 bool KrtDriverRemoveTree(int64 path) {
     if ((KrtDriverFileMode(path, false) & 61440) != 16384) { return KrtDriverRemoveFile(path); }
     KrtDriverPath entries = KrtDriverListEntries(path);
     while (entries != null) { if (!KrtDriverRemoveTree(entries.value)) { return false; } entries = entries.next; }
-    int64 result = syscall(84, path, 0, 0, 0, 0, 0); return result == 0 || result == -2;
+    int64 result = KrtPlatformCall(84, path, 0, 0, 0, 0, 0); return result == 0 || result == -2;
 }
 
 int64 KrtDriverNumber(int64 number) {
@@ -386,26 +386,26 @@ int64 KrtDriverNumber(int64 number) {
 
 int64 KrtDriverTemporaryPath(int64 directory, int64 prefix) {
     KrtDriverTemporaryIndex = KrtDriverTemporaryIndex + 1;
-    int64 name = KrtDriverConcat(prefix, KrtDriverNumber(syscall(39, 0, 0, 0, 0, 0, 0)));
+    int64 name = KrtDriverConcat(prefix, KrtDriverNumber(KrtPlatformCall(39, 0, 0, 0, 0, 0, 0)));
     name = KrtDriverConcat(KrtDriverConcat(name, (int64)"-"), KrtDriverNumber(KrtDriverTemporaryIndex));
     return KrtDriverJoinPath(directory, name);
 }
 
 // Binary artifacts are streamed independently of the source-reader limit.
 bool KrtDriverCopyToDescriptor(int64 source, int64 target) {
-    int64 descriptor = syscall(2, source, 0, 0, 0, 0, 0);
+    int64 descriptor = KrtPlatformCall(2, source, 0, 0, 0, 0, 0);
     if (descriptor < 0) { return false; }
     int64 data = KrtDriverAlloc(65536);
-    if (data == 0) { syscall(3, descriptor, 0, 0, 0, 0, 0); return false; }
+    if (data == 0) { KrtPlatformCall(3, descriptor, 0, 0, 0, 0, 0); return false; }
     bool ok = true;
     while (ok) {
-        int64 count = syscall(0, descriptor, data, 65536, 0, 0, 0);
+        int64 count = KrtPlatformCall(0, descriptor, data, 65536, 0, 0, 0);
         if (count == -4) { continue; }
         if (count < 0) { ok = false; break; }
         if (count == 0) { break; }
         ok = KrtDriverWriteAll(target, data, count);
     }
-    if (syscall(3, descriptor, 0, 0, 0, 0, 0) != 0) { ok = false; }
+    if (KrtPlatformCall(3, descriptor, 0, 0, 0, 0, 0) != 0) { ok = false; }
     return ok;
 }
 
@@ -415,24 +415,27 @@ bool KrtDriverCopyFile(int64 source, int64 target, bool executable) {
 
 bool KrtDriverPublish(int64 source, int64 target, bool executable) {
     int64 temporary = KrtDriverTemporaryPath(KrtDriverDirectory(target), (int64)".krt-output-");
-    int64 descriptor = syscall(2, temporary, 193, 384, 0, 0, 0);
+    int64 descriptor = KrtPlatformCall(2, temporary, 193, 384, 0, 0, 0);
     int32 attempts = 0;
     while (descriptor == -17 && attempts < 128) {
         temporary = KrtDriverTemporaryPath(KrtDriverDirectory(target), (int64)".krt-output-");
-        descriptor = syscall(2, temporary, 193, 384, 0, 0, 0);
+        descriptor = KrtPlatformCall(2, temporary, 193, 384, 0, 0, 0);
         attempts = attempts + 1;
     }
     if (descriptor < 0) { return false; }
     bool ok = KrtDriverCopyToDescriptor(source, descriptor);
-    if (syscall(3, descriptor, 0, 0, 0, 0, 0) != 0) { ok = false; }
+    if (KrtPlatformCall(3, descriptor, 0, 0, 0, 0, 0) != 0) { ok = false; }
     int64 mode = executable ? 493 : 420;
-    if (ok) { ok = syscall(90, temporary, mode, 0, 0, 0, 0) == 0; }
-    if (ok) { ok = syscall(82, temporary, target, 0, 0, 0, 0) == 0; }
+    // MiniOS RAM files have no chmod service; publication preserves its native
+    // file permissions rather than claiming POSIX permission changes occurred.
+    if (ok && !__krt_target_minios()) { ok = KrtPlatformCall(90, temporary, mode, 0, 0, 0, 0) == 0; }
+    if (ok) { ok = KrtPlatformCall(82, temporary, target, 0, 0, 0, 0) == 0; }
     if (!ok) { KrtDriverRemoveFile(temporary); }
     return ok;
 }
 
 KrtDriverPath KrtDriverArguments() {
+    if (__krt_target_minios()) { return KrtMiniOSReadArguments(); }
     KrtDriverBuffer buffer = new KrtDriverBuffer();
     if (!KrtDriverReadFile((int64)"/proc/self/cmdline", buffer)) { return null; }
     KrtDriverPath arguments = null; int64 position = 0;
@@ -449,6 +452,7 @@ KrtDriverPath KrtDriverArguments() {
 }
 
 int64 KrtDriverGetEnv(string name) {
+    if (__krt_target_minios()) { return KrtMiniOSGetEnv(name); }
     if (KrtDriverEnvironment == 0) {
         KrtDriverBuffer buffer = new KrtDriverBuffer();
         if (!KrtDriverReadFile((int64)"/proc/self/environ", buffer)) { return (int64)""; }
@@ -478,8 +482,12 @@ int64 KrtDriverGetEnv(string name) {
 }
 
 int64 KrtDriverExecutablePath() {
+    if (__krt_target_minios()) {
+        KrtDriverPath arguments = KrtMiniOSReadArguments();
+        return arguments == null ? (int64)"/bin/krtc" : arguments.value;
+    }
     int64 buffer = KrtDriverAlloc(16384);
-    int64 length = syscall(89, (int64)"/proc/self/exe", buffer, 16383, 0, 0, 0);
+    int64 length = KrtPlatformCall(89, (int64)"/proc/self/exe", buffer, 16383, 0, 0, 0);
     if (length < 0) { return 0; }
     unsafe(using krt.mem;) { ((byte*)buffer)[length] = 0; }
     return buffer;
@@ -508,19 +516,31 @@ int32 KrtDriverRun(int64 executable, KrtDriverPath arguments) {
         while (item != null) { values[index] = item.value; index = index + 1; item = item.next; }
         values[index] = 0;
     }
-    int64 process = syscall(57, 0, 0, 0, 0, 0, 0);
+    if (__krt_target_minios()) {
+        int64 block = KrtMiniOSPackArguments(vector);
+        if (block == 0) { return 127; }
+        int64 child = syscall(76,executable,block,0,0,0,0);
+        if (child < 0) { return 127; }
+        unsafe(using krt.mem;) {
+            int32* status = stackalloc int32[1]; status[0] = 0;
+            int64 waited = syscall(8,child,(int64)status,0,0,0,0);
+            while (waited == -4) { waited = syscall(8,child,(int64)status,0,0,0,0); }
+            return waited < 0 ? 127 : status[0] & 255;
+        }
+    }
+    int64 process = KrtPlatformCall(57, 0, 0, 0, 0, 0, 0);
     if (process < 0) { return 127; }
     if (process == 0) {
         unsafe(using krt.mem;) {
             int64* environment = stackalloc int64[1]; environment[0] = 0;
-            syscall(59, executable, vector, (int64)environment, 0, 0, 0);
+            KrtPlatformCall(59, executable, vector, (int64)environment, 0, 0, 0);
         }
-        syscall(60, 127, 0, 0, 0, 0, 0); return 127;
+        KrtPlatformCall(60, 127, 0, 0, 0, 0, 0); return 127;
     }
     unsafe(using krt.mem;) {
         int32* status = stackalloc int32[1]; status[0] = 0;
-        int64 result = syscall(61, process, (int64)status, 0, 0, 0, 0);
-        while (result == -4) { result = syscall(61, process, (int64)status, 0, 0, 0, 0); }
+        int64 result = KrtPlatformCall(61, process, (int64)status, 0, 0, 0, 0);
+        while (result == -4) { result = KrtPlatformCall(61, process, (int64)status, 0, 0, 0, 0); }
         if (result < 0) { return 127; }
         if ((status[0] & 127) != 0) { return 128 + (status[0] & 127); }
         return (status[0] >> 8) & 255;

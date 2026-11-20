@@ -1,0 +1,16 @@
+int32 main() {
+    if (__krt_target_minios()) { return 1; }
+    unsafe(using krt.mem;) {
+        int64 region = syscall(9,0,12288,3,0x22,-1,0);
+        if (region < 0) { return 2; }
+        ((byte*)region)[0] = 77;
+        if (syscall(11,region,12288,0,0,0,0) != 0) { return 3; }
+        // The middle page differs from the top-down allocator's automatic choice.
+        int64 page = syscall(9,region+4096,4096,3,0x32,-1,0);
+        if (page != region+4096 || ((byte*)page)[0] != 0) { return 4; }
+        syscall(11,page,4096,0,0,0,0);
+        if (syscall(9,0,4096,3,0x21,-1,0) != -22) { return 5; }
+        if (syscall(9,0,4096,3,0x1022,-1,0) != -38) { return 6; }
+    }
+    return 42;
+}

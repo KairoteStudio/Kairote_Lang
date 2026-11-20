@@ -47,11 +47,11 @@ int32 KrtDriverCompileBundle(KrtDriverOptions options, KrtSourceBundle bundle) {
         (vm_sidecar != 0 && !KrtDriverOutputPathSafe(options,bundle,vm_sidecar))) {
         KrtDriverQuiet = previous_quiet; KrtDriverArtifactTarget = previous_target; return 1;
     }
-    int64 temporary = KrtDriverTemporaryPath((int64)"/tmp",(int64)"kairote-native-");
-    int64 created = syscall(83,temporary,448,0,0,0,0); int32 attempts = 0;
+    int64 temporary = KrtDriverTemporaryPath(__krt_target_minios() ? (int64)"/home" : (int64)"/tmp",(int64)"kairote-native-");
+    int64 created = KrtPlatformCall(83,temporary,448,0,0,0,0); int32 attempts = 0;
     while (created == -17 && attempts < 128) {
-        temporary = KrtDriverTemporaryPath((int64)"/tmp",(int64)"kairote-native-");
-        created = syscall(83,temporary,448,0,0,0,0); attempts = attempts + 1;
+        temporary = KrtDriverTemporaryPath(__krt_target_minios() ? (int64)"/home" : (int64)"/tmp",(int64)"kairote-native-");
+        created = KrtPlatformCall(83,temporary,448,0,0,0,0); attempts = attempts + 1;
     }
     if (created != 0) { KrtDriverError("E_OUTPUT","unable to create temporary build directory"); KrtDriverQuiet = previous_quiet; KrtDriverArtifactTarget = previous_target; return 1; }
     int64 object_path = KrtDriverJoinPath(temporary,(int64)"module.kro");

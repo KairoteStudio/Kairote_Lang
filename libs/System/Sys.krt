@@ -1,4 +1,4 @@
-/** Linux x86-64 runtime primitives. Strings are zero-terminated byte sequences. */
+/** POSIX-shaped runtime services for Linux and MiniOS x86-64. */
 public static class Sys {
     public const int64 SYS_read = 0;
     public const int64 SYS_write = 1;
@@ -9,9 +9,11 @@ public static class Sys {
     public const int64 SYS_brk = 12;
     public const int64 SYS_exit = 60;
 
-    /** Forward six integer arguments to the native syscall instruction. */
+    /** POSIX/Linux service numbers; unsupported MiniOS services return ENOSYS.
+     * Lowercase syscall() remains the unmodified target-native intrinsic. */
     public static int64 Syscall(int64 number, int64 arg1, int64 arg2, int64 arg3,
                                int64 arg4, int64 arg5, int64 arg6) {
+        if (__krt_target_minios()) { return MiniOSService(number,arg1,arg2,arg3,arg4,arg5,arg6); }
         return syscall(number, arg1, arg2, arg3, arg4, arg5, arg6);
     }
 
@@ -49,7 +51,7 @@ public static class Sys {
             remaining /= 10;
         }
         int32 length = digits + (negative ? 1 : 0);
-        int64 buffer = syscall(SYS_mmap, 0, (int64)length + 1, 3, 0x22, -1, 0);
+        int64 buffer = Syscall(SYS_mmap, 0, (int64)length + 1, 3, 0x22, -1, 0);
         if (buffer <= 0) {
             return null;
         }
@@ -71,6 +73,111 @@ public static class Sys {
 
     /** Terminate the process with the platform's low-byte exit status. */
     public static void Exit(int32 code) {
-        syscall(SYS_exit, (int64)code, 0, 0, 0, 0, 0);
+        Syscall(SYS_exit, (int64)code, 0, 0, 0, 0, 0);
     }
+
+private static int64 MiniOSPackArguments(int64 vector) {
+    if (vector == 0) { return 0; }
+    int64 block = syscall(49,0,66568,3,9,-1,0);
+    if (block < 0) { return 0; }
+    unsafe(using krt.mem;) {
+        byte* data = (byte*)block; int64 zero = 0;
+        while (zero < 66568) { data[zero] = 0; zero = zero + 1; }
+        uint32* header = (uint32*)block; header[0] = 0x41524731;
+        uint16* offsets = (uint16*)(block + 8); int64* values = (int64*)vector;
+        int32 count = 0; int64 position = 0;
+        while (values[count] != 0) {
+            if (count >= 512) { syscall(50,block,66568,0,0,0,0); return 0; }
+            int64 length = InternalStringLength((string)values[count]);
+            if (length >= 65536 - position) { syscall(50,block,66568,0,0,0,0); return 0; }
+            offsets[count] = (uint16)position; byte* source = (byte*)values[count]; int64 index = 0;
+            while (index < length) { data[1032 + position] = source[index]; position = position + 1; index = index + 1; }
+            data[1032 + position] = 0; position = position + 1; count = count + 1;
+        }
+        header[1] = (uint32)count;
+    }
+    return block;
+}
+
+
+private static int64 MiniOSStat(int64 descriptor, int64 destination) {
+    unsafe(using krt.mem;) {
+        int64* info = stackalloc int64[2];
+        int64 result = syscall(28,descriptor,(int64)info,0,0,0,0);
+        if (result < 0) { return result; }
+        byte* out = (byte*)destination; int32 index = 0;
+        while (index < 144) { out[index] = 0; index = index + 1; }
+        int32* flags = (int32*)info;
+        ((int32*)(destination + 24))[0] = flags[3] != 0 ? 16877 : (flags[2] != 0 ? 33060 : 33188);
+        ((int64*)(destination + 48))[0] = info[0];
+        return 0;
+    }
+}
+
+private static int64 MiniOSDirectory(int64 descriptor, int64 destination, int64 capacity) {
+    if (capacity < 64) { return -22; }
+    unsafe(using krt.mem;) {
+        byte* entry = stackalloc byte[56];
+        int64 result = syscall(20,descriptor,(int64)entry,56,0,0,0);
+        if (result != 0) { return result == -2 ? 0 : result; }
+        byte* out = (byte*)destination; int32 index = 0;
+        while (index < 64) { out[index] = 0; index = index + 1; }
+        ((int64*)out)[0] = 1; ((uint16*)(destination + 16))[0] = 64;
+        out[18] = ((int32*)((int64)entry + 8))[0] != 0 ? 4 : 8;
+        index = 0;
+        while (index < 43 && entry[12 + index] != 0) { out[19 + index] = entry[12 + index]; index = index + 1; }
+        return 64;
+    }
+}
+
+private static int64 MiniOSService(int64 number, int64 a, int64 b, int64 c, int64 d, int64 e, int64 f) {
+    if (number == 0) { return syscall(2,a,b,c,0,0,0); }
+    if (number == 1) { return syscall(1,a,b,c,0,0,0); }
+    if (number == 2) { return syscall(18,a,b & 1731,0,0,0,0); }
+    if (number == 3) { return syscall(16,a,0,0,0,0,0); }
+    if (number == 4 || number == 6) {
+        int64 descriptor = syscall(18,a,0,0,0,0,0);
+        if (descriptor < 0) { return descriptor; }
+        int64 result = MiniOSStat(descriptor,b); syscall(16,descriptor,0,0,0,0,0); return result;
+    }
+    if (number == 5) { return MiniOSStat(a,b); }
+    if (number == 8) { return syscall(27,a,b,c,0,0,0); }
+    if (number == 9) {
+        // Linux and MiniOS use different MAP_* bit assignments. Do not silently
+        // turn MAP_SHARED/FIXED or an unsupported extension into a private map.
+        if ((d & ~51) != 0) { return -38; }
+        if ((d & 3) == 0 || (d & 3) == 3) { return -22; }
+        int64 flags = ((d & 1) != 0 ? 2 : 1) | ((d & 16) != 0 ? 4 : 0) | ((d & 32) != 0 ? 8 : 0);
+        return syscall(49,a,b,c,flags,e,f);
+    }
+    if (number == 11) { return syscall(50,a,b,0,0,0,0); }
+    if (number == 33) { return syscall(17,a,b,0,0,0,0); }
+    if (number == 39) { return syscall(3,0,0,0,0,0,0); }
+    if (number == 57) { return syscall(33,0,0,0,0,0,0); }
+    if (number == 59) {
+        int64 block = MiniOSPackArguments(b);
+        if (block == 0) { return -7; }
+        int64 result = syscall(75,a,block,0,0,0,0);
+        unsafe(using krt.mem;) { syscall(50,block,66568,0,0,0,0); }
+        return result;
+    }
+    if (number == 60) { return syscall(0,a,0,0,0,0,0); }
+    if (number == 61) {
+        unsafe(using krt.mem;) {
+            int32* status = stackalloc int32[1]; status[0] = 0;
+            int64 result = syscall(8,a,(int64)status,c,0,0,0);
+            if (result > 0 && b != 0) { ((int32*)b)[0] = (status[0] & 255) << 8; }
+            return result;
+        }
+    }
+    if (number == 79) { return syscall(38,a,b,0,0,0,0); }
+    if (number == 82) { return syscall(30,a,b,0,0,0,0); }
+    if (number == 83) { return syscall(35,a,0,0,0,0,0); }
+    if (number == 84) { return syscall(36,a,0,0,0,0,0); }
+    if (number == 87) { return syscall(19,a,0,0,0,0,0); }
+    if (number == 217) { return MiniOSDirectory(a,b,c); }
+    // chmod/readlink and other absent services fail honestly, never succeed silently.
+    return -38;
+}
+
 }

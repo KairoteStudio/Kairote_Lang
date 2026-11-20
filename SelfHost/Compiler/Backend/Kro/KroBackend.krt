@@ -149,8 +149,8 @@ bool KrtKroNativeGuardEnter(KrtKroObject output,ref int32 pc){
     // threads wait until the release store publishes initialized storage.
     if(!KrtKroNativeByte(output,ref pc,95)||!KrtKroNativeCode(output,ref pc,0x023f8348,4)||!KrtKroNativeCode(output,ref pc,0x840f,2)){return false;}
     int32 cached=pc;
-    if(!KrtKroNativeU32(output,ref pc,0)||!KrtKroNativeByte(output,ref pc,184)||!KrtKroNativeU32(output,ref pc,186)||
-       !KrtKroNativeCode(output,ref pc,0x050f,2)||!KrtKroNativeCode(output,ref pc,0xc08949,3)){return false;}
+    if(!KrtKroNativeU32(output,ref pc,0)||!KrtKroNativeByte(output,ref pc,184)||!KrtKroNativeU32(output,ref pc,KrtDriverPlatformTarget == 2 ? 71 : 186)||
+       !KrtKroNativeCode(output,ref pc,KrtDriverPlatformTarget == 2 ? 0x80cd : 0x050f,2)||!KrtKroNativeCode(output,ref pc,0xc08949,3)){return false;}
     int32 loop=pc;
     if(!KrtKroNativeCode(output,ref pc,0xc031,2)||!KrtKroNativeByte(output,ref pc,186)||!KrtKroNativeU32(output,ref pc,1)||
        !KrtKroNativeCode(output,ref pc,0x17b10f48f0,5)||!KrtKroNativeCode(output,ref pc,0x840f,2)){return false;}
@@ -200,8 +200,8 @@ bool KrtKroNativeIndirectCall(KrtKroObject output, ref int32 pc, int32 arity, in
     int32 nonnull = pc;
     if (!KrtKroNativeU32(output, ref pc, 0) ||
         !KrtKroNativeByte(output, ref pc, 191) || !KrtKroNativeU32(output, ref pc, 127) ||
-        !KrtKroNativeByte(output, ref pc, 184) || !KrtKroNativeU32(output, ref pc, 60) ||
-        !KrtKroNativeCode(output, ref pc, 0x0b0f050f, 4) ||
+        !KrtKroNativeByte(output, ref pc, 184) || !KrtKroNativeU32(output, ref pc, KrtDriverPlatformTarget == 2 ? 0 : 60) ||
+        !KrtKroNativeCode(output, ref pc, KrtDriverPlatformTarget == 2 ? 0x0b0f80cd : 0x0b0f050f, 4) ||
         !KrtKroEmitTextU32(output, nonnull, pc - nonnull - 4) ||
         !KrtKroNativeCode(output, ref pc, 0xd23145, 3) ||
         !KrtKroNativeCode(output, ref pc, 0xc08548, 3) || !KrtKroNativeCode(output, ref pc, 0x890f, 2)) { return false; }
@@ -370,8 +370,8 @@ bool KrtKroNativeTryLeave(KrtKroObject output, ref int32 pc, int32 slot) {
 
 bool KrtKroNativeThrow(KrtKroObject output, ref int32 pc) {
     return KrtKroNativeCode(output, ref pc, 3507440034076762, 7) &&
-        KrtKroNativeCode(output, ref pc, 19913255090666680, 7) &&
-        KrtKroNativeCode(output, ref pc, 38642357884682240, 7) &&
+        KrtKroNativeCode(output, ref pc, (KrtDriverPlatformTarget == 2 ? 19913255090651320 : 19913255090666680), 7) &&
+        KrtKroNativeCode(output, ref pc, (KrtDriverPlatformTarget == 2 ? 38642889353330688 : 38642357884682240), 7) &&
         KrtKroNativeCode(output, ref pc, 20583233637390407, 7) &&
         KrtKroNativeCode(output, ref pc, 2365647737614219, 7) &&
         KrtKroNativeCode(output, ref pc, 17886087037291337, 7) &&
@@ -491,8 +491,8 @@ bool KrtKroEmitConstantHelperCall(KrtAstNode unit, KrtKroObject output) {
     output.text_word0 = 184 | ((int32)(immediate & 255) << 8) | ((int32)((immediate >> 8) & 255) << 16) | ((int32)((immediate >> 16) & 255) << 24);
     output.text_word1 = (int32)((immediate >> 24) & 255) | (195 << 8) | (232 << 16) | (245 << 24);
     output.text_word2 = 255 | (255 << 8) | (255 << 16) | (137 << 24);
-    output.text_word3 = 199 | (184 << 8) | (60 << 16);
-    output.text_word4 = 15 << 16 | 5 << 24; output.text_word5 = 0;
+    output.text_word3 = 199 | (184 << 8) | ((KrtDriverPlatformTarget == 2 ? 0 : 60) << 16);
+    output.text_word4 = (KrtDriverPlatformTarget == 2 ? 0x80cd : 0x050f) << 16; output.text_word5 = 0;
     return KrtKroObjectIsValid(output);
 }
 
@@ -517,8 +517,8 @@ bool KrtKroEmitConstantArgumentCall(KrtAstNode unit, KrtKroObject output) {
         ((int32)((immediate >> 16) & 255) << 16) | ((int32)((immediate >> 24) & 255) << 24);
     output.text_word2 = 232 | (243 << 8) | (255 << 16) | (255 << 24);
     output.text_word3 = 255 | (137 << 8) | (199 << 16) | (184 << 24);
-    output.text_word4 = 60;
-    output.text_word5 = 15 | (5 << 8);
+    output.text_word4 = KrtDriverPlatformTarget == 2 ? 0 : 60;
+    output.text_word5 = (KrtDriverPlatformTarget == 2 ? 0x80cd : 0x050f);
     return KrtKroObjectIsValid(output);
 }
 
@@ -548,8 +548,8 @@ bool KrtKroEmitConstantTwoArgumentCall(KrtAstNode unit, KrtKroObject output) {
         ((int32)((second >> 16) & 255) << 24);
     output.text_word3 = 232 << 8 | 238 << 16 | 255 << 24;
     output.text_word4 = 255 | (255 << 8) | (137 << 16) | (199 << 24);
-    output.text_word5 = 184 | (60 << 8);
-    output.text_word6 = (15 << 8) | (5 << 16);
+    output.text_word5 = 184 | ((KrtDriverPlatformTarget == 2 ? 0 : 60) << 8);
+    output.text_word6 = (KrtDriverPlatformTarget == 2 ? 0x80cd : 0x050f) << 8;
     output.text_word7 = 0;
     return KrtKroObjectIsValid(output);
 }
@@ -563,8 +563,8 @@ bool KrtKroEmitExecutableConstant(KrtKroObject raw, KrtKroObject output) {
     output.total_reloc_count = 0; output.relocation_count = 0; output.symbol_count = 1; output.strtab_size = 6;
     output.text_word0 = raw.text_word0;
     output.text_word1 = ((int32)(raw.text_word0 >> 24) & 255) | (137 << 8) | (199 << 16) | (184 << 24);
-    output.text_word2 = 60;
-    output.text_word3 = 15 | (5 << 8);
+    output.text_word2 = KrtDriverPlatformTarget == 2 ? 0 : 60;
+    output.text_word3 = (KrtDriverPlatformTarget == 2 ? 0x80cd : 0x050f);
     output.text_word4 = 0; output.text_word5 = 0;
     return KrtKroObjectIsValid(output) && immediate == (raw.text_word0 >> 8);
 }
@@ -579,8 +579,8 @@ bool KrtKroEmitExecutableLocal(KrtKroObject raw, KrtKroObject output) {
     output.total_reloc_count = 0; output.relocation_count = 0; output.symbol_count = 1; output.strtab_size = 6;
     output.text_word0 = 184 | ((immediate & 255) << 8) | (((immediate >> 8) & 255) << 16) | (((immediate >> 16) & 255) << 24);
     output.text_word1 = ((immediate >> 24) & 255) | (137 << 8) | (199 << 16) | (184 << 24);
-    output.text_word2 = 60;
-    output.text_word3 = 15 | (5 << 8);
+    output.text_word2 = KrtDriverPlatformTarget == 2 ? 0 : 60;
+    output.text_word3 = (KrtDriverPlatformTarget == 2 ? 0x80cd : 0x050f);
     output.text_word4 = 0; output.text_word5 = 0; output.text_word6 = 0;
     return KrtKroObjectIsValid(output);
 }
@@ -595,8 +595,8 @@ bool KrtKroEmitExecutableLocals(KrtKroObject raw, KrtKroObject output) {
     output.text_word2 = raw.text_word2; output.text_word3 = raw.text_word3;
     output.text_word4 = raw.text_word4;
     output.text_word5 = (raw.text_word5 & 65535) | (137 << 16) | (199 << 24);
-    output.text_word6 = 184 | (60 << 8);
-    output.text_word7 = (15 << 8) | (5 << 16);
+    output.text_word6 = 184 | ((KrtDriverPlatformTarget == 2 ? 0 : 60) << 8);
+    output.text_word7 = (KrtDriverPlatformTarget == 2 ? 0x80cd : 0x050f) << 8;
     return KrtKroObjectIsValid(output);
 }
 
@@ -609,9 +609,9 @@ bool KrtKroEmitExecutableMemory(KrtKroObject raw, KrtKroObject output) {
     output.text_word0 = raw.text_word0; output.text_word1 = raw.text_word1;
     output.text_word2 = raw.text_word2; output.text_word3 = raw.text_word3;
     output.text_word4 = raw.text_word4;
-    output.text_word5 = 137 | (199 << 8) | (184 << 16) | (60 << 24);
+    output.text_word5 = 137 | (199 << 8) | (184 << 16) | ((KrtDriverPlatformTarget == 2 ? 0 : 60) << 24);
     output.text_word6 = 0;
-    output.text_word7 = 15 | (5 << 8);
+    output.text_word7 = (KrtDriverPlatformTarget == 2 ? 0x80cd : 0x050f);
     return KrtKroObjectIsValid(output);
 }
 
@@ -633,7 +633,7 @@ bool KrtKroWriteText(KrtKroObject object, int64 file_descriptor) {
                     dynamic_bytes[chunk_index] = (byte)((word >> shift) & 255);
                     chunk_index = chunk_index + 1;
                 }
-                if (syscall(1, file_descriptor, (int64)dynamic_bytes, chunk, 0, 0, 0) != chunk) { return false; }
+                if (KrtPlatformCall(1, file_descriptor, (int64)dynamic_bytes, chunk, 0, 0, 0) != chunk) { return false; }
                 byte_index = byte_index + chunk;
             }
             return true;
@@ -753,7 +753,7 @@ bool KrtKroWriteText(KrtKroObject object, int64 file_descriptor) {
             bytes[29] = (byte)((object.text_word7 >> 8) & 255);
             bytes[30] = (byte)((object.text_word7 >> 16) & 255);
         }
-        return syscall(1, file_descriptor, (int64)bytes, object.text_size, 0, 0, 0) == object.text_size;
+        return KrtPlatformCall(1, file_descriptor, (int64)bytes, object.text_size, 0, 0, 0) == object.text_size;
     }
 }
 
@@ -779,7 +779,7 @@ bool KrtKroWriteHeader(KrtKroObject object, int64 file_descriptor) {
             header[offset + 3] = (byte)((value >> 24) & 255);
             word = word + 1;
         }
-        return syscall(1, file_descriptor, (int64)header, 64, 0, 0, 0) == 64;
+        return KrtPlatformCall(1, file_descriptor, (int64)header, 64, 0, 0, 0) == 64;
     }
 }
 
@@ -812,7 +812,7 @@ bool KrtKroWriteSymbols(KrtKroObject object, int64 file_descriptor) {
         if (object.symbol_count == 2) {
             data[32] = 8; data[36] = (byte)(object.text_size == 22 || object.text_size == 27 ? 3 : 6); data[40] = (byte)(object.text_size - (object.text_size == 22 || object.text_size == 27 ? 3 : 6)); data[44] = 1; data[48] = 1; data[52] = 1;
         }
-        if (syscall(1, file_descriptor, (int64)data, symbol_bytes, 0, 0, 0) != symbol_bytes) { return false; }
+        if (KrtPlatformCall(1, file_descriptor, (int64)data, symbol_bytes, 0, 0, 0) != symbol_bytes) { return false; }
         byte* strings = stackalloc byte[13];
         strings[0] = 0;
         if (object.symbol_count == 1) {
@@ -822,16 +822,16 @@ bool KrtKroWriteSymbols(KrtKroObject object, int64 file_descriptor) {
             strings[7] = 0; strings[8] = 109; strings[9] = 97; strings[10] = 105; strings[11] = 110; strings[12] = 0;
         }
         int32 string_bytes = object.symbol_count == 2 ? 13 : 6;
-        return syscall(1, file_descriptor, (int64)strings, string_bytes, 0, 0, 0) == string_bytes;
+        return KrtPlatformCall(1, file_descriptor, (int64)strings, string_bytes, 0, 0, 0) == string_bytes;
     }
 }
 
 bool KrtKroWriteObjectToPath(KrtKroObject object, string path) {
-    int64 file_descriptor = syscall(2, (int64)path, 577, 420, 0, 0, 0);
+    int64 file_descriptor = KrtPlatformCall(2, (int64)path, 577, 420, 0, 0, 0);
     if (file_descriptor < 0) { return false; }
     bool result = KrtKroWriteHeader(object, file_descriptor) && KrtKroWriteText(object, file_descriptor) &&
         KrtKroWriteBytes(object.rodata_bytes,object.rodata_size,file_descriptor) && KrtKroWriteSymbols(object, file_descriptor);
-    syscall(3, file_descriptor, 0, 0, 0, 0, 0);
+    KrtPlatformCall(3, file_descriptor, 0, 0, 0, 0, 0);
     return result;
 }
 
@@ -1087,11 +1087,11 @@ bool KrtKroNativeAllocate(KrtKroObject output, ref int32 pc, int64 stride) {
     if (!KrtKroNativeU32(output, ref pc, 0) ||
         !KrtKroNativeByte(output, ref pc, 49) || !KrtKroNativeByte(output, ref pc, 255) ||
         !KrtKroNativeByte(output, ref pc, 186) || !KrtKroNativeU32(output, ref pc, 3) ||
-        !KrtKroNativeByte(output, ref pc, 65) || !KrtKroNativeByte(output, ref pc, 186) || !KrtKroNativeU32(output, ref pc, 34) ||
+        !(KrtDriverPlatformTarget == 2 ? (KrtKroNativeByte(output, ref pc, 185) && KrtKroNativeU32(output, ref pc, 9)) : (KrtKroNativeByte(output, ref pc, 65) && KrtKroNativeByte(output, ref pc, 186) && KrtKroNativeU32(output, ref pc, 34))) ||
         !KrtKroNativeByte(output, ref pc, 73) || !KrtKroNativeByte(output, ref pc, 184) || !KrtKroNativeU64(output, ref pc, -1) ||
         !KrtKroNativeByte(output, ref pc, 69) || !KrtKroNativeByte(output, ref pc, 49) || !KrtKroNativeByte(output, ref pc, 201) ||
-        !KrtKroNativeByte(output, ref pc, 184) || !KrtKroNativeU32(output, ref pc, 9) ||
-        !KrtKroNativeByte(output, ref pc, 15) || !KrtKroNativeByte(output, ref pc, 5) ||
+        !KrtKroNativeByte(output, ref pc, 184) || !KrtKroNativeU32(output, ref pc, KrtDriverPlatformTarget == 2 ? 49 : 9) ||
+        !KrtKroNativeByte(output, ref pc, KrtDriverPlatformTarget == 2 ? 205 : 15) || !KrtKroNativeByte(output, ref pc, KrtDriverPlatformTarget == 2 ? 128 : 5) ||
         !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 133) || !KrtKroNativeByte(output, ref pc, 192) ||
         !KrtKroNativeByte(output, ref pc, 15) || !KrtKroNativeByte(output, ref pc, 136)) { return false; }
     int32 mmap_patch = pc;
@@ -1122,8 +1122,8 @@ bool KrtKroNativeFree(KrtKroObject output, ref int32 pc) {
     if (!KrtKroNativeU32(output, ref pc, 0) ||
         !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 131) || !KrtKroNativeByte(output, ref pc, 239) || !KrtKroNativeByte(output, ref pc, 16) ||
         !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 139) || !KrtKroNativeByte(output, ref pc, 119) || !KrtKroNativeByte(output, ref pc, 8) ||
-        !KrtKroNativeByte(output, ref pc, 184) || !KrtKroNativeU32(output, ref pc, 11) ||
-        !KrtKroNativeByte(output, ref pc, 15) || !KrtKroNativeByte(output, ref pc, 5)) { return false; }
+        !KrtKroNativeByte(output, ref pc, 184) || !KrtKroNativeU32(output, ref pc, KrtDriverPlatformTarget == 2 ? 50 : 11) ||
+        !KrtKroNativeByte(output, ref pc, KrtDriverPlatformTarget == 2 ? 205 : 15) || !KrtKroNativeByte(output, ref pc, KrtDriverPlatformTarget == 2 ? 128 : 5)) { return false; }
     return KrtKroEmitTextU32(output, null_patch, pc - null_patch - 4);
 }
 
@@ -1169,6 +1169,17 @@ bool KrtKroNativeStackDepths(KrtNativeModule module, int32 first, int32 last, in
             if (op == 18 && !KrtKroNativeFlowEdge(depths, queue, ref tail, (int32)module.extra[index], first, last, depth)) { return false; }
         } else if (!KrtKroNativeFlowEdge(depths, queue, ref tail, index + 1, first, last, depth)) { return false; }
     }
+    return true;
+}
+
+// Shared by stack and SSA emitters; raw syscalls follow the output ABI.
+bool KrtKroNativeSystemCall(KrtKroObject output, ref int32 pc, int32 arity) {
+    if (arity < 1 || arity > 7) { return false; }
+    // Source arguments are already on the expression stack:
+    // Arguments are popped first, then the syscall number.
+    int32 argument = arity - 2;
+    while (argument >= 0) { if (!KrtKroNativeByte(output, ref pc, 88) || !(KrtDriverPlatformTarget == 2 ? KrtKroNativeMoveArg(output, ref pc, argument) : KrtKroNativeMoveSyscallArg(output, ref pc, argument))) { return false; } argument = argument - 1; }
+    if (!KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeByte(output, ref pc, KrtDriverPlatformTarget == 2 ? 205 : 15) || !KrtKroNativeByte(output, ref pc, KrtDriverPlatformTarget == 2 ? 128 : 5) || !KrtKroNativeByte(output, ref pc, 80)) { return false; }
     return true;
 }
 
@@ -1237,12 +1248,14 @@ bool KrtKroEmitStackModule(KrtNativeModule module, KrtKroObject output) {
         if (allocation == null) { return false; }
         function_offsets[function_index] = pc;
         if (function_index == module.entry) {
+            if (KrtDriverPlatformTarget == 2 && !KrtKroNativeCode(output, ref pc, 0x5657, 2)) { return false; }
             if (!KrtKroNativeCode(output, ref pc, 16724293, 3) || !KrtKroNativeGlobalsStart(output, ref pc, module.global_count)) { return false; }
             if (module.initializer_index >= 0) {
                 if (module.initializer_index >= module.function_count || patch_count >= patch_capacity || !KrtKroNativeByte(output, ref pc, 232)) { return false; }
                 patch_offsets[patch_count] = pc; patch_targets[patch_count] = module.initializer_index; patch_kinds[patch_count] = 2; patch_count = patch_count + 1;
                 if (!KrtKroNativeU32(output, ref pc, 0)) { return false; }
             }
+            if (KrtDriverPlatformTarget == 2 && !KrtKroNativeCode(output, ref pc, 0x5f5e, 2)) { return false; }
             if (!KrtKroNativeCode(output,ref pc,0x08ec8348,4)) { return false; }
         }
         if (!KrtKroNativeByte(output, ref pc, 85) || !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 229)) { return false; }
@@ -1382,7 +1395,7 @@ bool KrtKroEmitStackModule(KrtNativeModule module, KrtKroObject output) {
                 if (arity == 1 && !KrtKroNativeByte(output, ref pc, 88)) { return false; }
                 if (arity == 0 && (!KrtKroNativeByte(output, ref pc, 49) || !KrtKroNativeByte(output, ref pc, 192))) { return false; }
                 if (function_index == module.entry) {
-                    if (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 199) || !KrtKroNativeByte(output, ref pc, 184) || !KrtKroNativeU32(output, ref pc, 60) || !KrtKroNativeByte(output, ref pc, 15) || !KrtKroNativeByte(output, ref pc, 5)) { return false; }
+                    if (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 199) || !KrtKroNativeByte(output, ref pc, 184) || !KrtKroNativeU32(output, ref pc, KrtDriverPlatformTarget == 2 ? 0 : 60) || !KrtKroNativeByte(output, ref pc, KrtDriverPlatformTarget == 2 ? 205 : 15) || !KrtKroNativeByte(output, ref pc, KrtDriverPlatformTarget == 2 ? 128 : 5)) { return false; }
                 } else if (!KrtKroNativePreserveRegisters(output,ref pc,module.local_counts[function_index]+125,true) ||
                     !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 236) || !KrtKroNativeByte(output, ref pc, 93) || !KrtKroNativeByte(output, ref pc, 195)) { return false; }
             } else if (op == (int32)KrtNativeOp.Address) {
@@ -1423,12 +1436,7 @@ bool KrtKroEmitStackModule(KrtNativeModule module, KrtKroObject output) {
                 patch_offsets[patch_count] = pc; patch_targets[patch_count] = (int32)module.args[index]; patch_kinds[patch_count] = 3; patch_count = patch_count + 1;
                 if (!KrtKroNativeU32(output, ref pc, 0) || !KrtKroNativeByte(output, ref pc, 80)) { return false; }
             } else if (op == (int32)KrtNativeOp.Syscall) {
-                if (arity < 1 || arity > 7) { return false; }
-                // Source arguments are already on the expression stack:
-                // Linux arguments are popped first, then the syscall number.
-                int32 argument = arity - 2;
-                while (argument >= 0) { if (!KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeMoveSyscallArg(output, ref pc, argument)) { return false; } argument = argument - 1; }
-                if (!KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeByte(output, ref pc, 15) || !KrtKroNativeByte(output, ref pc, 5) || !KrtKroNativeByte(output, ref pc, 80)) { return false; }
+                if (!KrtKroNativeSystemCall(output, ref pc, arity)) { return false; }
             } else if (op == (int32)KrtNativeOp.Drop) {
                 if (!KrtKroNativeByte(output, ref pc, 88)) { return false; }
             } else if (op == (int32)KrtNativeOp.Cast) {
@@ -1565,7 +1573,7 @@ bool KrtKroWriteBytes(byte[] bytes, int32 count, int64 descriptor) {
             int32 index = 0; while (index < chunk) { buffer[index] = bytes[position + index]; index = index + 1; }
             int32 written = 0;
             while (written < chunk) {
-                int64 result = syscall(1, descriptor, (int64)(buffer + written), chunk - written, 0, 0, 0);
+                int64 result = KrtPlatformCall(1, descriptor, (int64)(buffer + written), chunk - written, 0, 0, 0);
                 if (result <= 0) { return false; } written = written + (int32)result;
             }
             position = position + chunk;
@@ -2833,6 +2841,7 @@ bool KrtKroEmitSsaModule(KrtSsaModule ssa, KrtKroObject output) {
             module.local_counts[function_index] < module.parameter_counts[function_index]) { return false; }
         function_offsets[function_index] = pc;
         if (function_index == module.entry) {
+            if (KrtDriverPlatformTarget == 2 && !KrtKroNativeCode(output, ref pc, 0x5657, 2)) { return false; }
             if (!KrtKroNativeCode(output, ref pc, 16724293, 3) || !KrtKroNativeGlobalsStart(output, ref pc, module.global_count)) { return false; }
             if (module.initializer_index >= 0) {
                 if (module.initializer_index >= module.function_count || patch_count >= patch_capacity || !KrtKroNativeByte(output, ref pc, 232)) { return false; }
@@ -2842,6 +2851,7 @@ bool KrtKroEmitSsaModule(KrtSsaModule ssa, KrtKroObject output) {
             // ELF enters with a 16-byte aligned rsp, whereas a called function
             // receives a return address first. Match that stack shape so rbp
             // and the aggregate arena retain the ordinary call alignment.
+            if (KrtDriverPlatformTarget == 2 && !KrtKroNativeCode(output, ref pc, 0x5f5e, 2)) { return false; }
             if (!KrtKroNativeCode(output,ref pc,0x08ec8348,4)) { return false; }
         }
         if (!KrtKroNativeByte(output, ref pc, 85) || !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 229)) { return false; }
@@ -2998,7 +3008,7 @@ bool KrtKroEmitSsaModule(KrtSsaModule ssa, KrtKroObject output) {
                 if (arity == 1 && !KrtKroNativeByte(output, ref pc, 88)) { return false; }
                 if (arity == 0 && (!KrtKroNativeByte(output, ref pc, 49) || !KrtKroNativeByte(output, ref pc, 192))) { return false; }
                 if (function_index == module.entry) {
-                    if (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 199) || !KrtKroNativeByte(output, ref pc, 184) || !KrtKroNativeU32(output, ref pc, 60) || !KrtKroNativeByte(output, ref pc, 15) || !KrtKroNativeByte(output, ref pc, 5)) { return false; }
+                    if (!KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 199) || !KrtKroNativeByte(output, ref pc, 184) || !KrtKroNativeU32(output, ref pc, KrtDriverPlatformTarget == 2 ? 0 : 60) || !KrtKroNativeByte(output, ref pc, KrtDriverPlatformTarget == 2 ? 205 : 15) || !KrtKroNativeByte(output, ref pc, KrtDriverPlatformTarget == 2 ? 128 : 5)) { return false; }
                 } else if (!KrtKroNativePreserveRegisters(output,ref pc,frame_slots+125,true) ||
                     !KrtKroNativeByte(output, ref pc, 72) || !KrtKroNativeByte(output, ref pc, 137) || !KrtKroNativeByte(output, ref pc, 236) || !KrtKroNativeByte(output, ref pc, 93) || !KrtKroNativeByte(output, ref pc, 195)) { return false; }
             } else if (op == (int32)KrtNativeOp.Address) {
@@ -3045,12 +3055,7 @@ bool KrtKroEmitSsaModule(KrtSsaModule ssa, KrtKroObject output) {
                 patch_offsets[patch_count] = pc; patch_targets[patch_count] = (int32)ssa.args[index]; patch_kinds[patch_count] = 3; patch_count = patch_count + 1;
                 if (!KrtKroNativeU32(output, ref pc, 0) || !KrtKroNativeByte(output, ref pc, 80)) { return false; }
             } else if (op == (int32)KrtNativeOp.Syscall) {
-                if (arity < 1 || arity > 7) { return false; }
-                // Source arguments are already on the expression stack:
-                // Linux arguments are popped first, then the syscall number.
-                int32 argument = arity - 2;
-                while (argument >= 0) { if (!KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeMoveSyscallArg(output, ref pc, argument)) { return false; } argument = argument - 1; }
-                if (!KrtKroNativeByte(output, ref pc, 88) || !KrtKroNativeByte(output, ref pc, 15) || !KrtKroNativeByte(output, ref pc, 5) || !KrtKroNativeByte(output, ref pc, 80)) { return false; }
+                if (!KrtKroNativeSystemCall(output, ref pc, arity)) { return false; }
             } else if (op == (int32)KrtNativeOp.Drop) {
                 if (!KrtKroNativeByte(output, ref pc, 88)) { return false; }
             } else if (op == (int32)KrtNativeOp.Cast) {

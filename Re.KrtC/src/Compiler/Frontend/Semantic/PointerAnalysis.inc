@@ -40,6 +40,13 @@ static bool require_memory_permission(SemanticAnalyzer* analyzer, ASTNode* node)
 static bool pointer_assignable(SemanticAnalyzer* analyzer, ASTNode* node, KrtSourceType target, KrtSourceType value) {
     target.is_ref = value.is_ref = false;
     if (!KrtSourceIsPointer(target) && !KrtSourceIsPointer(value)) {
+        /* Class instances are references (including in the native SelfHost).
+         * Do not treat null-to-class as a mismatched numeric/named value.
+         * Raw pointer nullability and unrelated named-type checks stay below. */
+        if (value.token == TOKEN_NULL && target.token == TOKEN_IDENTIFIER && target.type_name &&
+            semantic_analyzer_lookup_class(analyzer, target.type_name)) {
+            return true;
+        }
         bool target_string = target.token == TOKEN_STRING || target.token == TOKEN_TYPE_STRING;
         bool value_string = value.token == TOKEN_STRING || value.token == TOKEN_TYPE_STRING;
         bool null_to_string = value.token == TOKEN_NULL && target_string;
@@ -462,13 +469,23 @@ bool semantic_analyzer_analyze_expression(SemanticAnalyzer* analyzer, ASTNode* e
     case AST_BINARY_OPERATION: {
         KrtSourceType a = expr->data.binary_op.left->resolved_type, b = expr->data.binary_op.right->resolved_type;
         bool ap = KrtSourceIsPointer(a), bp = KrtSourceIsPointer(b);
+        KrtTokenType op = expr->data.binary_op.operator;
         if (!ap && !bp) {
+            /* Comparing class references produces bool, not the left named
+             * type. Preserve that result before assignment compatibility. */
+            bool class_operand = (a.token == TOKEN_IDENTIFIER && a.type_name &&
+                semantic_analyzer_lookup_class(analyzer, a.type_name)) ||
+                (b.token == TOKEN_IDENTIFIER && b.type_name &&
+                semantic_analyzer_lookup_class(analyzer, b.type_name));
+            if (class_operand && (op == TOKEN_EQUAL || op == TOKEN_NOT_EQUAL || op == TOKEN_LESS || op == TOKEN_GREATER ||
+                op == TOKEN_LESS_EQUAL || op == TOKEN_GREATER_EQUAL || op == TOKEN_AND || op == TOKEN_OR)) {
+                expr->resolved_type = (KrtSourceType){.token = TOKEN_BOOL};
+            }
             break;
         }
         if (!require_memory_permission(analyzer, expr)) {
             return false;
         }
-        KrtTokenType op = expr->data.binary_op.operator;
         bool equality = op == TOKEN_EQUAL || op == TOKEN_NOT_EQUAL;
         if (equality && (a.token == TOKEN_NULL || b.token == TOKEN_NULL)) {
             expr->resolved_type.token = TOKEN_BOOL;

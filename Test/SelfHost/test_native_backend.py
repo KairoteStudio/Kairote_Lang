@@ -191,7 +191,10 @@ class NativeBackendTest(unittest.TestCase):
             compiler=os.environ.get("SELFHOST_COMPILER")
             command=([str(Path(compiler).resolve()),"-O2","--linker",str(ARKLINK),str(source),"-o",str(emitter)]
                      if compiler else [str(KRTC),"-O2",str(source),"output",str(emitter)])
-            built = subprocess.run(command, cwd=work, capture_output=True, text=True, timeout=60)
+            # This fixture compiles the entire compiler plus all emitter cases in
+            # one translation unit. Native self-host builds can exceed a minute;
+            # keep a bounded deadline without dropping any behavioral checks.
+            built = subprocess.run(command, cwd=work, capture_output=True, text=True, timeout=180)
             self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
             emitted = subprocess.run([str(emitter)], cwd=work, capture_output=True, text=True, timeout=30)
             self.assertEqual(emitted.returncode, 0, f"case #{emitted.returncode}: {emitted.stdout}{emitted.stderr}")
