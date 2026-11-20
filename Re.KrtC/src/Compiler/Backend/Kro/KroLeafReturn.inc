@@ -82,9 +82,9 @@ static bool entry_leaf_return(KROCodegenContext* ctx, KrtIRFunction* func, int* 
     }
     KrtIRBasicBlock* entry = func->entry_block;
     KrtIRInst* compare = entry ? entry->first_inst : NULL;
-    if (!compare || entry->pred_count || !can_fuse_integer_branch(ctx, entry, compare) ||
-        entry->succs[0] == entry->succs[1] || !is_entry_scalar(func, &compare->operands[0]) ||
-        !is_entry_scalar(func, &compare->operands[1])) {
+    if (!compare || compare->operand_count < 2 || entry->pred_count || entry->succ_count < 2 ||
+        !can_fuse_integer_branch(ctx, entry, compare) || entry->succs[0] == entry->succs[1] ||
+        !is_entry_scalar(func, &compare->operands[0]) || !is_entry_scalar(func, &compare->operands[1])) {
         return false;
     }
     int leaf_index = 0;
@@ -95,7 +95,7 @@ static bool entry_leaf_return(KROCodegenContext* ctx, KrtIRFunction* func, int* 
         }
     }
     KrtIRBasicBlock* leaf = entry->succs[leaf_index];
-    if (leaf->pred_count != 1 || leaf->preds[0] != entry) {
+    if (!leaf || leaf->pred_count != 1 || leaf->preds[0] != entry) {
         return false;
     }
     *selected_leaf = leaf_index;
@@ -103,6 +103,10 @@ static bool entry_leaf_return(KROCodegenContext* ctx, KrtIRFunction* func, int* 
 }
 
 static uint8_t emit_entry_compare(KROCodegenContext* ctx, KrtIRFunction* func, KrtIRInst* compare) {
+    if (!ctx || !func || !compare || compare->operand_count < 2) {
+        KrtError("KRO emit_entry_compare: compare needs two operands");
+        return 0;
+    }
     KrtTokenType type = KrtTokenIntegerCommon(compare->operands[0].value_type, compare->operands[1].value_type);
     int width = KrtTokenIntegerBits(type);
     int source = incoming_scalar_register(func, &compare->operands[0]);
@@ -159,7 +163,11 @@ static void emit_tail_backedge(KROCodegenContext* ctx) {
         return;
     }
     KrtIRBasicBlock* entry = func->entry_block;
-    KrtIRInst* compare = entry->first_inst;
+    KrtIRInst* compare = entry ? entry->first_inst : NULL;
+    if (!compare || compare->operand_count < 2 || entry->succ_count < 2) {
+        emit_jump_to_block(ctx, func->entry_block);
+        return;
+    }
     int leaf_index = entry->succs[0] == ctx->rotated_tail_leaf ? 0 : 1;
     KrtTokenType type = KrtTokenIntegerCommon(compare->operands[0].value_type, compare->operands[1].value_type);
     emit_scalar_compare_flags(ctx, compare, type);

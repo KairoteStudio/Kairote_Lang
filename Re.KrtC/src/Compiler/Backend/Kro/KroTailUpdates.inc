@@ -64,7 +64,8 @@ static bool tail_update_leaf(KROCodegenContext* ctx, KROTailUpdatePlan* plan, Kr
         return true;
     }
     if (value.type != KRT_IR_VALUE_ARG || width != 64 || value.data.index < 0 ||
-        value.data.index >= ctx->current_param_count || ctx->arg_address_taken[value.data.index]) {
+        value.data.index >= ctx->current_param_count || value.data.index >= 32 ||
+        ctx->arg_address_taken[value.data.index]) {
         return false;
     }
     KROPackedField* field = &ctx->arg_packed[value.data.index];

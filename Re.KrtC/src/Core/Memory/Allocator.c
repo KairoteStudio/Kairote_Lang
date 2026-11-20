@@ -28,6 +28,9 @@ static MemorySafetyManager memory_manager = {
 #endif
 MemorySafetyManager* g_memory_safety = &memory_manager;
 
+/* Sticky, thread-safe flag: non-zero once any memory-safety error has been reported. */
+int g_krt_memory_error_flag = 0;
+
 void KrtMemorySafetyInit(void) {
 #ifdef _WIN32
     InitOnceExecuteOnce(&memory_once, initialize_memory, NULL, NULL);
@@ -424,11 +427,24 @@ bool KrtMemoryIsPoisoned(const void* ptr, size_t size) {
 
 void KrtMemoryReportError(const char* error_type, const void* ptr, const char* file, int line, const char* format,
                           ...) {
-    (void)error_type;
-    (void)ptr;
-    (void)file;
-    (void)line;
-    (void)format;
+    char detail[256];
+    if (format) {
+        va_list args;
+        va_start(args, format);
+        vsnprintf(detail, sizeof(detail), format, args);
+        va_end(args);
+    } else {
+        detail[0] = '\0';
+    }
+
+    /* Reuses the project's atomic helper (Platform.h); safe to call from any thread. */
+    KrtAtomicInc(&g_krt_memory_error_flag);
+
+    /* Written straight to stderr on purpose: routing through the output cache would
+     * allocate, and this reporter is itself reached on allocation failure (OOM). */
+    fprintf(stderr, "[KrtMemoryError] %s: %s at %s:%d (ptr=%p)\n", error_type ? error_type : "UNKNOWN", detail,
+            file ? file : "<unknown>", line, ptr);
+    fflush(stderr);
 #ifdef KRT_DEBUG
     __debugbreak();
 #endif

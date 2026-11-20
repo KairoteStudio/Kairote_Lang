@@ -234,6 +234,10 @@ static void emit_store_value(KROCodegenContext* ctx, KrtIRValue* dest) {
         slot = alloc_temp_slot(ctx, dest->data.index);
     } else if (dest->type == KRT_IR_VALUE_ARG) {
         int index = dest->data.index;
+        if (index < 0 || index >= KRT_KRO_MAX_ARGS) {
+            KrtError("KRO emit_store_value: argument index %d out of range", index);
+            return;
+        }
         KROPackedField* field = &ctx->arg_packed[index];
         if (field->bit_width) {
             if (wide) {
@@ -244,6 +248,10 @@ static void emit_store_value(KROCodegenContext* ctx, KrtIRValue* dest) {
         }
         slot = ctx->arg_stack_offsets[index];
     } else if (dest->type == KRT_IR_VALUE_VAR) {
+        if (!dest->data.name) {
+            KrtError("KRO emit_store_value: variable store without a name");
+            return;
+        }
         KROLocalVar* var = find_local_var(ctx, dest->data.name);
         if (var && var->packed.bit_width) {
             if (wide) {
@@ -266,9 +274,11 @@ static void emit_store_value(KROCodegenContext* ctx, KrtIRValue* dest) {
         if (!var) {
             var = find_or_alloc_local_var(ctx, dest->data.name);
         }
-        if (var) {
-            slot = var->stack_offset;
+        if (!var) {
+            KrtError("KRO emit_store_value: cannot allocate local variable slot");
+            return;
         }
+        slot = var->stack_offset;
     }
     if (slot > 0) {
         emit_store_to_stack(ctx, slot, KRT_REG_RAX);
@@ -649,6 +659,10 @@ static bool emit_binary32(KROCodegenContext* ctx, KrtIRInst* inst) {
 }
 
 static void emit_scalar_compare_flags(KROCodegenContext* ctx, KrtIRInst* inst, KrtTokenType type) {
+    if (!ctx || !inst || inst->operand_count < 2) {
+        KrtError("KRO emit_scalar_compare_flags: compare needs two operands");
+        return;
+    }
     int width = KrtTokenIntegerBits(type);
     if (ctx->optimization_level >= 3 && (width == 32 || width == 64) &&
         KrtTokenIntegerBits(inst->operands[0].value_type) == width &&
@@ -737,6 +751,10 @@ static bool emit_shift_by_constant(KROCodegenContext* ctx, KrtIRInst* inst) {
 }
 
 static void emit_integer_binary(KROCodegenContext* ctx, KrtIRInst* inst) {
+    if (!ctx || !inst || inst->operand_count < 2) {
+        KrtError("KRO emit_integer_binary: binary op needs two operands");
+        return;
+    }
     if (emit_shift_by_constant(ctx, inst)) {
         return;
     }
@@ -845,12 +863,19 @@ static uint8_t integer_condition(KrtIROpcode op, bool is_unsigned) {
         return is_unsigned ? 0x93 : 0x9D;
     case KRT_IR_EQ:
         return 0x94;
+    case KRT_IR_NE:
+        return 0x95;
     default:
+        KrtError("KRO integer_condition: unknown comparison opcode %d", (int)op);
         return 0x95;
     }
 }
 
 static void emit_integer_compare(KROCodegenContext* ctx, KrtIRInst* inst) {
+    if (!ctx || !inst || inst->operand_count < 2) {
+        KrtError("KRO emit_integer_compare: compare needs two operands");
+        return;
+    }
     KrtTokenType type = KrtTokenIntegerCommon(inst->operands[0].value_type, inst->operands[1].value_type);
     bool wide = KrtTokenIntegerBits(type) > 64;
     if (!wide) {

@@ -117,7 +117,15 @@ void KrtFreeChecked(void* ptr, const char* file, int line);
     } while (0)
 #define KRT_STRNCPY_SAFE(dest, src) KRT_STRNCPY(dest, src, sizeof(dest))
 
-#define KRT_ASSERT(condition) ((void)0)
+/* Always-on invariant check: report a diagnostic, then let assert() abort when enabled
+ * (assert() compiles out under NDEBUG, but the KrtError report above still fires). */
+#define KRT_ASSERT(condition)                                                                                          \
+    do {                                                                                                               \
+        if (!(condition)) {                                                                                            \
+            KrtError("KRT_ASSERT failed: %s at %s:%d", #condition, __FILE__, __LINE__);                                \
+            assert(condition);                                                                                         \
+        }                                                                                                              \
+    } while (0)
 
 #ifdef _WIN32
 #define KRT_API_EXPORT __declspec(dllexport)
@@ -188,6 +196,9 @@ typedef struct {
 } MemoryLeakDetector;
 
 extern MemoryLeakDetector g_memory_leak_detector;
+
+/* Non-zero once any memory-safety error has been reported by KrtMemoryReportError. */
+extern int g_krt_memory_error_flag;
 
 void KrtMemoryLeakDetectorInit(void);
 void KrtMemoryLeakDetectorCleanup(void);

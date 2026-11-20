@@ -361,9 +361,9 @@ static bool apply_mov_mov_chain_elimination(KrtIRBasicBlock* block, KrtIRInst* i
         return false;
     }
 
+    /* 只把 inst3 的源前推到链首，保留 inst2 对中间 temp 的定义：
+       该 temp 若被后续指令使用，删除其定义会产生静默错误结果。 */
     inst3->operands[0] = inst1->operands[0];
-    inst2->opcode = KRT_IR_NOP;
-    inst2->operand_count = 0;
     return true;
 }
 

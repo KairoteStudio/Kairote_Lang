@@ -95,7 +95,8 @@ static bool module_has_native_pointers(KrtIRModule* module) {
         for (KrtIRBasicBlock* block = fn->entry_block; block; block = block->next) {
             for (KrtIRInst* inst = block->first_inst; inst; inst = inst->next) {
                 if (inst->opcode == KRT_IR_ADDRESS_OF || inst->opcode == KRT_IR_STACKALLOC ||
-                    inst->opcode == KRT_IR_CALL_INDIRECT) {
+                    inst->opcode == KRT_IR_CALL_INDIRECT || inst->opcode == KRT_IR_LOADPTR ||
+                    inst->opcode == KRT_IR_STOREPTR || inst->opcode == KRT_IR_ARRAY_STORE) {
                     return true;
                 }
             }
@@ -110,13 +111,18 @@ static bool module_fits_kro_limits(KrtIRModule* module) {
             KrtError("KRO function %s exceeds the %d parameter limit", fn->name, KRT_KRO_MAX_ARGS);
             return false;
         }
-        int locals = 0, temporaries = 0;
+        int locals = 0, max_temp_index = -1;
         const char* names[KRT_KRO_MAX_LOCAL_VARS * 2] = {0};
         for (KrtIRBasicBlock* block = fn->entry_block; block; block = block->next) {
             for (KrtIRInst* inst = block->first_inst; inst; inst = inst->next) {
-                temporaries += inst->result.type == KRT_IR_VALUE_TEMP;
+                if (inst->result.type == KRT_IR_VALUE_TEMP && inst->result.data.index > max_temp_index) {
+                    max_temp_index = inst->result.data.index;
+                }
                 for (int i = 0; i < inst->operand_count; i++) {
                     KrtIRValue* value = &inst->operands[i];
+                    if (value->type == KRT_IR_VALUE_TEMP && value->data.index > max_temp_index) {
+                        max_temp_index = value->data.index;
+                    }
                     if (value->type != KRT_IR_VALUE_VAR || !value->data.name ||
                         KrtIrModuleFindGlobal(module, value->data.name)) {
                         continue;
@@ -139,6 +145,7 @@ static bool module_fits_kro_limits(KrtIRModule* module) {
                 }
             }
         }
+        int temporaries = max_temp_index + 1;
         if (locals > KRT_KRO_MAX_LOCAL_VARS || temporaries > KRT_KRO_MAX_TEMP_STORAGE) {
         storage_limit:
             KrtError("KRO function %s exceeds the %d local or %d temporary storage limit", fn->name,
@@ -172,20 +179,6 @@ bool KrtCompilerCompile(KrtCompiler* compiler, ASTNode* ast, void* semantic_anal
         KrtError("extended integer widths require the KRO/native executable backend");
         KrtIrBuilderDestroy(ir_builder);
         return false;
-    }
-
-    {
-        KrtIRFunction* f = ir_builder->module->functions;
-        while (f) {
-            if (f->name && strcmp(f->name, "main") == 0) {
-                KrtIRBasicBlock* b = f->entry_block;
-                KrtIRInst* inst = b->first_inst;
-                while (inst) {
-                    inst = inst->next;
-                }
-            }
-            f = f->next;
-        }
     }
 
     ir_builder->module->optimization_level = compiler->optimization_level;

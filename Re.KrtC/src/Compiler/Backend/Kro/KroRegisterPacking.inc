@@ -1,10 +1,12 @@
 /* Each field keeps a fixed bit range for the entire function, including loops. */
 static void allocate_packed_field(KROCodegenContext* ctx, KrtTokenType type, KROPackedField* field) {
     int bits = KrtTokenIntegerBits(type);
-    int fragment = bits == 64 ? 64 : bits % 64;
-    if (!fragment) {
+    /* Only scalars up to 64 bits fit a packed register. Wider integers and
+     * non-integer types deliberately keep their stack storage. */
+    if (bits <= 0 || bits > 64) {
         return;
     }
+    int fragment = bits;
 
     int best = -1;
     for (int i = 0; i < KRT_KRO_PACKED_REG_COUNT; i++) {
@@ -258,8 +260,9 @@ static void coalesce_storage_copies(KROCodegenContext* ctx, KrtIRFunction* func)
     }
     int position = 0;
     for (KrtIRBasicBlock* block = func->entry_block; block; block = block->next) {
-        int next_write[16];
-        for (int i = 0; i < 16; i++) {
+        /* Indexed by physical register number; g_packed_regs only uses a few. */
+        int next_write[KRT_REG_R15 + 1];
+        for (int i = 0; i <= KRT_REG_R15; i++) {
             next_write[i] = -1;
         }
         position += block->inst_count;
@@ -267,7 +270,7 @@ static void coalesce_storage_copies(KROCodegenContext* ctx, KrtIRFunction* func)
             KrtIRInst* inst = block->insts[index];
             int here = position - block->inst_count + index;
             int written = full_storage_register(ctx, &inst->result, locals);
-            if (written >= 0) {
+            if (written >= 0 && written <= KRT_REG_R15) {
                 next_write[written] = here;
             }
             if ((inst->opcode != KRT_IR_COPY && inst->opcode != KRT_IR_CAST) || inst->operand_count < 1 ||
@@ -276,7 +279,7 @@ static void coalesce_storage_copies(KROCodegenContext* ctx, KrtIRFunction* func)
                 continue;
             }
             int source = full_storage_register(ctx, &inst->operands[0], locals);
-            if (source < 0) {
+            if (source < 0 || source > KRT_REG_R15) {
                 continue;
             }
             KROTempSlot* slot = find_temp_location(ctx, inst->result.data.index);

@@ -114,6 +114,10 @@ static void plan_tail_calls(KROCodegenContext* ctx, KrtIRFunction* func) {
                 ctx->tail_acc_opcode = combine->opcode;
             }
             KROTempSlot* slot = find_temp_location(ctx, inst->result.data.index);
+            if (!slot) {
+                KrtError("KRO plan_tail_calls: call result temporary has no slot");
+                continue;
+            }
             slot->tail_combine = combine;
             slot->tail_return = ret;
             for (KrtIRInst* omitted = inst; omitted != ret; omitted = omitted->next) {
@@ -153,6 +157,10 @@ static void plan_tail_calls(KROCodegenContext* ctx, KrtIRFunction* func) {
                         continue;
                     }
                     KROTempSlot* contribution = find_temp_location(ctx, producer->result.data.index);
+                    if (!contribution) {
+                        KrtError("KRO plan_tail_calls: producer temporary has no slot");
+                        continue;
+                    }
                     contribution->early_tail_accumulate = true;
                     contribution->no_storage = true;
                     tail->tail_combine = NULL;
