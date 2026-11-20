@@ -828,10 +828,13 @@ class KrtNativeRuntimeKey {
     public KrtNativeRuntimeKey next;
 }
 int32 KrtNativeRuntimeIntern(KrtAbiBytes bytes,KrtAbiBytes identity,KrtNativeRuntimeKey[] buckets) {
+    if (bytes == null || identity == null || buckets == null) { if (bytes != null) { bytes.ok = false; } return -1; }
     uint64 hash = KrtAbiHash(identity); int32 slot = (int32)(hash & 4095);
     KrtNativeRuntimeKey key = buckets[slot];
     while (key != null) { if (key.hash == hash && KrtAbiCompare(key.identity,identity) == 0) { return key.offset; } key = key.next; }
-    key = new KrtNativeRuntimeKey(); key.identity = identity; key.hash = hash; key.offset = bytes.count;
+    key = new KrtNativeRuntimeKey();
+    if (key == null) { bytes.ok = false; return -1; }
+    key.identity = identity; key.hash = hash; key.offset = bytes.count;
     KrtAbiAppend(bytes,identity); key.next = buckets[slot]; buckets[slot] = key;
     return bytes.ok ? key.offset : -1;
 }
@@ -1002,8 +1005,10 @@ bool KrtNativeRuntimeBuild(KrtNativeModule module) {
         if (!KrtNativeRuntimePrepareType(module,record)) { return false; }
         record = record.next;
     }
-    module.runtime_offsets = new int32[module.runtime_type_count]; KrtAbiBytes bytes = KrtAbiNew();
-    KrtNativeRuntimeKey[] keys = new KrtNativeRuntimeKey[4096];
+    module.runtime_offsets = new int32[module.runtime_type_count];
+    KrtAbiBytes bytes = KrtAbiNew(); module.runtime_build_bytes = bytes;
+    KrtNativeRuntimeKey[] keys = new KrtNativeRuntimeKey[4096]; module.runtime_build_keys = keys;
+    if (module.runtime_offsets == null || bytes == null || bytes.data == null || keys == null) { return false; }
     record = module.runtime_types;
     while (record != null) {
         record.offset = KrtNativeRuntimeReserve(bytes,96,16); module.runtime_offsets[record.index] = record.offset;
@@ -1061,5 +1066,7 @@ bool KrtNativeRuntimeBuild(KrtNativeModule module) {
     if (!bytes.ok) { return false; }
     int32 bucket = 0;
     while (bucket < 4096) { KrtNativeRuntimeKey key = keys[bucket]; while (key != null) { KrtNativeRuntimeKey following = key.next; delete key; key = following; } bucket = bucket+1; }
-    delete keys; module.runtime_bytes = bytes.data; module.runtime_length = bytes.count; delete bytes; return true;
+    delete keys; module.runtime_build_keys = null;
+    module.runtime_bytes = bytes.data; module.runtime_length = bytes.count;
+    bytes.data = null; module.runtime_build_bytes = null; delete bytes; return true;
 }

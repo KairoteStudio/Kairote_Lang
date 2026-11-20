@@ -1324,6 +1324,17 @@ const char* KrtIrVarTypeResolveIRName(KrtIRBuilder* builder, const char* name) {
     if (!builder || !name) {
         return name;
     }
+    /* Parameters are ABI bindings, not locals.  Their names may appear in the
+     * local declaration history while lowering a function, but that history
+     * must never redirect a parameter reference to a synthetic local slot. */
+    if (builder->current_function) {
+        for (int i = 0; i < builder->current_function->param_count; i++) {
+            if (builder->current_function->params[i].name &&
+                strcmp(builder->current_function->params[i].name, name) == 0) {
+                return name;
+            }
+        }
+    }
     for (int i = builder->var_type_count - 1; i >= 0; i--) {
         if (strcmp(builder->var_types[i].name, name) == 0) {
             return builder->var_types[i].ir_name ? builder->var_types[i].ir_name : name;

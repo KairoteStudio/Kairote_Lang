@@ -87,7 +87,7 @@ const char* KrtCompilePipelineGetError(KrtCompilePipeline* pipeline);
 const char* KrtCompilePipelineGetFailedStageName(KrtCompilePipeline* pipeline);
 KrtCompileStageResult* KrtCompilePipelineGetStageResults(KrtCompilePipeline* pipeline, int* count);
 double KrtCompilePipelineGetTotalDuration(KrtCompilePipeline* pipeline);
-void KrtCompilePipelineAddImportedFile(KrtCompilePipeline* pipeline, const char* file_path);
+bool KrtCompilePipelineAddImportedFile(KrtCompilePipeline* pipeline, const char* file_path);
 char** KrtCompilePipelineGetImportedFiles(KrtCompilePipeline* pipeline, int* count);
 void KrtCompilePipelinePrintErrorReport(KrtCompilePipeline* pipeline);
 

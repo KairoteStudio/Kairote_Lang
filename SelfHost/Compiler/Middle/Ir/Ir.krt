@@ -392,6 +392,16 @@ bool KrtNativeLowerTemporaryClosureCall(KrtAstNode call, KrtAstNode ast, KrtNati
 }
 
 // ===== Exception lowering =====
+KrtNativeExceptionFrame KrtNativeExceptionFrameCreate(KrtNativeModule module) {
+    if (module == null) { return null; }
+    KrtNativeExceptionFrame frame = new KrtNativeExceptionFrame();
+    if (frame != null) {
+        frame.allocated_next = module.allocated_exception_frames;
+        module.allocated_exception_frames = frame;
+    }
+    return frame;
+}
+
 bool KrtNativeLowerSavedThrow(KrtNativeModule module, int32 record_slot) {
     return KrtNativeEmit(module, (int32)KrtNativeOp.CatchValue, record_slot, 0) >= 0 &&
         KrtNativeEmit(module, (int32)KrtNativeOp.CatchType, record_slot, 0) >= 0 &&
@@ -431,7 +441,8 @@ bool KrtNativeLowerPendingFinally(KrtAstNode finally_body,int32 packet_slot,KrtA
     if (record_slot < 0) { return false; }
     while (index < 6) { if (KrtNativeBoxTemporary(module) != record_slot+index) { return false; } index = index+1; }
     KrtNativeExceptionFrame outer = module.exception_frame;
-    KrtNativeExceptionFrame frame = new KrtNativeExceptionFrame();
+    KrtNativeExceptionFrame frame = KrtNativeExceptionFrameCreate(module);
+    if (frame == null) { return false; }
     frame.previous = outer; frame.record_slot = record_slot; frame.loop_depth = depth;
     frame.active_handler = true; frame.owns_packet = true; frame.packet_slot = packet_slot;
     int32 enter = KrtNativeEmit(module,(int32)KrtNativeOp.TryEnter,-1,record_slot);
@@ -448,7 +459,8 @@ bool KrtNativeLowerPendingFinally(KrtAstNode finally_body,int32 packet_slot,KrtA
 
 bool KrtNativeLowerTry(KrtAstNode statement, KrtAstNode module_ast, KrtAstNode unit, KrtNativeModule module, int64 source, int32[] breaks, int32[] continues, ref int32 depth) {
     KrtNativeExceptionFrame outer = module.exception_frame;
-    KrtNativeExceptionFrame frame = new KrtNativeExceptionFrame();
+    KrtNativeExceptionFrame frame = KrtNativeExceptionFrameCreate(module);
+    if (frame == null) { return false; }
     frame.previous = outer; frame.finally_body = statement.alternate; frame.record_slot = statement.local_slot;
     frame.loop_depth = depth; frame.active_handler = true;
     int32 enter = KrtNativeEmit(module, (int32)KrtNativeOp.TryEnter, -1, statement.local_slot);
@@ -747,10 +759,11 @@ bool KrtNativeGeneratorGuardBusy(KrtNativeModule module) {
     return true;
 }
 
-KrtNativeExceptionFrame KrtNativeGeneratorCopyFrames(KrtNativeExceptionFrame original) {
+KrtNativeExceptionFrame KrtNativeGeneratorCopyFrames(KrtNativeExceptionFrame original, KrtNativeModule module) {
     KrtNativeExceptionFrame first = null; KrtNativeExceptionFrame tail = null;
     while (original != null) {
-        KrtNativeExceptionFrame frame = new KrtNativeExceptionFrame();
+        KrtNativeExceptionFrame frame = KrtNativeExceptionFrameCreate(module);
+        if (frame == null) { return null; }
         frame.finally_body = original.finally_body; frame.record_slot = original.record_slot;
         frame.loop_depth = original.loop_depth; frame.active_handler = original.active_handler;
         frame.handler_enter = original.handler_enter;
@@ -796,7 +809,8 @@ bool KrtNativeLowerYield(KrtAstNode statement, KrtAstNode ast, KrtAstNode unit, 
     }
     KrtNativeGeneratorResume resume = new KrtNativeGeneratorResume();
     plan.state_count = plan.state_count+1; resume.state = plan.state_count;
-    resume.frames = KrtNativeGeneratorCopyFrames(module.exception_frame);
+    resume.frames = KrtNativeGeneratorCopyFrames(module.exception_frame,module);
+    if (module.exception_frame != null && resume.frames == null) { return false; }
     resume.next = plan.resumes; plan.resumes = resume;
     if (!KrtNativeGeneratorWrite(module,8,resume.state) || !KrtNativeGeneratorWrite(module,16,1) ||
         !KrtNativeGeneratorWrite(module,24,0) || !KrtNativeGeneratorLeaveHandlers(resume.frames,module) ||
@@ -925,7 +939,7 @@ bool KrtNativeLowerGeneratorMove(KrtAstNode ast, KrtAstNode unit, KrtNativeModul
     int32 initial = module.count;
     int32 enter = KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.TryEnter,-1,plan.handler_slot);
     if (enter < 0) { return false; }
-    KrtNativeExceptionFrame frame = new KrtNativeExceptionFrame(); frame.active_handler = true;
+    KrtNativeExceptionFrame frame = KrtNativeExceptionFrameCreate(module); if (frame == null) { return false; } frame.active_handler = true;
     frame.record_slot = plan.handler_slot; frame.handler_enter = enter; frame.loop_depth = -1;
     module.exception_frame = frame;
     int32[] breaks = new int32[64]; int32[] continues = new int32[64]; int32 depth = 0;
@@ -990,7 +1004,7 @@ bool KrtNativeLowerGeneratorDispose(KrtAstNode ast, KrtAstNode unit, KrtNativeMo
         !KrtNativeGeneratorWrite(module,16,0)) { return false; }
     int32 enter = KrtNativeGeneratorRaw(module,(int32)KrtNativeOp.TryEnter,-1,plan.handler_slot);
     if (enter < 0) { return false; }
-    KrtNativeExceptionFrame frame = new KrtNativeExceptionFrame(); frame.active_handler = true;
+    KrtNativeExceptionFrame frame = KrtNativeExceptionFrameCreate(module); if (frame == null) { return false; } frame.active_handler = true;
     frame.record_slot = plan.handler_slot; frame.handler_enter = enter; frame.loop_depth = -1;
     module.exception_frame = frame;
     int32[] breaks = new int32[64]; int32[] continues = new int32[64]; int32 depth = 0; int32 exits = -1;
@@ -1556,6 +1570,7 @@ enum KrtNativeOp {
 bool KrtNativeInit(KrtNativeModule module) {
     if (module == null) { return false; }
     module.ssa = null;
+    module.exception_frame = null; module.allocated_exception_frames = null;
     module.count = 0;
     module.capacity = 8192;
     module.ops = new int32[module.capacity];

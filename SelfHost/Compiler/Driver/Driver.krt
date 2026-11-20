@@ -767,6 +767,7 @@ class KrtDriverCompileTask {
     public int64 log_path;
     public int64 pid;
     public int32 status;
+    public bool defer_failures;
     public KrtDriverCompileTask next;
 }
 
@@ -784,8 +785,8 @@ void KrtDriverCompileWorker(KrtDriverCompileTask task) {
     if (log != 1 && log != 2) { KrtPlatformCall(3,log,0,0,0,0,0); }
     KrtDriverLastErrorCode = 0; KrtDriverQuiet = false; task.options.quiet = false;
     int32 status = KrtDriverCompile(task.options); int32 result = 2;
-    if (status == 0 && KrtDriverFileExists(task.options.output)) { result = 0; }
-    else if (status != 0 && KrtDriverDeferredCode(KrtDriverLastErrorCode)) { result = 1; }
+    if (status == 0 && (task.options.check || KrtDriverFileExists(task.options.output))) { result = 0; }
+    else if (status != 0 && task.defer_failures && KrtDriverDeferredCode(KrtDriverLastErrorCode)) { result = 1; }
     KrtPlatformCall(60,result,0,0,0,0,0);
 }
 

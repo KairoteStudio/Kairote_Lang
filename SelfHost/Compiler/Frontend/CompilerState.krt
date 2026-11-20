@@ -9,10 +9,14 @@ class KrtNativeCapture {
     public KrtAstNode declaration;
     public int32 index;
     public KrtNativeCapture next;
+    public KrtNativeCapture release_next;
+    public bool destroy_mark;
 }
 class KrtNativeCellOwner {
     public KrtAstNode declaration;
     public KrtNativeCellOwner next;
+    public KrtNativeCellOwner release_next;
+    public bool destroy_mark;
 }
 
 // A contextual overload probe restores mutations through a nested journal.
@@ -40,6 +44,8 @@ class KrtNativeClosureProbeState {
 }
 
 class KrtNativeSignatureCache {
+    public KrtNativeSignatureCache release_next;
+    public bool destroy_mark;
     public KrtAstNode module;
     public int64 source;
     public KrtAstNode scope;
@@ -140,6 +146,8 @@ class KrtNativeModule {
     public KrtNativeRuntimeType[] runtime_buckets;
     public int32 runtime_bucket_count;
     public byte[] runtime_bytes;
+    public KrtAbiBytes runtime_build_bytes;
+    public KrtNativeRuntimeKey[] runtime_build_keys;
     public int32 runtime_length;
     public int64 runtime_pointer;
     public int32[] runtime_offsets;
@@ -187,6 +195,7 @@ class KrtNativeModule {
     public int32[] external_reloc_targets;
     public int32 entry;
     public KrtNativeExceptionFrame exception_frame;
+    public KrtNativeExceptionFrame allocated_exception_frames;
     // Data storage is byte[] so the self-host language does not require an
     // unsafe pointer field on this metadata class.
     public int64 data;
@@ -221,6 +230,7 @@ class KrtSsaModule {
 // Handler contexts are compile-time state. Native TryEnter records unwind state.
 class KrtNativeExceptionFrame {
     public KrtNativeExceptionFrame previous;
+    public KrtNativeExceptionFrame allocated_next;
     public KrtAstNode finally_body;
     public int32 record_slot;
     public int32 loop_depth;

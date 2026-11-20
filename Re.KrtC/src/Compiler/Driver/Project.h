@@ -54,9 +54,9 @@ typedef struct KrtProject {
 KrtProject* KrtProjCreate(const char* name, KrtProjectType type);
 void KrtProjDestroy(KrtProject* project);
 
-void KrtProjAddFile(KrtProject* project, const char* file_path, const char* item_type);
+int KrtProjAddFile(KrtProject* project, const char* file_path, const char* item_type);
 void KrtProjRemoveFile(KrtProject* project, const char* file_path);
-void KrtProjAddDependency(KrtProject* project, const char* name, const char* version, const char* path);
+int KrtProjAddDependency(KrtProject* project, const char* name, const char* version, const char* path);
 
 char** KrtProjGetSourceFiles(KrtProject* project, int* count);
 char* KrtProjGetOutputPath(KrtProject* project, KrtProjectConfig config);

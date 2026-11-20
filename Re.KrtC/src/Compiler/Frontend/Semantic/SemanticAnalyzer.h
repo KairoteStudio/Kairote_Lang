@@ -38,9 +38,16 @@ typedef struct SemanticAnalyzer {
     UsingDirective** using_directives;
     int using_count;
     int using_capacity;
+    char** project_namespace_names;
+    int project_namespace_count;
+    int project_namespace_capacity;
+    bool project_namespace_collection_failed;
+    char** imported_source_paths;
+    bool* imported_source_failed;
+    int imported_source_count;
+    int imported_source_capacity;
     char* input_file_path;
     char* libs_path;
-    ASTNode* program_ast;
     void* pipeline;
     KrtErrorReport* error_report;
 } SemanticAnalyzer;
@@ -95,9 +102,11 @@ void semantic_analyzer_push_class_context(SemanticAnalyzer* analyzer, const char
 void semantic_analyzer_pop_class_context(SemanticAnalyzer* analyzer);
 void semantic_analyzer_set_input_file(SemanticAnalyzer* analyzer, const char* file_path);
 void semantic_analyzer_set_pipeline(SemanticAnalyzer* analyzer, void* pipeline);
-void semantic_analyzer_register_imported_file(SemanticAnalyzer* analyzer, const char* file_path);
+bool semantic_analyzer_register_imported_file(SemanticAnalyzer* analyzer, const char* file_path);
 SymbolEntry* semantic_analyzer_lookup_qualified_name(SemanticAnalyzer* analyzer, char** parts, int part_count);
 const char* semantic_analyzer_get_current_class_context(SemanticAnalyzer* analyzer);
 void semantic_analyzer_collect_exports(SemanticAnalyzer* analyzer, ASTNode* ast);
+/** Collect namespace declarations without defining their contents. */
+void semantic_analyzer_collect_project_namespaces(SemanticAnalyzer* analyzer, ASTNode* ast);
 
 #endif

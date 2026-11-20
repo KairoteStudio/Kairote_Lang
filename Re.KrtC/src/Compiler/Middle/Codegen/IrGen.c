@@ -528,8 +528,8 @@ static int irgen_binop_is_float(KrtIRBuilder* builder, ASTNode* expr) {
            irgen_expr_is_float(builder, expr->data.binary_op.right);
 }
 
-/* 浮点运算的操作数取值: 数字字面量按双精度立即数生成(保位型),
- * 其余照常求值。非字面量的整型子表达式暂不自动转换(记入台账限制) */
+/* 浮点运算的操作数取值: 数字字面量按双精度立即数生成以保留精度，
+ * 其他表达式照常求值并在需要时转换为 float64。 */
 static KrtIRValue irgen_float_operand(KrtIRBuilder* builder, ASTNode* node) {
     if (node && node->type == AST_NUMBER) {
         return KrtIrImmF(builder, node->data.number_value);

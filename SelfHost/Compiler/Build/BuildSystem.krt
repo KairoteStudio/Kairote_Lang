@@ -74,6 +74,8 @@ int32 KrtDriverCompileBundle(KrtDriverOptions options, KrtSourceBundle bundle) {
                 } else { ok = KrtKroWriteObjectToPath(object,(string)object_path); }
                 if (!ok) { KrtDriverError("E_OUTPUT","unable to write compiler artifact"); }
             }
+            KrtCompileWorkspaceRelease(KrtDriverLastWorkspace); KrtDriverLastWorkspace = null;
+            KrtDriverLastModule = null;
         }
         KrtDriverActiveBundle = null;
         if (ok) { link_objects = KrtDriverAppend(link_objects,object_path); }

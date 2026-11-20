@@ -10,6 +10,8 @@
 #include <stdio.h>
 #include <time.h>
 #include <sys/stat.h>
+#include <limits.h>
+#include <stdint.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -719,28 +721,38 @@ void KrtCompilePipelinePrintErrorReport(KrtCompilePipeline* pipeline) {
     fflush(stderr);
 }
 
-void KrtCompilePipelineAddImportedFile(KrtCompilePipeline* pipeline, const char* file_path) {
+bool KrtCompilePipelineAddImportedFile(KrtCompilePipeline* pipeline, const char* file_path) {
     if (!pipeline || !file_path) {
-        return;
+        return false;
     }
 
     for (int i = 0; i < pipeline->imported_file_count; i++) {
         if (strcmp(pipeline->imported_files[i], file_path) == 0) {
-            return;
+            return true;
         }
     }
 
     if (pipeline->imported_file_count >= pipeline->imported_file_capacity) {
+        if (pipeline->imported_file_capacity > INT_MAX / 2 ||
+            (size_t)(pipeline->imported_file_capacity == 0 ? 8 : pipeline->imported_file_capacity * 2) >
+                SIZE_MAX / sizeof(*pipeline->imported_files)) {
+            return false;
+        }
         int new_capacity = pipeline->imported_file_capacity == 0 ? 8 : pipeline->imported_file_capacity * 2;
         char** new_files = (char**)KRT_REALLOC(pipeline->imported_files, new_capacity * sizeof(char*));
         if (!new_files) {
-            return;
+            return false;
         }
         pipeline->imported_files = new_files;
         pipeline->imported_file_capacity = new_capacity;
     }
 
-    pipeline->imported_files[pipeline->imported_file_count++] = KRT_STRDUP(file_path);
+    char* copy = KRT_STRDUP(file_path);
+    if (!copy) {
+        return false;
+    }
+    pipeline->imported_files[pipeline->imported_file_count++] = copy;
+    return true;
 }
 
 char** KrtCompilePipelineGetImportedFiles(KrtCompilePipeline* pipeline, int* count) {

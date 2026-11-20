@@ -6,12 +6,14 @@
 #include <string.h>
 #include <strings.h>
 #include <stdarg.h>
+#include <errno.h>
 #include <unistd.h>
 #include <limits.h>
+#include <stdint.h>
 #include <sys/stat.h>
 #include <dirent.h>
-static void import_krt_file(SemanticAnalyzer* analyzer, const char* file_path);
-static void semantic_try_lazy_import_class(SemanticAnalyzer* analyzer, const char* class_name);
+static bool import_krt_file(SemanticAnalyzer* analyzer, const char* file_path);
+static bool semantic_try_lazy_import_class(SemanticAnalyzer* analyzer, const char* class_name);
 
 #include "Core/Utils/OutputCache.h"
 #include "Core/Utils/KrtCommon.h"
@@ -128,6 +130,16 @@ void semantic_analyzer_destroy(SemanticAnalyzer* analyzer) {
         KRT_FREE(analyzer->using_directives);
     }
 
+    for (int i = 0; i < analyzer->project_namespace_count; i++) {
+        KRT_FREE(analyzer->project_namespace_names[i]);
+    }
+    KRT_FREE(analyzer->project_namespace_names);
+    for (int i = 0; i < analyzer->imported_source_count; i++) {
+        KRT_FREE(analyzer->imported_source_paths[i]);
+    }
+    KRT_FREE(analyzer->imported_source_paths);
+    KRT_FREE(analyzer->imported_source_failed);
+
     if (analyzer->error_report) {
         KrtErrorReportDestroy(analyzer->error_report);
         analyzer->error_report = NULL;
@@ -155,12 +167,12 @@ void semantic_analyzer_set_pipeline(SemanticAnalyzer* analyzer, void* pipeline) 
     analyzer->pipeline = pipeline;
 }
 
-void semantic_analyzer_register_imported_file(SemanticAnalyzer* analyzer, const char* file_path) {
+bool semantic_analyzer_register_imported_file(SemanticAnalyzer* analyzer, const char* file_path) {
     if (!analyzer || !file_path || !analyzer->pipeline) {
-        return;
+        return analyzer && file_path;
     }
 
-    KrtCompilePipelineAddImportedFile(analyzer->pipeline, file_path);
+    return KrtCompilePipelineAddImportedFile(analyzer->pipeline, file_path);
 }
 
 static void collect_exports_from_node(SemanticAnalyzer* analyzer, ASTNode* node) {
@@ -190,79 +202,26 @@ static void collect_exports_from_node(SemanticAnalyzer* analyzer, ASTNode* node)
         break;
     }
     case AST_CLASS_DECLARATION: {
-        const char* name = node->data.class_decl.name;
-        if (!name) {
-            break;
-        }
-        SymbolEntry* existing = symbol_table_lookup(analyzer->global_symbol_table, name);
-        if (!existing) {
-            existing = symbol_table_define(analyzer->global_symbol_table, name, SYMBOL_CLASS, 0, NULL);
-        }
-        ASTNode* cbody = node->data.class_decl.body;
-        if (existing && cbody && cbody->type == AST_BLOCK) {
-            struct SymbolScope* prev_scope = symbol_table_enter_nested_scope(analyzer->global_symbol_table, existing);
-            for (int i = 0; i < cbody->data.block.statement_count; i++) {
-                ASTNode* m = cbody->data.block.statements[i];
-                if (!m) {
-                    continue;
-                }
-                if (m->type == AST_ACCESS_MODIFIER) {
-                    m = m->data.access_modifier.member;
-                    if (!m) {
-                        continue;
-                    }
-                }
-                const char* mname = NULL;
-                KrtTokenType* ptypes = NULL;
-                int pcount = 0;
-                if (m->type == AST_STATIC_FUNCTION_DECLARATION) {
-                    mname = m->data.static_function_decl.name;
-                    ptypes = m->data.static_function_decl.parameter_types;
-                    pcount = m->data.static_function_decl.parameter_count;
-                } else if (m->type == AST_FUNCTION_DECLARATION) {
-                    mname = m->data.function_decl.name;
-                    ptypes = m->data.function_decl.parameter_types;
-                    pcount = m->data.function_decl.parameter_count;
-                } else if (m->type == AST_CONSTRUCTOR_DECLARATION) {
-                    mname = name;
-                    ptypes = m->data.constructor_decl.parameter_types;
-                    pcount = m->data.constructor_decl.parameter_count;
-                }
-                if (!mname) {
-                    continue;
-                }
-
-                const char* ns_path[2] = {name, NULL};
-                char* key = name_mangle_function(ns_path, mname, ptypes, pcount);
-                if (key) {
-                    if (!symbol_table_lookup_current_scope(analyzer->global_symbol_table, key)) {
-                        SymbolEntry* method =
-                            symbol_table_define(analyzer->global_symbol_table, key, SYMBOL_FUNCTION, 0, NULL);
-                        if (method) {
-                            method->source_type = KrtSourceTypeClone(
-                                analyzer->type_arena, (KrtSourceType){.token = TOKEN_FN, .function = m->function_type});
-                        }
-                    }
-                    KRT_FREE(key);
-                }
-                if (!symbol_table_lookup_current_scope(analyzer->global_symbol_table, mname)) {
-                    SymbolEntry* method =
-                        symbol_table_define(analyzer->global_symbol_table, mname, SYMBOL_FUNCTION, 0, NULL);
-                    if (method) {
-                        method->source_type = KrtSourceTypeClone(
-                            analyzer->type_arena, (KrtSourceType){.token = TOKEN_FN, .function = m->function_type});
-                    }
-                }
-            }
-            symbol_table_exit_nested_scope(analyzer->global_symbol_table, prev_scope);
-        }
+        /* Project precollection is deliberately limited to free-function
+         * signatures.  Classes may follow a semicolon namespace declaration
+         * while still appearing as top-level AST nodes, so only their owning
+         * namespace analysis can select the correct symbol table. */
         break;
     }
     case AST_NAMESPACE_DECLARATION: {
         ASTNode* body = node->data.namespace_decl.body;
         if (body && body->type == AST_BLOCK) {
             for (int i = 0; i < body->data.block.statement_count; i++) {
-                collect_exports_from_node(analyzer, body->data.block.statements[i]);
+                ASTNode* child = body->data.block.statements[i];
+                /* Namespace classes belong to the namespace's nested symbol
+                 * table.  Registering them here in the global table makes
+                 * their real declaration look like a duplicate.  Functions
+                 * are safe forward exports, and nested namespaces recurse. */
+                if (child && (child->type == AST_FUNCTION_DECLARATION ||
+                              child->type == AST_STATIC_FUNCTION_DECLARATION ||
+                              child->type == AST_NAMESPACE_DECLARATION)) {
+                    collect_exports_from_node(analyzer, child);
+                }
             }
         }
         break;
@@ -272,10 +231,61 @@ static void collect_exports_from_node(SemanticAnalyzer* analyzer, ASTNode* node)
     }
 }
 
+void semantic_analyzer_collect_project_namespaces(SemanticAnalyzer* analyzer, ASTNode* node) {
+    if (!analyzer || !node) {
+        return;
+    }
+    if (node->type == AST_PROGRAM || node->type == AST_BLOCK) {
+        for (int i = 0; i < node->data.block.statement_count; i++) {
+            semantic_analyzer_collect_project_namespaces(analyzer, node->data.block.statements[i]);
+        }
+        return;
+    }
+    if (node->type != AST_NAMESPACE_DECLARATION) {
+        return;
+    }
+
+    const char* name = node->data.namespace_decl.name;
+    if (name) {
+        for (int i = 0; i < analyzer->project_namespace_count; i++) {
+            if (strcmp(analyzer->project_namespace_names[i], name) == 0) {
+                goto collect_children;
+            }
+        }
+        if (analyzer->project_namespace_count == analyzer->project_namespace_capacity) {
+            if (analyzer->project_namespace_capacity > INT_MAX / 2 ||
+                (size_t)(analyzer->project_namespace_capacity == 0 ? 8 : analyzer->project_namespace_capacity * 2) >
+                    SIZE_MAX / sizeof(*analyzer->project_namespace_names)) {
+                analyzer->project_namespace_collection_failed = true;
+                return;
+            }
+            int capacity = analyzer->project_namespace_capacity == 0 ? 8 : analyzer->project_namespace_capacity * 2;
+            char** names = KRT_REALLOC(analyzer->project_namespace_names, (size_t)capacity * sizeof(*names));
+            if (!names) {
+                analyzer->project_namespace_collection_failed = true;
+                return;
+            }
+            analyzer->project_namespace_names = names;
+            analyzer->project_namespace_capacity = capacity;
+        }
+        char* copy = KRT_STRDUP(name);
+        if (!copy) {
+            analyzer->project_namespace_collection_failed = true;
+            return;
+        }
+        analyzer->project_namespace_names[analyzer->project_namespace_count++] = copy;
+    }
+
+collect_children:
+    semantic_analyzer_collect_project_namespaces(analyzer, node->data.namespace_decl.body);
+}
+
 void semantic_analyzer_collect_exports(SemanticAnalyzer* analyzer, ASTNode* ast) {
     if (!analyzer || !ast) {
         return;
     }
+
+    semantic_analyzer_collect_project_namespaces(analyzer, ast);
 
     if (ast->type == AST_PROGRAM || ast->type == AST_BLOCK) {
         for (int i = 0; i < ast->data.block.statement_count; i++) {
@@ -3333,7 +3343,11 @@ SemanticAnalysisResult* semantic_analyzer_analyze(SemanticAnalyzer* analyzer, AS
 
     analyzer->error_count = 0;
     analyzer->warning_count = 0;
-    analyzer->program_ast = ast;
+    semantic_analyzer_collect_project_namespaces(analyzer, ast);
+    if (analyzer->project_namespace_collection_failed) {
+        semantic_analyzer_add_error(analyzer, "Out of memory while collecting project namespaces");
+        result->success = false;
+    }
     if (!semantic_expand_types(analyzer, ast)) {
         result->success = false;
     }
@@ -3348,7 +3362,9 @@ SemanticAnalysisResult* semantic_analyzer_analyze(SemanticAnalyzer* analyzer, AS
             }
         }
 
-        semantic_analyzer_analyze_dependencies(analyzer);
+        if (!semantic_analyzer_analyze_dependencies(analyzer)) {
+            result->success = false;
+        }
 
         for (int i = 0; i < ast->data.block.statement_count; i++) {
             ASTNode* decl = ast->data.block.statements[i];
@@ -3515,6 +3531,9 @@ static char* resolve_using_path(char** path_parts, int path_length, bool* is_wil
 
     int capacity = 256;
     char* resolved = (char*)KRT_MALLOC(capacity);
+    if (!resolved) {
+        return NULL;
+    }
     int len = 0;
     resolved[0] = '\0';
 
@@ -3526,8 +3545,18 @@ static char* resolve_using_path(char** path_parts, int path_length, bool* is_wil
 
         int part_len = (int)strlen(path_parts[i]);
         if (len + part_len + 2 > capacity) {
-            capacity = (len + part_len + 2) * 2;
-            resolved = (char*)KRT_REALLOC(resolved, capacity);
+            if (len + part_len + 2 > INT_MAX / 2) {
+                KRT_FREE(resolved);
+                return NULL;
+            }
+            int new_capacity = (len + part_len + 2) * 2;
+            char* grown = (char*)KRT_REALLOC(resolved, new_capacity);
+            if (!grown) {
+                KRT_FREE(resolved);
+                return NULL;
+            }
+            resolved = grown;
+            capacity = new_capacity;
         }
 
         if (i > 0) {
@@ -3568,28 +3597,17 @@ static bool namespace_matches_using(const char* namespace_name, const UsingDirec
     return *current == '\0' || *current == '.';
 }
 
-static bool ast_declares_namespace(const ASTNode* node, const UsingDirective* directive) {
-    if (!node) {
-        return false;
-    }
-    if (node->type == AST_PROGRAM || node->type == AST_BLOCK) {
-        for (int i = 0; i < node->data.block.statement_count; i++) {
-            if (ast_declares_namespace(node->data.block.statements[i], directive)) {
-                return true;
-            }
-        }
-        return false;
-    }
-    if (node->type == AST_NAMESPACE_DECLARATION) {
-        return namespace_matches_using(node->data.namespace_decl.name, directive) ||
-               ast_declares_namespace(node->data.namespace_decl.body, directive);
-    }
-    return false;
-}
-
 static bool semantic_analyzer_using_is_project_namespace(const SemanticAnalyzer* analyzer,
                                                           const UsingDirective* directive) {
-    return analyzer && ast_declares_namespace(analyzer->program_ast, directive);
+    if (!analyzer || !directive) {
+        return false;
+    }
+    for (int i = 0; i < analyzer->project_namespace_count; i++) {
+        if (namespace_matches_using(analyzer->project_namespace_names[i], directive)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static char* try_file_path(const char* path) {
@@ -3605,25 +3623,26 @@ static char* try_file_path(const char* path) {
     return NULL;
 }
 
-static void import_krt_file(SemanticAnalyzer* analyzer, const char* file_path);
-
-static void semantic_try_lazy_import_class(SemanticAnalyzer* analyzer, const char* class_name) {
+static bool semantic_try_lazy_import_class(SemanticAnalyzer* analyzer, const char* class_name) {
     if (!analyzer || !class_name || !analyzer->libs_path) {
-        return;
+        return false;
     }
 
     char path[1024];
-    snprintf(path, sizeof(path), "%s/%s.krt", analyzer->libs_path, class_name);
+    int length = snprintf(path, sizeof(path), "%s/%s.krt", analyzer->libs_path, class_name);
+    if (length < 0 || (size_t)length >= sizeof(path)) {
+        semantic_analyzer_add_error(analyzer, "Using: library path for '%s' is too long", class_name);
+        return false;
+    }
     FILE* fp = fopen(path, "r");
     if (fp) {
         fclose(fp);
-        import_krt_file(analyzer, path);
-        return;
+        return import_krt_file(analyzer, path);
     }
 
     DIR* dir = opendir(analyzer->libs_path);
     if (!dir) {
-        return;
+        return false;
     }
     struct dirent* ent;
     while ((ent = readdir(dir)) != NULL) {
@@ -3636,16 +3655,16 @@ static void semantic_try_lazy_import_class(SemanticAnalyzer* analyzer, const cha
         if (stat(sub, &st) != 0 || !S_ISDIR(st.st_mode)) {
             continue;
         }
-        int length = snprintf(path, sizeof(path), "%s/%s.krt", sub, class_name);
-        if (length < 0 || (size_t)length >= sizeof(path)) {
+        int sub_path_length = snprintf(path, sizeof(path), "%s/%s.krt", sub, class_name);
+        if (sub_path_length < 0 || (size_t)sub_path_length >= sizeof(path)) {
             continue;
         }
         fp = fopen(path, "r");
         if (fp) {
             fclose(fp);
-            import_krt_file(analyzer, path);
+            bool imported = import_krt_file(analyzer, path);
             closedir(dir);
-            return;
+            return imported;
         }
         DIR* sub_dir = opendir(sub);
         if (!sub_dir) {
@@ -3668,38 +3687,116 @@ static void semantic_try_lazy_import_class(SemanticAnalyzer* analyzer, const cha
             fp = fopen(path, "r");
             if (fp) {
                 fclose(fp);
-                import_krt_file(analyzer, path);
+                bool imported = import_krt_file(analyzer, path);
                 closedir(sub_dir);
                 closedir(dir);
-                return;
+                return imported;
             }
         }
         closedir(sub_dir);
     }
     closedir(dir);
+    return false;
 }
 
-static void import_krt_file(SemanticAnalyzer* analyzer, const char* file_path) {
+static int semantic_analyzer_find_imported_file(SemanticAnalyzer* analyzer, const char* file_path) {
     if (!analyzer || !file_path) {
-        return;
+        return -1;
+    }
+    for (int i = 0; i < analyzer->imported_source_count; i++) {
+        if (strcmp(analyzer->imported_source_paths[i], file_path) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static bool semantic_analyzer_has_imported_file(SemanticAnalyzer* analyzer, const char* file_path) {
+    return semantic_analyzer_find_imported_file(analyzer, file_path) >= 0;
+}
+
+static bool semantic_analyzer_remember_imported_file(SemanticAnalyzer* analyzer, const char* file_path) {
+    if (semantic_analyzer_has_imported_file(analyzer, file_path)) {
+        return true;
+    }
+    if (analyzer->imported_source_count == analyzer->imported_source_capacity) {
+        if (analyzer->imported_source_capacity > INT_MAX / 2 ||
+            (size_t)(analyzer->imported_source_capacity == 0 ? 8 : analyzer->imported_source_capacity * 2) >
+                SIZE_MAX / sizeof(*analyzer->imported_source_paths)) {
+            return false;
+        }
+        int capacity = analyzer->imported_source_capacity == 0 ? 8 : analyzer->imported_source_capacity * 2;
+        char** paths = KRT_MALLOC((size_t)capacity * sizeof(*paths));
+        bool* failures = KRT_MALLOC((size_t)capacity * sizeof(*failures));
+        if (!paths || !failures) {
+            KRT_FREE(paths);
+            KRT_FREE(failures);
+            return false;
+        }
+        for (int i = 0; i < analyzer->imported_source_count; i++) {
+            paths[i] = analyzer->imported_source_paths[i];
+            failures[i] = analyzer->imported_source_failed[i];
+        }
+        KRT_FREE(analyzer->imported_source_paths);
+        KRT_FREE(analyzer->imported_source_failed);
+        analyzer->imported_source_paths = paths;
+        analyzer->imported_source_failed = failures;
+        analyzer->imported_source_capacity = capacity;
+    }
+    char* copy = KRT_STRDUP(file_path);
+    if (!copy) {
+        return false;
+    }
+    analyzer->imported_source_paths[analyzer->imported_source_count] = copy;
+    analyzer->imported_source_failed[analyzer->imported_source_count] = false;
+    analyzer->imported_source_count++;
+    return true;
+}
+
+static bool import_krt_file(SemanticAnalyzer* analyzer, const char* file_path) {
+    if (!analyzer || !file_path) {
+        return false;
     }
 
     if (analyzer->input_file_path && strcmp(analyzer->input_file_path, file_path) == 0) {
-        return;
+        return true;
     }
-
-    semantic_analyzer_register_imported_file(analyzer, file_path);
+    int imported_index = semantic_analyzer_find_imported_file(analyzer, file_path);
+    if (imported_index >= 0) {
+        if (!semantic_analyzer_register_imported_file(analyzer, file_path)) {
+            semantic_analyzer_add_error(analyzer, "Using: unable to record imported source '%s'", file_path);
+            return false;
+        }
+        if (analyzer->imported_source_failed[imported_index]) {
+            semantic_analyzer_add_error(analyzer, "Using: imported source '%s' previously failed", file_path);
+            return false;
+        }
+        return true;
+    }
 
     KrtArena* import_arena = KrtArenaCreateLocal(KRT_ARENA_DEFAULT_BLOCK_SIZE);
     if (!import_arena) {
-        return;
+        semantic_analyzer_add_error(analyzer, "Using: unable to allocate memory while importing '%s'", file_path);
+        return false;
     }
     ASTNode* imported_ast = KrtStdlibCacheClone(file_path, import_arena, false);
     if (!imported_ast) {
         KrtArenaDestroy(import_arena);
-        return;
+        semantic_analyzer_add_error(analyzer, "Using: unable to read or parse imported source '%s'", file_path);
+        return false;
+    }
+    if (!semantic_analyzer_register_imported_file(analyzer, file_path)) {
+        KrtArenaDestroy(import_arena);
+        semantic_analyzer_add_error(analyzer, "Using: unable to record imported source '%s'", file_path);
+        return false;
+    }
+    if (!semantic_analyzer_remember_imported_file(analyzer, file_path)) {
+        KrtArenaDestroy(import_arena);
+        semantic_analyzer_add_error(analyzer, "Using: unable to retain imported source '%s'", file_path);
+        return false;
     }
 
+    int initial_errors = analyzer->error_count;
     if (imported_ast->type == AST_PROGRAM || imported_ast->type == AST_BLOCK) {
         for (int j = 0; j < imported_ast->data.block.statement_count; j++) {
             ASTNode* stmt = imported_ast->data.block.statements[j];
@@ -3830,20 +3927,46 @@ static void import_krt_file(SemanticAnalyzer* analyzer, const char* file_path) {
     }
 
     KrtArenaDestroy(import_arena);
+    bool success = analyzer->error_count == initial_errors;
+    imported_index = semantic_analyzer_find_imported_file(analyzer, file_path);
+    if (imported_index >= 0) {
+        analyzer->imported_source_failed[imported_index] = !success;
+    }
+    return success;
 }
 
-static void import_namespace_folder(SemanticAnalyzer* analyzer, const char* folder_path) {
+static int compare_import_paths(const void* left, const void* right) {
+    const char* const* a = (const char* const*)left;
+    const char* const* b = (const char* const*)right;
+    return strcmp(*a, *b);
+}
+
+static bool import_namespace_folder(SemanticAnalyzer* analyzer, const char* folder_path) {
     if (!analyzer || !folder_path) {
-        return;
+        return false;
     }
 
+    int initial_errors = analyzer->error_count;
     DIR* directory = opendir(folder_path);
     if (!directory) {
-        return;
+        semantic_analyzer_add_error(analyzer, "Using: cannot open namespace directory '%s'", folder_path);
+        return false;
     }
 
+    char** paths = NULL;
+    int count = 0;
+    int capacity = 0;
+    bool success = true;
     struct dirent* entry;
-    while ((entry = readdir(directory)) != NULL) {
+    for (;;) {
+        errno = 0;
+        entry = readdir(directory);
+        if (!entry) {
+            if (errno != 0) {
+                success = false;
+            }
+            break;
+        }
         const char* name = entry->d_name;
         size_t length = strlen(name);
         if (name[0] == '.' || length <= 4 || strcmp(name + length - 4, ".krt") != 0) {
@@ -3853,12 +3976,60 @@ static void import_namespace_folder(SemanticAnalyzer* analyzer, const char* fold
         char path[PATH_MAX];
         int path_length = snprintf(path, sizeof(path), "%s/%s", folder_path, name);
         struct stat st;
-        if (path_length >= 0 && (size_t)path_length < sizeof(path) && stat(path, &st) == 0 && S_ISREG(st.st_mode)) {
-            import_krt_file(analyzer, path);
+        if (path_length < 0 || (size_t)path_length >= sizeof(path) || stat(path, &st) != 0) {
+            success = false;
+            break;
         }
+        if (!S_ISREG(st.st_mode)) {
+            continue;
+        }
+        if (count == capacity) {
+            if (capacity > INT_MAX / 2 ||
+                (size_t)(capacity == 0 ? 8 : capacity * 2) > SIZE_MAX / sizeof(*paths)) {
+                success = false;
+                break;
+            }
+            int new_capacity = capacity == 0 ? 8 : capacity * 2;
+            char** new_paths = KRT_REALLOC(paths, (size_t)new_capacity * sizeof(*new_paths));
+            if (!new_paths) {
+                success = false;
+                break;
+            }
+            paths = new_paths;
+            capacity = new_capacity;
+        }
+        paths[count] = KRT_STRDUP(path);
+        if (!paths[count]) {
+            success = false;
+            break;
+        }
+        count++;
     }
 
-    closedir(directory);
+    if (closedir(directory) != 0) {
+        success = false;
+    }
+    if (success && count == 0) {
+        semantic_analyzer_add_error(analyzer, "Using: namespace directory '%s' contains no .krt files", folder_path);
+        success = false;
+    }
+    if (success) {
+        qsort(paths, (size_t)count, sizeof(*paths), compare_import_paths);
+        for (int i = 0; i < count; i++) {
+            if (!import_krt_file(analyzer, paths[i])) {
+                success = false;
+                break;
+            }
+        }
+    }
+    if (!success && analyzer->error_count == initial_errors) {
+        semantic_analyzer_add_error(analyzer, "Using: failed to enumerate namespace directory '%s'", folder_path);
+    }
+    for (int i = 0; i < count; i++) {
+        KRT_FREE(paths[i]);
+    }
+    KRT_FREE(paths);
+    return success;
 }
 
 bool semantic_analyzer_analyze_dependencies(SemanticAnalyzer* analyzer) {
@@ -3879,29 +4050,46 @@ bool semantic_analyzer_analyze_dependencies(SemanticAnalyzer* analyzer) {
         bool is_wildcard = false;
         char* relative_path = resolve_using_path(directive->namespace_path, directive->path_length, &is_wildcard);
         if (!relative_path) {
-            semantic_analyzer_add_warning(analyzer, "Could not resolve using path");
+            semantic_analyzer_add_error(analyzer, "Using: unable to resolve import path");
+            success = false;
             continue;
         }
 
         const char* libs_dir = analyzer->libs_path ? analyzer->libs_path : "./libs";
         char folder_path_resolved[1024];
-        snprintf(folder_path_resolved, sizeof(folder_path_resolved), "%s/%s", libs_dir, relative_path);
+        int folder_length = snprintf(folder_path_resolved, sizeof(folder_path_resolved), "%s/%s", libs_dir, relative_path);
+        if (folder_length < 0 || (size_t)folder_length >= sizeof(folder_path_resolved)) {
+            semantic_analyzer_add_error(analyzer, "Using: import path is too long");
+            KRT_FREE(relative_path);
+            success = false;
+            continue;
+        }
 
         if (is_wildcard) {
-            import_namespace_folder(analyzer, folder_path_resolved);
+            if (!import_namespace_folder(analyzer, folder_path_resolved)) {
+                success = false;
+            }
             KRT_FREE(relative_path);
             continue;
         }
 
         struct stat st;
         if (stat(folder_path_resolved, &st) == 0 && S_ISDIR(st.st_mode)) {
-            import_namespace_folder(analyzer, folder_path_resolved);
+            if (!import_namespace_folder(analyzer, folder_path_resolved)) {
+                success = false;
+            }
             KRT_FREE(relative_path);
             continue;
         }
 
         char file_path_with_ext[1024];
-        snprintf(file_path_with_ext, sizeof(file_path_with_ext), "%s/%s.krt", libs_dir, relative_path);
+        int file_length = snprintf(file_path_with_ext, sizeof(file_path_with_ext), "%s/%s.krt", libs_dir, relative_path);
+        if (file_length < 0 || (size_t)file_length >= sizeof(file_path_with_ext)) {
+            semantic_analyzer_add_error(analyzer, "Using: import path is too long");
+            KRT_FREE(relative_path);
+            success = false;
+            continue;
+        }
         char* file_path = try_file_path(file_path_with_ext);
 
         if (!file_path) {
@@ -3912,7 +4100,9 @@ bool semantic_analyzer_analyze_dependencies(SemanticAnalyzer* analyzer) {
             continue;
         }
 
-        import_krt_file(analyzer, file_path);
+        if (!import_krt_file(analyzer, file_path)) {
+            success = false;
+        }
 
         KRT_FREE(relative_path);
         KRT_FREE(file_path);

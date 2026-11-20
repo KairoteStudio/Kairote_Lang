@@ -17,6 +17,12 @@ class KrtAstNode {
     public KrtAstNode native_member_first;
     public KrtAstNode native_member_next;
     public bool native_members_saved;
+    public bool native_destroy_mark;
+    public bool owns_parameter_starts;
+    public bool owns_parameter_lengths;
+    public bool owns_parameter_type_starts;
+    public bool owns_parameter_type_lengths;
+    public bool owns_parameter_refs;
     public int32 op;
     public bool grouped;
     public int32 parameter_count;
@@ -671,6 +677,8 @@ KrtAstNode KrtParserAppendSyntax(KrtParser parser,KrtAstNode declaration){
 // through parent links, while siblings and file boundaries keep distinct frames.
 class KrtUsingScope {
     public KrtUsingScope parent;
+    public KrtUsingScope release_next;
+    public bool destroy_mark;
     public KrtAstNode imports;
     public KrtAstNode namespace_scope;
     public int64 source_start;
@@ -901,7 +909,8 @@ KrtAstNode KrtParserParseFunctionType(KrtParser parser) {
     KrtLexerNext(parser.lexer, parser.token);
     KrtAstNode signature = KrtAstMake(KrtAstKind.Function, start, 0);
     signature.parameter_type_starts = new int64[128]; signature.parameter_type_lengths = new int64[128];
-    signature.parameter_refs = new bool[128];bool overflow_reported=false;
+    signature.parameter_refs = new bool[128]; signature.owns_parameter_type_starts = true;
+    signature.owns_parameter_type_lengths = true; signature.owns_parameter_refs = true; bool overflow_reported=false;
     while (!KrtParserTokenText(parser, 41)) {
         bool parameter_fits=signature.parameter_count<128;
         if(!parameter_fits&&!overflow_reported){KrtParserRecordExpected(parser,KrtTokenKind.RightParen,"function type exceeds 128 parameters");overflow_reported=true;}
@@ -1086,7 +1095,9 @@ KrtAstNode KrtParserParseLambda(KrtParser parser) {
     KrtAstNode lambda = KrtAstMake(KrtAstKind.Lambda, start, 0);
     lambda.parameter_starts = new int64[128]; lambda.parameter_lengths = new int64[128];
     lambda.parameter_type_starts = new int64[128]; lambda.parameter_type_lengths = new int64[128];
-    lambda.parameter_refs = new bool[128]; bool overflow_reported = false;
+    lambda.parameter_refs = new bool[128]; lambda.owns_parameter_starts = true; lambda.owns_parameter_lengths = true;
+    lambda.owns_parameter_type_starts = true; lambda.owns_parameter_type_lengths = true; lambda.owns_parameter_refs = true;
+    bool overflow_reported = false;
     while (!KrtParserTokenText(parser, 41) && parser.token.kind != KrtTokenKind.Eof) {
         bool parameter_fits = lambda.parameter_count < 128;
         if (!parameter_fits && !overflow_reported) {
@@ -1710,6 +1721,8 @@ KrtAstNode KrtParserParseFunctionTail(KrtParser parser, KrtAstNode unit, bool ex
         unit.parameter_refs = new bool[128];
         unit.parameter_type_starts = new int64[128];
         unit.parameter_type_lengths = new int64[128];
+        unit.owns_parameter_starts = true; unit.owns_parameter_lengths = true;
+        unit.owns_parameter_type_starts = true; unit.owns_parameter_type_lengths = true; unit.owns_parameter_refs = true;
         bool overflow_reported=false;
         while (true) {
             bool by_reference = false;
@@ -1871,6 +1884,8 @@ KrtAstNode KrtParserParseTypeDeclaration(KrtParser parser) {
                     if (method.parameter_starts == null) {
                         method.parameter_starts = new int64[128]; method.parameter_lengths = new int64[128];
                         method.parameter_type_starts = new int64[128]; method.parameter_type_lengths = new int64[128]; method.parameter_refs = new bool[128];
+                        method.owns_parameter_starts = true; method.owns_parameter_lengths = true;
+                        method.owns_parameter_type_starts = true; method.owns_parameter_type_lengths = true; method.owns_parameter_refs = true;
                     }
                     int32 parameter = method.parameter_count;
                     while (parameter > 0) {
@@ -2348,6 +2363,8 @@ void KrtParserInitializeConstructors(KrtAstNode declaration) {
         method.native_owner = declaration; method.op = 220; method.parameter_count = 1;
         method.parameter_starts = new int64[128]; method.parameter_lengths = new int64[128];
         method.parameter_type_starts = new int64[128]; method.parameter_type_lengths = new int64[128]; method.parameter_refs = new bool[128];
+        method.owns_parameter_starts = true; method.owns_parameter_lengths = true;
+        method.owns_parameter_type_starts = true; method.owns_parameter_type_lengths = true; method.owns_parameter_refs = true;
         method.parameter_starts[0] = declaration.name_start;
         method.parameter_type_starts[0] = declaration.name_start; method.parameter_type_lengths[0] = declaration.name_length;
         method.left = KrtAstMake(KrtAstKind.Block, declaration.start, declaration.length);

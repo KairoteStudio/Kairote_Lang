@@ -529,7 +529,7 @@ static void emit_jump(Emitter* em, const char* prefix, const char* label) {
 }
 
 static void emit_call(Emitter* em, const char* func_name, KrtIRValue* args, int arg_count, KrtIRValue* result) {
-    if (!em || !func_name || !args) {
+    if (!em || !func_name || (arg_count > 0 && !args)) {
         return;
     }
     if (arg_count < 0) {
@@ -537,6 +537,7 @@ static void emit_call(Emitter* em, const char* func_name, KrtIRValue* args, int 
     }
 
     int capped_arg_count = arg_count < g_arg_reg_count ? arg_count : g_arg_reg_count;
+    int stack_arg_count = arg_count - capped_arg_count;
     int save_reg_indices[14] = {0};
     int save_count = 0;
 
@@ -583,8 +584,60 @@ static void emit_call(Emitter* em, const char* func_name, KrtIRValue* args, int 
         fprintf(em->output, "    push %s\n", g_register_names[save_reg_indices[i]]);
     }
 
+    /*
+     * A value used as a later argument may itself live in an ABI argument
+     * register.  Loading directly into rdi/rsi/... therefore corrupts that
+     * later value (for example, rsi -> r8 after rsi has received argument 2).
+     * Snapshot the allocable registers and stage every argument before
+     * assigning any ABI argument register.
+     */
+    const int register_snapshot_count = g_register_count;
+    for (int i = 0; i < register_snapshot_count; i++) {
+        fprintf(em->output, "    push %s\n", g_register_names[i]);
+    }
+
+    for (int i = 0; i < arg_count; i++) {
+        KrtIRValue* arg = &args[i];
+        if (arg->type == KRT_IR_VALUE_TEMP) {
+            TempLocation* loc = codegen_get_temp_location(em->ctx, arg->data.index);
+            if (loc && loc->type == TEMP_LOC_REGISTER && loc->reg) {
+                int register_index = -1;
+                for (int j = 0; j < register_snapshot_count; j++) {
+                    if (strcmp(g_register_names[j], loc->reg) == 0) {
+                        register_index = j;
+                        break;
+                    }
+                }
+                if (register_index >= 0) {
+                    int snapshot_offset = (register_snapshot_count - 1 - register_index + i) * 8;
+                    fprintf(em->output, "    mov rax, [rsp + %d]\n", snapshot_offset);
+                    fprintf(em->output, "    push rax\n");
+                    continue;
+                }
+            }
+        }
+        emit_load_value(em, arg, "rax");
+        fprintf(em->output, "    push rax\n");
+    }
+
+    /* Keep the ABI-required 16-byte stack alignment at the call site. */
+    int outgoing = stack_arg_count * 8 + X86_SHADOW_SPACE;
+    int required_modulo = (8 - ((save_count + register_snapshot_count + arg_count) * 8) % 16 + 16) % 16;
+    outgoing += (required_modulo - outgoing % 16 + 16) % 16;
+    if (outgoing > 0) {
+        fprintf(em->output, "    sub rsp, %d\n", outgoing);
+    }
+
+    for (int i = capped_arg_count; i < arg_count; i++) {
+        int source_offset = outgoing + (arg_count - 1 - i) * 8;
+        int destination_offset = X86_SHADOW_SPACE + (i - capped_arg_count) * 8;
+        fprintf(em->output, "    mov rax, [rsp + %d]\n", source_offset);
+        fprintf(em->output, "    mov [rsp + %d], rax\n", destination_offset);
+    }
+
     for (int i = 0; i < capped_arg_count; i++) {
-        emit_load_value(em, &args[i], g_arg_regs[i]);
+        int source_offset = outgoing + (arg_count - 1 - i) * 8;
+        fprintf(em->output, "    mov %s, [rsp + %d]\n", g_arg_regs[i], source_offset);
     }
 
     const char* actual_func_name = func_name;
@@ -594,6 +647,16 @@ static void emit_call(Emitter* em, const char* func_name, KrtIRValue* args, int 
         actual_func_name = "_println_string";
     }
     fprintf(em->output, "    call %s\n", actual_func_name);
+
+    /* Restore all snapshotted registers except rax, which holds the result. */
+    for (int i = 1; i < register_snapshot_count; i++) {
+        int snapshot_offset = outgoing + arg_count * 8 + (register_snapshot_count - 1 - i) * 8;
+        fprintf(em->output, "    mov %s, [rsp + %d]\n", g_register_names[i], snapshot_offset);
+    }
+    int cleanup = outgoing + arg_count * 8 + register_snapshot_count * 8;
+    if (cleanup > 0) {
+        fprintf(em->output, "    add rsp, %d\n", cleanup);
+    }
 
     for (int i = 0; i < save_count; i++) {
         fprintf(em->output, "    pop %s\n", g_register_names[save_reg_indices[i]]);
@@ -910,11 +973,18 @@ static void emit_function_prologue(FILE* output, CodegenContext* ctx) {
         fprintf(output, "    sub rsp, %d\n", adjusted_stack_size);
     }
 
-    for (int i = 0; i < ctx->current_func->param_count && i < g_arg_reg_count; i++) {
+    int incoming_stack_offset = 16 + X86_SHADOW_SPACE;
+    for (int i = 0; i < ctx->current_func->param_count; i++) {
         if (ctx->current_func->params && ctx->current_func->params[i].name) {
             const char* param_name = ctx->current_func->params[i].name;
             int offset = codegen_get_var_offset(ctx, param_name);
-            fprintf(output, "    mov [rbp - %d], %s\n", offset, g_arg_regs[i]);
+            if (i < g_arg_reg_count) {
+                fprintf(output, "    mov [rbp - %d], %s\n", offset, g_arg_regs[i]);
+            } else {
+                fprintf(output, "    mov rax, [rbp + %d]\n", incoming_stack_offset);
+                fprintf(output, "    mov [rbp - %d], rax\n", offset);
+                incoming_stack_offset += 8;
+            }
         }
     }
 }

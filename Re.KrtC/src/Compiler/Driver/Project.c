@@ -8,6 +8,9 @@
 #include <direct.h>
 #include <windows.h>
 #define KRT_MKDIR(path) _mkdir(path)
+#ifndef S_ISDIR
+#define S_ISDIR(mode) (((mode) & _S_IFDIR) != 0)
+#endif
 #else
 #include <sys/stat.h>
 #include <unistd.h>
@@ -31,21 +34,78 @@ static int path_is_separator(char c) {
     return (c == '/') || (c == '\\');
 }
 
-static int copy_directory_recursive(const char* src_dir, const char* dst_dir) {
+static int ensure_directory_exists(const char* path) {
+    struct stat st;
+    if (stat(path, &st) == 0) {
 #ifdef _WIN32
+        return (st.st_mode & _S_IFDIR) != 0 ? 0 : -1;
+#else
+        return S_ISDIR(st.st_mode) ? 0 : -1;
+#endif
+    }
+    if (KRT_MKDIR(path) == 0) {
+        return 0;
+    }
+    if (errno == EEXIST && stat(path, &st) == 0) {
+#ifdef _WIN32
+        return (st.st_mode & _S_IFDIR) != 0 ? 0 : -1;
+#else
+        return S_ISDIR(st.st_mode) ? 0 : -1;
+#endif
+    }
+    return -1;
+}
 
-    KRT_MKDIR(dst_dir);
-
-    char search_path[KRT_MAX_PATH];
-    snprintf(search_path, sizeof(search_path), "%s\\*", src_dir);
-
-    WIN32_FIND_DATAA find_data;
-    HANDLE find_handle = FindFirstFileA(search_path, &find_data);
-
-    if (find_handle == INVALID_HANDLE_VALUE) {
+static int copy_file_checked(const char* source, const char* destination) {
+    FILE* src = fopen(source, "rb");
+    if (!src) {
+        return -1;
+    }
+    FILE* dst = fopen(destination, "wb");
+    if (!dst) {
+        fclose(src);
         return -1;
     }
 
+    int result = 0;
+    char buffer[4096];
+    size_t count;
+    while ((count = fread(buffer, 1, sizeof(buffer), src)) != 0) {
+        if (fwrite(buffer, 1, count, dst) != count) {
+            result = -1;
+            break;
+        }
+    }
+    if (ferror(src)) {
+        result = -1;
+    }
+    if (fclose(src) != 0) {
+        result = -1;
+    }
+    if (fclose(dst) != 0) {
+        result = -1;
+    }
+    return result;
+}
+
+static int copy_directory_recursive(const char* src_dir, const char* dst_dir) {
+    if (ensure_directory_exists(dst_dir) != 0) {
+        return -1;
+    }
+#ifdef _WIN32
+    char search_path[KRT_MAX_PATH];
+    int search_length = snprintf(search_path, sizeof(search_path), "%s\\*", src_dir);
+    if (search_length < 0 || (size_t)search_length >= sizeof(search_path)) {
+        return -1;
+    }
+
+    WIN32_FIND_DATAA find_data;
+    HANDLE find_handle = FindFirstFileA(search_path, &find_data);
+    if (find_handle == INVALID_HANDLE_VALUE) {
+        return GetLastError() == ERROR_FILE_NOT_FOUND ? 0 : -1;
+    }
+
+    int result = 0;
     do {
         if (strcmp(find_data.cFileName, ".") == 0 || strcmp(find_data.cFileName, "..") == 0) {
             continue;
@@ -53,91 +113,97 @@ static int copy_directory_recursive(const char* src_dir, const char* dst_dir) {
 
         char src_path[KRT_MAX_PATH];
         char dst_path[KRT_MAX_PATH];
-        snprintf(src_path, sizeof(src_path), "%s\\%s", src_dir, find_data.cFileName);
-        snprintf(dst_path, sizeof(dst_path), "%s\\%s", dst_dir, find_data.cFileName);
+        int src_length = snprintf(src_path, sizeof(src_path), "%s\\%s", src_dir, find_data.cFileName);
+        int dst_length = snprintf(dst_path, sizeof(dst_path), "%s\\%s", dst_dir, find_data.cFileName);
+        if (src_length < 0 || (size_t)src_length >= sizeof(src_path) || dst_length < 0 ||
+            (size_t)dst_length >= sizeof(dst_path)) {
+            result = -1;
+            break;
+        }
 
         if (find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-
-            copy_directory_recursive(src_path, dst_path);
+            if (copy_directory_recursive(src_path, dst_path) != 0) {
+                result = -1;
+                break;
+            }
         } else {
-
-            FILE* src_fp = fopen(src_path, "rb");
-            if (src_fp) {
-                FILE* dst_fp = fopen(dst_path, "wb");
-                if (dst_fp) {
-                    char buffer[4096];
-                    size_t bytes_read;
-                    while ((bytes_read = fread(buffer, 1, sizeof(buffer), src_fp)) > 0) {
-                        fwrite(buffer, 1, bytes_read, dst_fp);
-                    }
-                    fclose(dst_fp);
-                }
-                fclose(src_fp);
+            if (copy_file_checked(src_path, dst_path) != 0) {
+                result = -1;
+                break;
             }
         }
     } while (FindNextFileA(find_handle, &find_data));
 
+    if (result == 0 && GetLastError() != ERROR_NO_MORE_FILES) {
+        result = -1;
+    }
     FindClose(find_handle);
+    return result;
 #else
-
-    mkdir(dst_dir, 0775);
-
     DIR* dir = opendir(src_dir);
     if (!dir) {
         return -1;
     }
 
+    int result = 0;
     struct dirent* entry;
-    while ((entry = readdir(dir)) != NULL) {
+    for (;;) {
+        errno = 0;
+        entry = readdir(dir);
+        if (!entry) {
+            if (errno != 0) {
+                result = -1;
+            }
+            break;
+        }
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
             continue;
         }
 
         char src_path[KRT_MAX_PATH];
         char dst_path[KRT_MAX_PATH];
-        snprintf(src_path, sizeof(src_path), "%s/%s", src_dir, entry->d_name);
-        snprintf(dst_path, sizeof(dst_path), "%s/%s", dst_dir, entry->d_name);
+        int src_length = snprintf(src_path, sizeof(src_path), "%s/%s", src_dir, entry->d_name);
+        int dst_length = snprintf(dst_path, sizeof(dst_path), "%s/%s", dst_dir, entry->d_name);
+        if (src_length < 0 || (size_t)src_length >= sizeof(src_path) || dst_length < 0 ||
+            (size_t)dst_length >= sizeof(dst_path)) {
+            result = -1;
+            break;
+        }
 
         struct stat st;
-        if (stat(src_path, &st) == 0) {
-            if (S_ISDIR(st.st_mode)) {
-
-                copy_directory_recursive(src_path, dst_path);
-            } else {
-
-                FILE* src_fp = fopen(src_path, "rb");
-                if (src_fp) {
-                    FILE* dst_fp = fopen(dst_path, "wb");
-                    if (dst_fp) {
-                        char buffer[4096];
-                        size_t bytes_read;
-                        while ((bytes_read = fread(buffer, 1, sizeof(buffer), src_fp)) > 0) {
-                            fwrite(buffer, 1, bytes_read, dst_fp);
-                        }
-                        fclose(dst_fp);
-                    }
-                    fclose(src_fp);
-                }
+        if (stat(src_path, &st) != 0) {
+            result = -1;
+            break;
+        }
+        if (S_ISDIR(st.st_mode)) {
+            if (copy_directory_recursive(src_path, dst_path) != 0) {
+                result = -1;
+                break;
             }
+        } else if (copy_file_checked(src_path, dst_path) != 0) {
+            result = -1;
+            break;
         }
     }
 
-    closedir(dir);
+    if (closedir(dir) != 0) {
+        result = -1;
+    }
+    return result;
 #endif
-    return 0;
 }
 
-static void join_path(char* buffer, size_t buffer_size, const char* base, const char* part) {
+static int join_path(char* buffer, size_t buffer_size, const char* base, const char* part) {
     if (!buffer || buffer_size == 0) {
-        return;
+        return 0;
     }
     if (!base || base[0] == '\0') {
-        snprintf(buffer, buffer_size, "%s", part ? part : "");
-        return;
+        int length = snprintf(buffer, buffer_size, "%s", part ? part : "");
+        return length >= 0 && (size_t)length < buffer_size;
     }
     if (!part || part[0] == '\0') {
-        snprintf(buffer, buffer_size, "%s", base);
-        return;
+        int length = snprintf(buffer, buffer_size, "%s", base);
+        return length >= 0 && (size_t)length < buffer_size;
     }
 
     char sep = path_separator();
@@ -145,9 +211,11 @@ static void join_path(char* buffer, size_t buffer_size, const char* base, const 
     int need_sep = base_len > 0 && !path_is_separator(base[base_len - 1]);
 
     if (!need_sep) {
-        snprintf(buffer, buffer_size, "%s%s", base, part);
+        int length = snprintf(buffer, buffer_size, "%s%s", base, part);
+        return length >= 0 && (size_t)length < buffer_size;
     } else {
-        snprintf(buffer, buffer_size, "%s%c%s", base, sep, part);
+        int length = snprintf(buffer, buffer_size, "%s%c%s", base, sep, part);
+        return length >= 0 && (size_t)length < buffer_size;
     }
 }
 
@@ -157,7 +225,10 @@ static int create_directory_recursive(const char* path) {
     }
 
     char temp[KRT_MAX_PATH];
-    snprintf(temp, sizeof(temp), "%s", path);
+    int copied = snprintf(temp, sizeof(temp), "%s", path);
+    if (copied < 0 || (size_t)copied >= sizeof(temp)) {
+        return -1;
+    }
     size_t len = strlen(temp);
     if (len == 0) {
         return 0;
@@ -168,7 +239,7 @@ static int create_directory_recursive(const char* path) {
             char old = temp[i];
             temp[i] = '\0';
             if (temp[0] != '\0') {
-                if (KRT_MKDIR(temp) != 0 && errno != EEXIST) {
+                if (ensure_directory_exists(temp) != 0) {
                     temp[i] = old;
                     return -1;
                 }
@@ -176,22 +247,46 @@ static int create_directory_recursive(const char* path) {
             temp[i] = old;
         }
     }
-    if (KRT_MKDIR(temp) != 0 && errno != EEXIST) {
+    if (ensure_directory_exists(temp) != 0) {
         return -1;
     }
     return 0;
 }
 
-static void write_file_if_possible(const char* path, const char* content) {
+static int write_file_checked(const char* path, const char* content) {
     if (!path || !content) {
-        return;
+        return -1;
     }
     FILE* fp = fopen(path, "w");
     if (!fp) {
-        return;
+        return -1;
     }
-    fputs(content, fp);
-    fclose(fp);
+    int result = fputs(content, fp) == EOF ? -1 : 0;
+    if (fclose(fp) != 0) {
+        result = -1;
+    }
+    return result;
+}
+
+static int write_krt_string_literal(FILE* fp, const char* value) {
+    if (!fp || !value || fputc('"', fp) == EOF) {
+        return -1;
+    }
+    for (const unsigned char* current = (const unsigned char*)value; *current != '\0'; current++) {
+        if (*current == '"' || *current == '\\') {
+            if (fputc('\\', fp) == EOF || fputc(*current, fp) == EOF) {
+                return -1;
+            }
+        } else if (*current == '\n' || *current == '\r' || *current == '\t') {
+            const char* escape = *current == '\n' ? "\\n" : (*current == '\r' ? "\\r" : "\\t");
+            if (fputs(escape, fp) == EOF) {
+                return -1;
+            }
+        } else if (*current < 32 || *current == 127 || fputc(*current, fp) == EOF) {
+            return -1;
+        }
+    }
+    return fputc('"', fp) == EOF ? -1 : 0;
 }
 
 static int resolve_bundled_stdlib(char* result, size_t result_size) {
@@ -226,17 +321,22 @@ static int resolve_bundled_stdlib(char* result, size_t result_size) {
     };
     for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
         char candidate[KRT_MAX_PATH];
-        join_path(candidate, sizeof(candidate), exe_dir, candidates[i]);
+        if (!join_path(candidate, sizeof(candidate), exe_dir, candidates[i])) {
+            continue;
+        }
         struct stat st;
         if (stat(candidate, &st) == 0 && S_ISDIR(st.st_mode)) {
-            snprintf(result, result_size, "%s", candidate);
-            return 1;
+            int length = snprintf(result, result_size, "%s", candidate);
+            return length >= 0 && (size_t)length < result_size;
         }
     }
     return 0;
 }
 
 KrtProject* KrtProjCreate(const char* name, KrtProjectType type) {
+    if (!name) {
+        return NULL;
+    }
     KrtProject* project = KRT_CALLOC(1, sizeof(KrtProject));
     if (!project) {
         return NULL;
@@ -253,9 +353,19 @@ KrtProject* KrtProjCreate(const char* name, KrtProjectType type) {
 
     time_t now = time(NULL);
     char time_str[64];
-    strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", localtime(&now));
+    struct tm* local_time = localtime(&now);
+    if (!local_time || strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", local_time) == 0) {
+        KrtProjDestroy(project);
+        return NULL;
+    }
     project->created_date = KRT_STRDUP(time_str);
     project->modified_date = KRT_STRDUP(time_str);
+
+    if (!project->name || !project->version || !project->output_type || !project->root_namespace ||
+        !project->description || !project->sdk_version || !project->created_date || !project->modified_date) {
+        KrtProjDestroy(project);
+        return NULL;
+    }
 
     return project;
 }
@@ -309,45 +419,73 @@ void KrtProjDestroy(KrtProject* project) {
     KRT_FREE(project);
 }
 
-void KrtProjAddFile(KrtProject* project, const char* file_path, const char* item_type) {
+int KrtProjAddFile(KrtProject* project, const char* file_path, const char* item_type) {
     if (!project || !file_path) {
-        return;
+        return 0;
     }
 
     KrtProjectItem* item = KRT_CALLOC(1, sizeof(KrtProjectItem));
     if (!item) {
-        return;
+        return 0;
     }
 
     item->file_path = KRT_STRDUP(file_path);
     item->item_type = KRT_STRDUP(item_type ? item_type : "Compile");
-
-    item->next = project->items;
-    project->items = item;
+    if (!item->file_path || !item->item_type) {
+        KRT_FREE(item->file_path);
+        KRT_FREE(item->item_type);
+        KRT_FREE(item);
+        return 0;
+    }
 
     time_t now = time(NULL);
     char time_str[64];
-    strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", localtime(&now));
+    struct tm* local_time = localtime(&now);
+    if (!local_time || strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", local_time) == 0) {
+        KRT_FREE(item->file_path);
+        KRT_FREE(item->item_type);
+        KRT_FREE(item);
+        return 0;
+    }
+    char* modified_date = KRT_STRDUP(time_str);
+    if (!modified_date) {
+        KRT_FREE(item->file_path);
+        KRT_FREE(item->item_type);
+        KRT_FREE(item);
+        return 0;
+    }
+
+    item->next = project->items;
+    project->items = item;
     KRT_FREE(project->modified_date);
-    project->modified_date = KRT_STRDUP(time_str);
+    project->modified_date = modified_date;
+    return 1;
 }
 
-void KrtProjAddDependency(KrtProject* project, const char* name, const char* version, const char* path) {
+int KrtProjAddDependency(KrtProject* project, const char* name, const char* version, const char* path) {
     if (!project || !name) {
-        return;
+        return 0;
     }
 
     KrtProjectDependency* dep = KRT_CALLOC(1, sizeof(KrtProjectDependency));
     if (!dep) {
-        return;
+        return 0;
     }
 
     dep->name = KRT_STRDUP(name);
     dep->version = KRT_STRDUP(version ? version : "*");
     dep->path = path ? KRT_STRDUP(path) : NULL;
+    if (!dep->name || !dep->version || (path && !dep->path)) {
+        KRT_FREE(dep->name);
+        KRT_FREE(dep->version);
+        KRT_FREE(dep->path);
+        KRT_FREE(dep);
+        return 0;
+    }
 
     dep->next = project->dependencies;
     project->dependencies = dep;
+    return 1;
 }
 
 char** KrtProjGetSourceFiles(KrtProject* project, int* count) {
@@ -379,7 +517,17 @@ char** KrtProjGetSourceFiles(KrtProject* project, int* count) {
     item = project->items;
     while (item && index < file_count) {
         if (strcmp(item->item_type, "Compile") == 0) {
-            files[index++] = KRT_STRDUP(item->file_path);
+            files[index] = KRT_STRDUP(item->file_path);
+            if (!files[index]) {
+                for (int i = 0; i < index; i++) {
+                    KRT_FREE(files[i]);
+                }
+                KRT_FREE(files);
+                *count = 0;
+                KrtError("无法复制项目源文件列表");
+                return NULL;
+            }
+            index++;
         }
         item = item->next;
     }
@@ -390,6 +538,7 @@ char** KrtProjGetSourceFiles(KrtProject* project, int* count) {
 
 int KrtProjCreateTemplate(KrtProject* project, const char* output_dir) {
     if (!project || !output_dir) {
+        KrtError("项目模板需要有效的项目和输出路径");
         return 0;
     }
 
@@ -397,8 +546,17 @@ int KrtProjCreateTemplate(KrtProject* project, const char* output_dir) {
         output_dir = project->name ? project->name : "MyProject";
     }
 
+    if (strlen(output_dir) >= KRT_MAX_PATH) {
+        KrtError("项目输出路径过长");
+        return 0;
+    }
+
     if (!project->project_root) {
         project->project_root = KRT_STRDUP(output_dir);
+        if (!project->project_root) {
+            KrtError("无法分配项目根目录路径");
+            return 0;
+        }
     }
 
     char stdlib_src[KRT_MAX_PATH];
@@ -470,79 +628,114 @@ int KrtProjCreateTemplate(KrtProject* project, const char* output_dir) {
     }
 
     if (create_directory_recursive(output_dir) != 0) {
+        KrtError("无法创建项目目录: %s", output_dir);
         return 0;
     }
 
     char sources_buf[512] = "";
     for (size_t i = 0; i < template_count; ++i) {
         const TemplateFile* tpl = &templates[i];
-        KrtProjAddFile(project, tpl->name, "Compile");
+        if (!KrtProjAddFile(project, tpl->name, "Compile")) {
+            KrtError("无法记录项目模板源文件: %s", tpl->name);
+            return 0;
+        }
 
         char file_path[KRT_MAX_PATH];
-        join_path(file_path, sizeof(file_path), output_dir, tpl->name);
-        write_file_if_possible(file_path, tpl->content);
-
-        if (strlen(sources_buf) + strlen(tpl->name) + 1 < sizeof(sources_buf)) {
-            strncat(sources_buf, tpl->name, sizeof(sources_buf) - strlen(sources_buf) - 1);
-            strncat(sources_buf, " ", sizeof(sources_buf) - strlen(sources_buf) - 1);
+        if (!join_path(file_path, sizeof(file_path), output_dir, tpl->name)) {
+            KrtError("项目模板文件路径过长: %s", tpl->name);
+            return 0;
         }
+        if (write_file_checked(file_path, tpl->content) != 0) {
+            KrtError("无法写入项目模板文件: %s", file_path);
+            return 0;
+        }
+
+        size_t sources_length = strlen(sources_buf);
+        size_t template_name_length = strlen(tpl->name);
+        if (sources_length + template_name_length + 2 > sizeof(sources_buf)) {
+            KrtError("项目模板源文件列表过长");
+            return 0;
+        }
+        memcpy(sources_buf + sources_length, tpl->name, template_name_length);
+        sources_buf[sources_length + template_name_length] = ' ';
+        sources_buf[sources_length + template_name_length + 1] = '\0';
     }
 
     char project_krt_path[KRT_MAX_PATH];
-    join_path(project_krt_path, sizeof(project_krt_path), output_dir, "project.krt");
+    if (!join_path(project_krt_path, sizeof(project_krt_path), output_dir, "project.krt")) {
+        KrtError("项目配置文件路径过长");
+        return 0;
+    }
     {
         FILE* pk = fopen(project_krt_path, "w");
-        if (pk) {
-            const char* proj_name = project->name ? project->name : output_dir;
-            const char* type_str = "console";
-            switch (project->type) {
-            case KRT_PROJ_TYPE_LIBRARY:
-                type_str = "library";
-                break;
-            case KRT_PROJ_TYPE_WEB:
-                type_str = "web";
-                break;
-            case KRT_PROJ_TYPE_SYSTEM:
-                type_str = "system";
-                break;
-            default:
-                break;
-            }
+        if (!pk) {
+            KrtError("无法创建项目配置文件: %s", project_krt_path);
+            return 0;
+        }
 
-            fprintf(pk, "// Kairote Lang project\n");
-            fprintf(pk, "function Configure(Project p) {\n");
-            fprintf(pk, "    p.Name(\"%s\");\n", proj_name);
-            fprintf(pk, "    p.Type(\"%s\");\n", type_str);
-            fprintf(pk, "    p.Output(\"%s\");\n", proj_name);
-            fprintf(pk, "    p.CompileTogether(true);\n");
-            if (sources_buf[0] != '\0') {
-                size_t slen = strlen(sources_buf);
-                while (slen > 0 && (sources_buf[slen - 1] == ' ' || sources_buf[slen - 1] == '\t')) {
-                    sources_buf[--slen] = '\0';
-                }
-                fprintf(pk, "    p.Sources(");
-                char* save = NULL;
-                char* tok = strtok_r(sources_buf, " \t", &save);
-                int first = 1;
-                while (tok) {
-                    if (!first) {
-                        fprintf(pk, ", ");
-                    }
-                    fprintf(pk, "\"%s\"", tok);
-                    first = 0;
-                    tok = strtok_r(NULL, " \t", &save);
-                }
-                fprintf(pk, ");\n");
+        const char* proj_name = project->name ? project->name : output_dir;
+        const char* type_str = "console";
+        switch (project->type) {
+        case KRT_PROJ_TYPE_LIBRARY:
+            type_str = "library";
+            break;
+        case KRT_PROJ_TYPE_WEB:
+            type_str = "web";
+            break;
+        case KRT_PROJ_TYPE_SYSTEM:
+            type_str = "system";
+            break;
+        default:
+            break;
+        }
+
+        int project_file_ok = 1;
+        project_file_ok &= fprintf(pk, "// Kairote Lang project\n") >= 0;
+        project_file_ok &= fprintf(pk, "function Configure(Project p) {\n") >= 0;
+        project_file_ok &= fprintf(pk, "    p.Name(") >= 0;
+        project_file_ok &= write_krt_string_literal(pk, proj_name) == 0;
+        project_file_ok &= fprintf(pk, ");\n") >= 0;
+        project_file_ok &= fprintf(pk, "    p.Type(\"%s\");\n", type_str) >= 0;
+        project_file_ok &= fprintf(pk, "    p.Output(") >= 0;
+        project_file_ok &= write_krt_string_literal(pk, proj_name) == 0;
+        project_file_ok &= fprintf(pk, ");\n") >= 0;
+        project_file_ok &= fprintf(pk, "    p.CompileTogether(true);\n") >= 0;
+        if (sources_buf[0] != '\0') {
+            size_t slen = strlen(sources_buf);
+            while (slen > 0 && (sources_buf[slen - 1] == ' ' || sources_buf[slen - 1] == '\t')) {
+                sources_buf[--slen] = '\0';
             }
-            fprintf(pk, "}\n");
-            fclose(pk);
+            project_file_ok &= fprintf(pk, "    p.Sources(") >= 0;
+            char* save = NULL;
+            char* tok = strtok_r(sources_buf, " \t", &save);
+            int first = 1;
+            while (tok) {
+                if (!first) {
+                    project_file_ok &= fprintf(pk, ", ") >= 0;
+                }
+                project_file_ok &= fprintf(pk, "\"%s\"", tok) >= 0;
+                first = 0;
+                tok = strtok_r(NULL, " \t", &save);
+            }
+            project_file_ok &= fprintf(pk, ");\n") >= 0;
+        }
+        project_file_ok &= fprintf(pk, "}\n") >= 0;
+        if (fclose(pk) != 0) {
+            project_file_ok = 0;
+        }
+        if (!project_file_ok) {
+            KrtError("写入项目配置文件失败: %s", project_krt_path);
+            return 0;
         }
     }
 
     char stdlib_dst[KRT_MAX_PATH];
     char project_libs[KRT_MAX_PATH];
-    join_path(project_libs, sizeof(project_libs), output_dir, "libs");
-    join_path(stdlib_dst, sizeof(stdlib_dst), project_libs, "System");
+    if (!join_path(project_libs, sizeof(project_libs), output_dir, "libs") ||
+        !join_path(stdlib_dst, sizeof(stdlib_dst), project_libs, "System")) {
+        KrtError("标准库目标路径过长");
+        return 0;
+    }
     if (create_directory_recursive(stdlib_dst) != 0 || copy_directory_recursive(stdlib_src, stdlib_dst) != 0) {
         KrtError("无法复制标准库到项目目录: %s", stdlib_dst);
         return 0;
