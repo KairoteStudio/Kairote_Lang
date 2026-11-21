@@ -11,10 +11,6 @@ ASTNode* parser_parse_block(Parser* parser);
 ASTNode* parser_parse_namespace_declaration(Parser* parser);
 ASTNode* parser_parse_class_declaration(Parser* parser);
 
-#define KRT_PARSER_ARGUMENT_CAPACITY_INIT 8
-
-#define KRT_PARSER_MALLOC(size) KRT_MALLOC(size)
-
 #define KRT_PARSER_ALLOC_FROM_ARENA(parser, size) KrtParserAlloc(parser, size)
 
 #define KRT_PARSER_CREATE_NODE(type, line, col) KrtParserCreateNode(parser, type, line, col)
@@ -703,17 +699,11 @@ static ASTNode* parser_parse_block_or_statement(Parser* parser) {
         return NULL;
     }
 
-    ASTNode** statements = (ASTNode**)KRT_PARSER_MALLOC(sizeof(ASTNode*) * 1);
-    if (!statements) {
-        ast_destroy_node(stmt);
-        return NULL;
-    }
+    ASTNode** statements = (ASTNode**)KrtParserAlloc(parser, sizeof(ASTNode*));
     statements[0] = stmt;
 
     ASTNode* node = KrtParserCreateNode(parser, AST_BLOCK, line, col);
     if (!node) {
-        ast_destroy_node(statements[0]);
-        KRT_FREE(statements);
         return NULL;
     }
     node->data.block.statements = statements;
