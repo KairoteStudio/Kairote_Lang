@@ -1,4 +1,5 @@
 #include "../Utils/KrtCommon.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stddef.h>
@@ -462,22 +463,16 @@ void KrtMemoryDumpBlocks(void) {
         return;
     }
 
-#ifdef _WIN32
-    EnterCriticalSection(&g_memory_safety->mutex);
-#else
-    pthread_mutex_lock(&g_memory_safety->mutex);
-#endif
-
-    MemoryBlock* current = g_memory_safety->blocks;
-    while (current) {
-        current = current->next;
+    memory_lock();
+    for (MemoryBlock* current = g_memory_safety->blocks; current; current = current->next) {
+        fprintf(stderr, "[KrtMemory] block %p size %zu%s", current->user_ptr, current->user_size,
+                current->is_freed ? " (freed)" : "");
+        if (current->file) {
+            fprintf(stderr, " at %s:%d", current->file, current->line);
+        }
+        fprintf(stderr, "\n");
     }
-
-#ifdef _WIN32
-    LeaveCriticalSection(&g_memory_safety->mutex);
-#else
-    pthread_mutex_unlock(&g_memory_safety->mutex);
-#endif
+    memory_unlock();
 }
 
 size_t KrtMemoryGetTotalUsage(void) {
@@ -495,4 +490,6 @@ size_t KrtMemoryGetBlockCount(void) {
 }
 
 void KrtMemoryDumpStats(void) {
+    fprintf(stderr, "[KrtMemory] total_used=%zu block_count=%zu\n", KrtMemoryGetTotalUsage(),
+            KrtMemoryGetBlockCount());
 }
