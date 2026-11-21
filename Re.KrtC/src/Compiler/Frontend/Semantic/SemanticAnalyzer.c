@@ -818,9 +818,11 @@ static KrtTokenType semantic_analyzer_infer_expression_type(SemanticAnalyzer* an
         if (!callee && expr->data.call.name) {
             callee = symbol_table_lookup_scope_chain(analyzer->symbol_table, expr->data.call.name);
             if (!callee && expr->data.call.resolved_class_name) {
-                char legacy[256];
-                snprintf(legacy, sizeof(legacy), "%s__%s", expr->data.call.resolved_class_name, expr->data.call.name);
-                callee = symbol_table_lookup_scope_chain(analyzer->symbol_table, legacy);
+                char* legacy = name_mangle_simple(expr->data.call.resolved_class_name, expr->data.call.name);
+                if (legacy) {
+                    callee = symbol_table_lookup_scope_chain(analyzer->symbol_table, legacy);
+                    KRT_FREE(legacy);
+                }
             }
         }
         if (callee && callee->value_type != TOKEN_EOF) {
@@ -829,6 +831,9 @@ static KrtTokenType semantic_analyzer_infer_expression_type(SemanticAnalyzer* an
         return TOKEN_INT32;
     }
     case AST_UNARY_OPERATION:
+        if (expr->data.unary_op.operator == TOKEN_NOT) {
+            return TOKEN_BOOL;
+        }
         return semantic_analyzer_infer_expression_type(analyzer, expr->data.unary_op.operand);
     case AST_TERNARY_OPERATION: {
         KrtTokenType left = semantic_analyzer_infer_expression_type(analyzer, expr->data.ternary_op.true_value);
@@ -878,24 +883,25 @@ static KrtTokenType semantic_analyzer_infer_expression_type(SemanticAnalyzer* an
 }
 
 void semantic_analyzer_add_error(SemanticAnalyzer* analyzer, const char* format, ...) {
-    if (!analyzer) {
-        return;
-    }
-
-    analyzer->error_count++;
-
+    char message[1024];
     va_list args;
     va_start(args, format);
-    fprintf(stderr, "Error: ");
-    vfprintf(stderr, format, args);
-    fprintf(stderr, "\n");
-    fflush(stderr);
+    int written = vsnprintf(message, sizeof(message), format, args);
     va_end(args);
+    if (written < 0) {
+        message[0] = '\0';
+    }
+    semantic_analyzer_add_error_ex(analyzer, 0, 0, message, NULL);
 }
 
 void semantic_analyzer_add_error_ex(SemanticAnalyzer* analyzer, int line, int column, const char* message,
                                     const char* hint) {
     if (!analyzer) {
+        // 9-11: never swallow a diagnostic just because the analyzer is gone.
+        if (message) {
+            fprintf(stderr, "Error: %s\n", message);
+            fflush(stderr);
+        }
         return;
     }
 
@@ -904,9 +910,14 @@ void semantic_analyzer_add_error_ex(SemanticAnalyzer* analyzer, int line, int co
     if (analyzer->error_report) {
         KrtErrorReportAdd(analyzer->error_report, KRT_ERROR_ERROR, KRT_ERROR_STAGE_SEMANTIC, line, column, message,
                           hint ? hint : "");
+        return;
     }
 
-    fprintf(stderr, "Error: %s\n", message);
+    if (line > 0) {
+        fprintf(stderr, "Error at %d:%d: %s\n", line, column, message);
+    } else {
+        fprintf(stderr, "Error: %s\n", message);
+    }
     fflush(stderr);
 }
 
@@ -920,14 +931,24 @@ void semantic_analyzer_add_error_at(SemanticAnalyzer* analyzer, ASTNode* node, c
     char message[512];
     va_list args;
     va_start(args, format);
-    vsnprintf(message, sizeof(message), format, args);
+    int written = vsnprintf(message, sizeof(message), format, args);
     va_end(args);
+    if (written < 0) {
+        snprintf(message, sizeof(message), "%s", "internal error while formatting a diagnostic");
+    }
 
     int line = node ? node->line : 0;
     int column = node ? node->col : 0;
 
     if (analyzer->error_report) {
         KrtErrorReportAdd(analyzer->error_report, KRT_ERROR_ERROR, KRT_ERROR_STAGE_SEMANTIC, line, column, message, "");
+    } else {
+        if (line > 0) {
+            fprintf(stderr, "Error at %d:%d: %s\n", line, column, message);
+        } else {
+            fprintf(stderr, "Error: %s\n", message);
+        }
+        fflush(stderr);
     }
 }
 

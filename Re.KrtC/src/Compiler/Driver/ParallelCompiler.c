@@ -86,11 +86,16 @@ static void compile_task(CompileTask* task, KrtCompilePipeline* pipeline) {
     task->duration = KrtTimeNowSeconds() - start_time;
 
     if (result != 1) {
+        const char* detail = KrtCompilePipelineGetError(pipeline);
         if (!task->error_message) {
             char error_msg[512];
-            snprintf(error_msg, sizeof(error_msg), "编译失败: %s (耗时: %.2fs)", task->input_file, task->duration);
+            snprintf(error_msg, sizeof(error_msg), "%s",
+                     (detail && detail[0]) ? detail : "编译失败");
             collect_compile_error(task, error_msg);
         }
+        /* The per-task report is the only place the individual diagnostics are
+         * listed, so print it here rather than only in the serial driver. */
+        KrtCompilePipelinePrintErrorReport(pipeline);
         task->result = -1;
     } else {
         task->result = 0;
