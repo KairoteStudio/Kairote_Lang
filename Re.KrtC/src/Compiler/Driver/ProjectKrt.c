@@ -1,19 +1,28 @@
 #include "ProjectKrt.h"
 #include "ConfigManager.h"
 #include "../../Core/Utils/Path.h"
+#include "../../Core/Utils/Integer.h"
 #include "Compiler/Frontend/Lexer/Tokenizer.h"
 #include "Compiler/Frontend/Parser/Parser.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <errno.h>
+#include <limits.h>
 
 #ifndef _WIN32
 #include <dirent.h>
 #endif
 
 static char* trim(char* s) {
+    if (!s) {
+        return s;
+    }
     while (*s == ' ' || *s == '\t') {
         s++;
+    }
+    if (*s == '\0') {
+        return s;
     }
     char* e = s + strlen(s) - 1;
     while (e > s && (*e == ' ' || *e == '\t' || *e == '\n' || *e == '\r')) {
@@ -75,6 +84,7 @@ typedef struct {
     int var_count;
     int var_cap;
     KrtProjectKrtConfig* cfg;
+    bool has_error;
 } KrtProjEval;
 
 static const char* krt_proj_builtin(const char* name, char* out, size_t out_size) {
@@ -114,15 +124,25 @@ static const char* krt_proj_lookup(KrtProjEval* ev, const char* name, char* out,
 static void krt_proj_set_var(KrtProjEval* ev, const char* name, const char* value) {
     for (int i = 0; i < ev->var_count; i++) {
         if (strcmp(ev->vars[i].name, name) == 0) {
+            char* copy = KRT_STRDUP(value ? value : "");
+            if (!copy) {
+                KrtError("project.krt: out of memory setting variable '%s'", name);
+                return;
+            }
             KRT_FREE(ev->vars[i].value);
-            ev->vars[i].value = KRT_STRDUP(value ? value : "");
+            ev->vars[i].value = copy;
             return;
         }
     }
     if (ev->var_count >= ev->var_cap) {
+        if (ev->var_cap > INT_MAX / 2) {
+            KrtError("project.krt: too many variables");
+            return;
+        }
         int cap = ev->var_cap == 0 ? 4 : ev->var_cap * 2;
         KrtProjVar* nv = (KrtProjVar*)KRT_REALLOC(ev->vars, sizeof(KrtProjVar) * (size_t)cap);
         if (!nv) {
+            KrtError("project.krt: out of memory growing the variable table");
             return;
         }
         ev->vars = nv;
@@ -130,6 +150,9 @@ static void krt_proj_set_var(KrtProjEval* ev, const char* name, const char* valu
     }
     ev->vars[ev->var_count].name = KRT_STRDUP(name);
     ev->vars[ev->var_count].value = KRT_STRDUP(value ? value : "");
+    if (!ev->vars[ev->var_count].name || !ev->vars[ev->var_count].value) {
+        KrtError("project.krt: out of memory storing variable '%s'", name);
+    }
     ev->var_count++;
 }
 
@@ -144,8 +167,7 @@ static char* krt_proj_expand(KrtProjEval* ev, const char* s) {
         if (p[0] == '$' && p[1] == '{') {
             const char* close = strchr(p + 2, '}');
             if (!close) {
-                buf[len++] = *p++;
-                continue;
+                goto copy_literal;
             }
             char namebuf[512];
             size_t nlen = (size_t)(close - (p + 2));
@@ -165,7 +187,8 @@ static char* krt_proj_expand(KrtProjEval* ev, const char* s) {
             } else {
                 val = krt_proj_lookup(ev, namebuf, varbuf, sizeof(varbuf));
                 if (!val) {
-                    KRT_WARNING("project.krt: unknown variable '${%s}'", namebuf);
+                    KrtError("project.krt: unknown variable '${%s}'", namebuf);
+                    ev->has_error = true;
                     val = "";
                 }
             }
@@ -230,19 +253,30 @@ static int krt_list_add(char*** list, int* count, int* cap, const char* value) {
         return *count;
     }
     if (*count >= *cap) {
+        if (*cap > INT_MAX / 2) {
+            KrtError("project.krt: too many entries");
+            return -1;
+        }
         int nc = (*cap == 0) ? 4 : (*cap) * 2;
         char** nl = (char**)KRT_REALLOC(*list, sizeof(char*) * (size_t)nc);
         if (!nl) {
+            KrtError("project.krt: out of memory growing an entry list");
             return -1;
         }
         *list = nl;
         *cap = nc;
     }
-    (*list)[(*count)++] = KRT_STRDUP(value);
+    char* copy = KRT_STRDUP(value);
+    if (!copy) {
+        KrtError("project.krt: out of memory copying an entry");
+        return -1;
+    }
+    (*list)[(*count)++] = copy;
     return *count;
 }
 
-static int krt_glob_append(const char* base_dir, const char* pattern, char*** list, int* count, int* cap) {
+static int krt_glob_append(KrtProjEval* ev, const char* base_dir, const char* pattern, char*** list, int* count,
+                           int* cap) {
     if (!pattern) {
         return *count;
     }
@@ -310,6 +344,8 @@ static int krt_glob_append(const char* base_dir, const char* pattern, char*** li
 #else
     DIR* d = opendir(dirpath);
     if (!d) {
+        KrtError("project.krt: cannot open source directory '%s'", dirpath);
+        ev->has_error = true;
         return *count;
     }
     struct dirent* e;
@@ -341,6 +377,10 @@ static int krt_proj_add_sources(KrtProjEval* ev, char*** list, int* count, int* 
         return *count;
     }
     char* copy = KRT_STRDUP(spec);
+    if (!copy) {
+        KrtError("project.krt: out of memory expanding sources");
+        return -1;
+    }
     char* p = copy;
     while (*p) {
         if (*p == ',' || *p == ';') {
@@ -355,7 +395,7 @@ static int krt_proj_add_sources(KrtProjEval* ev, char*** list, int* count, int* 
         if (*item) {
             char* exp = krt_proj_expand(ev, item);
             if (exp) {
-                if (krt_glob_append(ev->cfg->base_dir, exp, list, count, cap) < 0) {
+                if (krt_glob_append(ev, ev->cfg->base_dir, exp, list, count, cap) < 0) {
                     KRT_FREE(exp);
                     KRT_FREE(copy);
                     return -1;
@@ -374,6 +414,10 @@ static int krt_proj_add_libraries(KrtProjEval* ev, char*** list, int* count, int
         return *count;
     }
     char* copy = KRT_STRDUP(spec);
+    if (!copy) {
+        KrtError("project.krt: out of memory expanding libraries");
+        return -1;
+    }
     char* p = copy;
     while (*p) {
         if (*p == ',' || *p == ';') {
@@ -388,7 +432,7 @@ static int krt_proj_add_libraries(KrtProjEval* ev, char*** list, int* count, int
         if (*item) {
             char* exp = krt_proj_expand(ev, item);
             if (exp) {
-                if (krt_list_add(list, count, cap, exp) < 0) {
+                if (krt_glob_append(ev, ev->cfg->base_dir, exp, list, count, cap) < 0) {
                     KRT_FREE(exp);
                     KRT_FREE(copy);
                     return -1;
@@ -442,33 +486,84 @@ static int krt_proj_eval_condition(KrtProjEval* ev, ASTNode* cond) {
     if (!cond) {
         return 0;
     }
-    if (cond->type == AST_BINARY_OPERATION &&
-        (cond->data.binary_op.operator == TOKEN_EQUAL || cond->data.binary_op.operator == TOKEN_NOT_EQUAL)) {
-        ASTNode* l = cond->data.binary_op.left;
-        ASTNode* r = cond->data.binary_op.right;
-        char lbuf[512], rbuf[512];
-        const char *lval = NULL, *rval = NULL;
-        if (l && l->type == AST_IDENTIFIER) {
-            lval = krt_proj_lookup(ev, l->data.identifier_name, lbuf, sizeof(lbuf));
-        } else if (l && l->type == AST_STRING) {
-            lval = l->data.string_value;
-        }
-        if (r && r->type == AST_IDENTIFIER) {
-            rval = krt_proj_lookup(ev, r->data.identifier_name, rbuf, sizeof(rbuf));
-        } else if (r && r->type == AST_STRING) {
-            rval = r->data.string_value;
-        }
-        int eq = strcmp(lval ? lval : "", rval ? rval : "") == 0;
-        return cond->data.binary_op.operator == TOKEN_EQUAL ? eq : !eq;
-    }
     if (cond->type == AST_IDENTIFIER) {
         char buf[64];
         const char* v = krt_proj_lookup(ev, cond->data.identifier_name, buf, sizeof(buf));
-        if (v) {
-            return strcmp(v, "true") == 0 || strcmp(v, "1") == 0;
+        if (!v) {
+            KrtError("project.krt: unknown variable '%s' in condition", cond->data.identifier_name);
+            ev->has_error = true;
+            return 0;
         }
+        return strcmp(v, "true") == 0 || strcmp(v, "1") == 0;
     }
-    return 0;
+    if (cond->type == AST_BOOLEAN) {
+        return cond->data.boolean_value != 0;
+    }
+    if (cond->type != AST_BINARY_OPERATION) {
+        KrtError("project.krt: unsupported condition expression");
+        ev->has_error = true;
+        return 0;
+    }
+
+    KrtTokenType op = cond->data.binary_op.operator;
+    if (op == TOKEN_AND || op == TOKEN_OR) {
+        int left = krt_proj_eval_condition(ev, cond->data.binary_op.left);
+        int right = krt_proj_eval_condition(ev, cond->data.binary_op.right);
+        return op == TOKEN_AND ? (left && right) : (left || right);
+    }
+    if (op != TOKEN_EQUAL && op != TOKEN_NOT_EQUAL && op != TOKEN_LESS && op != TOKEN_LESS_EQUAL &&
+        op != TOKEN_GREATER && op != TOKEN_GREATER_EQUAL) {
+        KrtError("project.krt: unsupported condition operator");
+        ev->has_error = true;
+        return 0;
+    }
+
+    ASTNode* l = cond->data.binary_op.left;
+    ASTNode* r = cond->data.binary_op.right;
+    char lbuf[512], rbuf[512];
+    const char *lval = NULL, *rval = NULL;
+    if (l && l->type == AST_IDENTIFIER) {
+        lval = krt_proj_lookup(ev, l->data.identifier_name, lbuf, sizeof(lbuf));
+    } else if (l && l->type == AST_STRING) {
+        lval = l->data.string_value;
+    }
+    if (r && r->type == AST_IDENTIFIER) {
+        rval = krt_proj_lookup(ev, r->data.identifier_name, rbuf, sizeof(rbuf));
+    } else if (r && r->type == AST_STRING) {
+        rval = r->data.string_value;
+    }
+    if (!lval || !rval) {
+        KrtError("project.krt: condition compares an unknown variable");
+        ev->has_error = true;
+        return 0;
+    }
+    if (op == TOKEN_EQUAL || op == TOKEN_NOT_EQUAL) {
+        int eq = strcmp(lval, rval) == 0;
+        return op == TOKEN_EQUAL ? eq : !eq;
+    }
+
+    /* Ordered comparison: numeric when both sides parse as integers. */
+    char* lend = NULL;
+    char* rend = NULL;
+    long long lnum = strtoll(lval, &lend, 10);
+    long long rnum = strtoll(rval, &rend, 10);
+    int numeric = lend != lval && rend != rval && *lend == '\0' && *rend == '\0';
+    int cmp;
+    if (numeric) {
+        cmp = (lnum > rnum) - (lnum < rnum);
+    } else {
+        cmp = strcmp(lval, rval);
+    }
+    switch (op) {
+    case TOKEN_LESS:
+        return cmp < 0;
+    case TOKEN_LESS_EQUAL:
+        return cmp <= 0;
+    case TOKEN_GREATER:
+        return cmp > 0;
+    default:
+        return cmp >= 0;
+    }
 }
 
 static int krt_proj_eval_call(KrtProjEval* ev, ASTNode* c) {
@@ -525,7 +620,10 @@ static int krt_proj_eval_call(KrtProjEval* ev, ASTNode* c) {
             char* alloc = NULL;
             const char* v = krt_proj_str_arg(ev, c->data.call.arguments[0], &alloc);
             if (v) {
-                parse_project_type(v, &ev->cfg->type);
+                if (!parse_project_type(v, &ev->cfg->type)) {
+                    KrtError("project.krt: unknown project type '%s'", v);
+                    ev->has_error = true;
+                }
             }
             if (alloc) {
                 KRT_FREE(alloc);
@@ -597,6 +695,21 @@ static int krt_proj_eval_stmt(KrtProjEval* ev, ASTNode* s) {
         if (value && value->type == AST_STRING) {
             alloc = krt_proj_expand(ev, value->data.string_value);
             v = alloc;
+        } else if (value && value->type == AST_NUMBER) {
+            char numbuf[64];
+            if (value->is_integer_literal) {
+                KrtIntegerFormat(value->integer_value, true, numbuf);
+            } else {
+                snprintf(numbuf, sizeof(numbuf), "%.17g", value->data.number_value);
+            }
+            alloc = KRT_STRDUP(numbuf);
+            v = alloc;
+        } else if (value && value->type == AST_BOOLEAN) {
+            alloc = KRT_STRDUP(value->data.boolean_value ? "true" : "false");
+            v = alloc;
+        } else if (value) {
+            KrtError("project.krt: unsupported variable value type");
+            ev->has_error = true;
         }
         if (vname) {
             krt_proj_set_var(ev, vname, v ? v : "");
@@ -634,23 +747,27 @@ static int krt_proj_eval_block(KrtProjEval* ev, ASTNode* b) {
     return 0;
 }
 
-static void krt_proj_eval_top_level_vars(KrtProjEval* ev, ASTNode* ast) {
-    if (!ev || !ast) {
+static void krt_proj_collect_vars(KrtProjEval* ev, ASTNode* node) {
+    if (!ev || !node) {
         return;
     }
-    ASTNode* listnode = ast;
-    if (ast->type == AST_NAMESPACE_DECLARATION) {
-        listnode = ast->data.namespace_decl.body;
-    }
-    if (!listnode || listnode->type != AST_PROGRAM) {
+    if (node->type == AST_VARIABLE_DECLARATION) {
+        krt_proj_eval_stmt(ev, node);
         return;
     }
-    for (int i = 0; i < listnode->data.block.statement_count; i++) {
-        ASTNode* s = listnode->data.block.statements[i];
-        if (s && s->type == AST_VARIABLE_DECLARATION) {
-            krt_proj_eval_stmt(ev, s);
+    if (node->type == AST_PROGRAM || node->type == AST_BLOCK) {
+        for (int i = 0; i < node->data.block.statement_count; i++) {
+            krt_proj_collect_vars(ev, node->data.block.statements[i]);
         }
+        return;
     }
+    if (node->type == AST_NAMESPACE_DECLARATION) {
+        krt_proj_collect_vars(ev, node->data.namespace_decl.body);
+    }
+}
+
+static void krt_proj_eval_top_level_vars(KrtProjEval* ev, ASTNode* ast) {
+    krt_proj_collect_vars(ev, ast);
 }
 
 static ASTNode* krt_proj_find_configure(ASTNode* ast) {
@@ -683,6 +800,7 @@ KrtProjectKrtConfig* KrtProjectKrtLoad(const char* path) {
 
     FILE* fp = fopen(path, "r");
     if (!fp) {
+        KrtError("project.krt: cannot open '%s': %s", path, strerror(errno));
         return NULL;
     }
     fseek(fp, 0, SEEK_END);
@@ -719,6 +837,9 @@ KrtProjectKrtConfig* KrtProjectKrtLoad(const char* path) {
     Lexer* lexer = lexer_create(source);
     Parser* parser = lexer ? parser_create(lexer) : NULL;
     if (!parser) {
+        if (lexer) {
+            lexer_destroy(lexer);
+        }
         KRT_FREE(source);
         KrtProjectKrtDestroy(config);
         KrtError("project.krt: 无法解析项目文件 '%s'", path);
@@ -742,13 +863,14 @@ KrtProjectKrtConfig* KrtProjectKrtLoad(const char* path) {
     krt_proj_eval_top_level_vars(&ev, ast);
 
     int rc = krt_proj_eval_block(&ev, body);
+    int had_error = ev.has_error;
 
     krt_proj_eval_destroy(&ev);
     parser_destroy(parser);
     lexer_destroy(lexer);
     KRT_FREE(source);
 
-    if (rc != 0) {
+    if (rc != 0 || had_error) {
         KrtProjectKrtDestroy(config);
         return NULL;
     }
@@ -760,6 +882,7 @@ KrtProjectKrtConfig* KrtProjectKrtLoad(const char* path) {
         config->output_name = KRT_STRDUP(config->project_name ? config->project_name : "output");
     }
 
+#if KRT_DEBUG_ENABLED
     fprintf(stderr, "[KrtProj.debug] name='%s' out='%s' type=%d\n", config->project_name, config->output_name,
             (int)config->type);
     for (int i = 0; i < config->source_count; i++) {
@@ -768,6 +891,7 @@ KrtProjectKrtConfig* KrtProjectKrtLoad(const char* path) {
     for (int i = 0; i < config->library_count; i++) {
         fprintf(stderr, "[KrtProj.debug]   lib[%d]=%s\n", i, config->libraries[i]);
     }
+#endif
 
     return config;
 }
@@ -794,6 +918,40 @@ void KrtProjectKrtDestroy(KrtProjectKrtConfig* config) {
     KRT_FREE(config);
 }
 
+static void write_krt_string_literal(FILE* fp, const char* text) {
+    fputc('"', fp);
+    for (const unsigned char* p = (const unsigned char*)(text ? text : ""); *p; p++) {
+        switch (*p) {
+        case '"':
+            fputs("\\\"", fp);
+            break;
+        case '\\':
+            fputs("\\\\", fp);
+            break;
+        case '\n':
+            fputs("\\n", fp);
+            break;
+        case '\r':
+            fputs("\\r", fp);
+            break;
+        case '\t':
+            fputs("\\t", fp);
+            break;
+        default:
+            fputc(*p, fp);
+        }
+    }
+    fputc('"', fp);
+}
+
+static void write_krt_call_arguments(FILE* fp, char* const* items, int count) {
+    for (int i = 0; i < count; i++) {
+        fprintf(fp, "        ");
+        write_krt_string_literal(fp, items[i] ? items[i] : "");
+        fprintf(fp, "%s\n", i + 1 < count ? "," : "");
+    }
+}
+
 int KrtProjectKrtSave(const KrtProjectKrtConfig* config, const char* path) {
     if (!config || !path) {
         return -1;
@@ -801,50 +959,41 @@ int KrtProjectKrtSave(const KrtProjectKrtConfig* config, const char* path) {
 
     FILE* fp = fopen(path, "w");
     if (!fp) {
+        KrtError("project.krt: cannot write '%s': %s", path, strerror(errno));
         return -1;
     }
 
-    fprintf(fp, "# Kairote Lang project file (.csproj equivalent)\n");
-    fprintf(fp, "project: %s\n", config->project_name ? config->project_name : "Untitled");
-    fprintf(fp, "type: console\n");
-    switch (config->type) {
-    case KRT_PROJ_TYPE_LIBRARY:
-        fprintf(fp, "type: library\n");
-        break;
-    case KRT_PROJ_TYPE_WEB:
-        fprintf(fp, "type: web\n");
-        break;
-    case KRT_PROJ_TYPE_SYSTEM:
-        fprintf(fp, "type: system\n");
-        break;
-    default:
-        break;
-    }
-    fprintf(fp, "output: %s\n", config->output_name ? config->output_name : "output");
+    static const char* const type_names[] = {"console", "library", "web", "system"};
 
+    fprintf(fp, "# Kairote Lang project file\n");
+    fprintf(fp, "function Configure(Project p) {\n");
+    fprintf(fp, "    p.Name(");
+    write_krt_string_literal(fp, config->project_name ? config->project_name : "Untitled");
+    fprintf(fp, ");\n");
+    fprintf(fp, "    p.Type(");
+    write_krt_string_literal(fp,
+                            type_names[config->type <= KRT_PROJ_TYPE_SYSTEM ? config->type : KRT_PROJ_TYPE_CONSOLE]);
+    fprintf(fp, ");\n");
+    fprintf(fp, "    p.CompileTogether(%s);\n", config->compile_together ? "true" : "false");
     if (config->source_count > 0) {
-        fprintf(fp, "sources: ");
-        for (int i = 0; i < config->source_count; i++) {
-            if (config->sources[i]) {
-                fprintf(fp, "%s ", config->sources[i]);
-            }
-        }
-        fprintf(fp, "\n");
+        fprintf(fp, "    p.Sources(\n");
+        write_krt_call_arguments(fp, config->sources, config->source_count);
+        fprintf(fp, "    );\n");
     }
-
     if (config->library_count > 0) {
-        fprintf(fp, "libraries: ");
-        for (int i = 0; i < config->library_count; i++) {
-            if (config->libraries[i]) {
-                fprintf(fp, "%s ", config->libraries[i]);
-            }
-        }
-        fprintf(fp, "\n");
-    } else {
-        fprintf(fp, "# libraries: Sys\n");
+        fprintf(fp, "    p.Libraries(\n");
+        write_krt_call_arguments(fp, config->libraries, config->library_count);
+        fprintf(fp, "    );\n");
     }
+    fprintf(fp, "    p.Output(");
+    write_krt_string_literal(fp, config->output_name ? config->output_name : "output");
+    fprintf(fp, ");\n");
+    fprintf(fp, "}\n");
 
-    fclose(fp);
+    if (fclose(fp) != 0) {
+        KrtError("project.krt: cannot write '%s': %s", path, strerror(errno));
+        return -1;
+    }
     return 0;
 }
 
