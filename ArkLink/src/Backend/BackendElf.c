@@ -884,7 +884,33 @@ static ArkLinkResult elf_plan_layout(ElfLinkState* state) {
     state->phdr_load_count = 0;
     if (!state->has_dynamic && !state->has_tls) {
         uint32_t cur_flags = 0;
+        /*
+         * Sections are laid out grouped by permission class, so their virtual
+         * addresses are no longer in input order.  Walk them by address:
+         * building the PT_LOADs in input order makes them overlap, and the
+         * later mapping silently wins (which is how .rodata used to be
+         *clobbered by a text segment).
+         */
+        size_t* sec_order = (size_t*)malloc(state->ns * sizeof(size_t));
+        if (!sec_order) {
+            return ARK_LINK_ERR_MEMORY;
+        }
         for (size_t i = 0; i < state->ns; i++) {
+            sec_order[i] = i;
+        }
+        for (size_t i = 1; i < state->ns; i++) {
+            size_t key = sec_order[i];
+            uint64_t key_va = ark_layout_get_section(state->layout, key)->virtual_address;
+            size_t j = i;
+            while (j > 0 &&
+                   ark_layout_get_section(state->layout, sec_order[j - 1])->virtual_address > key_va) {
+                sec_order[j] = sec_order[j - 1];
+                j--;
+            }
+            sec_order[j] = key;
+        }
+        for (size_t oi = 0; oi < state->ns; oi++) {
+            size_t i = sec_order[oi];
             ArkSectionKind k = (ArkSectionKind)state->input->sections[i].kind;
             if (k != ARK_SECTION_CODE && k != ARK_SECTION_DATA && k != ARK_SECTION_RODATA && k != ARK_SECTION_BSS &&
                 k != ARK_SECTION_TDATA) {
@@ -924,7 +950,8 @@ static ArkLinkResult elf_plan_layout(ElfLinkState* state) {
                 continue;
             }
             if (state->n_static_loads >= 48) {
-                break;
+                oi = state->ns; /* stop, but still reach the free() below */
+                continue;
             }
             Elf64_Phdr* seg = &state->static_loads[state->n_static_loads++];
             memset(seg, 0, sizeof(*seg));
@@ -938,6 +965,7 @@ static ArkLinkResult elf_plan_layout(ElfLinkState* state) {
             seg->p_align = state->page_size;
             cur_flags = f;
         }
+        free(sec_order);
         if (state->n_static_loads > 0) {
             state->seg1_filesz = state->static_loads[0].p_filesz;
             state->seg1_memsz = state->static_loads[0].p_memsz;
