@@ -21,7 +21,7 @@ KrtCompiler* KrtCompilerCreate(const char* output_filename, KrtTargetPlatform ta
 
     KRT_STRNCPY_SAFE(compiler->output_filename, output_filename);
 
-    if (target == KRT_TARGET_KRO_OBJ) {
+    if (target == KRT_TARGET_KRO_OBJ || target == KRT_TARGET_EXE_PLATFORM) {
         compiler->output_file = fopen(output_filename, "wb");
     } else {
         compiler->output_file = fopen(output_filename, "w");
@@ -209,10 +209,7 @@ bool KrtCompilerCompile(KrtCompiler* compiler, ASTNode* ast, void* semantic_anal
         KrtError("WebAssembly backend is not implemented");
         KrtIrBuilderDestroy(ir_builder);
         return false;
-    case KRT_TARGET_KRO_OBJ: {
-        KrtKrtGenerate(compiler->output_file, compiler->output_filename, ir_builder->module);
-        break;
-    }
+    case KRT_TARGET_KRO_OBJ:
     case KRT_TARGET_EXE_PLATFORM: {
         KrtKrtGenerate(compiler->output_file, compiler->output_filename, ir_builder->module);
         break;

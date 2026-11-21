@@ -192,6 +192,10 @@ static void plan_tail_register_updates(KROCodegenContext* ctx, KrtIRFunction* fu
             }
             for (int i = 0; i < plan.definition_count; i++) {
                 KROTempSlot* slot = find_temp_location(ctx, plan.definitions[i]->result.data.index);
+                if (!slot) {
+                    KrtError("KRO tail update definition temporary has no slot");
+                    continue;
+                }
                 slot->deferred_tail_argument = true;
                 slot->no_storage = true;
             }

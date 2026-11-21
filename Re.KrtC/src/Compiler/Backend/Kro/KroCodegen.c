@@ -1292,6 +1292,11 @@ static bool generate_function(KROCodegenContext* ctx, KrtIRFunction* func, KrtIR
         KrtError("KRO temporary storage allocation failed");
         return false;
     }
+    if (func->param_count > 0 && !func->params) {
+        KrtError("KRO function %s declares %d parameters but has no parameter table", func->name,
+                 func->param_count);
+        return false;
+    }
 
     // KrtIrSsaOptimize(func);  //禁用SSA优化,除了Airs_td以外的人不要打开它,SSA不稳定
 
@@ -1314,7 +1319,11 @@ static bool generate_function(KROCodegenContext* ctx, KrtIRFunction* func, KrtIR
     ctx->tail_register_argument = false;
     memset(ctx->tail_arg_offsets, 0, sizeof(ctx->tail_arg_offsets));
     ctx->current_block = NULL;
-    ctx->current_param_count = func->param_count < KRT_KRO_MAX_ARGS ? func->param_count : KRT_KRO_MAX_ARGS;
+    if (func->param_count > KRT_KRO_MAX_ARGS) {
+        KrtError("KRO function %s exceeds the %d parameter limit", func->name, KRT_KRO_MAX_ARGS);
+        return false;
+    }
+    ctx->current_param_count = func->param_count;
     memset(ctx->arg_stack_offsets, 0, sizeof(ctx->arg_stack_offsets));
     memset(ctx->arg_address_taken, 0, sizeof(ctx->arg_address_taken));
     memset(ctx->arg_packed, 0, sizeof(ctx->arg_packed));

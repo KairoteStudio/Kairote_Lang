@@ -29,6 +29,12 @@ static void allocate_packed_field(KROCodegenContext* ctx, KrtTokenType type, KRO
 
 static void emit_load_packed_field(KROCodegenContext* ctx, const KROPackedField* field, bool is_unsigned,
                                    int target_reg) {
+    if (!field || field->bit_width <= 0 || field->bit_width > 64 || field->bit_offset < 0 ||
+        field->bit_offset + field->bit_width > 64) {
+        KrtError("KRO invalid packed field (offset=%d width=%d)", field ? field->bit_offset : -1,
+                 field ? field->bit_width : 0);
+        return;
+    }
     if (!field->bit_offset) {
         emit_extend_scalar(ctx, field->bit_width, is_unsigned, field->reg, target_reg);
         return;

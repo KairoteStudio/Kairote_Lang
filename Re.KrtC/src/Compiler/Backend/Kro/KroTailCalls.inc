@@ -30,6 +30,9 @@ static KrtIRInst* skip_tail_copies(KROCodegenContext* ctx, KrtIRInst* inst, KrtI
 
 static bool match_tail_return(KROCodegenContext* ctx, KrtIRInst* call, KrtIRInst** combine, KrtIRInst** ret) {
     KrtIRFunction* func = ctx->current_function;
+    if (func->param_count > 0 && !func->params) {
+        return false;
+    }
     if (call->opcode != KRT_IR_CALL || call->operand_count != func->param_count + 1 ||
         call->operands[0].type != KRT_IR_VALUE_FUNCTION || !call->operands[0].data.function_name ||
         strcmp(call->operands[0].data.function_name, func->name) != 0 || call->result.value_type != func->return_type ||
@@ -120,11 +123,19 @@ static void plan_tail_calls(KROCodegenContext* ctx, KrtIRFunction* func) {
             }
             slot->tail_combine = combine;
             slot->tail_return = ret;
-            for (KrtIRInst* omitted = inst; omitted != ret; omitted = omitted->next) {
+            KrtIRInst* omitted = inst;
+            while (omitted && omitted != ret) {
                 KROTempSlot* unused = find_temp_location(ctx, omitted->result.data.index);
                 if (unused) {
                     unused->no_storage = true;
                 }
+                omitted = omitted->next;
+            }
+            if (!omitted) {
+                KrtError("KRO plan_tail_calls: tail return is not reachable from the call");
+                slot->tail_combine = NULL;
+                slot->tail_return = NULL;
+                continue;
             }
             ctx->tail_site_count++;
         }
