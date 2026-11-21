@@ -17,7 +17,7 @@ static const char* g_arg_regs[] = {"rcx", "rdx", "r8", "r9"};
 static const int g_arg_reg_count = 4;
 #endif
 
-static int calculate_stack_size(KrtIRFunction* func) {
+static int calculate_stack_size(KrtIRFunction* func, int spill_space) {
     int stack_size = X86_SHADOW_SPACE;
     int max_temp_idx = 0;
 
@@ -47,6 +47,11 @@ static int calculate_stack_size(KrtIRFunction* func) {
     int temp_space = (max_temp_idx + 1) * 8;
     if (temp_space > X86_MAX_TEMP_SPACE) {
         temp_space = X86_MAX_TEMP_SPACE;
+    }
+    /* Spill slots assigned by the register allocator live beyond the fixed
+     * temp window; make sure the frame covers them. */
+    if (spill_space > temp_space) {
+        temp_space = spill_space;
     }
 
     stack_size += func->param_count * 8 + temp_space;
@@ -168,7 +173,7 @@ void codegen_context_init(CodegenContext* ctx, KrtIRFunction* func, KrtIRModule*
         }
     }
 
-    ctx->stack_size = calculate_stack_size(func);
+    ctx->stack_size = calculate_stack_size(func, regalloc ? regalloc->stack_space_needed : 0);
     ctx->temp_stack_base = func->param_count * 8 + 32;
 }
 
@@ -286,6 +291,10 @@ void codegen_emit_load_temp(FILE* output, CodegenContext* ctx, int temp_idx, con
         break;
     case TEMP_LOC_NONE:
     default:
+        /* Keep load/store locations consistent: an unassigned temporary gets
+         * the same stack slot that codegen_emit_store_temp would choose. */
+        codegen_set_temp_on_stack(ctx, temp_idx, ctx->temp_stack_base + temp_idx * 8);
+        fprintf(output, "    mov %s, [rbp - %d]\n", target_reg, ctx->temp_stack_base + temp_idx * 8);
         break;
     }
 }
@@ -363,9 +372,18 @@ static void restore_rcx_if_needed(Emitter* em, int was_spilled) {
 }
 
 static void emit_load_value(Emitter* em, KrtIRValue* value, const char* target_reg) {
+    if (!em || !value || !target_reg) {
+        return;
+    }
+
     switch (value->type) {
     case KRT_IR_VALUE_INTEGER:
-        fprintf(em->output, "    mov %s, %llu\n", target_reg, (unsigned long long)value->data.integer);
+        if (KrtTokenIntegerBits(value->value_type) > 64) {
+            KrtError("X86 backend: integer constant exceeds 64 bits");
+            fprintf(em->output, "    xor %s, %s\n", target_reg, target_reg);
+        } else {
+            fprintf(em->output, "    mov %s, %llu\n", target_reg, (unsigned long long)value->data.integer);
+        }
         break;
     case KRT_IR_VALUE_IMM: {
         long long imm = (long long)value->data.imm;
@@ -399,6 +417,10 @@ static void emit_load_value(Emitter* em, KrtIRValue* value, const char* target_r
     }
     case KRT_IR_VALUE_STRING_CONST: {
         int str_id = value->data.string_const_id;
+        if (str_id < 0) {
+            KrtError("X86 backend: invalid string constant id %d", str_id);
+            break;
+        }
         fprintf(em->output, "    lea %s, [rel string_const_%d]\n", target_reg, str_id);
         break;
     }
@@ -799,25 +821,36 @@ static void emit_instruction(Emitter* em, KrtIRInst* inst) {
         break;
 
     case KRT_IR_BRANCH:
-        if (inst->operand_count >= 3) {
+        if (inst->operand_count >= 3 && inst->operands[1].data.name && inst->operands[2].data.name) {
             char safe_name[256];
             sanitize_label_name(em->ctx->current_func->name, safe_name, sizeof(safe_name));
             emit_branch(em, &inst->operands[0], safe_name, inst->operands[1].data.name, inst->operands[2].data.name);
+        } else {
+            KrtError("X86 BRANCH expects 3 operands with label names (got %d)", inst->operand_count);
         }
         break;
 
     case KRT_IR_JUMP:
-        if (inst->operand_count >= 1) {
+        if (inst->operand_count >= 1 && inst->operands[0].data.name) {
             char safe_name[256];
             sanitize_label_name(em->ctx->current_func->name, safe_name, sizeof(safe_name));
             emit_jump(em, safe_name, inst->operands[0].data.name);
+        } else {
+            KrtError("X86 JUMP expects a label operand (got %d)", inst->operand_count);
         }
         break;
 
     case KRT_IR_CALL:
         if (inst->operand_count >= 1) {
             const char* func_name = inst->operands[0].data.function_name;
-            emit_call(em, func_name, &inst->operands[1], inst->operand_count - 1, &inst->result);
+            if (!func_name) {
+                KrtError("X86 CALL is missing its function name");
+                break;
+            }
+            emit_call(em, func_name, inst->operand_count > 1 ? &inst->operands[1] : NULL,
+                      inst->operand_count > 1 ? inst->operand_count - 1 : 0, &inst->result);
+        } else {
+            KrtError("X86 CALL expects at least a function-name operand");
         }
         break;
 
@@ -959,6 +992,7 @@ static void emit_instruction(Emitter* em, KrtIRInst* inst) {
         break;
 
     default:
+        KrtError("X86 backend: unsupported IR opcode %d", (int)inst->opcode);
         break;
     }
 }
@@ -1024,6 +1058,11 @@ static void emit_function_prologue(FILE* output, CodegenContext* ctx) {
     }
 
     int incoming_stack_offset = 16 + X86_SHADOW_SPACE;
+    if (ctx->current_func->param_count > 0 && !ctx->current_func->params) {
+        KrtError("X86 function '%s' declares %d parameters without a parameter table",
+                 ctx->current_func->name ? ctx->current_func->name : "<anonymous>",
+                 ctx->current_func->param_count);
+    }
     for (int i = 0; i < ctx->current_func->param_count; i++) {
         if (ctx->current_func->params && ctx->current_func->params[i].name) {
             const char* param_name = ctx->current_func->params[i].name;
