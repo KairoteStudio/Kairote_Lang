@@ -551,18 +551,23 @@ int KrtProjCreateTemplate(KrtProject* project, const char* output_dir) {
         return 0;
     }
 
+    char created_files[8][KRT_MAX_PATH];
+    int created_count = 0;
+    char stdlib_dst[KRT_MAX_PATH] = {0};
+    char project_libs[KRT_MAX_PATH] = {0};
+
     if (!project->project_root) {
         project->project_root = KRT_STRDUP(output_dir);
         if (!project->project_root) {
             KrtError("无法分配项目根目录路径");
-            return 0;
+            goto fail;
         }
     }
 
     char stdlib_src[KRT_MAX_PATH];
     if (!resolve_bundled_stdlib(stdlib_src, sizeof(stdlib_src))) {
         KrtError("无法找到捆绑标准库；期望安装目录同级的 stdlib/");
-        return 0;
+        goto fail;
     }
 
     typedef struct {
@@ -629,7 +634,7 @@ int KrtProjCreateTemplate(KrtProject* project, const char* output_dir) {
 
     if (create_directory_recursive(output_dir) != 0) {
         KrtError("无法创建项目目录: %s", output_dir);
-        return 0;
+        goto fail;
     }
 
     char sources_buf[512] = "";
@@ -637,24 +642,28 @@ int KrtProjCreateTemplate(KrtProject* project, const char* output_dir) {
         const TemplateFile* tpl = &templates[i];
         if (!KrtProjAddFile(project, tpl->name, "Compile")) {
             KrtError("无法记录项目模板源文件: %s", tpl->name);
-            return 0;
+            goto fail;
         }
 
         char file_path[KRT_MAX_PATH];
         if (!join_path(file_path, sizeof(file_path), output_dir, tpl->name)) {
             KrtError("项目模板文件路径过长: %s", tpl->name);
-            return 0;
+            goto fail;
         }
         if (write_file_checked(file_path, tpl->content) != 0) {
             KrtError("无法写入项目模板文件: %s", file_path);
-            return 0;
+            goto fail;
+        }
+        if (created_count < 8) {
+            KRT_STRNCPY(created_files[created_count], file_path, KRT_MAX_PATH);
+            created_count++;
         }
 
         size_t sources_length = strlen(sources_buf);
         size_t template_name_length = strlen(tpl->name);
         if (sources_length + template_name_length + 2 > sizeof(sources_buf)) {
             KrtError("项目模板源文件列表过长");
-            return 0;
+            goto fail;
         }
         memcpy(sources_buf + sources_length, tpl->name, template_name_length);
         sources_buf[sources_length + template_name_length] = ' ';
@@ -664,13 +673,13 @@ int KrtProjCreateTemplate(KrtProject* project, const char* output_dir) {
     char project_krt_path[KRT_MAX_PATH];
     if (!join_path(project_krt_path, sizeof(project_krt_path), output_dir, "project.krt")) {
         KrtError("项目配置文件路径过长");
-        return 0;
+        goto fail;
     }
     {
         FILE* pk = fopen(project_krt_path, "w");
         if (!pk) {
             KrtError("无法创建项目配置文件: %s", project_krt_path);
-            return 0;
+            goto fail;
         }
 
         const char* proj_name = project->name ? project->name : output_dir;
@@ -725,23 +734,34 @@ int KrtProjCreateTemplate(KrtProject* project, const char* output_dir) {
         }
         if (!project_file_ok) {
             KrtError("写入项目配置文件失败: %s", project_krt_path);
-            return 0;
+            goto fail;
+        }
+        if (created_count < 8) {
+            KRT_STRNCPY(created_files[created_count], project_krt_path, KRT_MAX_PATH);
+            created_count++;
         }
     }
 
-    char stdlib_dst[KRT_MAX_PATH];
-    char project_libs[KRT_MAX_PATH];
     if (!join_path(project_libs, sizeof(project_libs), output_dir, "libs") ||
         !join_path(stdlib_dst, sizeof(stdlib_dst), project_libs, "System")) {
         KrtError("标准库目标路径过长");
-        return 0;
+        goto fail;
     }
     if (create_directory_recursive(stdlib_dst) != 0 || copy_directory_recursive(stdlib_src, stdlib_dst) != 0) {
         KrtError("无法复制标准库到项目目录: %s", stdlib_dst);
-        return 0;
+        goto fail;
     }
 
     return 1;
+
+fail:
+    for (int i = 0; i < created_count; i++) {
+        KrtDeleteFile(created_files[i]);
+    }
+    KrtRemoveDirectory(stdlib_dst);
+    KrtRemoveDirectory(project_libs);
+    KrtRemoveDirectory(output_dir);
+    return 0;
 }
 
 char** KrtProjGetTemplates(int* count) {
