@@ -327,7 +327,7 @@ static int link_kro_executable(KrtConfig* config, KrtPlatform* platform, const c
                         }
 
                         int nested_count = 0;
-                        char** nested_files = KrtCompilePipelineGetImportedFiles(import_pipeline, &nested_count);
+                        const char* const* nested_files = KrtCompilePipelineGetImportedFiles(import_pipeline, &nested_count);
                         for (int j = 0; j < nested_count; j++) {
                             KrtConfigAddImportedFile(config, nested_files[j]);
                         }
@@ -516,7 +516,7 @@ static int compile_single_file(const char* input_file, const char* output_file, 
 #ifdef __linux__
             {
                 int import_count = 0;
-                char** import_files = KrtCompilePipelineGetImportedFiles(pipeline, &import_count);
+                const char* const* import_files = KrtCompilePipelineGetImportedFiles(pipeline, &import_count);
                 for (int i = 0; i < import_count; i++) {
                     KrtConfigAddImportedFile(config, import_files[i]);
                 }
@@ -557,7 +557,7 @@ static int compile_single_file(const char* input_file, const char* output_file, 
 
             {
                 int import_count = 0;
-                char** import_files = KrtCompilePipelineGetImportedFiles(pipeline, &import_count);
+                const char* const* import_files = KrtCompilePipelineGetImportedFiles(pipeline, &import_count);
                 for (int i = 0; i < import_count; i++) {
                     KrtConfigAddImportedFile(config, import_files[i]);
                 }

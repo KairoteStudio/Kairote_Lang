@@ -12,18 +12,7 @@ typedef enum { KRT_TARGET_ASM, KRT_TARGET_IR, KRT_TARGET_EXE, KRT_TARGET_KRO, KR
 typedef enum { KRT_CONFIG_PLATFORM_WINDOWS, KRT_CONFIG_PLATFORM_LINUX, KRT_CONFIG_PLATFORM_UNKNOWN } KrtPlatformType;
 
 typedef struct {
-    const char* platform_name;
-    const char* const* object_files;
-    int object_count;
-    const char* const* end_objects;
-    int end_object_count;
-    const char* const* library_paths;
-    int library_path_count;
-    const char* const* libraries;
-    int library_count;
     const char* entry_point;
-    const char* subsystem;
-    const char* dynamic_linker;
 } KrtLinkerConfig;
 
 typedef struct {
@@ -40,8 +29,6 @@ typedef struct {
     int keep_temp_files;
     int max_threads;
     const char* project_type;
-
-    const KrtLinkerConfig* linker_config;
 
     int color_enabled;
     char temp_asm_file[KRT_MAX_PATH];
@@ -61,11 +48,7 @@ int KrtConfigValidate(KrtConfig* config);
 
 KrtPlatformType KrtConfigDetectPlatform(void);
 const KrtLinkerConfig* KrtConfigGetLinkerConfig(KrtPlatformType platform);
-
 const char* KrtConfigGetDefaultOutput(KrtConfig* config);
 int KrtConfigNeedsLinking(KrtConfig* config);
-
-const char* KrtConfigProjectNameFromType(const char* project_type);
-int KrtConfigCreateProject(const char* project_name, const char* project_type);
 
 #endif

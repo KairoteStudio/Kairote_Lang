@@ -149,8 +149,14 @@ static void record_stage_result(KrtCompilePipeline* pipeline, KrtCompileStage st
 }
 
 KrtCompilePipeline* KrtCompilePipelineCreate(KrtConfig* config, KrtPlatform* platform) {
+    if (!config) {
+        KrtError("编译流水线需要配置");
+        return NULL;
+    }
+
     KrtCompilePipeline* pipeline = (KrtCompilePipeline*)KRT_MALLOC(sizeof(KrtCompilePipeline));
     if (!pipeline) {
+        KrtError("无法分配编译流水线");
         return NULL;
     }
 
@@ -198,6 +204,12 @@ void KrtCompilePipelineReset(KrtCompilePipeline* pipeline) {
     }
     if (pipeline->source_code) {
         KRT_FREE(pipeline->source_code);
+    }
+    if (pipeline->input_file) {
+        KRT_FREE(pipeline->input_file);
+    }
+    if (pipeline->output_file) {
+        KRT_FREE(pipeline->output_file);
     }
 
     if (pipeline->imported_files) {
@@ -329,6 +341,7 @@ int KrtCompilePipelinePreprocess(KrtCompilePipeline* pipeline) {
 }
 
 static void apply_lexer_error(KrtCompilePipeline* pipeline) {
+    pipeline->error_line = pipeline->lexer->error_line;
     if (pipeline->lexer->error_message[0] != '\0') {
         snprintf(pipeline->error_message, sizeof(pipeline->error_message), "%s near line %d",
                  pipeline->lexer->error_message, pipeline->lexer->error_line);
@@ -349,14 +362,6 @@ int KrtCompilePipelineLex(KrtCompilePipeline* pipeline) {
     if (!pipeline->lexer) {
         snprintf(pipeline->error_message, sizeof(pipeline->error_message), "词法分析器创建失败: %s",
                  pipeline->input_file);
-        pipeline->success = 0;
-        record_stage_result(pipeline, KRT_STAGE_LEX, KRT_RESULT_FAILED, (double)(clock() - start) / CLOCKS_PER_SEC,
-                            pipeline->input_file);
-        return 0;
-    }
-
-    if (pipeline->lexer->error_count > 0) {
-        apply_lexer_error(pipeline);
         pipeline->success = 0;
         record_stage_result(pipeline, KRT_STAGE_LEX, KRT_RESULT_FAILED, (double)(clock() - start) / CLOCKS_PER_SEC,
                             pipeline->input_file);
@@ -386,13 +391,6 @@ int KrtCompilePipelineParse(KrtCompilePipeline* pipeline) {
     }
 
     pipeline->parser->source_name = pipeline->input_file ? pipeline->input_file : NULL;
-    if (pipeline->lexer->error_count > 0) {
-        apply_lexer_error(pipeline);
-        pipeline->success = 0;
-        record_stage_result(pipeline, KRT_STAGE_PARSE, KRT_RESULT_FAILED, (double)(clock() - start) / CLOCKS_PER_SEC,
-                            pipeline->input_file);
-        return 0;
-    }
     pipeline->ast = parser_parse(pipeline->parser);
 
     if (pipeline->lexer->error_count > 0) {
@@ -404,6 +402,7 @@ int KrtCompilePipelineParse(KrtCompilePipeline* pipeline) {
     }
 
     if (pipeline->ast && pipeline->parser->error_count > 0) {
+        pipeline->error_line = pipeline->lexer->error_line;
         snprintf(pipeline->error_message, sizeof(pipeline->error_message), "语法错误 %d 处: %s",
                  pipeline->parser->error_count, pipeline->input_file);
         pipeline->success = 0;
@@ -448,12 +447,8 @@ int KrtCompilePipelineSemantic(KrtCompilePipeline* pipeline) {
     }
 
     semantic_analyzer_set_input_file(pipeline->semantic_analyzer, pipeline->input_file);
-    {
-        const char* of = pipeline->output_file;
-        size_t ol = of ? strlen(of) : 0;
-        if (ol >= 4 && strcmp(of + ol - 4, ".kro") == 0) {
-            pipeline->semantic_analyzer->require_entry_point = false;
-        }
+    if (pipeline->config && pipeline->config->target_type == KRT_TARGET_KRO) {
+        pipeline->semantic_analyzer->require_entry_point = false;
     }
     semantic_analyzer_set_pipeline(pipeline->semantic_analyzer, pipeline);
 
@@ -581,8 +576,15 @@ int KrtCompilePipelineExecute(KrtCompilePipeline* pipeline, const char* input_fi
 
     clock_t total_start = clock();
 
-    pipeline->input_file = input_file;
-    pipeline->output_file = output_file;
+    KRT_FREE(pipeline->input_file);
+    KRT_FREE(pipeline->output_file);
+    pipeline->input_file = KRT_STRDUP(input_file);
+    pipeline->output_file = KRT_STRDUP(output_file);
+    if (!pipeline->input_file || !pipeline->output_file) {
+        snprintf(pipeline->error_message, sizeof(pipeline->error_message), "内存分配失败: 无法复制输入/输出路径");
+        pipeline->success = 0;
+        return 0;
+    }
 
     if (pipeline->ast) {
         if (!KrtCompilePipelineSemantic(pipeline)) {
@@ -637,7 +639,7 @@ const char* KrtCompilePipelineGetError(KrtCompilePipeline* pipeline) {
     return pipeline ? pipeline->error_message : "Unknown error";
 }
 
-KrtCompileStageResult* KrtCompilePipelineGetStageResults(KrtCompilePipeline* pipeline, int* count) {
+const KrtCompileStageResult* KrtCompilePipelineGetStageResults(KrtCompilePipeline* pipeline, int* count) {
     if (!pipeline || !count) {
         return NULL;
     }
@@ -783,37 +785,11 @@ bool KrtCompilePipelineAddImportedFile(KrtCompilePipeline* pipeline, const char*
     if (!pipeline || !file_path) {
         return false;
     }
-
-    for (int i = 0; i < pipeline->imported_file_count; i++) {
-        if (strcmp(pipeline->imported_files[i], file_path) == 0) {
-            return true;
-        }
-    }
-
-    if (pipeline->imported_file_count >= pipeline->imported_file_capacity) {
-        if (pipeline->imported_file_capacity > INT_MAX / 2 ||
-            (size_t)(pipeline->imported_file_capacity == 0 ? 8 : pipeline->imported_file_capacity * 2) >
-                SIZE_MAX / sizeof(*pipeline->imported_files)) {
-            return false;
-        }
-        int new_capacity = pipeline->imported_file_capacity == 0 ? 8 : pipeline->imported_file_capacity * 2;
-        char** new_files = (char**)KRT_REALLOC(pipeline->imported_files, new_capacity * sizeof(char*));
-        if (!new_files) {
-            return false;
-        }
-        pipeline->imported_files = new_files;
-        pipeline->imported_file_capacity = new_capacity;
-    }
-
-    char* copy = KRT_STRDUP(file_path);
-    if (!copy) {
-        return false;
-    }
-    pipeline->imported_files[pipeline->imported_file_count++] = copy;
-    return true;
+    return krt_string_list_add(&pipeline->imported_files, &pipeline->imported_file_count,
+                               &pipeline->imported_file_capacity, file_path);
 }
 
-char** KrtCompilePipelineGetImportedFiles(KrtCompilePipeline* pipeline, int* count) {
+const char* const* KrtCompilePipelineGetImportedFiles(KrtCompilePipeline* pipeline, int* count) {
     if (!pipeline || !count) {
         return NULL;
     }

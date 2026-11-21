@@ -35,8 +35,8 @@ typedef struct {
 
     KrtConfig* config;
     KrtPlatform* platform;
-    const char* input_file;
-    const char* output_file;
+    char* input_file;
+    char* output_file;
     KrtCompileStage current_stage;
     char* source_code;
     char* processed_source;
@@ -85,10 +85,10 @@ int KrtCompilePipelineCodegen(KrtCompilePipeline* pipeline);
 int KrtCompilePipelineGetSuccess(KrtCompilePipeline* pipeline);
 const char* KrtCompilePipelineGetError(KrtCompilePipeline* pipeline);
 const char* KrtCompilePipelineGetFailedStageName(KrtCompilePipeline* pipeline);
-KrtCompileStageResult* KrtCompilePipelineGetStageResults(KrtCompilePipeline* pipeline, int* count);
+const KrtCompileStageResult* KrtCompilePipelineGetStageResults(KrtCompilePipeline* pipeline, int* count);
 double KrtCompilePipelineGetTotalDuration(KrtCompilePipeline* pipeline);
 bool KrtCompilePipelineAddImportedFile(KrtCompilePipeline* pipeline, const char* file_path);
-char** KrtCompilePipelineGetImportedFiles(KrtCompilePipeline* pipeline, int* count);
+const char* const* KrtCompilePipelineGetImportedFiles(KrtCompilePipeline* pipeline, int* count);
 void KrtCompilePipelinePrintErrorReport(KrtCompilePipeline* pipeline);
 
 #endif

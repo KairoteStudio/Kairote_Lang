@@ -87,9 +87,45 @@
 #include <stdbool.h>
 #include <assert.h>
 #include <stddef.h>
+#include <limits.h>
 #include "KrtString.h"
 #include <time.h>
 #include <stdarg.h>
+
+/* Append value to a growing string list, deduplicating. Shared by the config
+ * and pipeline imported-file tables. Returns false on an invalid argument or
+ * allocation failure; a duplicate is a no-op success. */
+static inline bool krt_string_list_add(char*** list, int* count, int* capacity, const char* value) {
+    if (!list || !count || !capacity || !value) {
+        return false;
+    }
+    for (int i = 0; i < *count; i++) {
+        if ((*list)[i] && strcmp((*list)[i], value) == 0) {
+            return true;
+        }
+    }
+    if (*count >= *capacity) {
+        if (*capacity > INT_MAX / 2) {
+            return false;
+        }
+        int new_capacity = *capacity == 0 ? 8 : *capacity * 2;
+        if ((size_t)new_capacity > SIZE_MAX / sizeof(char*)) {
+            return false;
+        }
+        char** new_list = (char**)KRT_REALLOC(*list, (size_t)new_capacity * sizeof(char*));
+        if (!new_list) {
+            return false;
+        }
+        *list = new_list;
+        *capacity = new_capacity;
+    }
+    char* copy = KRT_STRDUP(value);
+    if (!copy) {
+        return false;
+    }
+    (*list)[(*count)++] = copy;
+    return true;
+}
 
 double KrtGetTime(void);
 
