@@ -267,7 +267,7 @@ int KrtEnsureDirectoryRecursive(const char* path) {
         return -1;
     }
 
-    char temp[1024];
+    char temp[KRT_MAX_PATH];
     size_t len = 0;
     for (const char* p = path; *p; p++) {
         len++;
@@ -281,11 +281,9 @@ int KrtEnsureDirectoryRecursive(const char* path) {
 
 #ifdef _WIN32
 
-    if (len > 2 && temp[1] == ':') {
-        char* p = temp + 2;
-        if (*p == '/' || *p == '\\') {
-            p++;
-        }
+    /* Only "C:/..." is drive-absolute; "C:foo" is drive-relative. */
+    if (len > 2 && temp[1] == ':' && (temp[2] == '/' || temp[2] == '\\')) {
+        char* p = temp + 3;
 
         while (*p) {
             char* slash = NULL;

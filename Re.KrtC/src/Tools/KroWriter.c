@@ -53,6 +53,7 @@ typedef struct KROWriter {
 
     uint32_t flags;
     uint32_t arch;
+    uint32_t error_count;
 } KROWriter;
 
 static bool allocate_writer_buffers(KROWriter* writer) {
@@ -177,11 +178,15 @@ uint32_t kro_write_code(KROWriter* writer, const void* data, uint32_t size) {
 
     uint32_t offset = writer->text_offset;
     if (size > UINT32_MAX - offset) {
+        writer->error_count++;
+        KrtError("KRO text write overflow");
         return 0;
     }
     uint32_t new_size = offset + size;
 
     if (!ensure_capacity(&writer->text, &writer->text_capacity, new_size)) {
+        writer->error_count++;
+        KrtError("KRO text buffer allocation failed");
         return 0;
     }
 
@@ -200,11 +205,15 @@ uint32_t kro_write_data(KROWriter* writer, const void* data, uint32_t size) {
 
     uint32_t offset = writer->data_offset;
     if (size > UINT32_MAX - offset) {
+        writer->error_count++;
+        KrtError("KRO data write overflow");
         return 0;
     }
     uint32_t new_size = offset + size;
 
     if (!ensure_capacity(&writer->data, &writer->data_capacity, new_size)) {
+        writer->error_count++;
+        KrtError("KRO data buffer allocation failed");
         return 0;
     }
 
@@ -220,11 +229,15 @@ uint32_t kro_write_rodata(KROWriter* writer, const void* data, uint32_t size) {
 
     uint32_t offset = writer->rodata_offset;
     if (size > UINT32_MAX - offset) {
+        writer->error_count++;
+        KrtError("KRO rodata write overflow");
         return 0;
     }
     uint32_t new_size = offset + size;
 
     if (!ensure_capacity(&writer->rodata, &writer->rodata_capacity, new_size)) {
+        writer->error_count++;
+        KrtError("KRO rodata buffer allocation failed");
         return 0;
     }
 
@@ -272,9 +285,9 @@ uint32_t kro_write_data_aligned(KROWriter* writer, const void* data, uint32_t si
     return kro_write_data(writer, data, size);
 }
 
-static uint32_t add_string(KROWriter* writer, const char* str) {
+static int64_t add_string(KROWriter* writer, const char* str) {
     if (!writer || !str) {
-        return 0;
+        return -1;
     }
 
     uint32_t len = (uint32_t)strlen(str) + 1;
@@ -283,12 +296,18 @@ static uint32_t add_string(KROWriter* writer, const char* str) {
     if (new_size > writer->string_capacity) {
         uint32_t new_capacity = writer->string_capacity;
         while (new_capacity < new_size) {
+            if (new_capacity > UINT32_MAX / 2) {
+                new_capacity = new_size;
+                break;
+            }
             new_capacity *= 2;
         }
 
         char* new_strings = (char*)realloc(writer->strings, new_capacity);
         if (!new_strings) {
-            return 0;
+            writer->error_count++;
+            KrtError("KRO string table allocation failed");
+            return -1;
         }
 
         writer->strings = new_strings;
@@ -299,7 +318,7 @@ static uint32_t add_string(KROWriter* writer, const char* str) {
     memcpy(writer->strings + offset, str, len);
     writer->string_size = new_size;
 
-    return offset;
+    return (int64_t)offset;
 }
 
 int kro_add_symbol(KROWriter* writer, const char* name, uint8_t type, uint8_t bind, uint32_t sec_idx, uint64_t value) {
@@ -324,9 +343,19 @@ int kro_add_symbol(KROWriter* writer, const char* name, uint8_t type, uint8_t bi
 
     memset(sym, 0, sizeof(KROSymbol));
 
-    sym->name_offset = add_string(writer, name);
+    int64_t name_offset = add_string(writer, name);
+    if (name_offset < 0) {
+        writer->error_count++;
+        return -1;
+    }
+    sym->name_offset = (uint32_t)name_offset;
     sym->binding = bind;
     sym->section = sec_idx;
+    if (value > UINT32_MAX) {
+        writer->error_count++;
+        KrtError("KRO symbol value exceeds 32 bits: %s", name);
+        return -1;
+    }
     sym->value = (uint32_t)value;
     sym->size = 0;
     sym->type = type;
@@ -360,11 +389,17 @@ int kro_add_import_symbol(KROWriter* writer, const char* name, const char* modul
 
     memset(sym, 0, sizeof(KROSymbol));
 
-    sym->name_offset = add_string(writer, name);
+    int64_t name_offset = add_string(writer, name);
+    int64_t module_offset = add_string(writer, module);
+    if (name_offset < 0 || module_offset < 0) {
+        writer->error_count++;
+        return -1;
+    }
+    sym->name_offset = (uint32_t)name_offset;
     sym->binding = KRO_BIND_GLOBAL;
     sym->section = 0;
     sym->value = 0;
-    sym->flags = add_string(writer, module);
+    sym->flags = (uint32_t)module_offset;
 
     return (int)index;
 }
@@ -390,6 +425,11 @@ void kro_update_symbol_value(KROWriter* writer, int sym_idx, uint64_t value) {
     if (!writer || sym_idx < 0 || sym_idx >= (int)writer->sym_count) {
         return;
     }
+    if (value > UINT32_MAX) {
+        writer->error_count++;
+        KrtError("KRO symbol value exceeds 32 bits (symbol %d)", sym_idx);
+        return;
+    }
     writer->symbols[sym_idx].value = (uint32_t)value;
 }
 
@@ -412,6 +452,11 @@ static bool add_reloc_to_list(RelocList* list, const KRORelocation* reloc) {
 void kro_add_reloc(KROWriter* writer, uint32_t sec_idx, uint64_t offset, uint32_t sym_idx, uint16_t type,
                    int16_t addend) {
     if (!writer) {
+        return;
+    }
+    if (offset > UINT32_MAX) {
+        writer->error_count++;
+        KrtError("KRO relocation offset exceeds 32 bits");
         return;
     }
 
@@ -484,14 +529,25 @@ uint32_t kro_get_rodata_offset(KROWriter* writer) {
     return writer ? writer->rodata_offset : 0;
 }
 
-void kro_set_code_offset(KROWriter* writer, uint32_t offset) {
-    if (writer && offset <= writer->text_high_water) {
-        writer->text_offset = offset;
+bool kro_set_code_offset(KROWriter* writer, uint32_t offset) {
+    if (!writer) {
+        return false;
     }
+    if (offset > writer->text_high_water) {
+        writer->error_count++;
+        KrtError("KRO code offset out of range: %u > %u", offset, writer->text_high_water);
+        return false;
+    }
+    writer->text_offset = offset;
+    return true;
 }
 
 bool kro_write_file(KROWriter* writer, const char* filename) {
     if (!writer || !filename) {
+        return false;
+    }
+    if (writer->error_count > 0) {
+        KrtError("KRO writer reported %u error(s); not writing %s", writer->error_count, filename);
         return false;
     }
 
@@ -507,6 +563,12 @@ bool kro_write_file(KROWriter* writer, const char* filename) {
     header.version = KRO_VERSION;
     header.flags = writer->flags;
     header.entry_point = writer->has_entry ? (uint32_t)writer->entry_point : 0;
+    if (writer->has_entry && writer->entry_point > UINT32_MAX) {
+        writer->error_count++;
+        KrtError("KRO entry point exceeds 32 bits");
+        fclose(fp);
+        return false;
+    }
     header.text_size = writer->text_offset;
     header.rodata_size = writer->rodata_offset;
     header.data_size = writer->data_offset;

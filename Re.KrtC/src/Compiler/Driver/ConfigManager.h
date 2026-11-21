@@ -30,6 +30,8 @@ typedef struct {
     int max_threads;
     /** Stop after semantic analysis (the `check` command). */
     int check_only;
+    /** Native stack size handed to the linker. */
+    uint64_t stack_size;
     const char* project_type;
 
     int color_enabled;

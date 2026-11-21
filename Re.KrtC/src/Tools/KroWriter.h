@@ -111,7 +111,7 @@ bool kro_set_entry_point(KROWriter* writer, uint64_t offset);
 uint32_t kro_get_code_offset(KROWriter* writer);
 uint32_t kro_get_data_offset(KROWriter* writer);
 uint32_t kro_get_rodata_offset(KROWriter* writer);
-void kro_set_code_offset(KROWriter* writer, uint32_t offset);
+bool kro_set_code_offset(KROWriter* writer, uint32_t offset);
 
 bool kro_write_file(KROWriter* writer, const char* filename);
 

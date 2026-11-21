@@ -1017,7 +1017,13 @@ static int build_project_independent(const char* project_file, const char* outpu
 
     char obj_dir[KRT_MAX_PATH];
     KrtPlatformPathJoin(platform, obj_dir, sizeof(obj_dir), project_root, "obj");
-    KrtEnsureDirectoryRecursive(obj_dir);
+    if (KrtEnsureDirectoryRecursive(obj_dir) != 0) {
+        KrtError("无法创建项目对象目录: %s", obj_dir);
+        KrtProjectKrtDestroy(project);
+        KrtConfigDestroy(config);
+        KrtPlatformDestroy(platform);
+        return 1;
+    }
 
     for (int i = 0; i < project->source_count; i++) {
         const char* src = project->sources[i];
@@ -1116,7 +1122,13 @@ static int build_project_independent(const char* project_file, const char* outpu
 
         KrtPlatformPathJoin(platform, bin_dir, sizeof(bin_dir), project_root, bin_subdir);
 
-        KrtEnsureDirectoryRecursive(bin_dir);
+        if (KrtEnsureDirectoryRecursive(bin_dir) != 0) {
+            KrtError("无法创建项目输出目录: %s", bin_dir);
+            KrtProjectKrtDestroy(project);
+            KrtConfigDestroy(config);
+            KrtPlatformDestroy(platform);
+            return 1;
+        }
 
         char project_output_path[KRT_MAX_PATH];
         char project_filename[KRT_MAX_PATH];
@@ -1323,7 +1335,12 @@ static int build_project(const char* project_file, const char* output_path, int 
     }
     snprintf(bin_subdir, sizeof(bin_subdir), "bin%c%s", KrtPlatformGetSeparator(platform), platform_name);
     KrtPlatformPathJoin(platform, bin_dir, sizeof(bin_dir), project_root, bin_subdir);
-    KrtEnsureDirectoryRecursive(bin_dir);
+    if (KrtEnsureDirectoryRecursive(bin_dir) != 0) {
+        KrtError("无法创建项目输出目录: %s", bin_dir);
+        KrtProjectKrtDestroy(project);
+        KrtPlatformDestroy(platform);
+        return 1;
+    }
     if (platform->type == KRT_CONFIG_PLATFORM_WINDOWS) {
         snprintf(project_filename, sizeof(project_filename), "%s.exe", out_name ? out_name : "output");
     } else {

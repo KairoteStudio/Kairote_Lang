@@ -32,6 +32,7 @@ KrtConfig* KrtConfigCreate(void) {
     config->platform = KrtConfigDetectPlatform();
     config->keep_temp_files = 0;
     config->max_threads = 8;
+    config->stack_size = 0x100000;
 
     return config;
 }

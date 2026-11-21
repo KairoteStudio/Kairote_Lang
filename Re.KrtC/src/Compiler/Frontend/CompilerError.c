@@ -98,6 +98,9 @@ void KrtErrorReportSetSourceCode(KrtErrorReport* report, const char* source_code
 
     if (source_code) {
         report->source_code = KRT_STRDUP(source_code);
+        if (!report->source_code) {
+            KrtError("无法复制错误报告的源码: %s", source_code);
+        }
     }
 }
 
@@ -250,10 +253,12 @@ void KrtErrorReportPrint(KrtErrorReport* report) {
     }
 
     int error_count = 0;
-    int warning_count = report->warning_count;
+    int warning_count = 0;
     for (int i = 0; i < report->error_count; i++) {
         if (report->errors[i].severity >= KRT_ERROR_ERROR) {
             error_count++;
+        } else {
+            warning_count++;
         }
     }
 
@@ -279,6 +284,10 @@ void KrtErrorReportPrint(KrtErrorReport* report) {
             }
         } else {
             fprintf(stderr, "  %s: %s%s: %s%s\n", filename, sev_color, sev_name, error->message, KRT_COL_RESET);
+        }
+
+        if (error->error_code[0] != '\0') {
+            fprintf(stderr, "    %s[%s]%s\n", KRT_COL_GRAY, error->error_code, KRT_COL_RESET);
         }
 
         if (error->hint[0] != '\0') {

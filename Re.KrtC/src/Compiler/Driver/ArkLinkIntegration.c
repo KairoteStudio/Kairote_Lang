@@ -68,6 +68,8 @@ KrtArkLinkContext* KrtArkLinkContextCreate(KrtConfig* config) {
     ArkLinkTarget target = (config->platform == KRT_CONFIG_PLATFORM_WINDOWS) ? ARK_LINK_TARGET_PE : ARK_LINK_TARGET_ELF;
     arklink_session_set_target(ctx->session, target);
 
+    /* The driver only links native executables today; library output is not
+     * wired through this context. */
     arklink_session_set_output_kind(ctx->session, ARK_LINK_OUTPUT_EXECUTABLE);
 
     const KrtLinkerConfig* linker_config = KrtConfigGetLinkerConfig(config->platform);
@@ -85,7 +87,7 @@ KrtArkLinkContext* KrtArkLinkContextCreate(KrtConfig* config) {
         arklink_session_set_image_base(ctx->session, 0x400000ULL);
     }
 
-    arklink_session_set_stack_size(ctx->session, 0x100000);
+    arklink_session_set_stack_size(ctx->session, config->stack_size > 0 ? config->stack_size : 0x100000);
 
     return ctx;
 }
@@ -295,7 +297,9 @@ int KrtArkLinkLinkObjects(const char** obj_files, int obj_count, const char* out
         if (last_sep) {
             *last_sep = '\0';
             if (KrtPathExists(runtime_dir)) {
-                KrtArkLinkAddRuntimeObjects(ctx, runtime_dir);
+                if (KrtArkLinkAddRuntimeObjects(ctx, runtime_dir) != 0) {
+                    KrtError("无法添加运行时对象: %s", runtime_dir);
+                }
             }
         }
     }
@@ -318,8 +322,8 @@ int KrtArkLinkLinkObjects(const char** obj_files, int obj_count, const char* out
     int result = KrtArkLinkLink(ctx);
 
 #ifndef _WIN32
-    if (result == 0) {
-        chmod(output_path, S_IRUSR | S_IWUSR | S_IXUSR | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH);
+    if (result == 0 && chmod(output_path, S_IRUSR | S_IWUSR | S_IXUSR | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH) != 0) {
+        KrtError("无法设置输出文件权限: %s", output_path);
     }
 #endif
 

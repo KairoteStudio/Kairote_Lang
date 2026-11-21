@@ -17,6 +17,7 @@
 #define KRT_PLATFORM_DEFAULT KRT_CONFIG_PLATFORM_LINUX
 #endif
 
+#ifdef _WIN32
 static int win32_is_absolute_path(const char* path) {
     if (!path || path[0] == '\0') {
         return 0;
@@ -24,7 +25,8 @@ static int win32_is_absolute_path(const char* path) {
     if (path[0] == '/' || path[0] == '\\') {
         return 1;
     }
-    return strlen(path) >= 2 && path[1] == ':';
+    /* A drive letter alone ("C:foo") is drive-relative, not absolute. */
+    return strlen(path) >= 3 && path[1] == ':' && (path[2] == '/' || path[2] == '\\');
 }
 
 static int win32_path_exists(const char* path) {
@@ -86,6 +88,8 @@ static int win32_execute_command(const char* command) {
     return system(command);
 }
 
+#endif
+
 static int linux_is_absolute_path(const char* path) {
     return path && path[0] == '/';
 }
@@ -123,6 +127,7 @@ static int linux_execute_command(const char* command) {
 KrtPlatform* KrtPlatformCreate(KrtPlatformType type) {
     KrtPlatform* platform = (KrtPlatform*)KRT_MALLOC(sizeof(KrtPlatform));
     if (!platform) {
+        KrtError("无法分配平台抽象对象");
         return NULL;
     }
 
@@ -130,6 +135,7 @@ KrtPlatform* KrtPlatformCreate(KrtPlatformType type) {
     platform->type = type;
 
     switch (type) {
+#ifdef _WIN32
     case KRT_CONFIG_PLATFORM_WINDOWS:
         platform->name = "Windows";
         platform->path_separator = '\\';
@@ -140,6 +146,7 @@ KrtPlatform* KrtPlatformCreate(KrtPlatformType type) {
         platform->set_utf8 = win32_set_utf8;
         platform->execute_command = win32_execute_command;
         break;
+#endif
 
     case KRT_CONFIG_PLATFORM_LINUX:
         platform->name = "Linux";
@@ -202,12 +209,19 @@ void KrtPlatformPathJoin(KrtPlatform* platform, char* buffer, size_t buffer_size
         return;
     }
 
+    if (platform && platform->is_absolute_path && platform->is_absolute_path(part)) {
+        if (snprintf(buffer, buffer_size, "%s", part) >= (int)buffer_size) {
+            KrtError("平台路径拼接结果过长");
+        }
+        return;
+    }
+
     size_t base_len = strlen(base);
     int need_sep = base_len > 0 && base[base_len - 1] != '/' && base[base_len - 1] != '\\';
-    if (need_sep) {
-        snprintf(buffer, buffer_size, "%s%c%s", base, platform->path_separator, part);
-    } else {
-        snprintf(buffer, buffer_size, "%s%s", base, part);
+    int written = need_sep ? snprintf(buffer, buffer_size, "%s%c%s", base, platform->path_separator, part)
+                           : snprintf(buffer, buffer_size, "%s%s", base, part);
+    if (written < 0 || (size_t)written >= buffer_size) {
+        KrtError("平台路径拼接结果过长");
     }
 }
 
