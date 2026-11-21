@@ -934,8 +934,8 @@ static void emit_instruction(Emitter* em, KrtIRInst* inst) {
     case KRT_IR_POW:
 
         if (inst->operand_count >= 2) {
-            emit_load_value(em, &inst->operands[0], "rcx");
-            emit_load_value(em, &inst->operands[1], "rdx");
+            emit_load_value(em, &inst->operands[0], g_arg_regs[0]);
+            emit_load_value(em, &inst->operands[1], g_arg_regs[1]);
             fprintf(em->output, "    call KrtPow\n");
             emit_store_result(em, &inst->result, "rax");
         }
