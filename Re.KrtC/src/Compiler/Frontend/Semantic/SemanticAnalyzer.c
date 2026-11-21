@@ -708,6 +708,15 @@ static KrtTokenType semantic_array_element_type(SemanticAnalyzer* analyzer, ASTN
     return TOKEN_EOF;
 }
 
+/* Value of a compile-time integer constant, or -1 when it is not one. */
+static long semantic_constant_int(SemanticAnalyzer* analyzer, ASTNode* expr) {
+    (void)analyzer;
+    if (expr && expr->type == AST_NUMBER && expr->is_integer_literal) {
+        return (long)(int64_t)expr->integer_value;
+    }
+    return -1;
+}
+
 static KrtTokenType semantic_analyzer_infer_expression_type(SemanticAnalyzer* analyzer, ASTNode* expr) {
     if (!expr) {
         return TOKEN_INT32;
@@ -1617,6 +1626,13 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
                 semantic_analyzer_add_error(analyzer, "Attempting to access non-array as array");
                 return false;
             }
+            long size = symbol ? symbol->const_array_size : -1;
+            long index = semantic_constant_int(analyzer, expr->data.array_access.index);
+            if (size >= 0 && index >= size) {
+                semantic_analyzer_add_error_at(analyzer, expr->data.array_access.index,
+                                               "Array index %ld is out of bounds (size %ld)", index, size);
+                return false;
+            }
         }
 
         return array_ok && index_ok;
@@ -2132,6 +2148,7 @@ bool semantic_analyzer_analyze_variable_decl(SemanticAnalyzer* analyzer, ASTNode
     }
 
     symbol->value_type = var_decl->data.variable_decl.type;
+    symbol->const_array_size = -1;
 
     if (var_decl->data.variable_decl.type == TOKEN_IDENTIFIER &&
         var_decl->data.variable_decl.template_instantiation_type) {
@@ -2149,9 +2166,24 @@ bool semantic_analyzer_analyze_variable_decl(SemanticAnalyzer* analyzer, ASTNode
             if (!semantic_analyzer_analyze_expression(analyzer, var_decl->data.variable_decl.array_size)) {
                 return false;
             }
+            long size = semantic_constant_int(analyzer, var_decl->data.variable_decl.array_size);
+            if (size >= 0) {
+                symbol->const_array_size = size;
+            }
         }
     } else if (var_decl->data.variable_decl.value && var_decl->data.variable_decl.value->type == AST_ARRAY_LITERAL) {
         symbol->is_array = 1;
+    }
+
+    /* int32[] a = new int32[3]; */
+    if (var_decl->data.variable_decl.value &&
+        var_decl->data.variable_decl.value->type == AST_NEW_ARRAY_EXPRESSION) {
+        ASTNode* size = var_decl->data.variable_decl.value->data.new_array_expr.size;
+        long n = semantic_constant_int(analyzer, size);
+        if (n >= 0) {
+            symbol->is_array = 1;
+            symbol->const_array_size = n;
+        }
     }
 
     KrtSourceType type = var_decl->declared_type;
@@ -2289,6 +2321,13 @@ static bool semantic_analyze_stmt_array_assignment(SemanticAnalyzer* analyzer, A
         SymbolEntry* symbol = symbol_table_lookup(analyzer->symbol_table, array_name);
         if (symbol && !symbol->is_array && !KrtSourceIsPointer(symbol->source_type)) {
             semantic_analyzer_add_error(analyzer, "Attempting to assign to non-array as array");
+            return false;
+        }
+        long size = symbol ? symbol->const_array_size : -1;
+        long index = semantic_constant_int(analyzer, stmt->data.array_assignment.index);
+        if (size >= 0 && index >= size) {
+            semantic_analyzer_add_error_at(analyzer, stmt->data.array_assignment.index,
+                                           "Array index %ld is out of bounds (size %ld)", index, size);
             return false;
         }
     }

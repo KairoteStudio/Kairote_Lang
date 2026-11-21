@@ -24,6 +24,7 @@ typedef struct SymbolEntry {
     SymbolType type;
     SymbolState state;
     int is_const; /* set for `const` declarations; assignment is rejected */
+    long const_array_size; /* >=0 when the array length is a known constant */
     KrtIRValue* ir_value;
     KrtIRFunction* ir_function;
     int stack_offset;
