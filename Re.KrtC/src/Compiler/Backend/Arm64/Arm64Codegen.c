@@ -111,18 +111,22 @@ static void emit_load_imm(Arm64Context* ctx, int reg, uint64_t value, bool is_64
     }
 }
 
+/* Slot addressing is sp-relative; see the audit list (A64-1) for why dynamic
+ * stackalloc still needs a switch to x29. */
+#define ARM64_SLOT_BASE 31u
+
 static void emit_load_from_slot(Arm64Context* ctx, int reg, int slot, bool is_64) {
     uint32_t op = is_64 ? 0xF9400000u : 0xB9400000u;
     uint32_t scale = is_64 ? 8u : 4u;
     uint32_t imm = (uint32_t)((slot * ARM64_SLOT_SIZE) / scale) & 0xFFFu;
-    emit_word(ctx, op | (imm << 10) | (31u << 5) | (uint32_t)(reg & 0x1F));
+    emit_word(ctx, op | (imm << 10) | (ARM64_SLOT_BASE << 5) | (uint32_t)(reg & 0x1F));
 }
 
 static void emit_store_to_slot(Arm64Context* ctx, int reg, int slot, bool is_64) {
     uint32_t op = is_64 ? 0xF9000000u : 0xB9000000u;
     uint32_t scale = is_64 ? 8u : 4u;
     uint32_t imm = (uint32_t)((slot * ARM64_SLOT_SIZE) / scale) & 0xFFFu;
-    emit_word(ctx, op | (imm << 10) | (31u << 5) | (uint32_t)(reg & 0x1F));
+    emit_word(ctx, op | (imm << 10) | (ARM64_SLOT_BASE << 5) | (uint32_t)(reg & 0x1F));
 }
 
 static void emit_binary_reg(Arm64Context* ctx, uint32_t base, int rd, int rn, int rm) {
