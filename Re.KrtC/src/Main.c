@@ -497,7 +497,7 @@ static int compile_single_file(const char* input_file, const char* output_file, 
                 result = 0;
             }
 #endif
-        } else if (target_type == KRT_TARGET_CMD_KRO) {
+        } else if (target_type == KRT_TARGET_CMD_KRO || target_type == KRT_TARGET_CMD_ARM64) {
             if (pipeline->compiler) {
                 KrtCompilerDestroy(pipeline->compiler);
                 pipeline->compiler = NULL;
@@ -580,8 +580,8 @@ static int compile_multiple_files(const char** input_files, int input_count, con
     /* This path links one KRO module per input.  Do not silently turn an
      * unsupported request such as `target ir` into an executable build. */
     if (target_type != KRT_TARGET_CMD_EXE && target_type != KRT_TARGET_CMD_BUILD &&
-        target_type != KRT_TARGET_CMD_KRO) {
-        KrtError("Multiple source files support only executable or kro targets");
+        target_type != KRT_TARGET_CMD_KRO && target_type != KRT_TARGET_CMD_ARM64) {
+        KrtError("Multiple source files support only executable, kro or arm64 targets");
         return 1;
     }
 
@@ -592,7 +592,7 @@ static int compile_multiple_files(const char** input_files, int input_count, con
     }
     config->keep_temp_files = keep_temp;
     config->optimization_level = optimization_level;
-    config->target_type = KRT_TARGET_KRO;
+    config->target_type = (target_type == KRT_TARGET_CMD_ARM64) ? KRT_TARGET_ARM64 : KRT_TARGET_KRO;
     config->show_ir = show_ir;
 
     KrtPlatform* platform = KrtPlatformGetCurrent();

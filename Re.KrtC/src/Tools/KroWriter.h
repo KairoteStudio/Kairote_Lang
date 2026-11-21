@@ -30,12 +30,14 @@ typedef enum {
 #define KRO_RELOC_ADDR32 2
 #define KRO_RELOC_PC32 3
 
-/* AArch64 PC-relative relocations.  ABS64 (1) is shared with x86-64. */
-#define KRO_RELOC_AARCH64_ADR_PREL_PG_HI21 4
-#define KRO_RELOC_AARCH64_ADD_ABS_LO12_NC 5
-#define KRO_RELOC_AARCH64_LDR_ABS_LO12_NC 6
-#define KRO_RELOC_AARCH64_CALL26 7
-#define KRO_RELOC_AARCH64_ABS32 8
+/* AArch64 PC-relative relocations.  Values are shared with
+ * ArkLink's ArkRelocationType and deliberately start at 0x40 so they do not
+ * collide with the x86-64 kinds above.  ABS64 (1) is shared with x86-64. */
+#define KRO_RELOC_AARCH64_ADR_PREL_PG_HI21 0x40
+#define KRO_RELOC_AARCH64_ADD_ABS_LO12_NC 0x41
+#define KRO_RELOC_AARCH64_LDR_ABS_LO12_NC 0x42
+#define KRO_RELOC_AARCH64_CALL26 0x43
+#define KRO_RELOC_AARCH64_ABS32 0x44
 
 #pragma pack(push, 1)
 

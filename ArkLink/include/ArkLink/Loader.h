@@ -44,6 +44,12 @@ typedef enum ArkRelocationType {
     ARK_RELOC_PC32 = 3,
     ARK_RELOC_GOTPC32 = 4,
     ARK_RELOC_SECREL32 = 5,
+    /* AArch64 PC-relative kinds (shared values with the KRO writer) */
+    ARK_RELOC_AARCH64_ADR_PREL_PG_HI21 = 0x40,
+    ARK_RELOC_AARCH64_ADD_ABS_LO12_NC = 0x41,
+    ARK_RELOC_AARCH64_LDR_ABS_LO12_NC = 0x42,
+    ARK_RELOC_AARCH64_CALL26 = 0x43,
+    ARK_RELOC_AARCH64_ABS32 = 0x44,
 } ArkRelocationType;
 
 #define ARK_SECTION_READ 0x01

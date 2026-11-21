@@ -371,6 +371,47 @@ void ark_reloc_apply_elf(uint8_t* data, size_t size, const ArkRelocProcessor* pr
         result = proc->symbol_value + (uint64_t)proc->addend;
         break;
 
+    case ARK_RELOC_APPLY_AARCH64_CALL26: {
+        /* AArch64 branch PC is the instruction address itself. */
+        int64_t delta = (int64_t)(proc->symbol_value + (uint64_t)proc->addend) - (int64_t)p_vaddr;
+        uint32_t insn = 0;
+        if (proc->offset + 4 <= size) {
+            memcpy(&insn, data + proc->offset, 4);
+        }
+        insn &= ~0x03FFFFFFu;
+        insn |= (uint32_t)((delta >> 2) & 0x03FFFFFFu);
+        memcpy(data + proc->offset, &insn, 4);
+        return;
+    }
+
+    case ARK_RELOC_APPLY_AARCH64_ADRP: {
+        uint64_t target_page = (proc->symbol_value + (uint64_t)proc->addend) & ~0xFFFu;
+        uint64_t pc_page = p_vaddr & ~0xFFFu;
+        int64_t imm = ((int64_t)(target_page - pc_page)) >> 12;
+        uint32_t insn = 0;
+        if (proc->offset + 4 <= size) {
+            memcpy(&insn, data + proc->offset, 4);
+        }
+        uint32_t immlo = (uint32_t)((imm >> 2) & 0x3u);
+        uint32_t immhi = (uint32_t)((imm >> 4) & 0x7FFFFu);
+        insn &= ~((0x7FFFFu << 5) | (0x3u << 29));
+        insn |= (immhi << 5) | (immlo << 29);
+        memcpy(data + proc->offset, &insn, 4);
+        return;
+    }
+
+    case ARK_RELOC_APPLY_AARCH64_LO12: {
+        uint32_t lo12 = (uint32_t)((proc->symbol_value + (uint64_t)proc->addend) & 0xFFFu);
+        uint32_t insn = 0;
+        if (proc->offset + 4 <= size) {
+            memcpy(&insn, data + proc->offset, 4);
+        }
+        insn &= ~(0xFFFu << 10);
+        insn |= lo12 << 10;
+        memcpy(data + proc->offset, &insn, 4);
+        return;
+    }
+
     default:
         return;
     }
@@ -490,6 +531,29 @@ void ark_reloc_process_all(ArkResolverReloc* relocs, size_t count, ArkRelocApply
 
         case ARK_RELOC_SECREL32:
             proc.action = ARK_RELOC_APPLY_SECREL;
+            proc.field_size = ARK_RELOC_FIELD_32;
+            break;
+
+        case ARK_RELOC_AARCH64_CALL26:
+            proc.action = ARK_RELOC_APPLY_AARCH64_CALL26;
+            proc.field_size = ARK_RELOC_FIELD_32;
+            proc.is_pc_relative = 1;
+            break;
+
+        case ARK_RELOC_AARCH64_ADR_PREL_PG_HI21:
+            proc.action = ARK_RELOC_APPLY_AARCH64_ADRP;
+            proc.field_size = ARK_RELOC_FIELD_32;
+            proc.is_pc_relative = 1;
+            break;
+
+        case ARK_RELOC_AARCH64_ADD_ABS_LO12_NC:
+        case ARK_RELOC_AARCH64_LDR_ABS_LO12_NC:
+            proc.action = ARK_RELOC_APPLY_AARCH64_LO12;
+            proc.field_size = ARK_RELOC_FIELD_32;
+            break;
+
+        case ARK_RELOC_AARCH64_ABS32:
+            proc.action = ARK_RELOC_APPLY_ABSOLUTE;
             proc.field_size = ARK_RELOC_FIELD_32;
             break;
 

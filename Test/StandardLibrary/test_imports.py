@@ -95,7 +95,7 @@ int32 main() { return 0; }
                         compiler_command("target", target, first, second, "-o", output), cwd=work,
                         capture_output=True, text=True, timeout=30)
                     self.assertGreater(result.returncode, 0, result.stdout + result.stderr)
-                    self.assertIn("Multiple source files support only executable or kro targets",
+                    self.assertIn("Multiple source files support only executable, kro or arm64 targets",
                                   result.stdout + result.stderr)
                     self.assertEqual(output.read_text(), "previous output")
 
