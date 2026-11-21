@@ -1586,6 +1586,12 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
             }
         }
 
+        /* Nothing above claimed this member: it does not exist.  Falling through
+         * used to accept `(5).Length`, `null.Length` and unknown members. */
+        if (object_ok) {
+            semantic_analyzer_add_error_at(analyzer, expr, "Undefined member '%s'", member_name);
+            return false;
+        }
         return object_ok;
     }
 
