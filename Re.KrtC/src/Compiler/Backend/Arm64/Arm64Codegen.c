@@ -676,7 +676,9 @@ static uint32_t comparison_condition(KrtIROpcode opcode, bool is_unsigned) {
 }
 
 static void emit_comparison(Arm64Context* ctx, KrtIRInst* inst) {
-    bool is_unsigned = KrtTokenIsUnsigned(inst->result.value_type);
+    bool is_unsigned = inst->operand_count >= 2 &&
+                       (KrtTokenIsUnsigned(inst->operands[0].value_type) ||
+                        KrtTokenIsUnsigned(inst->operands[1].value_type));
     uint32_t cond = comparison_condition(inst->opcode, is_unsigned);
     bool is_64 = inst->operand_count >= 1 && value_is_64(&inst->operands[0]);
     if (inst->operand_count >= 2) {
