@@ -2696,7 +2696,6 @@ static bool semantic_analyze_stmt_namespace_declaration(SemanticAnalyzer* analyz
     const char* namespace_name = stmt->data.namespace_decl.name;
 
     SymbolEntry* ns_entry = symbol_table_lookup_current_scope(analyzer->symbol_table, namespace_name);
-    bool is_new_namespace = false;
     SymbolTable* prev_table = analyzer->symbol_table;
     if (!ns_entry) {
         ns_entry = symbol_table_define(analyzer->symbol_table, namespace_name, SYMBOL_NAMESPACE, 0, NULL);
@@ -2704,9 +2703,11 @@ static bool semantic_analyze_stmt_namespace_declaration(SemanticAnalyzer* analyz
             ns_entry->nested_table = symbol_table_create();
             if (ns_entry->nested_table) {
                 ns_entry->nested_table->parent_table = prev_table;
+            } else {
+                semantic_analyzer_add_error(analyzer, "Failed to create namespace scope: %s", namespace_name);
+                return false;
             }
         }
-        is_new_namespace = true;
     } else if (ns_entry->type != SYMBOL_NAMESPACE) {
         semantic_analyzer_add_error(analyzer, "'%s' is already declared as a different symbol type", namespace_name);
         return false;
@@ -2722,11 +2723,10 @@ static bool semantic_analyze_stmt_namespace_declaration(SemanticAnalyzer* analyz
     bool body_ok = true;
     ASTNode* body_node = stmt->data.namespace_decl.body;
 
-    if (body_node && body_node->type == AST_BLOCK) {
-
+    if (body_node) {
         if (body_node->type == AST_BLOCK) {
-            for (int i = 0; i < body_node->data.block.statement_count; i++) {
-                ASTNode* decl = body_node->data.block.statements[i];
+            for (int k = 0; k < body_node->data.block.statement_count; k++) {
+                ASTNode* decl = body_node->data.block.statements[k];
                 if (decl && decl->type == AST_ACCESS_MODIFIER) {
                     decl = decl->data.access_modifier.member;
                 }
@@ -2742,16 +2742,15 @@ static bool semantic_analyze_stmt_namespace_declaration(SemanticAnalyzer* analyz
                     }
                 }
             }
-            if (is_new_namespace) {
-                for (int i = 0; i < body_node->data.block.statement_count; i++) {
-                    ASTNode* decl = body_node->data.block.statements[i];
-                    if (!decl) {
-                        continue;
-                    }
-                    bool stmt_ok = semantic_analyzer_analyze_statement(analyzer, decl);
-                    if (!stmt_ok) {
-                        body_ok = false;
-                    }
+            /* Reopening an existing namespace must still analyse its body;
+             * only the predeclaration pass above is idempotent. */
+            for (int k = 0; k < body_node->data.block.statement_count; k++) {
+                ASTNode* decl = body_node->data.block.statements[k];
+                if (!decl) {
+                    continue;
+                }
+                if (!semantic_analyzer_analyze_statement(analyzer, decl)) {
+                    body_ok = false;
                 }
             }
         } else if (body_node->type == AST_ACCESS_MODIFIER) {
@@ -2760,16 +2759,15 @@ static bool semantic_analyze_stmt_namespace_declaration(SemanticAnalyzer* analyz
                 const char* class_name = inner_decl->data.class_decl.name;
                 SymbolEntry* existing = symbol_table_lookup_current_scope(analyzer->symbol_table, class_name);
                 if (!existing) {
-                    SymbolEntry* class_sym = symbol_table_declare(analyzer->symbol_table, class_name, SYMBOL_CLASS, 0);
+                    SymbolEntry* class_sym =
+                        symbol_table_declare(analyzer->symbol_table, class_name, SYMBOL_CLASS, 0);
                     if (class_sym && !class_sym->nested_table) {
                         class_sym->nested_table = symbol_table_create();
                     }
                 }
             }
-            if (is_new_namespace) {
-                body_ok = semantic_analyzer_analyze_statement(analyzer, body_node);
-            }
-        } else if (is_new_namespace) {
+            body_ok = semantic_analyzer_analyze_statement(analyzer, body_node);
+        } else {
             body_ok = semantic_analyzer_analyze_statement(analyzer, body_node);
         }
     }
