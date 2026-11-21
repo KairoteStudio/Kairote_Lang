@@ -344,6 +344,7 @@ typedef struct ASTNode {
             int template_param_count;
             struct ASTNode** constraints;
             int constraint_count;
+            int declaration_kind; /* 0 = class, 1 = struct, 2 = interface */
         } class_decl;
         struct {
             struct ASTNode* object;

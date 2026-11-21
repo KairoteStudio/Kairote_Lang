@@ -1502,7 +1502,7 @@ void KrtIrBuilderDestroy(KrtIRBuilder* builder) {
     KRT_FREE(builder);
 }
 
-void KrtIrRegisterClassLayout(KrtIRBuilder* builder, const char* class_name, ASTNode* class_body) {
+void KrtIrRegisterClassLayout(KrtIRBuilder* builder, const char* class_name, ASTNode* class_body, bool is_struct) {
     if (!builder || !class_name) {
         return;
     }
@@ -1514,6 +1514,7 @@ void KrtIrRegisterClassLayout(KrtIRBuilder* builder, const char* class_name, AST
 
     KrtIRClassLayout layout = {0};
     layout.class_name = KRT_STRDUP(class_name);
+    layout.is_struct = is_struct ? 1 : 0;
     layout.field_capacity = 8;
     layout.fields = (KrtIRFieldOffset*)KRT_MALLOC((size_t)layout.field_capacity * sizeof(KrtIRFieldOffset));
     if (!layout.class_name || !layout.fields) {
@@ -1593,6 +1594,19 @@ int KrtIrLayoutGetOffset(KrtIRBuilder* builder, const char* class_name, const ch
         }
     }
     return -1;
+}
+
+int KrtIrLayoutIsStruct(KrtIRBuilder* builder, const char* class_name) {
+    if (!builder || !class_name) {
+        return 0;
+    }
+
+    for (int i = 0; i < builder->layout_count; i++) {
+        if (strcmp(builder->layouts[i].class_name, class_name) == 0) {
+            return builder->layouts[i].is_struct;
+        }
+    }
+    return 0;
 }
 
 KrtTokenType KrtIrLayoutGetType(KrtIRBuilder* builder, const char* class_name, const char* field_name) {

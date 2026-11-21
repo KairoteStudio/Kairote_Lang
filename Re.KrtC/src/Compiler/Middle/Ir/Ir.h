@@ -510,13 +510,15 @@ typedef struct KrtIRClassLayout {
     int field_count;
     int field_capacity;
     int size;
+    int is_struct;
 } KrtIRClassLayout;
 /**
  * @brief Register the aligned storage layout for a class, preserving existing registrations.
  * @note Allocation failure reports a fatal compilation error; no partial layout is registered.
  */
-void KrtIrRegisterClassLayout(KrtIRBuilder* builder, const char* class_name, ASTNode* class_body);
+void KrtIrRegisterClassLayout(KrtIRBuilder* builder, const char* class_name, ASTNode* class_body, bool is_struct);
 int KrtIrLayoutGetOffset(KrtIRBuilder* builder, const char* class_name, const char* field_name);
+int KrtIrLayoutIsStruct(KrtIRBuilder* builder, const char* class_name);
 /** @brief Look up a field's storage type, returning TOKEN_EOF when unavailable. */
 KrtTokenType KrtIrLayoutGetType(KrtIRBuilder* builder, const char* class_name, const char* field_name);
 int KrtIrLayoutGetSize(KrtIRBuilder* builder, const char* class_name);

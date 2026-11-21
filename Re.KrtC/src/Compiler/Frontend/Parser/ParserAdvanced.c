@@ -12,7 +12,6 @@ ASTNode* parser_parse_class_declaration(Parser* parser) {
     int col = parser->current_token.column;
 
     KrtTokenType class_type = parser->current_token.type;
-    (void)class_type;
     parser_advance(parser);
 
     if (parser->current_token.type != TOKEN_IDENTIFIER) {
@@ -93,6 +92,8 @@ ASTNode* parser_parse_class_declaration(Parser* parser) {
     node->data.class_decl.base_class = base_class;
     node->data.class_decl.template_params = template_params;
     node->data.class_decl.template_param_count = template_param_count;
+    node->data.class_decl.declaration_kind =
+        class_type == TOKEN_STRUCT ? 1 : (class_type == TOKEN_INTERFACE ? 2 : 0);
     return node;
 }
 

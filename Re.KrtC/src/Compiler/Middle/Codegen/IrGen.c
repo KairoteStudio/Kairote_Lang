@@ -2773,6 +2773,19 @@ static void irgen_stmt_variable_declaration(KrtIRBuilder* builder, ASTNode* stmt
         return;
     }
 
+    if (!stmt->data.variable_decl.is_array && !is_c_style_array && !stmt->data.variable_decl.value &&
+        stmt->data.variable_decl.template_instantiation_type) {
+        int layout_size = KrtIrLayoutGetSize(builder, stmt->data.variable_decl.template_instantiation_type);
+        if (layout_size > 0 && KrtIrLayoutIsStruct(builder, stmt->data.variable_decl.template_instantiation_type)) {
+            /* Struct locals are values: the slot holds the address of a
+             * layout-sized object, matching how member access dereferences it. */
+            KrtIrAlloc(builder, ir_slot);
+            KrtIRValue object = irgen_allocate_memory(builder, KrtIrImm(builder, layout_size));
+            KrtIrStore(builder, ir_slot, object);
+            return;
+        }
+    }
+
     if (is_c_style_array) {
         int array_size = 10;
         double size_value;
@@ -2938,7 +2951,8 @@ static void irgen_stmt_class_declaration(KrtIRBuilder* builder, ASTNode* stmt) {
     }
 
     krt_ir_push_class_context(builder, stmt->data.class_decl.name);
-    KrtIrRegisterClassLayout(builder, stmt->data.class_decl.name, stmt->data.class_decl.body);
+    KrtIrRegisterClassLayout(builder, stmt->data.class_decl.name, stmt->data.class_decl.body,
+                             stmt->data.class_decl.declaration_kind == 1);
 
     ASTNode* body = stmt->data.class_decl.body;
     if (body) {
@@ -3544,7 +3558,8 @@ void KrtIrGenerateFromAst(KrtIRBuilder* builder, ASTNode* ast, void* semantic_an
         for (int i = 0; i < ast->data.block.statement_count; i++) {
             ASTNode* declaration = ast->data.block.statements[i];
             if (declaration && declaration->type == AST_CLASS_DECLARATION) {
-                KrtIrRegisterClassLayout(builder, declaration->data.class_decl.name, declaration->data.class_decl.body);
+                KrtIrRegisterClassLayout(builder, declaration->data.class_decl.name, declaration->data.class_decl.body,
+                                         declaration->data.class_decl.declaration_kind == 1);
             }
         }
         irgen_declare_functions(builder, ast);

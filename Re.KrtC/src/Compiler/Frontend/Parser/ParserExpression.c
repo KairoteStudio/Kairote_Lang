@@ -137,6 +137,7 @@ ASTNode* parser_parse_call(Parser* parser, ASTNode* callee) {
     return node;
 
 cleanup_error:
+    KrtParserFail(parser, parser->current_token.line, parser->current_token.column, "malformed call argument list");
     for (int i = 0; i < argument_count; i++) {
         ast_destroy_node(arguments[i]);
         if (argument_names && argument_names[i]) {
@@ -197,16 +198,16 @@ ASTNode* parser_parse_primary(Parser* parser) {
     case TOKEN_SIZEOF: {
         parser_advance(parser);
         if (parser->current_token.type != TOKEN_LEFT_PAREN) {
-            return NULL;
+            return KrtParserFail(parser, token.line, token.column, "expected '(' after 'sizeof'");
         }
         parser_advance(parser);
         if (!parser_is_type_keyword(parser->current_token.type)) {
-            return NULL;
+            return KrtParserFail(parser, token.line, token.column, "expected a type name in 'sizeof'");
         }
         KrtTokenType type = parser->current_token.type;
         parser_advance(parser);
         if (parser->current_token.type != TOKEN_RIGHT_PAREN) {
-            return NULL;
+            return KrtParserFail(parser, token.line, token.column, "expected ')' after 'sizeof'");
         }
         parser_advance(parser);
         ASTNode* node = KrtParserCreateNode(parser, AST_SIZEOF_EXPRESSION, token.line, token.column);
@@ -248,12 +249,12 @@ ASTNode* parser_parse_primary(Parser* parser) {
             }
         }
         if (parser->current_token.type != TOKEN_RIGHT_PAREN) {
-            return NULL;
+            return KrtParserFail(parser, token.line, token.column, "expected ')' after lambda parameters");
         }
         parser_advance(parser);
 
         if (parser->current_token.type != TOKEN_LAMBDA) {
-            return NULL;
+            return KrtParserFail(parser, token.line, token.column, "expected '=>' after lambda parameters");
         }
         parser_advance(parser);
 
@@ -398,7 +399,8 @@ ASTNode* parser_parse_primary(Parser* parser) {
         }
         if (parser->current_token.type != TOKEN_RIGHT_PAREN) {
             ast_destroy_node(expr);
-            return NULL;
+            return KrtParserFail(parser, parser->current_token.line, parser->current_token.column,
+                                 "expected ')' after expression");
         }
         parser_advance(parser);
         return expr;
@@ -459,6 +461,7 @@ ASTNode* parser_parse_primary(Parser* parser) {
         return node;
 
     array_cleanup:
+        KrtParserFail(parser, parser->current_token.line, parser->current_token.column, "malformed array literal");
         if (elements) {
             for (int i = 0; i < element_count; i++) {
                 ast_destroy_node(elements[i]);
@@ -488,7 +491,8 @@ ASTNode* parser_parse_primary(Parser* parser) {
             }
             if (parser->current_token.type != TOKEN_RIGHT_PAREN) {
                 ast_destroy_node(expr);
-                return NULL;
+                return KrtParserFail(parser, parser->current_token.line, parser->current_token.column,
+                                     "expected ')' after cast expression");
             }
             parser_advance(parser);
 
@@ -522,7 +526,7 @@ ASTNode* parser_parse_primary(Parser* parser) {
                 parser_advance(parser);
                 ASTNode* size = parser_parse_expression(parser);
                 if (!size || parser->current_token.type != TOKEN_RIGHT_BRACKET) {
-                    return NULL;
+                    return KrtParserFail(parser, token.line, token.column, "expected ']' after array size");
                 }
                 parser_advance(parser);
                 ASTNode* node = KrtParserCreateNode(parser, AST_NEW_ARRAY_EXPRESSION, token.line, token.column);
@@ -550,7 +554,7 @@ ASTNode* parser_parse_primary(Parser* parser) {
                     while (1) {
                         ASTNode* arg = parser_parse_expression(parser);
                         if (!arg) {
-                            return NULL;
+                            return KrtParserFail(parser, token.line, token.column, "expected constructor argument");
                         }
                         if (arg_count >= arg_capacity) {
                             arg_capacity *= 2;
@@ -571,7 +575,8 @@ ASTNode* parser_parse_primary(Parser* parser) {
                     }
                 }
                 if (parser->current_token.type != TOKEN_RIGHT_PAREN) {
-                    return NULL;
+                    return KrtParserFail(parser, parser->current_token.line, parser->current_token.column,
+                                         "expected ')' after constructor arguments");
                 }
                 parser_advance(parser);
             }
@@ -594,16 +599,17 @@ ASTNode* parser_parse_primary(Parser* parser) {
             parser_advance(parser);
 
             if (parser->current_token.type != TOKEN_LEFT_BRACKET) {
-                return NULL;
+                return KrtParserFail(parser, token.line, token.column, "expected '[' after array element type");
             }
             parser_advance(parser);
             ASTNode* size = parser_parse_expression(parser);
             if (!size) {
-                return NULL;
+                return KrtParserFail(parser, token.line, token.column, "expected array size expression");
             }
             if (parser->current_token.type != TOKEN_RIGHT_BRACKET) {
                 ast_destroy_node(size);
-                return NULL;
+                return KrtParserFail(parser, parser->current_token.line, parser->current_token.column,
+                                     "expected ']' after array size");
             }
             parser_advance(parser);
 
@@ -618,10 +624,10 @@ ASTNode* parser_parse_primary(Parser* parser) {
             return node;
         }
 
-        return NULL;
+        return KrtParserFail(parser, token.line, token.column, "expected a type after 'new'");
     }
     default:
-        return NULL;
+        return KrtParserFail(parser, token.line, token.column, "expected an expression");
     }
 }
 
@@ -799,7 +805,8 @@ ASTNode* parser_parse_postfix_expression(Parser* parser) {
             parser_advance(parser);
             if (parser->current_token.type != TOKEN_IDENTIFIER) {
                 ast_destroy_node(primary);
-                return NULL;
+                return KrtParserFail(parser, parser->current_token.line, parser->current_token.column,
+                                     "expected member name after '.'");
             }
 
             ASTNode* member = KrtParserCreateNode(parser, AST_MEMBER_ACCESS, primary->line, primary->col);
@@ -821,7 +828,8 @@ ASTNode* parser_parse_postfix_expression(Parser* parser) {
             if (parser->current_token.type != TOKEN_RIGHT_BRACKET) {
                 ast_destroy_node(index);
                 ast_destroy_node(primary);
-                return NULL;
+                return KrtParserFail(parser, parser->current_token.line, parser->current_token.column,
+                                     "expected ']' after array index");
             }
             parser_advance(parser);
 
@@ -879,7 +887,8 @@ ASTNode* parser_parse_ternary_operation(Parser* parser) {
     if (parser->current_token.type != TOKEN_COLON) {
         ast_destroy_node(condition);
         ast_destroy_node(then_expr);
-        return NULL;
+        return KrtParserFail(parser, parser->current_token.line, parser->current_token.column,
+                             "expected ':' in conditional expression");
     }
     parser_advance(parser);
 

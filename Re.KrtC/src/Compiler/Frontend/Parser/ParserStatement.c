@@ -1428,6 +1428,8 @@ ASTNode* parser_parse_statement(Parser* parser) {
         return parser_parse_enum(parser);
 
     case TOKEN_CLASS:
+    case TOKEN_STRUCT:
+    case TOKEN_INTERFACE:
         return parser_parse_class_declaration(parser);
 
     case TOKEN_PUBLIC:
