@@ -73,6 +73,7 @@ typedef struct {
 
 #define SHN_UNDEF 0
 #define SHN_ABS 0xfff1
+#define SHN_COMMON 0xfff2
 
 #define STB_LOCAL 0
 #define STB_GLOBAL 1
@@ -115,6 +116,10 @@ static int is_elf(const uint8_t* data, size_t size) {
     return data[0] == ELFMAG0 && data[1] == ELFMAG1 && data[2] == ELFMAG2 && data[3] == ELFMAG3;
 }
 
+static int elf_range_ok(uint64_t offset, uint64_t length, size_t size) {
+    return offset <= size && length <= (uint64_t)(size - offset);
+}
+
 static ElfContext* elf_context_create(const uint8_t* data, size_t size) {
     ElfContext* ctx = (ElfContext*)calloc(1, sizeof(ElfContext));
     if (!ctx) {
@@ -130,7 +135,7 @@ static ElfContext* elf_context_create(const uint8_t* data, size_t size) {
     ctx->file_size = size;
 
     ctx->ehdr = (Elf64_Ehdr_Loader*)ctx->file_data;
-    if (ctx->ehdr->e_shoff + (uint64_t)ctx->ehdr->e_shnum * sizeof(Elf64_Shdr_Loader) > size) {
+    if (!elf_range_ok(ctx->ehdr->e_shoff, (uint64_t)ctx->ehdr->e_shnum * sizeof(Elf64_Shdr_Loader), size)) {
         free(ctx->file_data);
         free(ctx);
         return NULL;
@@ -140,7 +145,7 @@ static ElfContext* elf_context_create(const uint8_t* data, size_t size) {
 
     if (ctx->ehdr->e_shstrndx != 0 && ctx->ehdr->e_shstrndx < ctx->ehdr->e_shnum) {
         Elf64_Shdr_Loader* shstr_shdr = &ctx->shdrs[ctx->ehdr->e_shstrndx];
-        if (shstr_shdr->sh_offset + shstr_shdr->sh_size <= size) {
+        if (elf_range_ok(shstr_shdr->sh_offset, shstr_shdr->sh_size, size)) {
             ctx->shstrtab = (char*)(ctx->file_data + shstr_shdr->sh_offset);
             ctx->shstrtab_size = (size_t)shstr_shdr->sh_size;
         }
@@ -205,9 +210,6 @@ static uint32_t elf_section_flags(uint32_t sh_flags, ArkSectionKind kind) {
         flags |= ARK_SECTION_WRITE;
     }
     flags |= ARK_SECTION_READ;
-    if (kind == ARK_SECTION_CODE && !(flags & ARK_SECTION_EXEC)) {
-        flags |= ARK_SECTION_EXEC;
-    }
     if (kind == ARK_SECTION_DATA) {
         flags |= ARK_SECTION_WRITE;
     }
@@ -264,6 +266,11 @@ ArkLinkResult ark_link_load_elf(const char* path, ArkLinkUnit** unit) {
         free(raw_data);
         return ARK_LINK_ERR_FORMAT;
     }
+    /* Validate class/endianness before any 64-bit structure is interpreted. */
+    if (file_size < 6 || raw_data[4] != ELFCLASS64 || raw_data[5] != ELFDATA2LSB) {
+        free(raw_data);
+        return ARK_LINK_ERR_FORMAT;
+    }
 
     ElfContext* ctx = elf_context_create(raw_data, (size_t)file_size);
     free(raw_data);
@@ -295,6 +302,11 @@ ArkLinkResult ark_link_load_elf(const char* path, ArkLinkUnit** unit) {
     for (int i = 0; i < ehdr->e_shnum; i++) {
         Elf64_Shdr_Loader* sh = &ctx->shdrs[i];
         const char* name = elf_section_name(ctx, sh->sh_name);
+        if (!elf_is_relevant_section(name, sh->sh_type) && (sh->sh_type == SHT_PROGBITS || sh->sh_type == SHT_NOBITS) &&
+            sh->sh_size > 0) {
+            fprintf(stderr, "ArkLink: ignoring unrecognized section '%s' (type %u, size %llu)\n", name,
+                    (unsigned)sh->sh_type, (unsigned long long)sh->sh_size);
+        }
         if (elf_is_relevant_section(name, sh->sh_type)) {
             ArkSectionDesc desc = {0};
             desc.name = name;
@@ -306,7 +318,7 @@ ArkLinkResult ark_link_load_elf(const char* path, ArkLinkUnit** unit) {
             desc.flags = elf_section_flags(sh->sh_flags, elf_section_kind(name, sh->sh_flags));
 
             if (sh->sh_type != SHT_NOBITS && sh->sh_size > 0) {
-                if (sh->sh_offset + sh->sh_size > ctx->file_size) {
+                if (!elf_range_ok(sh->sh_offset, sh->sh_size, ctx->file_size)) {
                     ark_link_unit_destroy(new_unit);
                     elf_context_destroy(ctx);
                     return ARK_LINK_ERR_FORMAT;
@@ -342,14 +354,19 @@ ArkLinkResult ark_link_load_elf(const char* path, ArkLinkUnit** unit) {
     for (int i = 0; i < ehdr->e_shnum; i++) {
         Elf64_Shdr_Loader* sh = &ctx->shdrs[i];
         if (sh->sh_type == SHT_SYMTAB) {
-            if (sh->sh_offset + sh->sh_size > ctx->file_size) {
+            if (!elf_range_ok(sh->sh_offset, sh->sh_size, ctx->file_size)) {
+                continue;
+            }
+            if (sh->sh_entsize != 0 && sh->sh_entsize != sizeof(Elf64_Sym_Loader)) {
+                fprintf(stderr, "ArkLink: symtab sh_entsize %llu != %zu\n", (unsigned long long)sh->sh_entsize,
+                        sizeof(Elf64_Sym_Loader));
                 continue;
             }
             symtab = (Elf64_Sym_Loader*)(ctx->file_data + sh->sh_offset);
             sym_count = (size_t)(sh->sh_size / sizeof(Elf64_Sym_Loader));
             if (sh->sh_link < (uint32_t)ehdr->e_shnum) {
                 Elf64_Shdr_Loader* str_sh = &ctx->shdrs[sh->sh_link];
-                if (str_sh->sh_offset + str_sh->sh_size <= ctx->file_size) {
+                if (elf_range_ok(str_sh->sh_offset, str_sh->sh_size, ctx->file_size)) {
                     strtab = (const char*)(ctx->file_data + str_sh->sh_offset);
                     strtab_size = (size_t)str_sh->sh_size;
                 }
@@ -381,13 +398,13 @@ ArkLinkResult ark_link_load_elf(const char* path, ArkLinkUnit** unit) {
             if (!sym_name && type == STT_FILE) {
                 char file_sym[64];
                 snprintf(file_sym, sizeof(file_sym), ".file.%zu", i);
-                desc.name = strdup(file_sym);
+                desc.name = file_sym;
             } else if (sym_name) {
-                desc.name = strdup(sym_name);
+                desc.name = sym_name;
             } else {
                 char anon_name[64];
                 snprintf(anon_name, sizeof(anon_name), ".anon.%zu", i);
-                desc.name = strdup(anon_name);
+                desc.name = anon_name;
             }
 
             desc.value = (uint64_t)sym->st_value;
@@ -402,8 +419,14 @@ ArkLinkResult ark_link_load_elf(const char* path, ArkLinkUnit** unit) {
                 } else {
                     desc.section_index = 0;
                 }
+            } else if (shndx == SHN_ABS || shndx == SHN_COMMON) {
+                fprintf(stderr, "ArkLink: symbol '%s' uses absolute/common section (unsupported)\n",
+                        desc.name ? desc.name : "(anon)");
+                continue;
             } else {
-                desc.section_index = 0;
+                fprintf(stderr, "ArkLink: symbol '%s' has invalid section index %u\n",
+                        desc.name ? desc.name : "(anon)", (unsigned)shndx);
+                continue;
             }
 
             uint8_t bind = ELF64_ST_BIND(sym->st_info);
@@ -415,12 +438,20 @@ ArkLinkResult ark_link_load_elf(const char* path, ArkLinkUnit** unit) {
                 desc.binding = ARK_BIND_WEAK;
                 break;
             default:
+                if (bind != STB_GLOBAL) {
+                    fprintf(stderr, "ArkLink: symbol '%s' has unsupported binding %u, treating as GLOBAL\n",
+                            desc.name ? desc.name : "(anon)", (unsigned)bind);
+                }
                 desc.binding = ARK_BIND_GLOBAL;
                 break;
             }
             desc.type = type == STT_FUNC ? ARK_SYM_FUNC : type == STT_OBJECT ? ARK_SYM_OBJECT : ARK_SYM_NOTYPE;
 
-            ark_link_unit_add_symbol(new_unit, &desc);
+            if (!ark_link_unit_add_symbol(new_unit, &desc)) {
+                elf_context_destroy(ctx);
+                ark_link_unit_destroy(new_unit);
+                return ARK_LINK_ERR_MEMORY;
+            }
         }
     }
 
@@ -429,7 +460,12 @@ ArkLinkResult ark_link_load_elf(const char* path, ArkLinkUnit** unit) {
         if (sh->sh_type != SHT_RELA) {
             continue;
         }
-        if (sh->sh_offset + sh->sh_size > ctx->file_size) {
+        if (!elf_range_ok(sh->sh_offset, sh->sh_size, ctx->file_size)) {
+            continue;
+        }
+        if (sh->sh_entsize != 0 && sh->sh_entsize != sizeof(Elf64_Rela_Loader)) {
+            fprintf(stderr, "ArkLink: relocation section sh_entsize %llu != %zu\n", (unsigned long long)sh->sh_entsize,
+                    sizeof(Elf64_Rela_Loader));
             continue;
         }
 
@@ -456,6 +492,11 @@ ArkLinkResult ark_link_load_elf(const char* path, ArkLinkUnit** unit) {
                 continue;
             }
             elf_sym_idx--;
+            if (elf_sym_idx >= sym_count) {
+                fprintf(stderr, "ArkLink: relocation symbol index %u out of range (%zu symbols)\n", elf_sym_idx,
+                        sym_count);
+                continue;
+            }
             uint32_t r_type = ELF64_R_TYPE(r->r_info);
 
             uint16_t ark_type = 0;
@@ -479,8 +520,8 @@ ArkLinkResult ark_link_load_elf(const char* path, ArkLinkUnit** unit) {
                 ark_type = ARK_RELOC_GOTPC32;
                 break;
             default:
-                ark_type = ARK_RELOC_ABS64;
-                break;
+                fprintf(stderr, "ArkLink: unsupported ELF relocation type %u\n", r_type);
+                continue;
             }
 
             ArkRelocationDesc reloc = {0};
@@ -490,7 +531,11 @@ ArkLinkResult ark_link_load_elf(const char* path, ArkLinkUnit** unit) {
             reloc.type = ark_type;
             reloc.addend = r->r_addend;
 
-            ark_link_section_add_reloc(target_sec, &reloc);
+            if (!ark_link_section_add_reloc(target_sec, &reloc)) {
+                elf_context_destroy(ctx);
+                ark_link_unit_destroy(new_unit);
+                return ARK_LINK_ERR_MEMORY;
+            }
         }
     }
 

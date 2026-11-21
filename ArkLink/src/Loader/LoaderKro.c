@@ -3,8 +3,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define KRO_DEBUG
-
 #pragma pack(push, 1)
 
 typedef struct {
@@ -62,8 +60,6 @@ static const char* kro_string_at(const char* string_table, size_t table_size, ui
 }
 
 ArkLinkResult ark_link_load_kro(const char* path, ArkLinkUnit** unit) {
-#ifdef KRO_DEBUG
-#endif
     if (!path || !unit) {
         return ARK_LINK_ERR_INVALID_ARGUMENT;
     }
@@ -207,8 +203,23 @@ ArkLinkResult ark_link_load_kro(const char* path, ArkLinkUnit** unit) {
         sec->kind = ARK_SECTION_DATA;
     }
 
-#ifdef KRO_DEBUG
-#endif
+    if (header.bss_size > 0) {
+        ArkSectionDesc desc = {0};
+        desc.name = ".bss";
+        desc.data = NULL;
+        desc.size = (size_t)header.bss_size;
+        desc.alignment = 16;
+        desc.flags = ARK_SECTION_READ | ARK_SECTION_WRITE;
+
+        ArkLinkSection* sec = ark_link_unit_add_section(new_unit, &desc);
+        if (!sec) {
+            ark_link_unit_destroy(new_unit);
+            fclose(file);
+            return ARK_LINK_ERR_MEMORY;
+        }
+        sec->kind = ARK_SECTION_BSS;
+    }
+
     if (header.sym_count > 0) {
         KroSymbol* kro_syms = (KroSymbol*)malloc(header.sym_count * sizeof(KroSymbol));
         if (!kro_syms) {
@@ -234,17 +245,19 @@ ArkLinkResult ark_link_load_kro(const char* path, ArkLinkUnit** unit) {
             string_table = (char*)malloc((size_t)string_table_size);
             if (string_table) {
                 fseek(file, (long)strtab_offset, SEEK_SET);
-                fread(string_table, 1, (size_t)string_table_size, file);
+                if (fread(string_table, 1, (size_t)string_table_size, file) != (size_t)string_table_size) {
+                    free(string_table);
+                    free(kro_syms);
+                    ark_link_unit_destroy(new_unit);
+                    fclose(file);
+                    return ARK_LINK_ERR_IO;
+                }
             }
         }
 
         uint32_t kro_to_actual[5] = {0};
-#ifdef KRO_DEBUG
-#endif
         for (size_t s = 0; s < new_unit->section_count; s++) {
             ArkLinkSection* sec = &new_unit->sections[s];
-#ifdef KRO_DEBUG
-#endif
             if (strcmp(sec->name, ".text") == 0) {
                 kro_to_actual[1] = (uint32_t)(s + 1);
             } else if (strcmp(sec->name, ".rodata") == 0) {
@@ -264,11 +277,8 @@ ArkLinkResult ark_link_load_kro(const char* path, ArkLinkUnit** unit) {
                 actual_section = kro_to_actual[kro_syms[i].section];
             }
 
-#ifdef KRO_DEBUG
-#endif
-
             ArkSymbolDesc sym_desc = {0};
-            sym_desc.name = sym_name ? strdup(sym_name) : NULL;
+            sym_desc.name = sym_name;
             sym_desc.section_index = actual_section;
             sym_desc.value = kro_syms[i].value;
             sym_desc.size = kro_syms[i].size;
@@ -276,11 +286,19 @@ ArkLinkResult ark_link_load_kro(const char* path, ArkLinkUnit** unit) {
             sym_desc.type = (ArkSymbolType)kro_syms[i].type;
             sym_desc.visibility = (ArkSymbolVisibility)kro_syms[i].flags;
 
-            ark_link_unit_add_symbol(new_unit, &sym_desc);
+            if (!ark_link_unit_add_symbol(new_unit, &sym_desc)) {
+                free(kro_syms);
+                free(string_table);
+                ark_link_unit_destroy(new_unit);
+                fclose(file);
+                return ARK_LINK_ERR_MEMORY;
+            }
         }
 
         free(kro_syms);
+        kro_syms = NULL;
         free(string_table);
+        string_table = NULL;
 
         struct {
             uint32_t count;
@@ -309,19 +327,31 @@ ArkLinkResult ark_link_load_kro(const char* path, ArkLinkUnit** unit) {
 
             KroReloc* kro_relocs = (KroReloc*)malloc(reloc_sections[r].count * sizeof(KroReloc));
             if (!kro_relocs) {
-                continue;
+                ark_link_unit_destroy(new_unit);
+                fclose(file);
+                return ARK_LINK_ERR_MEMORY;
             }
 
             fseek(file, (long)reloc_offsets[r], SEEK_SET);
-            if (fread(kro_relocs, sizeof(KroReloc), reloc_sections[r].count, file) == reloc_sections[r].count) {
-                for (size_t i = 0; i < reloc_sections[r].count; i++) {
-                    ArkRelocationDesc reloc_desc = {0};
-                    reloc_desc.offset = kro_relocs[i].offset;
-                    reloc_desc.type = kro_relocs[i].type;
-                    reloc_desc.sym_idx = kro_relocs[i].sym_idx;
-                    reloc_desc.addend = kro_relocs[i].addend;
-                    reloc_desc.section_index = actual_sec_idx - 1;
-                    ark_link_section_add_reloc(&new_unit->sections[actual_sec_idx - 1], &reloc_desc);
+            if (fread(kro_relocs, sizeof(KroReloc), reloc_sections[r].count, file) != reloc_sections[r].count) {
+                free(kro_relocs);
+                ark_link_unit_destroy(new_unit);
+                fclose(file);
+                return ARK_LINK_ERR_IO;
+            }
+
+            for (size_t i = 0; i < reloc_sections[r].count; i++) {
+                ArkRelocationDesc reloc_desc = {0};
+                reloc_desc.offset = kro_relocs[i].offset;
+                reloc_desc.type = kro_relocs[i].type;
+                reloc_desc.sym_idx = kro_relocs[i].sym_idx;
+                reloc_desc.addend = kro_relocs[i].addend;
+                reloc_desc.section_index = actual_sec_idx - 1;
+                if (!ark_link_section_add_reloc(&new_unit->sections[actual_sec_idx - 1], &reloc_desc)) {
+                    free(kro_relocs);
+                    ark_link_unit_destroy(new_unit);
+                    fclose(file);
+                    return ARK_LINK_ERR_MEMORY;
                 }
             }
             free(kro_relocs);

@@ -83,6 +83,7 @@ ArkLinkSection* ark_link_unit_add_section(ArkLinkUnit* unit, const ArkSectionDes
     memset(sec, 0, sizeof(ArkLinkSection));
 
     strncpy(sec->name, desc->name, sizeof(sec->name) - 1);
+    sec->name[sizeof(sec->name) - 1] = '\0';
     sec->data = desc->data;
     sec->size = desc->size;
     sec->alignment = desc->alignment;
@@ -104,7 +105,16 @@ int ark_link_unit_add_symbol(ArkLinkUnit* unit, const ArkSymbolDesc* desc) {
     }
 
     unit->symbols = new_symbols;
-    unit->symbols[unit->symbol_count] = *desc;
+    ArkSymbolDesc stored = *desc;
+    /* The unit owns its names; callers may pass borrowed or stack pointers. */
+    stored.name = desc->name ? strdup(desc->name) : NULL;
+    stored.import_module = desc->import_module ? strdup(desc->import_module) : NULL;
+    if ((desc->name && !stored.name) || (desc->import_module && !stored.import_module)) {
+        free((char*)stored.name);
+        free((void*)stored.import_module);
+        return 0;
+    }
+    unit->symbols[unit->symbol_count] = stored;
     unit->symbol_count++;
     return 1;
 }
@@ -120,6 +130,7 @@ ArkLinkSection* ark_link_section_create(const char* name, const uint8_t* data, s
     }
 
     strncpy(sec->name, name, sizeof(sec->name) - 1);
+    sec->name[sizeof(sec->name) - 1] = '\0';
     sec->data = data;
     sec->size = size;
 
