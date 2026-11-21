@@ -250,6 +250,51 @@ static int instruction_value_size(KrtIRInst* inst, int operand_index, int defaul
 /* Frame planning                                                      */
 /* ------------------------------------------------------------------ */
 
+static bool value_is_const_int(KrtIRValue* value) {
+    return value && (value->type == KRT_IR_VALUE_IMM || value->type == KRT_IR_VALUE_INTEGER);
+}
+
+static uint64_t value_const_int(KrtIRValue* value) {
+    if (!value) {
+        return 0;
+    }
+    return value->type == KRT_IR_VALUE_INTEGER ? (uint64_t)value->data.integer
+                                               : (uint64_t)(int64_t)value->data.imm;
+}
+
+/*
+ * KrtIrStackAlloc casts its count to uint64, so the operand is normally a TEMP
+ * produced by `cast <const>`.  Look through that so constant-sized requests can
+ * still be placed statically inside the frame.
+ */
+static bool resolve_const_count(KrtIRFunction* func, KrtIRValue* value, uint64_t* out) {
+    if (!value) {
+        return false;
+    }
+    if (value_is_const_int(value)) {
+        *out = value_const_int(value);
+        return true;
+    }
+    if (value->type != KRT_IR_VALUE_TEMP) {
+        return false;
+    }
+    int index = value->data.index;
+    for (KrtIRBasicBlock* block = func->entry_block; block; block = block->next) {
+        for (KrtIRInst* inst = block->first_inst; inst; inst = inst->next) {
+            if (inst->result.type != KRT_IR_VALUE_TEMP || inst->result.data.index != index) {
+                continue;
+            }
+            if ((inst->opcode == KRT_IR_CAST || inst->opcode == KRT_IR_IMM || inst->opcode == KRT_IR_COPY) &&
+                inst->operand_count >= 1 && value_is_const_int(&inst->operands[0])) {
+                *out = value_const_int(&inst->operands[0]);
+                return true;
+            }
+            return false;
+        }
+    }
+    return false;
+}
+
 static int alloc_slot(Arm64Context* ctx) {
     return ctx->slot_count++;
 }
@@ -324,16 +369,15 @@ static void plan_frame(Arm64Context* ctx, KrtIRFunction* func) {
             }
             value_slot(ctx, &inst->result);
             if (inst->opcode == KRT_IR_STACKALLOC && inst->operand_count >= 2 &&
-                (inst->operands[0].type == KRT_IR_VALUE_IMM || inst->operands[0].type == KRT_IR_VALUE_INTEGER) &&
-                inst->operands[1].type == KRT_IR_VALUE_IMM) {
-                uint64_t count = inst->operands[0].type == KRT_IR_VALUE_INTEGER
-                                    ? (uint64_t)inst->operands[0].data.integer
-                                    : (uint64_t)(int64_t)inst->operands[0].data.imm;
-                uint64_t element = (uint64_t)(int64_t)inst->operands[1].data.imm;
-                uint64_t bytes = count * element;
-                if (bytes > 0 && bytes <= (uint64_t)(ARM64_MAX_TEMPS - ctx->slot_count) * ARM64_SLOT_SIZE) {
-                    if (inst->result.type == KRT_IR_VALUE_TEMP) {
-                        ctx->stackalloc_of[inst->result.data.index] = alloc_slot_for_bytes(ctx, (uint32_t)bytes);
+                value_is_const_int(&inst->operands[1])) {
+                uint64_t count = 0;
+                uint64_t element = value_const_int(&inst->operands[1]);
+                if (resolve_const_count(func, &inst->operands[0], &count)) {
+                    uint64_t bytes = count * element;
+                    if (bytes > 0 && bytes <= (uint64_t)(ARM64_MAX_TEMPS - ctx->slot_count) * ARM64_SLOT_SIZE) {
+                        if (inst->result.type == KRT_IR_VALUE_TEMP) {
+                            ctx->stackalloc_of[inst->result.data.index] = alloc_slot_for_bytes(ctx, (uint32_t)bytes);
+                        }
                     }
                 }
             } else if (inst->opcode == KRT_IR_LOADPTR && inst->operand_count >= 3 &&
@@ -1034,7 +1078,59 @@ static void emit_function_body(Arm64Context* ctx, KrtIRFunction* func) {
     }
 }
 
+/* Exception support: minimal setjmp/longjmp stubs emitted directly by the
+ * backend (the target is a static, libc-free ELF).  The buffer layout must
+ * match KRT_JMP_BUF_* in IrGen.c. */
+#define ARM64_JMP_BUF_REG_COUNT 12 /* x19..x30 */
+#define ARM64_JMP_BUF_FP_OFFSET 112
+
+static void emit_arm64_setjmp(Arm64Context* ctx) {
+    /* x0 = buf; x30 = return address */
+    emit_word(ctx, 0xA9005013u); /* stp x19, x20, [x0, #0] */
+    emit_word(ctx, 0xA9015815u); /* stp x21, x22, [x0, #16] */
+    emit_word(ctx, 0xA9026017u); /* stp x23, x24, [x0, #32] */
+    emit_word(ctx, 0xA9036819u); /* stp x25, x26, [x0, #48] */
+    emit_word(ctx, 0xA904701Bu); /* stp x27, x28, [x0, #64] */
+    emit_word(ctx, 0xA905781Du); /* stp x29, x30, [x0, #80] */
+    emit_word(ctx, 0x910003E9u); /* mov x9, sp */
+    emit_word(ctx, 0xF9003009u); /* str x9, [x0, #96] */
+    emit_word(ctx, 0xAD03A408u); /* stp q8, q9, [x0, #112] */
+    emit_word(ctx, 0xAD04AC0Au); /* stp q10, q11, [x0, #144] */
+    emit_word(ctx, 0xAD05B40Cu); /* stp q12, q13, [x0, #176] */
+    emit_word(ctx, 0xAD06BC0Eu); /* stp q14, q15, [x0, #208] */
+    emit_word(ctx, 0x52800000u); /* mov x0, #0 */
+    emit_word(ctx, 0xD65F03C0u); /* ret */
+}
+
+static void emit_arm64_longjmp(Arm64Context* ctx) {
+    /* x0 = buf, x1 = value */
+    emit_word(ctx, 0xA9405013u); /* ldp x19, x20, [x0, #0] */
+    emit_word(ctx, 0xA9415815u); /* ldp x21, x22, [x0, #16] */
+    emit_word(ctx, 0xA9426017u); /* ldp x23, x24, [x0, #32] */
+    emit_word(ctx, 0xA9436819u); /* ldp x25, x26, [x0, #48] */
+    emit_word(ctx, 0xA944701Bu); /* ldp x27, x28, [x0, #64] */
+    emit_word(ctx, 0xA945781Du); /* ldp x29, x30, [x0, #80] */
+    emit_word(ctx, 0xF9403009u); /* ldr x9, [x0, #96] */
+    emit_word(ctx, 0x9100013Fu); /* mov sp, x9 */
+    emit_word(ctx, 0xAD43A408u); /* ldp q8, q9, [x0, #112] */
+    emit_word(ctx, 0xAD44AC0Au); /* ldp q10, q11, [x0, #144] */
+    emit_word(ctx, 0xAD45B40Cu); /* ldp q12, q13, [x0, #176] */
+    emit_word(ctx, 0xAD46BC0Eu); /* ldp q14, q15, [x0, #208] */
+    emit_word(ctx, 0x52800020u); /* mov x0, #1 */
+    emit_word(ctx, 0x9A801020u); /* csel x0, x1, x0, ne */
+    emit_word(ctx, 0xD61F03C0u); /* br x30 */
+}
+
 static void emit_function(Arm64Context* ctx, KrtIRFunction* func) {
+    if (func && func->name && strcmp(func->name, "__krt_setjmp") == 0) {
+        emit_arm64_setjmp(ctx);
+        return;
+    }
+    if (func && func->name && strcmp(func->name, "__krt_longjmp") == 0) {
+        emit_arm64_longjmp(ctx);
+        return;
+    }
+
     ctx->current_function = func;
     ctx->current_block = NULL;
     ctx->fixup_count = 0;
