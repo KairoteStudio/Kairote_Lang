@@ -1263,8 +1263,10 @@ static void generate_block(KROCodegenContext* ctx, KrtIRBasicBlock* block) {
         }
         if (can_fuse_integer_branch(ctx, block, inst)) {
             KrtTokenType type = KrtTokenIntegerCommon(inst->operands[0].value_type, inst->operands[1].value_type);
-            emit_scalar_compare_flags(ctx, inst, type);
-            emit_branch_targets(ctx, integer_condition(inst->opcode, KrtTokenIsUnsigned(type)) - 0x10);
+            int compare_unsigned = KrtTokenIsUnsigned(type) || KrtTokenIsUnsigned(inst->operands[0].value_type) ||
+                                   KrtTokenIsUnsigned(inst->operands[1].value_type);
+            emit_scalar_compare_flags(ctx, inst, type, compare_unsigned);
+            emit_branch_targets(ctx, integer_condition(inst->opcode, compare_unsigned) - 0x10);
             break;
         }
         generate_instruction(ctx, inst);

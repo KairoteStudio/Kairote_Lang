@@ -688,6 +688,7 @@ static void emit_scalar_compare_flags(KROCodegenContext* ctx, KrtIRInst* inst, K
         return;
     }
     int width = KrtTokenIntegerBits(type);
+    (void)compare_unsigned; /* fast paths compare raw registers; callers use it for the condition code */
     if (ctx->optimization_level >= 3 && (width == 32 || width == 64) &&
         KrtTokenIntegerBits(inst->operands[0].value_type) == width &&
         KrtTokenIntegerBits(inst->operands[1].value_type) == width) {

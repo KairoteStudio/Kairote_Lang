@@ -170,8 +170,10 @@ static void emit_tail_backedge(KROCodegenContext* ctx) {
     }
     int leaf_index = entry->succs[0] == ctx->rotated_tail_leaf ? 0 : 1;
     KrtTokenType type = KrtTokenIntegerCommon(compare->operands[0].value_type, compare->operands[1].value_type);
-    emit_scalar_compare_flags(ctx, compare, type);
-    uint8_t condition = integer_condition(compare->opcode, KrtTokenIsUnsigned(type)) - 0x10;
+    int compare_unsigned = KrtTokenIsUnsigned(type) || KrtTokenIsUnsigned(compare->operands[0].value_type) ||
+                           KrtTokenIsUnsigned(compare->operands[1].value_type);
+    emit_scalar_compare_flags(ctx, compare, type, compare_unsigned);
+    uint8_t condition = integer_condition(compare->opcode, compare_unsigned) - 0x10;
     emit_cond_jump_to_block(ctx, leaf_index ? condition : condition ^ 1, entry->succs[1 - leaf_index]);
     KrtIRValue value;
     if (!trivial_leaf_value(ctx, func, ctx->rotated_tail_leaf, &value)) {
