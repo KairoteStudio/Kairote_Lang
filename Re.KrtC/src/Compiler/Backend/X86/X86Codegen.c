@@ -541,6 +541,46 @@ static void emit_compare(Emitter* em, KrtIROpcode op, KrtIRValue* lhs, KrtIRValu
     emit_load_value(em, lhs, "rax");
     emit_load_value(em, rhs, "r9");
 
+    int lhs_float = lhs->value_type == TOKEN_FLOAT32 || lhs->value_type == TOKEN_FLOAT64;
+    int rhs_float = rhs->value_type == TOKEN_FLOAT32 || rhs->value_type == TOKEN_FLOAT64;
+    if (lhs_float || rhs_float) {
+        /* Floating-point compares go through SSE; NaN is unordered, so the
+         * ordered/equality setcc results are only exact for unordered-aware
+         * sequences (see audit item 2 for the remaining NaN corner). */
+        KrtTokenType float_type = lhs_float ? lhs->value_type : rhs->value_type;
+        int is_double = float_type == TOKEN_FLOAT64;
+        fprintf(em->output, "    movq xmm0, rax\n");
+        fprintf(em->output, "    movq xmm1, r9\n");
+        fprintf(em->output, "%s", is_double ? "    ucomisd xmm1, xmm0\n" : "    ucomiss xmm1, xmm0\n");
+        switch (op) {
+        case KRT_IR_EQ:
+            /* unordered must not compare equal */
+            fprintf(em->output, "    sete al\n    setnp cl\n    and al, cl\n");
+            break;
+        case KRT_IR_NE:
+            /* NaN compares unequal */
+            fprintf(em->output, "    setne al\n    setp cl\n    or al, cl\n");
+            break;
+        case KRT_IR_LT:
+            fprintf(em->output, "    setb al\n    setnp cl\n    and al, cl\n");
+            break;
+        case KRT_IR_LE:
+            fprintf(em->output, "    setbe al\n    setnp cl\n    and al, cl\n");
+            break;
+        case KRT_IR_GT:
+            fprintf(em->output, "    seta al\n");
+            break;
+        case KRT_IR_GE:
+            fprintf(em->output, "    setae al\n");
+            break;
+        default:
+            break;
+        }
+        fprintf(em->output, "    movzx rax, al\n");
+        emit_store_result(em, result, "rax");
+        return;
+    }
+
     fprintf(em->output, "    cmp rax, r9\n");
 
     int is_unsigned = emit_operand_is_unsigned(lhs, rhs);
