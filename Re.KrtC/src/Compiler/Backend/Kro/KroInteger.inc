@@ -681,7 +681,8 @@ static bool emit_binary32(KROCodegenContext* ctx, KrtIRInst* inst) {
     return true;
 }
 
-static void emit_scalar_compare_flags(KROCodegenContext* ctx, KrtIRInst* inst, KrtTokenType type) {
+static void emit_scalar_compare_flags(KROCodegenContext* ctx, KrtIRInst* inst, KrtTokenType type,
+                                       int compare_unsigned) {
     if (!ctx || !inst || inst->operand_count < 2) {
         KrtError("KRO emit_scalar_compare_flags: compare needs two operands");
         return;
@@ -724,10 +725,18 @@ static void emit_scalar_compare_flags(KROCodegenContext* ctx, KrtIRInst* inst, K
         }
         return;
     }
-    emit_load_for_type(ctx, &inst->operands[0], type, KRT_REG_RAX, KRT_REG_RDX);
-    emit_extend_scalar(ctx, width, KrtTokenIsUnsigned(type), KRT_REG_RAX, KRT_REG_RAX);
-    emit_load_for_type(ctx, &inst->operands[1], type, KRT_REG_RCX, KRT_REG_R8);
-    emit_extend_scalar(ctx, width, KrtTokenIsUnsigned(type), KRT_REG_RCX, KRT_REG_RCX);
+    /* Extend each operand according to its own declared type: a uint32
+     * operand must be zero-extended even when the common type is wider. */
+    int op0_bits = KrtTokenIntegerBits(inst->operands[0].value_type);
+    int op1_bits = KrtTokenIntegerBits(inst->operands[1].value_type);
+    emit_load_for_type(ctx, &inst->operands[0], inst->operands[0].value_type, KRT_REG_RAX, KRT_REG_RDX);
+    if (op0_bits > 0 && op0_bits < 64) {
+        emit_extend_scalar(ctx, op0_bits, KrtTokenIsUnsigned(inst->operands[0].value_type), KRT_REG_RAX, KRT_REG_RAX);
+    }
+    emit_load_for_type(ctx, &inst->operands[1], inst->operands[1].value_type, KRT_REG_RCX, KRT_REG_R8);
+    if (op1_bits > 0 && op1_bits < 64) {
+        emit_extend_scalar(ctx, op1_bits, KrtTokenIsUnsigned(inst->operands[1].value_type), KRT_REG_RCX, KRT_REG_RCX);
+    }
     emit_reg_op(ctx, 0x39, KRT_REG_RAX, KRT_REG_RCX);
 }
 
@@ -904,10 +913,12 @@ static void emit_integer_compare(KROCodegenContext* ctx, KrtIRInst* inst) {
     }
     KrtTokenType type = KrtTokenIntegerCommon(inst->operands[0].value_type, inst->operands[1].value_type);
     bool wide = KrtTokenIntegerBits(type) > 64;
+    int compare_unsigned = KrtTokenIsUnsigned(type) || KrtTokenIsUnsigned(inst->operands[0].value_type) ||
+                           KrtTokenIsUnsigned(inst->operands[1].value_type);
     if (!wide) {
-        emit_scalar_compare_flags(ctx, inst, type);
+        emit_scalar_compare_flags(ctx, inst, type, compare_unsigned);
         emit_byte(ctx, 0x0F);
-        emit_byte(ctx, integer_condition(inst->opcode, KrtTokenIsUnsigned(type)));
+        emit_byte(ctx, integer_condition(inst->opcode, compare_unsigned));
         emit_byte(ctx, 0xC0);
         emit_bytes(ctx, (const uint8_t*)"\x0F\xB6\xC0", 3);
         emit_store_value(ctx, &inst->result);
@@ -939,7 +950,7 @@ static void emit_integer_compare(KROCodegenContext* ctx, KrtIRInst* inst) {
         emit_reg_op(ctx, 0x39, KRT_REG_RAX, KRT_REG_RCX);
     }
     emit_byte(ctx, 0x0F);
-    emit_byte(ctx, integer_condition(inst->opcode, KrtTokenIsUnsigned(type)));
+    emit_byte(ctx, integer_condition(inst->opcode, compare_unsigned));
     emit_byte(ctx, 0xC0);
     if (low_done) {
         patch_local_jump(ctx, low_done, kro_get_code_offset(ctx->writer));
