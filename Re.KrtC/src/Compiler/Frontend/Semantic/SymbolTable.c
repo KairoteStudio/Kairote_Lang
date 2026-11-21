@@ -6,12 +6,15 @@
 #include <limits.h>
 
 static unsigned int hash_string(const char* str, int table_size) {
+    if (table_size <= 0) {
+        return 0;
+    }
     unsigned int hash = 5381;
     int c;
     while ((c = *str++)) {
         hash = ((hash << 5) + hash) + c;
     }
-    return hash % table_size;
+    return hash % (unsigned)table_size;
 }
 
 static bool grow_scope_index(SymbolScope* scope) {
@@ -34,14 +37,14 @@ static bool grow_scope_index(SymbolScope* scope) {
     return true;
 }
 
-static void grow_table_index(SymbolTable* table) {
-    if (table->hash_size > INT_MAX / 2) {
-        return;
+static bool grow_table_index(SymbolTable* table) {
+    if (!table || table->hash_size > INT_MAX / 2) {
+        return false;
     }
-    int size = table->hash_size * 2;
+    int size = table->hash_size ? table->hash_size * 2 : 16;
     SymbolEntry** buckets = KRT_CALLOC(size, sizeof(SymbolEntry*));
     if (!buckets) {
-        return;
+        return false;
     }
     for (int i = 0; i < table->hash_size; i++) {
         SymbolEntry* entry = table->hash_table[i];
@@ -67,6 +70,7 @@ static void grow_table_index(SymbolTable* table) {
     KRT_FREE(table->hash_table);
     table->hash_table = buckets;
     table->hash_size = size;
+    return true;
 }
 
 static SymbolEntry* lookup_in_scope(SymbolScope* scope, const char* name) {
@@ -105,15 +109,6 @@ SymbolTable* symbol_table_create(void) {
     table->global_scope->scope_level = 0;
     table->current_scope = table->global_scope;
 
-    table->forward_ref_capacity = 64;
-    table->forward_refs = KRT_CALLOC(table->forward_ref_capacity, sizeof(SymbolEntry*));
-    if (!table->forward_refs) {
-        KRT_FREE(table->global_scope);
-        KRT_FREE(table->hash_table);
-        KRT_FREE(table);
-        return NULL;
-    }
-
     table->parent_table = NULL;
 
     return table;
@@ -124,17 +119,23 @@ void symbol_table_destroy(SymbolTable* table) {
         return;
     }
 
-    SymbolScope* scope = table->global_scope;
+    SymbolScope* scope = table->current_scope ? table->current_scope : table->global_scope;
     while (scope) {
         SymbolScope* next_scope = scope->parent;
 
         SymbolEntry* sym = scope->symbols;
         while (sym) {
             SymbolEntry* next_sym = sym->scope_next;
-            if (sym->nested_table) {
-                if (sym->nested_table != table) {
-                    symbol_table_destroy(sym->nested_table);
+            if (sym->nested_table && sym->nested_table != table) {
+                SymbolTable* nested = sym->nested_table;
+                sym->nested_table = NULL;
+                /* Several entries can alias one nested table; only the first
+                 * destroys it. */
+                if (!nested->destroyed) {
+                    nested->destroyed = true;
+                    symbol_table_destroy(nested);
                 }
+            } else {
                 sym->nested_table = NULL;
             }
             KRT_FREE(sym->name);
@@ -147,8 +148,30 @@ void symbol_table_destroy(SymbolTable* table) {
         scope = next_scope;
     }
 
+    /* enter_nested_scope may have left current_scope pointing into a nested
+     * table, in which case the global scope is not on the chain above. */
+    if (table->global_scope) {
+        int reachable = 0;
+        for (SymbolScope* s = table->current_scope; s; s = s->parent) {
+            if (s == table->global_scope) {
+                reachable = 1;
+                break;
+            }
+        }
+        if (!reachable) {
+            SymbolEntry* sym = table->global_scope->symbols;
+            while (sym) {
+                SymbolEntry* next_sym = sym->scope_next;
+                KRT_FREE(sym->name);
+                KRT_FREE(sym);
+                sym = next_sym;
+            }
+            KRT_FREE(table->global_scope->hash_table);
+            KRT_FREE(table->global_scope);
+        }
+    }
+
     KRT_FREE(table->hash_table);
-    KRT_FREE(table->forward_refs);
     KRT_FREE(table);
 }
 
@@ -183,6 +206,7 @@ void symbol_table_pop_scope(SymbolTable* table) {
         SymbolEntry* entry = table->hash_table[hash];
         SymbolEntry* prev = NULL;
 
+        bool found = false;
         while (entry) {
             if (entry == sym) {
                 if (prev) {
@@ -190,14 +214,19 @@ void symbol_table_pop_scope(SymbolTable* table) {
                 } else {
                     table->hash_table[hash] = entry->next;
                 }
-                KRT_FREE(sym->name);
-                KRT_FREE(sym);
-                table->symbol_count--;
+                found = true;
                 break;
             }
             prev = entry;
             entry = entry->next;
         }
+
+        if (!found) {
+            /* Not in the table-level index (scope-only entry): release it. */
+            table->symbol_count--;
+        }
+        KRT_FREE(sym->name);
+        KRT_FREE(sym);
 
         sym = next_sym;
     }
@@ -218,7 +247,7 @@ SymbolEntry* symbol_table_declare(SymbolTable* table, const char* name, SymbolTy
 
             return existing;
         } else {
-            symbol_table_add_error(table, "符号 '%s' 重复声明", name);
+            symbol_table_add_error(table, "符号 '%s' 重复声明（第 %d 行）", name, line);
             return NULL;
         }
     }
@@ -227,8 +256,8 @@ SymbolEntry* symbol_table_declare(SymbolTable* table, const char* name, SymbolTy
     if (((size_t)scope->symbol_count + 1) * 4 >= (size_t)scope->hash_size * 3 && !grow_scope_index(scope)) {
         return NULL;
     }
-    if (((size_t)table->symbol_count + 1) * 4 >= (size_t)table->hash_size * 3) {
-        grow_table_index(table);
+    if (((size_t)table->symbol_count + 1) * 4 >= (size_t)table->hash_size * 3 && !grow_table_index(table)) {
+        return NULL;
     }
     SymbolEntry* sym = KRT_CALLOC(1, sizeof(SymbolEntry));
     if (!sym) {
@@ -272,7 +301,11 @@ SymbolEntry* symbol_table_define(SymbolTable* table, const char* name, SymbolTyp
 
     if (sym) {
         if (sym->state == SYMBOL_DEFINED) {
-            symbol_table_add_error(table, "Symbol '%s' already defined in current scope", name);
+            symbol_table_add_error(table, "Symbol '%s' already defined in current scope (line %d)", name, line);
+            return NULL;
+        }
+        if (sym->type != type) {
+            symbol_table_add_error(table, "符号 '%s' 的声明与定义类型不一致（第 %d 行）", name, line);
             return NULL;
         }
 
@@ -510,7 +543,6 @@ void symbol_table_print_stats(SymbolTable* table) {
     printf("符号表统计信息:\n");
     printf("  总符号数: %d\n", table->symbol_count);
     printf("  错误数: %d\n", table->error_count);
-    printf("  前向引用数: %d\n", table->forward_ref_count);
     printf("  当前作用域层级: %d\n", table->current_scope->scope_level);
 
     int var_count = 0, func_count = 0, type_count = 0, label_count = 0;

@@ -60,12 +60,9 @@ typedef struct SymbolTable {
     int hash_size;
     int symbol_count;
     int error_count;
-    SymbolEntry** forward_refs;
-    int forward_ref_count;
-    int forward_ref_capacity;
+    int destroyed;
     struct SymbolTable* parent_table;
 } SymbolTable;
-typedef void (*ForwardRefCallback)(SymbolEntry* symbol, void* context);
 SymbolTable* symbol_table_create(void);
 void symbol_table_destroy(SymbolTable* table);
 void symbol_table_push_scope(SymbolTable* table);
@@ -79,9 +76,6 @@ bool symbol_table_query_var_type(SymbolTable* table, const char* name, KrtTokenT
                                  bool* out_is_array);
 void symbol_table_mark_defined(SymbolTable* table, const char* name, int line);
 void symbol_table_check_undefined(SymbolTable* table);
-void symbol_table_register_forward_ref(SymbolTable* table, const char* name, ForwardRefCallback callback,
-                                       void* context);
-void symbol_table_resolve_forward_refs(SymbolTable* table);
 bool symbol_table_check_entry_point_conflict(SymbolTable* table);
 SymbolEntry* symbol_table_get_entry_point(SymbolTable* table);
 void symbol_table_set_entry_point(SymbolTable* table, const char* name);
