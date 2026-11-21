@@ -73,6 +73,7 @@ typedef struct {
     bool has_entry_func;
     int32_t* string_const_sym_indices;
     int string_const_count;
+    char sym_prefix[64];
 } Arm64Context;
 
 /* ------------------------------------------------------------------ */
@@ -419,8 +420,7 @@ static void add_fixup(Arm64Context* ctx, uint32_t kind, uint32_t cond, int block
     fix->func_name = func_name;
 }
 
-static uint32_t find_func_offset(Arm64Context* ctx, const char* name) {
-    for (int i = 0; i < ctx->func_count; i++) {
+static uint32_t find_func_offset(Arm64Context* ctx, const char* name) {    for (int i = 0; i < ctx->func_count; i++) {
         if (ctx->funcs[i].name && strcmp(ctx->funcs[i].name, name) == 0) {
             return ctx->funcs[i].offset;
         }
@@ -481,6 +481,15 @@ static bool value_is_64(KrtIRValue* value) {
 }
 
 static void emit_load_value(Arm64Context* ctx, KrtIRValue* value, int reg);
+
+/*
+ * String-constant symbols must be unique across objects: every module with
+ * literals would otherwise define its own "str_const_0", and the linker
+ * (which resolves relocations by name) hands out the first object's copy.
+ */
+static void string_const_symbol_name(Arm64Context* ctx, int id, char* buffer, size_t size) {
+    snprintf(buffer, size, "%sstr_const_%d", ctx->sym_prefix, id);
+}
 
 static bool value_is_float64(KrtIRValue* value) {
     return value && value->value_type == TOKEN_FLOAT64;
@@ -578,8 +587,8 @@ static void emit_load_value(Arm64Context* ctx, KrtIRValue* value, int reg) {
         int id = value->data.string_const_id;
         if (id >= 0 && id < ctx->string_const_count && ctx->string_const_sym_indices &&
             ctx->string_const_sym_indices[id] >= 0) {
-            char name[64];
-            snprintf(name, sizeof(name), "str_const_%d", id);
+            char name[96];
+            string_const_symbol_name(ctx, id, name, sizeof(name));
             emit_symbol_address(ctx, name, reg);
         } else {
             emit_load_imm(ctx, reg, 0, true);
@@ -1206,6 +1215,17 @@ void KrtArm64Generate(FILE* output_file, const char* output_filename, KrtIRModul
     } else {
         snprintf(ctx.output_filename, sizeof(ctx.output_filename), "output.kro");
     }
+    /* Symbol prefix derived from the output file name, sanitised. */
+    {
+        const char* base = strrchr(ctx.output_filename, '/');
+        base = base ? base + 1 : ctx.output_filename;
+        int w = 0;
+        for (const char* p = base; *p && w < (int)sizeof(ctx.sym_prefix) - 1; p++) {
+            char c = *p;
+            ctx.sym_prefix[w++] = (c == '.' || c == '-' || c == ' ') ? '_' : c;
+        }
+        ctx.sym_prefix[w] = '\0';
+    }
     ctx.writer = kro_writer_create(KRO_ARCH_ARM64);
     if (!ctx.writer) {
         return;
@@ -1256,8 +1276,8 @@ void KrtArm64Generate(FILE* output_file, const char* output_filename, KrtIRModul
             }
             uint32_t offset = kro_get_rodata_offset(ctx.writer);
             kro_write_rodata(ctx.writer, text, (uint32_t)strlen(text) + 1);
-            char name[64];
-            snprintf(name, sizeof(name), "str_const_%d", i);
+            char name[96];
+            string_const_symbol_name(&ctx, i, name, sizeof(name));
             ctx.string_const_sym_indices[i] =
                 kro_add_symbol(ctx.writer, name, KRO_SYM_OBJECT, KRO_BIND_LOCAL, KRO_SEC_RODATA, offset);
         }
