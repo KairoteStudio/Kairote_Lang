@@ -2878,6 +2878,8 @@ static bool semantic_analyze_stmt_class_declaration(SemanticAnalyzer* analyzer, 
             const char* ns_path[2] = {class_name, NULL};
             char* key = name_mangle_function(ns_path, mname, ptypes, pcount);
             if (!key) {
+                semantic_analyzer_add_error_at(analyzer, member, "Failed to mangle method %s", mname);
+                body_ok = false;
                 continue;
             }
             SymbolEntry* existing_m = symbol_table_lookup_current_scope(analyzer->symbol_table, key);
@@ -2896,7 +2898,7 @@ static bool semantic_analyze_stmt_class_declaration(SemanticAnalyzer* analyzer, 
     }
 
     if (body_node && body_node->type == AST_BLOCK) {
-        for (int i = 0; i < body_node->data.block.statement_count && body_ok; i++) {
+        for (int i = 0; i < body_node->data.block.statement_count; i++) {
             ASTNode* member = body_node->data.block.statements[i];
 
             if (!member) {
@@ -2910,7 +2912,8 @@ static bool semantic_analyze_stmt_class_declaration(SemanticAnalyzer* analyzer, 
                 }
             }
 
-            body_ok = semantic_analyzer_analyze_statement(analyzer, member);
+            bool member_ok = semantic_analyzer_analyze_statement(analyzer, member);
+            body_ok = member_ok && body_ok;
         }
     } else if (body_node) {
         body_ok = semantic_analyzer_analyze_statement(analyzer, body_node);
@@ -2971,7 +2974,8 @@ static bool semantic_analyze_stmt_unsafe_call(SemanticAnalyzer* analyzer, ASTNod
     int old_mode = analyzer->is_unsafe_mode, old_mem = analyzer->unsafe_mem;
     analyzer->is_unsafe_mode = 1;
     for (int i = 0; i < stmt->data.unsafe_call.permission_count; i++) {
-        if (!strcmp(stmt->data.unsafe_call.permissions[i], "krt.mem")) {
+        if (stmt->data.unsafe_call.permissions[i] &&
+            strcmp(stmt->data.unsafe_call.permissions[i], "krt.mem") == 0) {
             analyzer->unsafe_mem = 1;
         }
     }
@@ -2987,7 +2991,8 @@ static bool semantic_analyze_stmt_access_modifier(SemanticAnalyzer* analyzer, AS
     if (stmt->data.access_modifier.member) {
         return semantic_analyzer_analyze_statement(analyzer, stmt->data.access_modifier.member);
     }
-    return true;
+    semantic_analyzer_add_error_at(analyzer, stmt, "Access modifier without a member");
+    return false;
 }
 static bool semantic_analyze_stmt_function_declaration(SemanticAnalyzer* analyzer, ASTNode* stmt) {
     const char* func_name = stmt->data.function_decl.name;
@@ -3026,11 +3031,14 @@ static bool semantic_analyze_stmt_function_declaration(SemanticAnalyzer* analyze
     }
     func_sym->state = SYMBOL_DEFINED;
 
-    if (!current_class && strcmp(func_name, "main") == 0) {
-        analyzer->has_entry_point = true;
+    if (!current_class && analyzer->symbol_table == analyzer->global_symbol_table &&
+        strcmp(func_name, "main") == 0) {
         if (analyzer->entry_point_name) {
-            KRT_FREE(analyzer->entry_point_name);
+            semantic_analyzer_add_error_at(analyzer, stmt, "Multiple entry points named 'main'");
+            KRT_FREE(mangled_name);
+            return false;
         }
+        analyzer->has_entry_point = true;
         analyzer->entry_point_name = KRT_STRDUP(func_name);
         func_sym->is_entry_point = true;
     }
@@ -3042,7 +3050,7 @@ static bool semantic_analyze_stmt_function_declaration(SemanticAnalyzer* analyze
                                                      SYMBOL_VARIABLE, 0, NULL);
             if (param) {
                 param->value_type = stmt->data.function_decl.parameter_types[i];
-                if (stmt->function_type) {
+                if (stmt->function_type && i < stmt->function_type->parameter_count) {
                     param->source_type = stmt->function_type->parameters[i];
                 }
                 if (param->source_type.token == TOKEN_IDENTIFIER && param->source_type.type_name) {
