@@ -27,6 +27,7 @@ typedef struct SymbolEntry {
     long const_array_size; /* >=0 when the array length is a known constant */
     int is_initialized; /* locals: whether a value has been assigned yet */
     int was_read; /* locals: whether the name has been read */
+    KrtTokenType access; /* TOKEN_PUBLIC / TOKEN_PRIVATE / TOKEN_PROTECTED */
     KrtIRValue* ir_value;
     KrtIRFunction* ir_function;
     int stack_offset;

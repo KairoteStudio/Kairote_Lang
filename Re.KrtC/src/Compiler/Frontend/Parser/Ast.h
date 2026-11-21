@@ -193,6 +193,7 @@ typedef struct ASTNode {
             struct ASTNode* body;
             KrtTokenType return_type;
             int is_async;
+            KrtTokenType access;
         } function_decl;
         struct {
             char* name;
@@ -205,6 +206,7 @@ typedef struct ASTNode {
             struct ASTNode** parameter_default_values;
             struct ASTNode* body;
             KrtTokenType return_type;
+            KrtTokenType access;
         } static_function_decl;
         struct {
             char* name;
@@ -216,6 +218,7 @@ typedef struct ASTNode {
             char* template_instantiation_type;
             int is_nullable;
             int pointer_depth;
+            KrtTokenType access;
         } variable_decl;
         struct {
             char* name;

@@ -203,6 +203,7 @@ static ASTNode* parser_parse_function_declaration(Parser* parser) {
 static ASTNode* parser_parse_declaration_with_modifiers(Parser* parser) {
     int is_static = 0;
     int is_const = 0;
+    KrtTokenType access = TOKEN_PUBLIC;
     while (parser->current_token.type == TOKEN_PUBLIC || parser->current_token.type == TOKEN_PRIVATE ||
            parser->current_token.type == TOKEN_PROTECTED || parser->current_token.type == TOKEN_STATIC ||
            parser->current_token.type == TOKEN_CONST || parser->current_token.type == TOKEN_EXTERN ||
@@ -212,6 +213,9 @@ static ASTNode* parser_parse_declaration_with_modifiers(Parser* parser) {
             is_static = 1;
         } else if (parser->current_token.type == TOKEN_CONST) {
             is_const = 1;
+        } else if (parser->current_token.type == TOKEN_PRIVATE ||
+                   parser->current_token.type == TOKEN_PROTECTED) {
+            access = parser->current_token.type;
         }
         parser_advance(parser);
     }
@@ -226,6 +230,21 @@ static ASTNode* parser_parse_declaration_with_modifiers(Parser* parser) {
     } else if ((is_static || is_const) && declaration && declaration->type == AST_VARIABLE_DECLARATION) {
         declaration->type = AST_STATIC_VARIABLE_DECLARATION;
         declaration->data.static_variable_decl.is_const = is_const;
+    }
+    if (declaration) {
+        switch (declaration->type) {
+        case AST_FUNCTION_DECLARATION:
+        case AST_STATIC_FUNCTION_DECLARATION:
+            declaration->data.function_decl.access = access;
+            declaration->data.static_function_decl.access = access;
+            break;
+        case AST_VARIABLE_DECLARATION:
+        case AST_STATIC_VARIABLE_DECLARATION:
+            declaration->data.variable_decl.access = access;
+            break;
+        default:
+            break;
+        }
     }
     return declaration;
 }

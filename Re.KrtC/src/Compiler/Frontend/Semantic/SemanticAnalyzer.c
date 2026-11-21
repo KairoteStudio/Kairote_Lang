@@ -1972,6 +1972,16 @@ bool semantic_analyzer_analyze_function_call(SemanticAnalyzer* analyzer, ASTNode
                                                                        call_expr->data.call.argument_count,
                                                                        call_expr->data.call.arguments);
             }
+            if (method_symbol && method_symbol->type == SYMBOL_FUNCTION &&
+                method_symbol->access == TOKEN_PRIVATE) {
+                const char* from_class = semantic_analyzer_get_current_class_context(analyzer);
+                if (!from_class || strcmp(from_class, class_name) != 0) {
+                    semantic_analyzer_add_error_at(analyzer, call_expr,
+                                                   "Cannot access private method '%s' of %s", method_name, class_name);
+                    KRT_FREE(mangled_name);
+                    return false;
+                }
+            }
             if (method_symbol && method_symbol->type == SYMBOL_FUNCTION && method_symbol->name &&
                 method_symbol->name[0] == '_' && method_symbol->name[1] == 'Z') {
                 if (mangled_name) {
@@ -2178,6 +2188,7 @@ bool semantic_analyzer_analyze_variable_decl(SemanticAnalyzer* analyzer, ASTNode
     }
 
     symbol->value_type = var_decl->data.variable_decl.type;
+    symbol->access = var_decl->data.variable_decl.access;
     symbol->const_array_size = -1;
     symbol->is_initialized = var_decl->data.variable_decl.value != NULL;
     symbol->was_read = 0;
@@ -2294,6 +2305,7 @@ bool semantic_analyzer_analyze_static_variable_decl(SemanticAnalyzer* analyzer, 
     }
     symbol->value_type = var_decl->data.static_variable_decl.type;
     symbol->is_const = var_decl->data.static_variable_decl.is_const;
+    symbol->access = var_decl->data.variable_decl.access;
     symbol->source_type =
         var_decl->declared_type.token ? var_decl->declared_type : (KrtSourceType){.token = symbol->value_type};
 
@@ -2722,6 +2734,10 @@ static bool semantic_analyze_stmt_class_declaration(SemanticAnalyzer* analyzer, 
                 if (!member) {
                     continue;
                 }
+            } else if (member->type == AST_STATIC_FUNCTION_DECLARATION) {
+                member_access = member->data.static_function_decl.access;
+            } else if (member->type == AST_FUNCTION_DECLARATION) {
+                member_access = member->data.function_decl.access;
             }
             const char* mname = NULL;
             KrtTokenType* ptypes = NULL;
@@ -3318,6 +3334,9 @@ FunctionAnalysisResult semantic_analyzer_analyze_function(SemanticAnalyzer* anal
         }
     }
     func_symbol->state = SYMBOL_DEFINED;
+    func_symbol->access = (function_node->type == AST_FUNCTION_DECLARATION)
+                              ? function_node->data.function_decl.access
+                              : function_node->data.static_function_decl.access;
     func_symbol->source_type = KrtSourceTypeClone(
         analyzer->type_arena, (KrtSourceType){.token = TOKEN_FN, .function = function_node->function_type});
     func_symbol->value_type = function_node->data.function_decl.return_type;
