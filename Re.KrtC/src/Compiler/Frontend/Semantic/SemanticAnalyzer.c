@@ -3090,12 +3090,14 @@ static bool semantic_analyze_stmt_static_function_declaration(SemanticAnalyzer* 
         const char* ns_path[2] = {current_class, NULL};
         mangled_name = name_mangle_function(ns_path, method_name, stmt->data.static_function_decl.parameter_types,
                                             stmt->data.static_function_decl.parameter_count);
-        if (mangled_name) {
-            function_name = mangled_name;
+        if (!mangled_name) {
+            semantic_analyzer_add_error_at(analyzer, stmt, "Failed to mangle static method %s", method_name);
+            return false;
         }
+        function_name = mangled_name;
     }
 
-    SymbolEntry* existing = symbol_table_lookup_scope_chain(analyzer->symbol_table, function_name);
+    SymbolEntry* existing = symbol_table_lookup_current_scope(analyzer->symbol_table, function_name);
     if (existing && existing->state == SYMBOL_DEFINED) {
         semantic_analyzer_add_error_at(analyzer, stmt, "Static method %s already defined", method_name);
         if (mangled_name) {
@@ -3104,10 +3106,8 @@ static bool semantic_analyze_stmt_static_function_declaration(SemanticAnalyzer* 
         return false;
     }
 
-    SymbolEntry* func_sym = existing;
-    if (!func_sym) {
-        func_sym = symbol_table_define(analyzer->symbol_table, function_name, SYMBOL_FUNCTION, 0, NULL);
-    }
+    SymbolEntry* func_sym =
+        symbol_table_define(analyzer->symbol_table, function_name, SYMBOL_FUNCTION, 0, NULL);
     if (!func_sym) {
         semantic_analyzer_add_error_at(analyzer, stmt, "Failed to define static method %s", method_name);
         if (mangled_name) {
@@ -3120,6 +3120,14 @@ static bool semantic_analyze_stmt_static_function_declaration(SemanticAnalyzer* 
     func_sym->source_type =
         KrtSourceTypeClone(analyzer->type_arena, (KrtSourceType){.token = TOKEN_FN, .function = stmt->function_type});
 
+    /* A static method without a body is a legitimate forward declaration. */
+    if (!stmt->data.static_function_decl.body) {
+        if (mangled_name) {
+            KRT_FREE(mangled_name);
+        }
+        return true;
+    }
+
     symbol_table_push_scope(analyzer->symbol_table);
 
     for (int i = 0; i < stmt->data.static_function_decl.parameter_count; i++) {
@@ -3128,7 +3136,7 @@ static bool semantic_analyze_stmt_static_function_declaration(SemanticAnalyzer* 
         SymbolEntry* param = symbol_table_define(analyzer->symbol_table, param_name, SYMBOL_VARIABLE, 0, NULL);
         if (param) {
             param->value_type = stmt->data.static_function_decl.parameter_types[i];
-            if (stmt->function_type) {
+            if (stmt->function_type && i < stmt->function_type->parameter_count) {
                 param->source_type = stmt->function_type->parameters[i];
             }
             if (param->source_type.token == TOKEN_IDENTIFIER && param->source_type.type_name) {
@@ -3162,12 +3170,14 @@ static bool semantic_analyze_stmt_static_function_declaration(SemanticAnalyzer* 
 static bool semantic_analyze_stmt_constructor_declaration(SemanticAnalyzer* analyzer, ASTNode* stmt) {
     const char* current_class = semantic_analyzer_get_current_class_context(analyzer);
     if (!current_class) {
+        semantic_analyzer_add_error_at(analyzer, stmt, "Constructor declaration outside of a class");
         return false;
     }
 
     int parameter_count = stmt->data.constructor_decl.parameter_count;
     char* mangled_name = name_mangle_constructor(current_class, parameter_count);
     if (!mangled_name) {
+        semantic_analyzer_add_error_at(analyzer, stmt, "Failed to mangle constructor %s", current_class);
         return false;
     }
 
@@ -3185,6 +3195,9 @@ static bool semantic_analyze_stmt_constructor_declaration(SemanticAnalyzer* anal
         return false;
     }
     ctor_sym->state = SYMBOL_DEFINED;
+    ctor_sym->value_type = TOKEN_VOID;
+    ctor_sym->source_type =
+        KrtSourceTypeClone(analyzer->type_arena, (KrtSourceType){.token = TOKEN_FN, .function = stmt->function_type});
     KRT_FREE(mangled_name);
 
     if (stmt->data.constructor_decl.body) {
@@ -3198,8 +3211,9 @@ static bool semantic_analyze_stmt_constructor_declaration(SemanticAnalyzer* anal
         }
 
         bool base_ok = true;
-        for (int i = 0; i < stmt->data.constructor_decl.base_argument_count && base_ok; i++) {
-            base_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.constructor_decl.base_arguments[i]);
+        for (int i = 0; i < stmt->data.constructor_decl.base_argument_count; i++) {
+            bool arg_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.constructor_decl.base_arguments[i]);
+            base_ok = arg_ok && base_ok;
         }
 
         bool body_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.constructor_decl.body);
