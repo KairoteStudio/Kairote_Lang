@@ -551,9 +551,11 @@ static void get_kro_filename(const char* krt_file, char* kro_file, int kro_file_
     strncpy(kro_file, krt_file, kro_file_size - 1);
     kro_file[kro_file_size - 1] = '\0';
 
-    int len = strlen(kro_file);
-    if (len > 4) {
-        strcpy(kro_file + len - 4, ".kro");
+    size_t len = strlen(kro_file);
+    if (len >= 4 && strcmp(kro_file + len - 4, ".krt") == 0) {
+        memcpy(kro_file + len - 4, ".kro", 4);
+    } else if (len + 4 < (size_t)kro_file_size) {
+        snprintf(kro_file + len, (size_t)kro_file_size - len, ".kro");
     }
 }
 
@@ -864,6 +866,16 @@ static int compile_multiple_files(const char** input_files, int input_count, con
     }
     if (obj_idx != success_count) {
         KrtError("Build failed: one or more compiled object files are missing");
+        for (int i = 0; i < input_count; i++) {
+            if (kro_files[i]) {
+                free(kro_files[i]);
+            }
+        }
+        free(kro_files);
+        free(obj_files);
+        KrtConfigDestroy(config);
+        KrtPlatformDestroy(platform);
+        return 1;
     }
 
     char exe_output[KRT_MAX_PATH];
@@ -910,7 +922,7 @@ static int compile_multiple_files(const char** input_files, int input_count, con
     return 0;
 }
 
-static int build_project_independent(const char* project_file, const char* output_path __attribute__((unused)), int keep_temp,
+static int build_project_independent(const char* project_file, const char* output_path, int keep_temp,
                          int optimization_level) {
 
     KrtPlatform* platform = KrtPlatformGetCurrent();
@@ -1054,7 +1066,12 @@ static int build_project_independent(const char* project_file, const char* outpu
             snprintf(project_filename, sizeof(project_filename), "%s", out_name ? out_name : "output");
         }
 
-        KrtPlatformPathJoin(platform, project_output_path, sizeof(project_output_path), bin_dir, project_filename);
+        if (output_path && output_path[0] != '\0') {
+            /* An explicit -o wins over bin/<platform>/<name>. */
+            snprintf(project_output_path, sizeof(project_output_path), "%s", output_path);
+        } else {
+            KrtPlatformPathJoin(platform, project_output_path, sizeof(project_output_path), bin_dir, project_filename);
+        }
 
         if (ParallelCompilerLinkResults(parallel_compiler, project_output_path) != 0) {
             KrtError("链接失败");

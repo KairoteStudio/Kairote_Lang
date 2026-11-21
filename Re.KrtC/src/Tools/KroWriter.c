@@ -1,4 +1,5 @@
 #include "KroWriter.h"
+#include "../Core/Utils/KrtCommon.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -307,7 +308,8 @@ int kro_add_symbol(KROWriter* writer, const char* name, uint8_t type, uint8_t bi
     }
 
     if (writer->sym_count >= writer->sym_capacity) {
-        uint32_t new_capacity = writer->sym_capacity * 2;
+        uint32_t new_capacity =
+            writer->sym_capacity <= UINT32_MAX / 2 ? writer->sym_capacity * 2 : writer->sym_count + 1;
         KROSymbol* new_symbols = (KROSymbol*)realloc(writer->symbols, new_capacity * sizeof(KROSymbol));
         if (!new_symbols) {
             return -1;
@@ -342,7 +344,8 @@ int kro_add_import_symbol(KROWriter* writer, const char* name, const char* modul
     }
 
     if (writer->sym_count >= writer->sym_capacity) {
-        uint32_t new_capacity = writer->sym_capacity * 2;
+        uint32_t new_capacity =
+            writer->sym_capacity <= UINT32_MAX / 2 ? writer->sym_capacity * 2 : writer->sym_count + 1;
         KROSymbol* new_symbols = (KROSymbol*)realloc(writer->symbols, new_capacity * sizeof(KROSymbol));
         if (!new_symbols) {
             return -1;
@@ -392,7 +395,7 @@ void kro_update_symbol_value(KROWriter* writer, int sym_idx, uint64_t value) {
 
 static bool add_reloc_to_list(RelocList* list, const KRORelocation* reloc) {
     if (list->count >= list->capacity) {
-        uint32_t new_capacity = list->capacity * 2;
+        uint32_t new_capacity = list->capacity <= UINT32_MAX / 2 ? list->capacity * 2 : list->count + 1;
         KRORelocation* new_relocs = (KRORelocation*)realloc(list->relocs, new_capacity * sizeof(KRORelocation));
         if (!new_relocs) {
             return false;
@@ -437,7 +440,9 @@ void kro_add_reloc(KROWriter* writer, uint32_t sec_idx, uint64_t offset, uint32_
         return;
     }
 
-    add_reloc_to_list(list, &reloc);
+    if (!add_reloc_to_list(list, &reloc)) {
+        KrtError("Failed to record relocation for section %u", sec_idx);
+    }
 }
 
 bool kro_set_entry_point(KROWriter* writer, uint64_t offset) {

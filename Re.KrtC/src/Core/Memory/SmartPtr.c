@@ -1,4 +1,5 @@
 #include "../Utils/KrtCommon.h"
+#include "Size.h"
 #include <string.h>
 #include <assert.h>
 #include <stdlib.h>
@@ -56,7 +57,11 @@ SmartPtr* KrtMakeSharedArray(const char* type_name, size_t count, size_t element
         return NULL;
     }
 
-    SmartPtr* ptr = KrtMakeShared(type_name, count * element_size);
+    size_t total_size;
+    if (!KrtSizeMultiply(count, element_size, &total_size)) {
+        return NULL;
+    }
+    SmartPtr* ptr = KrtMakeShared(type_name, total_size);
     if (ptr && ptr->control) {
         ptr->control->is_array = true;
     }
@@ -94,7 +99,11 @@ SmartPtr* KrtMakeUniqueArray(const char* type_name, size_t count, size_t element
     if (count == 0 || element_size == 0) {
         return NULL;
     }
-    return KrtMakeUnique(type_name, count * element_size);
+    size_t total_size;
+    if (!KrtSizeMultiply(count, element_size, &total_size)) {
+        return NULL;
+    }
+    return KrtMakeUnique(type_name, total_size);
 }
 
 void KrtSharedAcquire(SmartPtr* ptr) {
