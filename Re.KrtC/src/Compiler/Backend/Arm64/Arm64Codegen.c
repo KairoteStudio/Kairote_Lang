@@ -26,6 +26,7 @@
 #define COND_NE 1
 #define COND_HS 2
 #define COND_LO 3
+#define COND_MI 4
 #define COND_HI 8
 #define COND_LS 9
 #define COND_GE 10
@@ -421,8 +422,59 @@ static bool value_is_64(KrtIRValue* value) {
     if (!value) {
         return true;
     }
+    if (value->value_type == TOKEN_FLOAT32) {
+        return false;
+    }
+    if (value->value_type == TOKEN_FLOAT64) {
+        return true;
+    }
     int bits = KrtTokenIntegerBits(value->value_type);
     return bits == 0 || bits > 32;
+}
+
+static void emit_load_value(Arm64Context* ctx, KrtIRValue* value, int reg);
+
+static bool value_is_float64(KrtIRValue* value) {
+    return value && value->value_type == TOKEN_FLOAT64;
+}
+
+static void emit_gp_to_fp(Arm64Context* ctx, int gp, int fp, bool is64) {
+    emit_word(ctx, (is64 ? 0x9E670000u : 0x1E270000u) | ((uint32_t)(gp & 0x1F) << 5) | (uint32_t)(fp & 0x1F));
+}
+
+static void emit_fp_to_gp(Arm64Context* ctx, int fp, int gp, bool is64) {
+    emit_word(ctx, (is64 ? 0x9E660000u : 0x1E260000u) | ((uint32_t)(fp & 0x1F) << 5) | (uint32_t)(gp & 0x1F));
+}
+
+static void emit_load_float(Arm64Context* ctx, KrtIRValue* value, int fp_reg) {
+    bool is64 = value_is_float64(value);
+    int slot = value_slot(ctx, value);
+    if (slot >= 0) {
+        emit_load_from_slot(ctx, 0, slot, is64);
+    } else if (value->type == KRT_IR_VALUE_IMM_F) {
+        if (is64) {
+            uint64_t bits = 0;
+            memcpy(&bits, &value->data.imm, sizeof(bits));
+            emit_load_imm(ctx, 0, bits, true);
+        } else {
+            float narrowed = (float)value->data.imm;
+            uint32_t bits = 0;
+            memcpy(&bits, &narrowed, sizeof(bits));
+            emit_load_imm(ctx, 0, bits, false);
+        }
+    } else {
+        emit_load_value(ctx, value, 0);
+    }
+    emit_gp_to_fp(ctx, 0, fp_reg, is64);
+}
+
+static void emit_store_float_result(Arm64Context* ctx, KrtIRInst* inst, int fp_reg) {
+    bool is64 = value_is_float64(&inst->result);
+    emit_fp_to_gp(ctx, fp_reg, 0, is64);
+    int slot = value_slot(ctx, &inst->result);
+    if (slot >= 0) {
+        emit_store_to_slot(ctx, 0, slot, is64);
+    }
 }
 
 static void emit_symbol_address(Arm64Context* ctx, const char* name, int reg);
@@ -572,7 +624,13 @@ static void emit_call(Arm64Context* ctx, KrtIRInst* inst) {
         return;
     }
     for (int i = 0; i < args; i++) {
-        emit_load_value(ctx, &inst->operands[i + 1], i);
+        KrtIRValue* arg = &inst->operands[i + 1];
+        bool arg_float = arg->value_type == TOKEN_FLOAT32 || arg->value_type == TOKEN_FLOAT64;
+        if (arg_float) {
+            emit_load_float(ctx, arg, i); /* AAPCS64: v0-v7 */
+        } else {
+            emit_load_value(ctx, arg, i);
+        }
     }
     if (find_func_offset(ctx, name) != 0xFFFFFFFFu) {
         add_fixup(ctx, 4, 0, -1, name);
@@ -602,12 +660,46 @@ static void emit_function_body(Arm64Context* ctx, KrtIRFunction* func) {
             case KRT_IR_COPY:
             case KRT_IR_IMM:
                 if (inst->operand_count >= 1) {
+                    bool src_float = inst->operands[0].value_type == TOKEN_FLOAT32 ||
+                                     inst->operands[0].value_type == TOKEN_FLOAT64;
+                    bool dst_float = inst->result.value_type == TOKEN_FLOAT32 ||
+                                     inst->result.value_type == TOKEN_FLOAT64;
+                    if (src_float && dst_float) {
+                        bool src64 = inst->operands[0].value_type == TOKEN_FLOAT64;
+                        bool dst64 = inst->result.value_type == TOKEN_FLOAT64;
+                        emit_load_float(ctx, &inst->operands[0], 0);
+                        if (src64 != dst64) {
+                            emit_word(ctx, src64 ? 0x1E624000u : 0x1E22C000u); /* fcvt */
+                        }
+                        emit_store_float_result(ctx, inst, 0);
+                        break;
+                    }
                     emit_load_value(ctx, &inst->operands[0], 0);
                     emit_store_result(ctx, inst, 0);
                 }
                 break;
             case KRT_IR_CAST: {
                 if (inst->operand_count >= 1) {
+                    bool src_float = inst->operands[0].value_type == TOKEN_FLOAT32 ||
+                                     inst->operands[0].value_type == TOKEN_FLOAT64;
+                    bool dst_float = inst->result.value_type == TOKEN_FLOAT32 ||
+                                     inst->result.value_type == TOKEN_FLOAT64;
+                    if (src_float && !dst_float) {
+                        /* float -> integer truncate */
+                        emit_load_float(ctx, &inst->operands[0], 0);
+                        emit_word(ctx, (inst->operands[0].value_type == TOKEN_FLOAT64) ? 0x9E780000u
+                                                                                        : 0x1E380000u);
+                        emit_store_result(ctx, inst, 0);
+                        break;
+                    }
+                    if (!src_float && dst_float) {
+                        /* integer -> float */
+                        emit_load_value(ctx, &inst->operands[0], 0);
+                        emit_word(ctx, (inst->result.value_type == TOKEN_FLOAT64) ? 0x9E620000u
+                                                                                   : 0x1E220000u);
+                        emit_store_float_result(ctx, inst, 0);
+                        break;
+                    }
                     emit_load_value(ctx, &inst->operands[0], 0);
                     int bits = KrtTokenIntegerBits(inst->result.value_type);
                     if (bits > 0 && bits < 64) {
@@ -694,6 +786,78 @@ static void emit_function_body(Arm64Context* ctx, KrtIRFunction* func) {
             case KRT_IR_NE:
                 emit_comparison(ctx, inst);
                 break;
+            case KRT_IR_FADD:
+            case KRT_IR_FSUB:
+            case KRT_IR_FMUL:
+            case KRT_IR_FDIV: {
+                if (inst->operand_count < 2) {
+                    break;
+                }
+                bool is64 = value_is_float64(&inst->operands[0]) || value_is_float64(&inst->operands[1]);
+                emit_load_float(ctx, &inst->operands[0], 0);
+                if (value_is_float64(&inst->operands[0]) != is64) {
+                    emit_word(ctx, (is64 ? 0x1E22C000u : 0x1E624000u) | (0u << 5) | 0u); /* fcvt s0/d0 */
+                }
+                emit_load_float(ctx, &inst->operands[1], 1);
+                if (value_is_float64(&inst->operands[1]) != is64) {
+                    emit_word(ctx, (is64 ? 0x1E22C000u : 0x1E624000u) | (1u << 5) | 1u); /* fcvt s1/d1 */
+                }
+                uint32_t base;
+                if (inst->opcode == KRT_IR_FADD) {
+                    base = is64 ? 0x1E602800u : 0x1E202800u;
+                } else if (inst->opcode == KRT_IR_FSUB) {
+                    base = is64 ? 0x1E603800u : 0x1E203800u;
+                } else if (inst->opcode == KRT_IR_FMUL) {
+                    base = is64 ? 0x1E600800u : 0x1E200800u;
+                } else {
+                    base = is64 ? 0x1E601800u : 0x1E201800u;
+                }
+                emit_word(ctx, base | (1u << 16)); /* sd0 = sd0 <op> sd1 */
+                if (is64 != value_is_float64(&inst->result)) {
+                    /* convert the operation precision to the result precision */
+                    emit_word(ctx, is64 ? 0x1E624000u : 0x1E22C000u); /* fcvt */
+                }
+                emit_store_float_result(ctx, inst, 0);
+                break;
+            }
+            case KRT_IR_FEQ:
+            case KRT_IR_FNE:
+            case KRT_IR_FLT:
+            case KRT_IR_FLE:
+            case KRT_IR_FGT:
+            case KRT_IR_FGE: {
+                if (inst->operand_count < 2) {
+                    break;
+                }
+                bool is64 = value_is_float64(&inst->operands[0]);
+                emit_load_float(ctx, &inst->operands[0], 0);
+                emit_load_float(ctx, &inst->operands[1], 1);
+                emit_word(ctx, (is64 ? 0x1E602000u : 0x1E202000u) | (1u << 16)); /* fcmp sd0, sd1 */
+                uint32_t cond;
+                switch (inst->opcode) {
+                case KRT_IR_FEQ:
+                    cond = COND_EQ;
+                    break;
+                case KRT_IR_FNE:
+                    cond = COND_NE;
+                    break;
+                case KRT_IR_FLT:
+                    cond = COND_MI;
+                    break;
+                case KRT_IR_FLE:
+                    cond = COND_LS;
+                    break;
+                case KRT_IR_FGT:
+                    cond = COND_GT;
+                    break;
+                default:
+                    cond = COND_GE;
+                    break;
+                }
+                emit_word(ctx, 0x1A9F07E0u | (((cond ^ 1) & 0xF) << 12)); /* cset w0, cond */
+                emit_store_result(ctx, inst, 0);
+                break;
+            }
             case KRT_IR_JUMP: {
                 if (block->succ_count > 0 && block->succs[0] != block->next) {
                     add_fixup(ctx, 0, 0, block->succs[0]->id, NULL);
@@ -880,7 +1044,14 @@ static void emit_function(Arm64Context* ctx, KrtIRFunction* func) {
     }
 
     for (int i = 0; i < func->param_count && i < ARM64_NUM_ARG_REGS; i++) {
-        emit_store_to_slot(ctx, i, i, true);
+        bool param_float = func->params[i].type == TOKEN_FLOAT32 || func->params[i].type == TOKEN_FLOAT64;
+        if (param_float) {
+            /* Spill the AAPCS64 FP argument register into its stack slot. */
+            emit_fp_to_gp(ctx, i, 0, func->params[i].type == TOKEN_FLOAT64);
+            emit_store_to_slot(ctx, 0, i, func->params[i].type == TOKEN_FLOAT64);
+        } else {
+            emit_store_to_slot(ctx, i, i, true);
+        }
     }
 
     emit_function_body(ctx, func);
