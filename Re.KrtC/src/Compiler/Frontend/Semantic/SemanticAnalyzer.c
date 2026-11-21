@@ -2983,13 +2983,47 @@ bool semantic_analyzer_analyze_statement(SemanticAnalyzer* analyzer, ASTNode* st
 
         return semantic_analyzer_analyze_expression(analyzer, stmt);
 
-    case AST_TRY_STATEMENT:
-        semantic_analyzer_add_error_at(analyzer, stmt,
-                                       "exception handling (try/catch/finally) is not implemented yet");
-        return false;
+    case AST_TRY_STATEMENT: {
+        bool ok = true;
+        if (stmt->data.try_stmt.try_block) {
+            ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.try_stmt.try_block);
+        }
+        for (int i = 0; i < stmt->data.try_stmt.catch_clause_count; i++) {
+            ASTNode* clause = stmt->data.try_stmt.catch_clauses ? stmt->data.try_stmt.catch_clauses[i] : NULL;
+            if (!clause) {
+                continue;
+            }
+            symbol_table_push_scope(analyzer->symbol_table);
+            if (clause->data.catch_clause.exception_var) {
+                SymbolEntry* catch_var = symbol_table_define(analyzer->symbol_table,
+                                                             clause->data.catch_clause.exception_var, SYMBOL_VARIABLE, 0,
+                                                             NULL);
+                if (!catch_var) {
+                    semantic_analyzer_add_error(analyzer, "Failed to define catch variable: %s",
+                                                clause->data.catch_clause.exception_var);
+                    symbol_table_pop_scope(analyzer->symbol_table);
+                    ok = false;
+                    continue;
+                }
+            }
+            if (clause->data.catch_clause.catch_block) {
+                ok = semantic_analyzer_analyze_statement(analyzer, clause->data.catch_clause.catch_block) && ok;
+            }
+            symbol_table_pop_scope(analyzer->symbol_table);
+        }
+        if (stmt->data.try_stmt.finally_clause &&
+            stmt->data.try_stmt.finally_clause->data.finally_clause.finally_block) {
+            ok = semantic_analyzer_analyze_statement(
+                     analyzer, stmt->data.try_stmt.finally_clause->data.finally_clause.finally_block) &&
+                 ok;
+        }
+        return ok;
+    }
     case AST_THROW_STATEMENT:
-        semantic_analyzer_add_error_at(analyzer, stmt, "throw is not implemented yet");
-        return false;
+        if (stmt->data.throw_stmt.exception_expr) {
+            return semantic_analyzer_analyze_expression(analyzer, stmt->data.throw_stmt.exception_expr);
+        }
+        return true;
 
     default:
         return true;

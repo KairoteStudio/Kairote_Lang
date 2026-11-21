@@ -471,14 +471,6 @@ static void irgen_dispose(KrtIRBuilder* builder, KrtIRValue resource) {
     irgen_call_builtin_1arg(builder, IRGEN_FUNC_DISPOSE, resource);
 }
 
-static void irgen_rethrow_exception(KrtIRBuilder* builder) {
-    irgen_call_builtin_0args(builder, IRGEN_FUNC_RETHROW_EXCEPTION);
-}
-
-static void irgen_throw_exception(KrtIRBuilder* builder) {
-    irgen_call_builtin_0args(builder, IRGEN_FUNC_THROW_EXCEPTION);
-}
-
 static KrtIRValue irgen_size_of_pointer(KrtIRBuilder* builder) {
     return irgen_call_builtin_0args(builder, IRGEN_FUNC_SIZE_OF_POINTER);
 }
@@ -2720,31 +2712,181 @@ static void irgen_stmt_using_statement(KrtIRBuilder* builder, ASTNode* stmt) {
     irgen_dispose(builder, resource);
     return;
 }
-static void irgen_stmt_throw_statement(KrtIRBuilder* builder, ASTNode* stmt) {
-    if (stmt->data.throw_stmt.is_rethrow) {
-        irgen_rethrow_exception(builder);
-    } else {
-        irgen_throw_exception(builder);
+/* ---- exception runtime (try/catch/throw) ---------------------------------- */
+
+/* Layout shared with the backend setjmp/longjmp stubs. */
+#define KRT_JMP_BUF_SIZE 240
+#define KRT_JMP_BUF_PREV_HANDLER_OFFSET 104
+
+static bool g_irgen_exception_runtime_ready = false;
+
+static void irgen_ensure_global(KrtIRBuilder* builder, const char* name) {
+    if (!KrtIrModuleFindGlobal(builder->module, name)) {
+        KrtIrModuleAddGlobal(builder, name, TOKEN_INT64);
     }
-    return;
 }
-static void irgen_stmt_try_statement(KrtIRBuilder* builder, ASTNode* stmt) {
-    if (stmt->data.try_stmt.try_block) {
-        krt_ir_generate_block(builder, stmt->data.try_stmt.try_block);
+
+static KrtIRFunction* irgen_ensure_runtime_function(KrtIRBuilder* builder, const char* name, int param_count,
+                                                    KrtTokenType return_type) {
+    for (KrtIRFunction* f = builder->module->functions; f; f = f->next) {
+        if (strcmp(f->name, name) == 0) {
+            return f;
+        }
     }
-    if (stmt->data.try_stmt.catch_clauses) {
-        for (int i = 0; i < stmt->data.try_stmt.catch_clause_count; i++) {
-            if (stmt->data.try_stmt.catch_clauses[i] &&
-                stmt->data.try_stmt.catch_clauses[i]->data.catch_clause.catch_block) {
-                krt_ir_generate_block(builder, stmt->data.try_stmt.catch_clauses[i]->data.catch_clause.catch_block);
+
+    KrtIRParam* params = NULL;
+    if (param_count > 0) {
+        params = (KrtIRParam*)KRT_CALLOC((size_t)param_count, sizeof(KrtIRParam));
+        if (!params) {
+            return NULL;
+        }
+        for (int i = 0; i < param_count; i++) {
+            char param_name[16];
+            snprintf(param_name, sizeof(param_name), "p%d", i);
+            params[i].name = KRT_STRDUP(param_name);
+            params[i].type = TOKEN_INT64;
+            if (!params[i].name) {
+                for (int k = 0; k < i; k++) {
+                    KRT_FREE(params[k].name);
+                }
+                KRT_FREE(params);
+                return NULL;
             }
         }
     }
-    if (stmt->data.try_stmt.finally_clause) {
-        krt_ir_generate_block(builder, stmt->data.try_stmt.finally_clause);
+
+    KrtIRFunction* func = KrtIrFunctionCreate(builder, name, params, param_count, return_type);
+    if (params) {
+        for (int i = 0; i < param_count; i++) {
+            KRT_FREE(params[i].name);
+        }
+        KRT_FREE(params);
+    }
+    if (!func) {
+        return NULL;
+    }
+    KrtIrFunctionSetEntry(builder, func);
+    return func;
+}
+
+static void irgen_ensure_exception_runtime(KrtIRBuilder* builder) {
+    if (g_irgen_exception_runtime_ready) {
+        return;
+    }
+    g_irgen_exception_runtime_ready = true;
+
+    irgen_ensure_global(builder, "__krt_handler");
+    irgen_ensure_global(builder, "__krt_exception");
+
+    KrtIRFunction* saved_func = builder->current_function;
+    KrtIRBasicBlock* saved_block = builder->current_block;
+
+    /* The setjmp/longjmp stubs are emitted directly by the backends.  Create
+     * them first so later runtime helpers resolve them as local calls. */
+    irgen_ensure_runtime_function(builder, "__krt_setjmp", 1, TOKEN_INT32);
+    irgen_ensure_runtime_function(builder, "__krt_longjmp", 2, TOKEN_VOID);
+
+    /* void __krt_try_enter(void* buf) */
+    KrtIRFunction* enter = irgen_ensure_runtime_function(builder, "__krt_try_enter", 1, TOKEN_VOID);
+    KrtIrBlockSetCurrent(builder, enter->entry_block);
+    KrtIRValue prev = KrtIrLoad(builder, "__krt_handler");
+    KrtIRValue prev_slot = KrtIrAdd(builder, KrtIrArg(builder, 0), KrtIrImm(builder, KRT_JMP_BUF_PREV_HANDLER_OFFSET));
+    KrtIrStorePtr(builder, prev_slot, 0, prev);
+    KrtIrStore(builder, "__krt_handler", KrtIrArg(builder, 0));
+    KrtIrReturn(builder, KRT_IMM_ZERO(builder));
+
+    /* void __krt_try_leave(void) */
+    KrtIRFunction* leave = irgen_ensure_runtime_function(builder, "__krt_try_leave", 0, TOKEN_VOID);
+    KrtIrBlockSetCurrent(builder, leave->entry_block);
+    KrtIRValue buf = KrtIrLoad(builder, "__krt_handler");
+    KrtIRValue leave_slot = KrtIrAdd(builder, buf, KrtIrImm(builder, KRT_JMP_BUF_PREV_HANDLER_OFFSET));
+    KrtIrStore(builder, "__krt_handler", KrtIrLoadPtr(builder, leave_slot, 0));
+    KrtIrReturn(builder, KRT_IMM_ZERO(builder));
+
+    /* void __krt_throw(void* exception) */
+    KrtIRFunction* throw_func = irgen_ensure_runtime_function(builder, "__krt_throw", 1, TOKEN_VOID);
+    KrtIrBlockSetCurrent(builder, throw_func->entry_block);
+    KrtIrStore(builder, "__krt_exception", KrtIrArg(builder, 0));
+    KrtIRValue throw_args[2] = {KrtIrLoad(builder, "__krt_handler"), KrtIrImm(builder, 1)};
+    KrtIrCall(builder, "__krt_longjmp", throw_args, 2);
+    KrtIrReturn(builder, KRT_IMM_ZERO(builder));
+
+    builder->current_function = saved_func;
+    builder->current_block = saved_block;
+}
+
+static void irgen_stmt_throw_statement(KrtIRBuilder* builder, ASTNode* stmt) {
+    irgen_ensure_exception_runtime(builder);
+
+    KrtIRValue exception;
+    if (stmt->data.throw_stmt.is_rethrow || !stmt->data.throw_stmt.exception_expr) {
+        exception = KrtIrLoad(builder, "__krt_exception");
+    } else {
+        exception = krt_ir_generate_expression(builder, stmt->data.throw_stmt.exception_expr);
+    }
+    KrtIRValue args[1] = {exception};
+    KrtIrCall(builder, "__krt_throw", args, 1);
+    return;
+}
+static void irgen_stmt_try_statement(KrtIRBuilder* builder, ASTNode* stmt) {
+    irgen_ensure_exception_runtime(builder);
+
+    KrtIRValue buf = irgen_allocate_memory(builder, KrtIrImm(builder, KRT_JMP_BUF_SIZE));
+
+    KrtIRValue enter_args[1] = {buf};
+    KrtIrCall(builder, "__krt_try_enter", enter_args, 1);
+
+    KrtIRValue setjmp_args[1] = {buf};
+    KrtIRValue resumed = KrtIrCall(builder, "__krt_setjmp", setjmp_args, 1);
+
+    char labels[3][32];
+    for (int i = 0; i < 3; i++) {
+        snprintf(labels[i], sizeof(labels[i]), "%s_%d", i == 0 ? "try_normal" : (i == 1 ? "try_handler" : "try_after"),
+                 builder->label_counter++);
+    }
+    KrtIRBasicBlock* normal_block = KrtIrBlockCreate(builder, labels[0]);
+    KrtIRBasicBlock* handler_block = KrtIrBlockCreate(builder, labels[1]);
+    KrtIRBasicBlock* after_block = KrtIrBlockCreate(builder, labels[2]);
+
+    KrtIrBranch(builder, resumed, handler_block, normal_block);
+
+    int vt_saved = builder->var_type_count;
+
+    KrtIrBlockSetCurrent(builder, normal_block);
+    if (stmt->data.try_stmt.try_block) {
+        krt_ir_generate_block(builder, stmt->data.try_stmt.try_block);
+    }
+    KrtIrCall(builder, "__krt_try_leave", NULL, 0);
+    KrtIrJump(builder, after_block);
+
+    KrtIrVarTypeTruncate(builder, vt_saved);
+    KrtIrBlockSetCurrent(builder, handler_block);
+    KrtIRValue exception = KrtIrLoad(builder, "__krt_exception");
+
+    int catch_count = stmt->data.try_stmt.catch_clause_count;
+    if (catch_count > 0 && stmt->data.try_stmt.catch_clauses) {
+        ASTNode* clause = stmt->data.try_stmt.catch_clauses[0];
+        if (clause && clause->data.catch_clause.exception_var) {
+            KrtIrVarTypePush(builder, clause->data.catch_clause.exception_var, (int)TOKEN_INT64, 0);
+            const char* slot = KrtIrVarTypeResolveIRName(builder, clause->data.catch_clause.exception_var);
+            KrtIrStore(builder, slot, exception);
+        }
+        if (clause && clause->data.catch_clause.catch_block) {
+            krt_ir_generate_block(builder, clause->data.catch_clause.catch_block);
+        }
+    }
+    KrtIrCall(builder, "__krt_try_leave", NULL, 0);
+    KrtIrJump(builder, after_block);
+
+    KrtIrVarTypeTruncate(builder, vt_saved);
+    KrtIrBlockSetCurrent(builder, after_block);
+    if (stmt->data.try_stmt.finally_clause &&
+        stmt->data.try_stmt.finally_clause->data.finally_clause.finally_block) {
+        krt_ir_generate_block(builder, stmt->data.try_stmt.finally_clause->data.finally_clause.finally_block);
     }
     return;
 }
+
 static void irgen_stmt_variable_declaration(KrtIRBuilder* builder, ASTNode* stmt) {
     KrtIrVarTypePush(builder, stmt->data.variable_decl.name, (int)stmt->data.variable_decl.type,
                      (stmt->data.variable_decl.is_array || stmt->data.variable_decl.array_size) ? 1 : 0);

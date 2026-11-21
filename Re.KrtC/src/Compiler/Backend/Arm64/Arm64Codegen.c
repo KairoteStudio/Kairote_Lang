@@ -165,35 +165,30 @@ static void emit_extend(Arm64Context* ctx, int bits, bool is_unsigned, bool is_6
  * numbering, so translate the ones whose signatures match.  Numbers without an
  * entry are passed through unchanged.
  */
+static const uint32_t g_syscall_map[][2] = {
+    {0, 63},   /* read */
+    {1, 64},   /* write */
+    {3, 57},   /* close */
+    {5, 80},   /* fstat */
+    {8, 62},   /* lseek */
+    {9, 222},  /* mmap */
+    {10, 226}, /* mprotect */
+    {11, 215}, /* munmap */
+    {12, 214}, /* brk */
+    {16, 29},  /* ioctl */
+    {60, 93},  /* exit */
+    {231, 94}, /* exit_group */
+};
+
+#define SYSCALL_MAP_COUNT (sizeof(g_syscall_map) / sizeof(g_syscall_map[0]))
+
 static uint32_t arm64_syscall_number(uint32_t x86_number) {
-    switch (x86_number) {
-    case 0:
-        return 63; /* read */
-    case 1:
-        return 64; /* write */
-    case 3:
-        return 57; /* close */
-    case 5:
-        return 80; /* fstat */
-    case 8:
-        return 62; /* lseek */
-    case 9:
-        return 222; /* mmap */
-    case 10:
-        return 226; /* mprotect */
-    case 11:
-        return 215; /* munmap */
-    case 12:
-        return 214; /* brk */
-    case 16:
-        return 29; /* ioctl */
-    case 60:
-        return 93; /* exit */
-    case 231:
-        return 94; /* exit_group */
-    default:
-        return x86_number;
+    for (size_t i = 0; i < SYSCALL_MAP_COUNT; i++) {
+        if (g_syscall_map[i][0] == x86_number) {
+            return g_syscall_map[i][1];
+        }
     }
+    return x86_number;
 }
 
 static void emit_load_indirect(Arm64Context* ctx, int address_reg, int size) {
@@ -308,6 +303,11 @@ static int alloc_slot_for_bytes(Arm64Context* ctx, uint32_t bytes) {
 
 static int local_slot(Arm64Context* ctx, const char* name) {
     if (!name) {
+        return -1;
+    }
+    /* Module-level objects are addressed through their symbol, not a frame
+     * slot; otherwise every function would get a private copy. */
+    if (kro_find_symbol(ctx->writer, name) >= 0) {
         return -1;
     }
     for (int i = 0; i < ctx->local_count; i++) {
@@ -549,6 +549,11 @@ static void emit_load_value(Arm64Context* ctx, KrtIRValue* value, int reg) {
         break;
     }
     case KRT_IR_VALUE_VAR: {
+        if (value->data.name && kro_find_symbol(ctx->writer, value->data.name) >= 0) {
+            emit_symbol_address(ctx, value->data.name, reg);
+            emit_word(ctx, 0xF9400000u | ((uint32_t)(reg & 0x1F) << 5) | (uint32_t)(reg & 0x1F));
+            break;
+        }
         int slot = local_slot(ctx, value->data.name);
         if (slot >= 0) {
             emit_load_from_slot(ctx, reg, slot, is_64);
@@ -588,6 +593,14 @@ static void emit_load_value(Arm64Context* ctx, KrtIRValue* value, int reg) {
 }
 
 static void emit_store_result(Arm64Context* ctx, KrtIRInst* inst, int reg) {
+    if (inst->result.type == KRT_IR_VALUE_VAR && inst->result.data.name &&
+        kro_find_symbol(ctx->writer, inst->result.data.name) >= 0) {
+        int scratch = reg == 9 ? 10 : 9;
+        emit_symbol_address(ctx, inst->result.data.name, scratch);
+        emit_word(ctx, 0xF9000000u | ((uint32_t)(scratch & 0x1F) << 5) | (uint32_t)(reg & 0x1F));
+        return;
+    }
+
     int slot = value_slot(ctx, &inst->result);
     if (slot >= 0) {
         emit_store_to_slot(ctx, reg, slot, value_is_64(&inst->result));
@@ -1064,8 +1077,15 @@ static void emit_function_body(Arm64Context* ctx, KrtIRFunction* func) {
                     emit_load_imm(ctx, 8, number, true);
                 } else {
                     emit_load_value(ctx, &inst->operands[0], 8);
-                    /* dynamic number: translate at runtime via a small stub is not
-                     * available yet, so use it verbatim */
+                    /* The number is a runtime value (e.g. the stdlib wraps it in
+                     * a parameter), so translate it inline. */
+                    for (size_t i = 0; i < SYSCALL_MAP_COUNT; i++) {
+                        uint32_t from = g_syscall_map[i][0];
+                        uint32_t to = g_syscall_map[i][1];
+                        emit_word(ctx, 0xF100001Fu | ((uint32_t)from << 10) | (8u << 5)); /* cmp x8, #from */
+                        emit_load_imm(ctx, 9, to, true);                                   /* movz/movk x9, #to */
+                        emit_word(ctx, 0x9A800000u | (8u << 16) | (9u << 5) | 8u);        /* csel x8, x9, x8, eq */
+                    }
                 }
                 for (int i = 1; i < inst->operand_count && i <= ARM64_NUM_ARG_REGS; i++) {
                     emit_load_value(ctx, &inst->operands[i], i - 1);
@@ -1122,6 +1142,7 @@ static void emit_arm64_longjmp(Arm64Context* ctx) {
     emit_word(ctx, 0xAD45B40Cu); /* ldp q12, q13, [x0, #176] */
     emit_word(ctx, 0xAD46BC0Eu); /* ldp q14, q15, [x0, #208] */
     emit_word(ctx, 0x52800020u); /* mov x0, #1 */
+    emit_word(ctx, 0xF100003Fu); /* cmp x1, #0 */
     emit_word(ctx, 0x9A801020u); /* csel x0, x1, x0, ne */
     emit_word(ctx, 0xD61F03C0u); /* br x30 */
 }
@@ -1188,6 +1209,30 @@ void KrtArm64Generate(FILE* output_file, const char* output_filename, KrtIRModul
     ctx.writer = kro_writer_create(KRO_ARCH_ARM64);
     if (!ctx.writer) {
         return;
+    }
+
+    /* Materialise module globals into .data so loads/stores can address them
+     * through their symbol. */
+    for (int i = 0; i < module->global_count; i++) {
+        KrtIRGlobal* global = &module->globals[i];
+        if (!global || !global->name) {
+            continue;
+        }
+
+        uint32_t data_offset = kro_get_data_offset(ctx.writer);
+        KrtUInt128 init_value = global->is_integer_initializer
+                                    ? global->init_integer
+                                    : (global->has_initializer ? (KrtUInt128)(int64_t)global->init_number : 0);
+        init_value = KrtIntegerNormalize(init_value, KrtTokenIntegerBits(global->type), KrtTokenIsUnsigned(global->type));
+        if (global->type == TOKEN_FLOAT32) {
+            float narrowed = (float)global->init_number;
+            init_value = 0;
+            memcpy(&init_value, &narrowed, sizeof(narrowed));
+        } else if (global->type == TOKEN_FLOAT64) {
+            memcpy(&init_value, &global->init_number, sizeof(double));
+        }
+        kro_write_data(ctx.writer, &init_value, KrtTokenIntegerBits(global->type) > 64 ? 16 : 8);
+        kro_add_symbol(ctx.writer, global->name, KRO_SYM_OBJECT, KRO_BIND_GLOBAL, KRO_SEC_DATA, data_offset);
     }
 
     int func_count = 0;
