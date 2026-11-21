@@ -76,7 +76,8 @@ static void compile_task(CompileTask* task, KrtCompilePipeline* pipeline) {
             if (assemble_res != 0) {
                 result = -1;
                 char error_msg[512];
-                snprintf(error_msg, sizeof(error_msg), "汇编失败: %s -> %s", task->output_file, task->obj_file);
+                snprintf(error_msg, sizeof(error_msg), "汇编失败: %s -> %s (退出码 %d)", task->output_file,
+                         task->obj_file, assemble_res);
                 collect_compile_error(task, error_msg);
             }
         }
@@ -131,6 +132,7 @@ ParallelCompiler* ParallelCompilerCreate(int max_threads, KrtConfig* config) {
 
     ParallelCompiler* compiler = (ParallelCompiler*)KRT_MALLOC(sizeof(ParallelCompiler));
     if (!compiler) {
+        KrtError("无法分配并行编译器上下文");
         return NULL;
     }
 
@@ -146,6 +148,7 @@ ParallelCompiler* ParallelCompilerCreate(int max_threads, KrtConfig* config) {
 
     compiler->shared_generic_registry = generics_create_registry();
     if (!compiler->shared_generic_registry) {
+        KrtError("无法创建泛型注册表");
         thread_pool_destroy(compiler->thread_pool);
         KRT_FREE(compiler);
         return NULL;
@@ -206,6 +209,7 @@ int ParallelCompilerAddFile(ParallelCompiler* compiler, const char* input_file, 
 
     CompileTask* task = (CompileTask*)KRT_MALLOC(sizeof(CompileTask));
     if (!task) {
+        KrtError("无法分配编译任务: %s", input_file);
         return -1;
     }
 
@@ -238,6 +242,7 @@ int ParallelCompilerAddFile(ParallelCompiler* compiler, const char* input_file, 
     CompileTask** expanded_tasks =
         (CompileTask**)KRT_REALLOC(compiler->tasks, (size_t)(compiler->task_count + 1) * sizeof(*compiler->tasks));
     if (!expanded_tasks) {
+        KrtError("无法扩展编译任务表");
         KRT_FREE(task->input_file);
         KRT_FREE(task->output_file);
         KRT_FREE(task->obj_file);
@@ -265,19 +270,12 @@ int ParallelCompilerExecute(ParallelCompiler* compiler) {
     double total_start_time = KrtTimeNowSeconds();
 
     compiler->next_task = 0;
-    size_t source_bytes = 0;
-    for (int i = 0; i < compiler->task_count; i++) {
-        struct stat file;
-        if (stat(compiler->tasks[i]->input_file, &file) == 0 && file.st_size > 0) {
-            source_bytes += (size_t)file.st_size;
-        }
-    }
-    int workers = (int)(source_bytes / (64u * 1024u));
-    if (workers > compiler->max_threads) {
-        workers = compiler->max_threads;
-    }
+    int workers = compiler->max_threads;
     if (workers > compiler->task_count) {
         workers = compiler->task_count;
+    }
+    if (workers < 1) {
+        workers = 1;
     }
     if (workers < 2) {
         compile_batch_worker(compiler);
@@ -394,7 +392,7 @@ void FindRuntimeObj(const char* obj_name, char* result, size_t size) {
         }
     }
 
-    KRT_STRCPY_S(result, size, obj_name);
+    result[0] = '\0';
 }
 
 void ParallelCompilerGetStats(ParallelCompiler* compiler, int* total, int* succeeded, int* failed) {
@@ -411,6 +409,51 @@ void ParallelCompilerGetStats(ParallelCompiler* compiler, int* total, int* succe
     if (failed) {
         *failed = compiler->stats.failed;
     }
+}
+
+/* Blank out comments and string/char literal contents so the generic-type
+ * scan cannot mistake text inside them for a declaration. */
+static char* mask_noncode(const char* source, size_t length) {
+    char* masked = (char*)KRT_MALLOC(length + 1);
+    if (!masked) {
+        return NULL;
+    }
+    memcpy(masked, source, length + 1);
+
+    size_t i = 0;
+    while (i < length) {
+        char current = masked[i];
+        if (current == '/' && i + 1 < length && masked[i + 1] == '/') {
+            while (i < length && masked[i] != '\n') {
+                masked[i++] = ' ';
+            }
+        } else if (current == '/' && i + 1 < length && masked[i + 1] == '*') {
+            masked[i++] = ' ';
+            masked[i++] = ' ';
+            while (i < length && !(masked[i] == '*' && i + 1 < length && masked[i + 1] == '/')) {
+                masked[i++] = ' ';
+            }
+            if (i < length) {
+                masked[i++] = ' ';
+                masked[i++] = ' ';
+            }
+        } else if (current == '"' || current == '\'') {
+            char quote = current;
+            masked[i++] = ' ';
+            while (i < length && masked[i] != quote) {
+                if (masked[i] == '\\' && i + 1 < length) {
+                    masked[i++] = ' ';
+                }
+                masked[i++] = ' ';
+            }
+            if (i < length) {
+                masked[i++] = ' ';
+            }
+        } else {
+            i++;
+        }
+    }
+    return masked;
 }
 
 int ParallelCompilerCollectGenericTypes(ParallelCompiler* compiler) {
@@ -449,7 +492,14 @@ int ParallelCompilerCollectGenericTypes(ParallelCompiler* compiler) {
         fclose(fp);
         source[read_bytes] = '\0';
 
-        char* pos = source;
+        char* masked = mask_noncode(source, read_bytes);
+        if (!masked) {
+            KrtError("内存分配失败: 泛型扫描缓冲区: %s", task->input_file);
+            KRT_FREE(source);
+            continue;
+        }
+
+        char* pos = masked;
         while ((pos = strstr(pos, "template")) != NULL) {
 
             char* search_pos = pos + 8;
@@ -512,6 +562,12 @@ int ParallelCompilerCollectGenericTypes(ParallelCompiler* compiler) {
             if (name_end > name_start) {
                 int name_len = name_end - name_start;
                 char* type_name = (char*)KRT_MALLOC(name_len + 1);
+                if (!type_name) {
+                    KrtError("内存分配失败: 泛型类型名");
+                    KRT_FREE(source);
+                    KRT_FREE(masked);
+                    return -1;
+                }
                 strncpy(type_name, name_start, name_len);
                 type_name[name_len] = '\0';
 
@@ -545,6 +601,7 @@ int ParallelCompilerCollectGenericTypes(ParallelCompiler* compiler) {
             pos = name_end;
         }
 
+        KRT_FREE(masked);
         KRT_FREE(source);
     }
 

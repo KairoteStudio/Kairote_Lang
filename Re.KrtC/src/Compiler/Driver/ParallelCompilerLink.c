@@ -74,6 +74,10 @@ int ParallelCompilerLinkResults(ParallelCompiler* compiler, const char* final_ou
         const char* runtime_paths[] = {runtime_obj, cache_obj, allocator_obj, KrtStringObj};
         const char* runtime_names[] = {"runtime.o", "output_cache.o", "allocator.o", "KrtString.o"};
         for (int i = 0; i < 4; i++) {
+            if (runtime_paths[i][0] == '\0') {
+                KrtError("运行时对象缺失: %s", runtime_names[i]);
+                continue;
+            }
             if (KrtArkLinkAddObjectFile(ark_ctx, runtime_paths[i]) != 0) {
                 KrtError("Failed to add runtime object %s: %s", runtime_names[i], runtime_paths[i]);
             }

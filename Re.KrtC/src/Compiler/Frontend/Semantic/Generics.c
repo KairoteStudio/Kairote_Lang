@@ -47,6 +47,11 @@ bool generics_register_type(GenericRegistry* registry, const char* name, Generic
     if (!registry || !name || param_count < 0) {
         return false;
     }
+    /* Parameter names are required once a count is claimed; a NULL list with
+     * a positive count would let later instantiation dereference NULL. */
+    if (!params && param_count > 0) {
+        param_count = 0;
+    }
 
     pthread_mutex_lock(&registry->mutex);
 
