@@ -581,6 +581,9 @@ bool kro_write_file(KROWriter* writer, const char* filename) {
         }
     }
 
-    fclose(fp);
+    if (fclose(fp) != 0) {
+        KrtError("Failed to flush object file: %s", filename);
+        return false;
+    }
     return true;
 }
