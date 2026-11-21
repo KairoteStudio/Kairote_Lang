@@ -1209,6 +1209,23 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
                                            left->data.member_access.member_name);
             return false;
         }
+        /* Assigning through a member/array marks the base object initialized:
+         * `Vec v; v.x = 1; use(v);` must not be reported as read-before-assign. */
+        if (left_ok && expr->data.binary_op.operator == TOKEN_ASSIGN) {
+            ASTNode* base = NULL;
+            if (left->type == AST_MEMBER_ACCESS) {
+                base = left->data.member_access.object;
+            } else if (left->type == AST_ARRAY_ACCESS) {
+                base = left->data.array_access.array;
+            }
+            if (base && base->type == AST_IDENTIFIER) {
+                SymbolEntry* base_symbol =
+                    symbol_table_lookup_scope_chain(analyzer->symbol_table, base->data.identifier_name);
+                if (base_symbol && base_symbol->type == SYMBOL_VARIABLE) {
+                    base_symbol->is_initialized = 1;
+                }
+            }
+        }
         bool right_ok = semantic_analyzer_analyze_expression(analyzer, expr->data.binary_op.right);
         return left_ok && right_ok;
     }
@@ -1560,6 +1577,16 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
                     member = symbol_table_lookup(class_symbol->nested_table, member_name);
                 }
                 if (member && (member->type == SYMBOL_STATIC_FIELD || member->type == SYMBOL_FUNCTION)) {
+                    const char* from_class = semantic_analyzer_get_current_class_context(analyzer);
+                    if (member->access == TOKEN_PRIVATE &&
+                        (!from_class || !class_name || strcmp(from_class, class_name) != 0)) {
+                        semantic_analyzer_add_error_at(analyzer, expr, "Cannot access private member '%s' of %s",
+                                                       member_name, class_name);
+                        if (mangled_name) {
+                            KRT_FREE(mangled_name);
+                        }
+                        return false;
+                    }
                     if (expr->data.member_access.resolved_class_name) {
                         KRT_FREE(expr->data.member_access.resolved_class_name);
                     }
@@ -2195,7 +2222,9 @@ bool semantic_analyzer_analyze_variable_decl(SemanticAnalyzer* analyzer, ASTNode
     if (!type.token) {
         type.token = var_decl->data.variable_decl.type;
     }
-    if (type.token == TOKEN_VOID || var_decl->data.variable_decl.type == TOKEN_VOID) {
+    /* `void*` is a valid pointer type; only a plain void variable is invalid. */
+    if ((type.token == TOKEN_VOID || var_decl->data.variable_decl.type == TOKEN_VOID) &&
+        type.pointer_depth == 0) {
         semantic_analyzer_add_error_at(analyzer, var_decl, "Cannot declare a variable of type void");
         return false;
     }
@@ -2686,7 +2715,9 @@ static bool semantic_analyze_stmt_class_declaration(SemanticAnalyzer* analyzer, 
             if (!member) {
                 continue;
             }
+            KrtTokenType member_access = TOKEN_PUBLIC;
             if (member->type == AST_ACCESS_MODIFIER) {
+                member_access = member->data.access_modifier.access_modifier;
                 member = member->data.access_modifier.member;
                 if (!member) {
                     continue;
@@ -2718,6 +2749,7 @@ static bool semantic_analyze_stmt_class_declaration(SemanticAnalyzer* analyzer, 
                 SymbolEntry* m_sym = symbol_table_define(analyzer->symbol_table, key, SYMBOL_FUNCTION, 0, NULL);
                 if (m_sym) {
                     m_sym->state = SYMBOL_DECLARED;
+                    m_sym->access = member_access;
                     m_sym->value_type = member->data.function_decl.return_type;
                     m_sym->source_type = KrtSourceTypeClone(
                         analyzer->type_arena, (KrtSourceType){.token = TOKEN_FN, .function = member->function_type});
