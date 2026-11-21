@@ -119,7 +119,17 @@ static int scan_stdlib_directory(const char* dir_path, char** file_list, int max
 
 static void record_stage_result(KrtCompilePipeline* pipeline, KrtCompileStage stage, KrtCompileResult result,
                                 double duration, const char* file_name) {
-    if (pipeline->stage_count >= 8) {
+    if (!pipeline) {
+        return;
+    }
+
+    if (stage < 0 || stage >= (int)(sizeof(KrtCompileStageNames) / sizeof(KrtCompileStageNames[0]))) {
+        KrtError("internal error: invalid compile stage %d", (int)stage);
+        return;
+    }
+
+    if (pipeline->stage_count >= (int)(sizeof(pipeline->stage_results) / sizeof(pipeline->stage_results[0]))) {
+        KrtError("compile stage result dropped: stage table full");
         return;
     }
 
@@ -265,6 +275,16 @@ int KrtCompilePipelineReadSource(KrtCompilePipeline* pipeline) {
 
     size_t read_bytes = fread(pipeline->source_code, 1, (size_t)file_size, fp);
     fclose(fp);
+    if (read_bytes != (size_t)file_size) {
+        KRT_FREE(pipeline->source_code);
+        pipeline->source_code = NULL;
+        snprintf(pipeline->error_message, sizeof(pipeline->error_message), "无法完整读取源文件: %s (%zu/%ld 字节)",
+                 pipeline->input_file, read_bytes, file_size);
+        pipeline->success = 0;
+        record_stage_result(pipeline, KRT_STAGE_READ_SOURCE, KRT_RESULT_FAILED,
+                            (double)(clock() - start) / CLOCKS_PER_SEC, pipeline->input_file);
+        return 0;
+    }
     pipeline->source_code[read_bytes] = '\0';
 
     record_stage_result(pipeline, KRT_STAGE_READ_SOURCE, KRT_RESULT_SUCCESS, (double)(clock() - start) / CLOCKS_PER_SEC,
@@ -456,13 +476,35 @@ int KrtCompilePipelineCodegen(KrtCompilePipeline* pipeline) {
 
     clock_t start = clock();
 
-    KrtTargetPlatform target = KRT_TARGET_X86_ASM;
-    if (pipeline->config->target_type == KRT_TARGET_IR) {
+    if (!pipeline->config) {
+        snprintf(pipeline->error_message, sizeof(pipeline->error_message), "编译配置缺失: %s", pipeline->input_file);
+        pipeline->success = 0;
+        record_stage_result(pipeline, KRT_STAGE_CODEGEN, KRT_RESULT_FAILED, (double)(clock() - start) / CLOCKS_PER_SEC,
+                            pipeline->input_file);
+        return 0;
+    }
+
+    KrtTargetPlatform target;
+    switch (pipeline->config->target_type) {
+    case KRT_TARGET_ASM:
+        target = KRT_TARGET_X86_ASM;
+        break;
+    case KRT_TARGET_IR:
         target = KRT_TARGET_IR_TEXT;
-    } else if (pipeline->config->target_type == KRT_TARGET_KRO) {
+        break;
+    case KRT_TARGET_KRO:
         target = KRT_TARGET_KRO_OBJ;
-    } else if (pipeline->config->target_type == KRT_TARGET_EXE) {
+        break;
+    case KRT_TARGET_EXE:
         target = KRT_TARGET_EXE_PLATFORM;
+        break;
+    default:
+        snprintf(pipeline->error_message, sizeof(pipeline->error_message), "未知目标类型: %d",
+                 (int)pipeline->config->target_type);
+        pipeline->success = 0;
+        record_stage_result(pipeline, KRT_STAGE_CODEGEN, KRT_RESULT_FAILED, (double)(clock() - start) / CLOCKS_PER_SEC,
+                            pipeline->input_file);
+        return 0;
     }
 
     pipeline->compiler = KrtCompilerCreate(pipeline->output_file, target);

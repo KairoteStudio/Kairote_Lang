@@ -218,8 +218,9 @@ bool KrtCompilerCompile(KrtCompiler* compiler, ASTNode* ast, void* semantic_anal
         break;
     }
     default:
-        KrtIrPrint(ir_builder->module, compiler->output_file);
-        break;
+        KrtError("unsupported target type %d", (int)compiler->target);
+        KrtIrBuilderDestroy(ir_builder);
+        return false;
     }
 
     KrtIrBuilderDestroy(ir_builder);
