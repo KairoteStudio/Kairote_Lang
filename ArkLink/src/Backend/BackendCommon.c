@@ -595,6 +595,19 @@ int ark_reloc_apply_pe_base(uint8_t* data, size_t size, const ArkRelocProcessor*
     return ark_reloc_write_field(data, size, proc->offset, result, proc->field_size);
 }
 
+uint64_t ark_reloc_resolve_symbol_value(const ArkResolverReloc* reloc) {
+    if (!reloc) {
+        return 0;
+    }
+    if (reloc->symbol_address_resolved) {
+        return reloc->symbol_address;
+    }
+    if (reloc->symbol_rva) {
+        return reloc->symbol_rva;
+    }
+    return reloc->symbol ? reloc->symbol->value : 0;
+}
+
 int ark_reloc_process_all(ArkResolverReloc* relocs, size_t count, ArkRelocApplyFn apply_fn,
                           ArkRelocShouldProcessFn filter_fn, void* user_data, uint8_t* section_data,
                           size_t section_size, const ArkImageLayout* layout) {
@@ -614,8 +627,7 @@ int ark_reloc_process_all(ArkResolverReloc* relocs, size_t count, ArkRelocApplyF
         ArkRelocProcessor proc = {0};
         proc.target_section = reloc->section_index;
         proc.offset = reloc->offset;
-        proc.symbol_value = reloc->symbol_address_resolved ? reloc->symbol_address :
-            (reloc->symbol_rva ? reloc->symbol_rva : (reloc->symbol ? reloc->symbol->value : 0));
+        proc.symbol_value = ark_reloc_resolve_symbol_value(reloc);
         proc.addend = reloc->addend;
 
         switch (reloc->type) {

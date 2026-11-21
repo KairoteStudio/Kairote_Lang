@@ -14,10 +14,12 @@ typedef struct ArkResolverSymbol {
     const char* name;
     ArkSymbolBinding binding;
     ArkSymbolVisibility visibility;
-    ArkSectionBuffer* section;
+    /* Section indexes are zero based; zero is a valid definition.  This is
+     * the single source of truth for a symbol's section; there is no
+     * separate section pointer that could drift out of sync. */
     uint32_t section_index;
-    int defined; /* Section indexes are zero based; zero is a valid definition. */
-    uint32_t value;
+    int defined;
+    uint64_t value;
     uint32_t size;
     int32_t import_id;
     int is_export;

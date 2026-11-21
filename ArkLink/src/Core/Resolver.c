@@ -277,7 +277,7 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
                     }
                 }
             }
-            sym.value = (uint32_t)sym_desc->value;
+            sym.value = sym_desc->value;
             sym.size = sym_desc->size;
             sym.type = sym_desc->type;
             sym.import_module = sym_desc->import_module;
@@ -403,18 +403,11 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
     }
 
     if (entry_sym && entry_sym->defined) {
-
-        out_plan->backend_input->entry_section = entry_sym->section_index;
-
-        out_plan->backend_input->entry_offset = entry_sym->value;
-    } else {
-    }
-
-    for (size_t i = 0; i < sym_table.symbol_count; i++) {
-        ArkResolverSymbol* sym = &sym_table.symbols[i];
-        if (sym->defined && sym->section_index < total_sections) {
-            sym->section = &out_plan->backend_input->sections[sym->section_index];
+        if (entry_sym->value > UINT32_MAX) {
+            return ARK_LINK_ERR_FORMAT;
         }
+        out_plan->backend_input->entry_section = entry_sym->section_index;
+        out_plan->backend_input->entry_offset = (uint32_t)entry_sym->value;
     }
 
     for (size_t i = 0; i < unit_count; i++) {
@@ -573,10 +566,13 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
                 }
 
                 if (should_export) {
+                    if (sym->value > UINT32_MAX) {
+                        return ARK_LINK_ERR_FORMAT;
+                    }
                     exports[idx].name = sym->name ? strdup(sym->name) : NULL;
                     exports[idx].ordinal = 0;
                     exports[idx].section_index = sym->section_index;
-                    exports[idx].offset = sym->value;
+                    exports[idx].offset = (uint32_t)sym->value;
                     exports[idx].value = sym->value;
                     exports[idx].is_function = (sym->type == ARK_SYM_FUNC);
 

@@ -208,6 +208,9 @@ ArkLinkResult ark_backend_elf_link(ArkLinkContext* ctx, ArkBackendInput* input, 
 
 /** @brief Return the address immediately after a relocation field, or 0 for an unknown field size. */
 uint64_t ark_backend_calc_pc_relative(uint64_t p_vaddr, ArkRelocFieldSize field_size);
+/** @brief Resolve a relocation's symbol value using the single shared precedence:
+ *  resolved link address, then object symbol_rva, then the symbol's value. */
+uint64_t ark_reloc_resolve_symbol_value(const ArkResolverReloc* reloc);
 /** @brief Return whether input requires dynamic ELF metadata. */
 int ark_backend_should_use_dynamic_elf(const ArkBackendInput* input);
 /** @brief Round value up to a power-of-two alignment; alignment must be nonzero. */

@@ -98,6 +98,7 @@ typedef struct {
 #define PE_CHAR_EXECUTABLE_IMAGE 0x0002
 #define PE_CHAR_LARGE_ADDRESS_AWARE 0x0020
 #define PE_CHAR_DEBUG_STRIPPED 0x0200
+#define PE_CHAR_DLL 0x2000
 #define PE_SCN_CNT_CODE 0x00000020
 #define PE_SCN_CNT_INITIALIZED_DATA 0x00000040
 #define PE_SCN_CNT_UNINITIALIZED_DATA 0x00000080
@@ -1175,7 +1176,11 @@ ArkLinkResult ark_backend_pe_link(ArkLinkContext* ctx, ArkBackendInput* input, A
     coff->PointerToSymbolTable = 0;
     coff->NumberOfSymbols = 0;
     coff->SizeOfOptionalHeader = sizeof(PE_OPTIONAL_HEADER_64);
-    coff->Characteristics = PE_CHAR_EXECUTABLE_IMAGE | PE_CHAR_LARGE_ADDRESS_AWARE | PE_CHAR_DEBUG_STRIPPED;
+    uint32_t characteristics = PE_CHAR_EXECUTABLE_IMAGE | PE_CHAR_LARGE_ADDRESS_AWARE | PE_CHAR_DEBUG_STRIPPED;
+    if (input->output_type == ARK_OUTPUT_SHARED_LIB) {
+        characteristics |= PE_CHAR_DLL;
+    }
+    coff->Characteristics = characteristics;
 
     size_t opt_offset = pe_offset + 4 + sizeof(PE_COFF_HEADER);
     if (opt_offset + sizeof(PE_OPTIONAL_HEADER_64) > total_file_size) {
