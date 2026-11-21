@@ -174,7 +174,8 @@ static int rename_table_add(RenameTable* t, size_t unit, const char* local, cons
 
 static const char* rename_table_lookup(RenameTable* t, size_t unit, const char* local) {
     for (size_t i = 0; i < t->count; i++) {
-        if (t->items[i].unit == unit && strcmp(t->items[i].local_name, local) == 0) {
+        if (t->items[i].unit == unit && t->items[i].local_name && local &&
+            strcmp(t->items[i].local_name, local) == 0) {
             return t->items[i].global_name;
         }
     }
@@ -501,21 +502,30 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
 
     if (import_count > 0) {
         ArkImportEntry* imports = (ArkImportEntry*)calloc(import_count, sizeof(ArkImportEntry));
-        if (imports) {
+        if (!imports) {
+            free(out_plan->backend_input->sections);
+            free(out_plan->backend_input);
+            symbol_table_free(&sym_table);
+            return ARK_LINK_ERR_MEMORY;
+        }
+        {
             size_t idx = 0;
             for (size_t i = 0; i < sym_table.symbol_count; i++) {
-                if (sym_table.symbols[i].import_module) {
-                    imports[idx].module = strdup(sym_table.symbols[i].import_module);
-                    imports[idx].symbol = strdup(sym_table.symbols[i].name);
-                    imports[idx].iat_rva = 0;
-
-                    imports[idx].is_function = (sym_table.symbols[i].type == ARK_SYM_FUNC);
-
-                    idx++;
+                const char* module_name = sym_table.symbols[i].import_module;
+                if (!module_name || module_name[0] == '\0') {
+                    continue;
                 }
+                if (idx >= import_count) {
+                    break;
+                }
+                imports[idx].module = strdup(module_name);
+                imports[idx].symbol = sym_table.symbols[i].name ? strdup(sym_table.symbols[i].name) : NULL;
+                imports[idx].iat_rva = 0;
+                imports[idx].is_function = (sym_table.symbols[i].type == ARK_SYM_FUNC);
+                idx++;
             }
             out_plan->backend_input->imports = imports;
-            out_plan->backend_input->import_count = import_count;
+            out_plan->backend_input->import_count = idx;
         }
     }
 
@@ -542,7 +552,14 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
 
     if (export_count > 0) {
         ArkExportEntry* exports = (ArkExportEntry*)calloc(export_count, sizeof(ArkExportEntry));
-        if (exports) {
+        if (!exports) {
+            free(out_plan->backend_input->imports);
+            free(out_plan->backend_input->sections);
+            free(out_plan->backend_input);
+            symbol_table_free(&sym_table);
+            return ARK_LINK_ERR_MEMORY;
+        }
+        {
             size_t idx = 0;
             for (size_t i = 0; i < sym_table.symbol_count; i++) {
                 ArkResolverSymbol* sym = &sym_table.symbols[i];
@@ -556,7 +573,7 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
                 }
 
                 if (should_export) {
-                    exports[idx].name = strdup(sym->name);
+                    exports[idx].name = sym->name ? strdup(sym->name) : NULL;
                     exports[idx].ordinal = 0;
                     exports[idx].section_index = sym->section_index;
                     exports[idx].offset = sym->value;
@@ -567,7 +584,7 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
                 }
             }
             out_plan->backend_input->exports = exports;
-            out_plan->backend_input->export_count = export_count;
+            out_plan->backend_input->export_count = idx;
         }
     }
 
