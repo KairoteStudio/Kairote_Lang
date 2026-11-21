@@ -900,27 +900,56 @@ static void emit_instruction(Emitter* em, KrtIRInst* inst) {
         emit_array_store(em, inst);
         break;
 
-    case KRT_IR_LOADPTR:
+    case KRT_IR_LOADPTR: {
+        int bits = KrtTokenIntegerBits(inst->result.value_type);
+        int is_unsigned = KrtTokenIsUnsigned(inst->result.value_type);
         if (inst->operand_count >= 2) {
             emit_load_value(em, &inst->operands[0], "rcx");
             int offset = (int)inst->operands[1].data.imm;
-            fprintf(em->output, "    mov rax, [rcx + %d]\n", offset);
+            if (bits == 8) {
+                fprintf(em->output, is_unsigned ? "    movzx rax, byte ptr [rcx + %d]\n" : "    movsx rax, byte ptr [rcx + %d]\n", offset);
+            } else if (bits == 16) {
+                fprintf(em->output, is_unsigned ? "    movzx rax, word ptr [rcx + %d]\n" : "    movsx rax, word ptr [rcx + %d]\n", offset);
+            } else if (bits == 32) {
+                fprintf(em->output, "    mov eax, dword ptr [rcx + %d]\n", offset);
+            } else {
+                fprintf(em->output, "    mov rax, [rcx + %d]\n", offset);
+            }
             emit_store_result(em, &inst->result, "rax");
         } else if (inst->operand_count >= 1) {
             emit_load_value(em, &inst->operands[0], "rcx");
-            fprintf(em->output, "    mov rax, [rcx]\n");
+            if (bits == 8) {
+                fprintf(em->output, is_unsigned ? "    movzx rax, byte ptr [rcx]\n" : "    movsx rax, byte ptr [rcx]\n");
+            } else if (bits == 16) {
+                fprintf(em->output, is_unsigned ? "    movzx rax, word ptr [rcx]\n" : "    movsx rax, word ptr [rcx]\n");
+            } else if (bits == 32) {
+                fprintf(em->output, "    mov eax, dword ptr [rcx]\n");
+            } else {
+                fprintf(em->output, "    mov rax, [rcx]\n");
+            }
             emit_store_result(em, &inst->result, "rax");
         }
         break;
+    }
 
-    case KRT_IR_STOREPTR:
+    case KRT_IR_STOREPTR: {
+        int bits = KrtTokenIntegerBits(inst->operands[2].value_type);
         if (inst->operand_count >= 3) {
             emit_load_value(em, &inst->operands[0], "rcx");
             emit_load_value(em, &inst->operands[2], "rax");
             int offset = (int)inst->operands[1].data.imm;
-            fprintf(em->output, "    mov [rcx + %d], rax\n", offset);
+            if (bits == 8) {
+                fprintf(em->output, "    mov byte ptr [rcx + %d], al\n", offset);
+            } else if (bits == 16) {
+                fprintf(em->output, "    mov word ptr [rcx + %d], ax\n", offset);
+            } else if (bits == 32) {
+                fprintf(em->output, "    mov dword ptr [rcx + %d], eax\n", offset);
+            } else {
+                fprintf(em->output, "    mov [rcx + %d], rax\n", offset);
+            }
         }
         break;
+    }
 
     case KRT_IR_STRCAT:
 
