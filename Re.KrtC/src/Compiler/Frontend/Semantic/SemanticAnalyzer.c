@@ -1094,6 +1094,23 @@ static bool semantic_check_assignable(SemanticAnalyzer* analyzer, ASTNode* node,
     return true;
 }
 
+/*
+ * C#-style condition: only bool is accepted.  Without this, `if (5)` and
+ * `while ("x")` compile silently and the run-time test is just "non-zero".
+ */
+static bool semantic_require_bool_condition(SemanticAnalyzer* analyzer, ASTNode* node, ASTNode* cond) {
+    if (!cond) {
+        return true;
+    }
+    KrtTokenType type = semantic_analyzer_infer_expression_type(analyzer, cond);
+    if (type != TOKEN_BOOL && type != TOKEN_EOF && type != TOKEN_NULL && type != TOKEN_UNKNOWN) {
+        semantic_analyzer_add_error_at(analyzer, node,
+                                       "Condition must be of type bool (got token %d)", (int)type);
+        return false;
+    }
+    return true;
+}
+
 static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) {
     if (!analyzer || !expr) {
         return false;
@@ -2310,6 +2327,9 @@ static bool semantic_statement_guarantees_return(ASTNode* stmt) {
 }
 static bool semantic_analyze_stmt_if_statement(SemanticAnalyzer* analyzer, ASTNode* stmt) {
     bool cond_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.if_stmt.condition);
+    if (cond_ok && !semantic_require_bool_condition(analyzer, stmt, stmt->data.if_stmt.condition)) {
+        return false;
+    }
     symbol_table_push_scope(analyzer->symbol_table);
     ASTNode* pattern = stmt->data.if_stmt.condition;
     if (cond_ok && pattern->type == AST_IS_EXPRESSION && pattern->data.is_expr.binding_name) {
@@ -2332,6 +2352,9 @@ static bool semantic_analyze_stmt_if_statement(SemanticAnalyzer* analyzer, ASTNo
 }
 static bool semantic_analyze_stmt_while_statement(SemanticAnalyzer* analyzer, ASTNode* stmt) {
     bool cond_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.while_stmt.condition);
+    if (cond_ok && !semantic_require_bool_condition(analyzer, stmt, stmt->data.while_stmt.condition)) {
+        return false;
+    }
     symbol_table_push_scope(analyzer->symbol_table);
     analyzer->breakable_depth++;
     analyzer->loop_depth++;
@@ -2350,6 +2373,9 @@ static bool semantic_analyze_stmt_for_statement(SemanticAnalyzer* analyzer, ASTN
     bool cond_ok = true;
     if (stmt->data.for_stmt.condition) {
         cond_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.for_stmt.condition);
+        if (cond_ok && !semantic_require_bool_condition(analyzer, stmt, stmt->data.for_stmt.condition)) {
+            cond_ok = false;
+        }
     }
     bool increment_ok = true;
     if (stmt->data.for_stmt.increment) {
