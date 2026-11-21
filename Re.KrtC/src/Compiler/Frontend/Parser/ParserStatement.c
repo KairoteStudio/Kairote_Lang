@@ -22,6 +22,60 @@ ASTNode* parser_parse_class_declaration(Parser* parser);
 
 #include "EnumParser.inc"
 
+/* Growable ASTNode* list backed by the parser arena.  Arena ownership means the
+ * array needs no separate free: the whole arena is released with the AST. */
+static bool parser_reserve_node_array(Parser* parser, ASTNode*** items, int* capacity, int needed, int line, int col) {
+    if (needed <= *capacity) {
+        return true;
+    }
+
+    int new_capacity = *capacity > 0 ? *capacity : 8;
+    while (new_capacity < needed) {
+        if (new_capacity > INT_MAX / 2) {
+            new_capacity = needed;
+            break;
+        }
+        new_capacity *= 2;
+    }
+
+    ASTNode** resized = (ASTNode**)KrtArenaRealloc(parser->arena, *items, (size_t)(*capacity) * sizeof(ASTNode*),
+                                                   (size_t)new_capacity * sizeof(ASTNode*));
+    if (!resized) {
+        parser_report_error(parser, line, col, "out of memory while building a statement list");
+        return false;
+    }
+
+    *items = resized;
+    *capacity = new_capacity;
+    return true;
+}
+
+static bool parser_reserve_string_array(Parser* parser, char*** items, int* capacity, int needed, int line, int col) {
+    if (needed <= *capacity) {
+        return true;
+    }
+
+    int new_capacity = *capacity > 0 ? *capacity : 8;
+    while (new_capacity < needed) {
+        if (new_capacity > INT_MAX / 2) {
+            new_capacity = needed;
+            break;
+        }
+        new_capacity *= 2;
+    }
+
+    char** resized = (char**)KrtArenaRealloc(parser->arena, *items, (size_t)(*capacity) * sizeof(char*),
+                                             (size_t)new_capacity * sizeof(char*));
+    if (!resized) {
+        parser_report_error(parser, line, col, "out of memory while building a qualified name");
+        return false;
+    }
+
+    *items = resized;
+    *capacity = new_capacity;
+    return true;
+}
+
 static ASTNode* parser_parse_function_declaration(Parser* parser) {
     int line = parser->current_token.line;
     int col = parser->current_token.column;
@@ -200,7 +254,7 @@ static ASTNode* parser_parse_variable_declaration(Parser* parser) {
         }
     } else if (parser->current_token.type == TOKEN_IDENTIFIER) {
         type_token = TOKEN_IDENTIFIER;
-        type_name = KRT_STRDUP(parser->current_token.value);
+        type_name = KrtParserStrdup(parser, parser->current_token.value);
         if (!type_name) {
             return NULL;
         }
@@ -216,19 +270,17 @@ static ASTNode* parser_parse_variable_declaration(Parser* parser) {
 
     char* name = NULL;
     if (parser->current_token.type == TOKEN_IDENTIFIER) {
-        name = KRT_STRDUP(parser->current_token.value);
+        name = KrtParserStrdup(parser, parser->current_token.value);
         parser_advance(parser);
     } else if (parser->current_token.type >= TOKEN_OP_ADDITION && parser->current_token.type <= TOKEN_OP_EXPLICIT) {
         const char* op_name = token_type_to_string(parser->current_token.type);
-        name = KRT_STRDUP(op_name ? op_name : "op_Unknown");
+        name = KrtParserStrdup(parser, op_name ? op_name : "op_Unknown");
         parser_advance(parser);
     } else {
-        KRT_FREE(type_name);
         return NULL;
     }
 
     if (!name) {
-        KRT_FREE(type_name);
         return NULL;
     }
 
@@ -241,14 +293,10 @@ static ASTNode* parser_parse_variable_declaration(Parser* parser) {
         if (parser->current_token.type != TOKEN_RIGHT_BRACKET) {
             array_size = parser_parse_expression(parser);
             if (!array_size) {
-                KRT_FREE(name);
-                KRT_FREE(type_name);
                 return NULL;
             }
         }
         if (parser->current_token.type != TOKEN_RIGHT_BRACKET) {
-            KRT_FREE(name);
-            KRT_FREE(type_name);
             if (array_size) {
                 ast_destroy_node(array_size);
             }
@@ -266,8 +314,6 @@ static ASTNode* parser_parse_variable_declaration(Parser* parser) {
                 parser_report_error(parser, parser->current_token.line, parser->current_token.column,
                                     "expected expression after '=' in declaration of '%s'", name ? name : "?");
             }
-            KRT_FREE(name);
-            KRT_FREE(type_name);
             if (array_size) {
                 ast_destroy_node(array_size);
             }
@@ -280,8 +326,6 @@ static ASTNode* parser_parse_variable_declaration(Parser* parser) {
             parser_report_error(parser, parser->current_token.line, parser->current_token.column,
                                 "expected ';' after declaration of '%s'", name ? name : "?");
         }
-        KRT_FREE(name);
-        KRT_FREE(type_name);
         if (value) {
             ast_destroy_node(value);
         }
@@ -294,8 +338,6 @@ static ASTNode* parser_parse_variable_declaration(Parser* parser) {
 
     ASTNode* node = KrtParserCreateNode(parser, AST_VARIABLE_DECLARATION, line, col);
     if (!node) {
-        KRT_FREE(name);
-        KRT_FREE(type_name);
         if (value) {
             ast_destroy_node(value);
         }
@@ -338,7 +380,6 @@ static ASTNode* parser_parse_variable_declaration_with_type(Parser* parser) {
     if (parser->current_token.type == TOKEN_LEFT_BRACKET) {
         parser_advance(parser);
         if (parser->current_token.type != TOKEN_RIGHT_BRACKET) {
-            KRT_FREE(type_name);
             return NULL;
         }
         parser_advance(parser);
@@ -354,12 +395,10 @@ static ASTNode* parser_parse_variable_declaration_with_type(Parser* parser) {
         name = KrtParserStrdup(parser, op_name ? op_name : "op_Unknown");
         parser_advance(parser);
     } else {
-        KRT_FREE(type_name);
         return NULL;
     }
 
     if (!name) {
-        KRT_FREE(type_name);
         return NULL;
     }
 
@@ -371,14 +410,10 @@ static ASTNode* parser_parse_variable_declaration_with_type(Parser* parser) {
         if (parser->current_token.type != TOKEN_RIGHT_BRACKET) {
             array_size = parser_parse_expression(parser);
             if (!array_size) {
-                KRT_FREE(name);
-                KRT_FREE(type_name);
                 return NULL;
             }
         }
         if (parser->current_token.type != TOKEN_RIGHT_BRACKET) {
-            KRT_FREE(name);
-            KRT_FREE(type_name);
             if (array_size) {
                 ast_destroy_node(array_size);
             }
@@ -394,8 +429,6 @@ static ASTNode* parser_parse_variable_declaration_with_type(Parser* parser) {
         if (!value) {
             parser_report_error(parser, parser->current_token.line, parser->current_token.column,
                                 "expected expression after '=' in declaration");
-            KRT_FREE(name);
-            KRT_FREE(type_name);
             if (array_size) {
                 ast_destroy_node(array_size);
             }
@@ -407,8 +440,6 @@ static ASTNode* parser_parse_variable_declaration_with_type(Parser* parser) {
         parser_report_error(parser, parser->current_token.line, parser->current_token.column,
                             "expected ';' after declaration");
 
-        KRT_FREE(name);
-        KRT_FREE(type_name);
         if (value) {
             ast_destroy_node(value);
         }
@@ -421,8 +452,6 @@ static ASTNode* parser_parse_variable_declaration_with_type(Parser* parser) {
 
     ASTNode* node = KrtParserCreateNode(parser, AST_VARIABLE_DECLARATION, line, col);
     if (!node) {
-        KRT_FREE(name);
-        KRT_FREE(type_name);
         if (value) {
             ast_destroy_node(value);
         }
@@ -534,7 +563,6 @@ static ASTNode* parser_parse_assignment_from_left(Parser* parser, ASTNode* left)
             node->data.array_compound_assignment.value = value;
             node->data.array_compound_assignment.operator = operator;
         }
-        KRT_FREE(left);
         return node;
     } else if (left->type == AST_IDENTIFIER) {
         ASTNode* node = (operator == TOKEN_ASSIGN) ? KrtParserCreateNode(parser, AST_ASSIGNMENT, line, col)
@@ -546,10 +574,20 @@ static ASTNode* parser_parse_assignment_from_left(Parser* parser, ASTNode* left)
         }
 
         if (operator == TOKEN_ASSIGN) {
-            node->data.assignment.name = KRT_STRDUP(left->data.identifier_name);
+            node->data.assignment.name = KrtParserStrdup(parser, left->data.identifier_name);
+            if (!node->data.assignment.name) {
+                parser_report_error(parser, line, col, "identifier assignment target has no name");
+                ast_destroy_node(value);
+                return NULL;
+            }
             node->data.assignment.value = value;
         } else {
-            node->data.compound_assignment.name = KRT_STRDUP(left->data.identifier_name);
+            node->data.compound_assignment.name = KrtParserStrdup(parser, left->data.identifier_name);
+            if (!node->data.compound_assignment.name) {
+                parser_report_error(parser, line, col, "identifier assignment target has no name");
+                ast_destroy_node(value);
+                return NULL;
+            }
             node->data.compound_assignment.value = value;
             node->data.compound_assignment.operator = operator;
         }
@@ -608,23 +646,19 @@ ASTNode* parser_parse_print_statement(Parser* parser) {
     }
     parser_advance(parser);
 
-    ASTNode** values =
-        (ASTNode**)KRT_PARSER_ALLOC_FROM_ARENA(parser, sizeof(ASTNode*) * KRT_PARSER_ARGUMENT_CAPACITY_INIT);
-    int count = 0, capacity = KRT_PARSER_ARGUMENT_CAPACITY_INIT;
+    ASTNode** values = NULL;
+    int count = 0, capacity = 0;
 
     while (parser->current_token.type != TOKEN_RIGHT_PAREN) {
-        if (count >= capacity) {
-            capacity *= 2;
-            values = (ASTNode**)KRT_REALLOC(values, capacity * sizeof(ASTNode*));
-            if (!values) {
-                return NULL;
-            }
+        if (!parser_reserve_node_array(parser, &values, &capacity, count + 1, line, col)) {
+            return NULL;
         }
 
-        values[count++] = parser_parse_expression(parser);
-        if (!values[count - 1]) {
+        ASTNode* value = parser_parse_expression(parser);
+        if (!value) {
             break;
         }
+        values[count++] = value;
 
         if (parser->current_token.type == TOKEN_COMMA) {
             parser_advance(parser);
@@ -634,30 +668,22 @@ ASTNode* parser_parse_print_statement(Parser* parser) {
     }
 
     if (parser->current_token.type != TOKEN_RIGHT_PAREN) {
-        for (int i = 0; i < count; i++) {
-            ast_destroy_node(values[i]);
-        }
-        KRT_FREE(values);
+        parser_report_error(parser, parser->current_token.line, parser->current_token.column,
+                            "expected ')' after print arguments");
         return NULL;
     }
     parser_advance(parser);
 
     bool has_newline = true;
     if (parser->current_token.type != TOKEN_SEMICOLON) {
-        for (int i = 0; i < count; i++) {
-            ast_destroy_node(values[i]);
-        }
-        KRT_FREE(values);
+        parser_report_error(parser, parser->current_token.line, parser->current_token.column,
+                            "expected ';' after print statement");
         return NULL;
     }
     parser_advance(parser);
 
     ASTNode* node = KrtParserCreateNode(parser, AST_PRINT_STATEMENT, line, col);
     if (!node) {
-        for (int i = 0; i < count; i++) {
-            ast_destroy_node(values[i]);
-        }
-        KRT_FREE(values);
         return NULL;
     }
     node->data.print_stmt.values = values;
@@ -816,27 +842,22 @@ ASTNode* parser_parse_switch_statement(Parser* parser) {
                     }
                     continue;
                 }
-                if (sc >= scap) {
-                    scap = scap ? scap * 2 : 4;
-                    stmts = (ASTNode**)KRT_REALLOC(stmts, scap * sizeof(ASTNode*));
+                if (!parser_reserve_node_array(parser, &stmts, &scap, sc + 1, cline, ccol)) {
+                    ast_destroy_node(value);
+                    goto cleanup;
                 }
                 stmts[sc++] = st;
             }
             ASTNode* clause = KrtParserCreateNode(parser, AST_CASE_CLAUSE, cline, ccol);
             if (!clause) {
                 ast_destroy_node(value);
-                for (int k = 0; k < sc; k++) {
-                    ast_destroy_node(stmts[k]);
-                }
-                KRT_FREE(stmts);
                 goto cleanup;
             }
             clause->data.case_clause.value = value;
             clause->data.case_clause.statements = stmts;
             clause->data.case_clause.statement_count = sc;
-            if (case_count >= cap) {
-                cap = cap ? cap * 2 : 4;
-                cases = (ASTNode**)KRT_REALLOC(cases, cap * sizeof(ASTNode*));
+            if (!parser_reserve_node_array(parser, &cases, &cap, case_count + 1, cline, ccol)) {
+                goto cleanup;
             }
             cases[case_count++] = clause;
         } else if (parser->current_token.type == TOKEN_DEFAULT) {
@@ -859,18 +880,13 @@ ASTNode* parser_parse_switch_statement(Parser* parser) {
                     }
                     continue;
                 }
-                if (sc >= scap) {
-                    scap = scap ? scap * 2 : 4;
-                    stmts = (ASTNode**)KRT_REALLOC(stmts, scap * sizeof(ASTNode*));
+                if (!parser_reserve_node_array(parser, &stmts, &scap, sc + 1, line, col)) {
+                    goto cleanup;
                 }
                 stmts[sc++] = st;
             }
             ASTNode* blk = KrtParserCreateNode(parser, AST_BLOCK, line, col);
             if (!blk) {
-                for (int k = 0; k < sc; k++) {
-                    ast_destroy_node(stmts[k]);
-                }
-                KRT_FREE(stmts);
                 goto cleanup;
             }
             blk->data.block.statements = stmts;
@@ -899,14 +915,6 @@ ASTNode* parser_parse_switch_statement(Parser* parser) {
     return node;
 
 cleanup:
-    ast_destroy_node(expr);
-    for (int k = 0; k < case_count; k++) {
-        ast_destroy_node(cases[k]);
-    }
-    if (cases) {
-        KRT_FREE(cases);
-    }
-    ast_destroy_node(default_case);
     return NULL;
 }
 
@@ -1194,8 +1202,8 @@ ASTNode* parser_parse_block(Parser* parser) {
     }
     parser_advance(parser);
 
-    ASTNode** statements = (ASTNode**)KRT_PARSER_MALLOC(sizeof(ASTNode*) * 16);
-    int count = 0, capacity = 16;
+    ASTNode** statements = NULL;
+    int count = 0, capacity = 0;
 
     int consecutive_errors = 0;
 
@@ -1207,12 +1215,8 @@ ASTNode* parser_parse_block(Parser* parser) {
             continue;
         }
 
-        if (count >= capacity) {
-            capacity *= 2;
-            statements = (ASTNode**)KRT_REALLOC(statements, capacity * sizeof(ASTNode*));
-            if (!statements) {
-                return NULL;
-            }
+        if (!parser_reserve_node_array(parser, &statements, &capacity, count + 1, line, col)) {
+            return NULL;
         }
 
         KrtTokenType current_token_before_parse = parser->current_token.type;
@@ -1235,30 +1239,18 @@ ASTNode* parser_parse_block(Parser* parser) {
             }
 
             if (consecutive_errors > 10) {
-                for (int i = 0; i < count; i++) {
-                    ast_destroy_node(statements[i]);
-                }
-                KRT_FREE(statements);
                 return NULL;
             }
         }
     }
 
     if (parser->current_token.type != TOKEN_RIGHT_BRACE) {
-        for (int i = 0; i < count; i++) {
-            ast_destroy_node(statements[i]);
-        }
-        KRT_FREE(statements);
         return NULL;
     }
     parser_advance(parser);
 
     ASTNode* node = KrtParserCreateNode(parser, AST_BLOCK, line, col);
     if (!node) {
-        for (int i = 0; i < count; i++) {
-            ast_destroy_node(statements[i]);
-        }
-        KRT_FREE(statements);
         return NULL;
     }
     node->data.block.statements = statements;
@@ -1459,39 +1451,37 @@ ASTNode* parser_parse_statement(Parser* parser) {
         int col = parser->current_token.column;
         parser_advance(parser);
 
-        char** path_parts = (char**)KRT_MALLOC(16 * sizeof(char*));
+        char** path_parts = NULL;
         int path_count = 0;
-        int capacity = 16;
+        int capacity = 0;
         char* alias = NULL;
 
         if (parser->current_token.type == TOKEN_IDENTIFIER) {
-            path_parts[path_count++] = KRT_STRDUP(parser->current_token.value);
+            if (!parser_reserve_string_array(parser, &path_parts, &capacity, 1, line, col)) {
+                return NULL;
+            }
+            path_parts[path_count++] = KrtParserStrdup(parser, parser->current_token.value);
             parser_advance(parser);
 
             while (parser->current_token.type == TOKEN_DOT) {
                 parser_advance(parser);
                 if (parser->current_token.type == TOKEN_IDENTIFIER) {
-                    if (path_count >= capacity) {
-                        capacity *= 2;
-                        path_parts = (char**)KRT_REALLOC(path_parts, capacity * sizeof(char*));
+                    if (!parser_reserve_string_array(parser, &path_parts, &capacity, path_count + 1, line, col)) {
+                        return NULL;
                     }
-                    path_parts[path_count++] = KRT_STRDUP(parser->current_token.value);
+                    path_parts[path_count++] = KrtParserStrdup(parser, parser->current_token.value);
                     parser_advance(parser);
                 } else if ((parser->current_token.type == TOKEN_MULTIPLY ||
                             parser->current_token.type == TOKEN_POWER)) {
                     parser_advance(parser);
-                    char* wildcard = KRT_STRDUP("*");
-                    if (path_count >= capacity) {
-                        capacity *= 2;
-                        path_parts = (char**)KRT_REALLOC(path_parts, capacity * sizeof(char*));
+                    if (!parser_reserve_string_array(parser, &path_parts, &capacity, path_count + 1, line, col)) {
+                        return NULL;
                     }
-                    path_parts[path_count++] = wildcard;
+                    path_parts[path_count++] = KrtParserStrdup(parser, "*");
                     break;
                 } else {
-                    for (int i = 0; i < path_count; i++) {
-                        KRT_FREE(path_parts[i]);
-                    }
-                    KRT_FREE(path_parts);
+                    parser_report_error(parser, parser->current_token.line, parser->current_token.column,
+                                        "expected identifier after '.' in using directive");
                     return NULL;
                 }
             }
@@ -1509,7 +1499,8 @@ ASTNode* parser_parse_statement(Parser* parser) {
             }
             return node;
         } else {
-            KRT_FREE(path_parts);
+            parser_report_error(parser, parser->current_token.line, parser->current_token.column,
+                                "expected namespace after 'using'");
             return NULL;
         }
     }
