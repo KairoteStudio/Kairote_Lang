@@ -169,6 +169,7 @@ typedef struct ArkBackendInput {
     uint64_t image_base;
     uint64_t stack_size;
     uint32_t subsystem;
+    uint32_t arch;
     ArkOutputType output_type;
 } ArkBackendInput;
 

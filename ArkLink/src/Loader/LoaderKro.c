@@ -23,7 +23,7 @@ typedef struct {
     uint32_t sym_count;
     uint32_t strtab_size;
     uint32_t total_reloc_count;
-    uint32_t reserved;
+    uint32_t arch;
 } KroHeader;
 
 #define KRO_VERSION_V2 2u
@@ -94,6 +94,7 @@ ArkLinkResult ark_link_load_kro(const char* path, ArkLinkUnit** unit) {
         return ARK_LINK_ERR_MEMORY;
     }
     new_unit->entry_point = header.entry_point;
+    new_unit->arch = header.arch ? header.arch : 0x8664u; /* default x86-64 for v1 objects */
 
     size_t header_size = sizeof(KroHeader);
     size_t text_offset = header_size;

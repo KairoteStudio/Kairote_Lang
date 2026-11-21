@@ -30,6 +30,13 @@ typedef enum {
 #define KRO_RELOC_ADDR32 2
 #define KRO_RELOC_PC32 3
 
+/* AArch64 PC-relative relocations.  ABS64 (1) is shared with x86-64. */
+#define KRO_RELOC_AARCH64_ADR_PREL_PG_HI21 4
+#define KRO_RELOC_AARCH64_ADD_ABS_LO12_NC 5
+#define KRO_RELOC_AARCH64_LDR_ABS_LO12_NC 6
+#define KRO_RELOC_AARCH64_CALL26 7
+#define KRO_RELOC_AARCH64_ABS32 8
+
 #pragma pack(push, 1)
 
 typedef struct {
@@ -48,7 +55,7 @@ typedef struct {
     uint32_t sym_count;
     uint32_t strtab_size;
     uint32_t total_reloc_count;
-    uint32_t reserved;
+    uint32_t arch;
 } KROHeader;
 
 typedef struct {
@@ -73,7 +80,7 @@ typedef struct {
 
 typedef struct KROWriter KROWriter;
 
-KROWriter* kro_writer_create(void);
+KROWriter* kro_writer_create(uint32_t arch);
 void kro_writer_destroy(KROWriter* writer);
 
 uint32_t kro_write_code(KROWriter* writer, const void* data, uint32_t size);

@@ -1495,7 +1495,7 @@ void KrtKrtGenerate(FILE* output_file, const char* output_filename, KrtIRModule*
     } else {
         memcpy(ctx.output_filename, "output.kro", 11);
     }
-    ctx.writer = kro_writer_create();
+    ctx.writer = kro_writer_create(KRO_ARCH_X86_64);
 
     if (!ctx.writer) {
         return;

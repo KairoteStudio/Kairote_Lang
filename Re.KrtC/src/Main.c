@@ -94,7 +94,8 @@ typedef enum {
     KRT_TARGET_CMD_CLEAN = 7,
     KRT_TARGET_CMD_CHECK = 8,
     KRT_TARGET_CMD_VERSION = 9,
-    KRT_TARGET_CMD_KRO = 10
+    KRT_TARGET_CMD_KRO = 10,
+    KRT_TARGET_CMD_ARM64 = 11
 } KrtCommandTargetType;
 
 #define KRT_MAX_INPUT_FILES 32
@@ -127,8 +128,8 @@ static void print_usage(const char* program_name) {
     KrtPrintf("%s--keep-temp%s:%s保留临时文件 (.kro)\n", blue, gray, blue);
     KrtPrintf("-O0 / -O1 / -O2 / -O3: 优化级别，默认 -O2\n");
     KrtPrintf("\n%s=========== %s其他 %s===========\n", gray, gray, gray);
-    KrtPrintf("%starget%s:%s输出类型 %s<%sir%s/%sasm%s/%sexe%s/%skro%s>\n", blue, gray, blue, gray, blue, gray,
-              blue, gray, blue, gray, blue, gray);
+    KrtPrintf("%starget%s:%s输出类型 %s<%sir%s/%sasm%s/%sexe%s/%skro%s/%sarm64%s>\n", blue, gray, blue, gray, blue, gray,
+              blue, gray, blue, gray, blue, gray, blue, gray);
     KrtPrintf("%snew%s:%s创建项目 %s<%s类型%s> <%s项目名%s>\n", blue, gray, blue, gray, blue, gray, blue, gray);
     KrtPrintf("%sversion%s:%s %s\n", blue, gray, blue, KRT_COMPILER_VERSION);
     KrtPrintf("%s", reset);
@@ -204,6 +205,8 @@ static KrtCommandLineOptions parse_command_line(int argc, char* argv[]) {
                 options.target_type = KRT_TARGET_CMD_IR;
             } else if (strcmp(target_type, "kro") == 0) {
                 options.target_type = KRT_TARGET_CMD_KRO;
+            } else if (strcmp(target_type, "arm64") == 0) {
+                options.target_type = KRT_TARGET_CMD_ARM64;
             } else {
                 KrtError("未知的目标类型 '%s'", target_type);
                 exit(1);
@@ -389,6 +392,9 @@ static int compile_single_file(const char* input_file, const char* output_file, 
     case KRT_TARGET_CMD_KRO:
         config->target_type = KRT_TARGET_KRO;
         break;
+    case KRT_TARGET_CMD_ARM64:
+        config->target_type = KRT_TARGET_ARM64;
+        break;
     case KRT_TARGET_CMD_BUILD:
         config->target_type = KRT_TARGET_EXE;
         break;
@@ -430,6 +436,15 @@ static int compile_single_file(const char* input_file, const char* output_file, 
         compile_output = temp_kro;
     } else if (target_type == KRT_TARGET_CMD_KRO) {
 
+        char file_base[KRT_MAX_PATH];
+        KrtPathGetFilename(input_file, file_base, sizeof(file_base));
+        KrtPathRemoveExtension(file_base, file_base, sizeof(file_base));
+        char file_base_truncated[1010];
+        strncpy(file_base_truncated, file_base, sizeof(file_base_truncated) - 1);
+        file_base_truncated[sizeof(file_base_truncated) - 1] = '\0';
+        snprintf(temp_kro, sizeof(temp_kro), "%s.kro", file_base_truncated);
+        compile_output = temp_kro;
+    } else if (target_type == KRT_TARGET_CMD_ARM64) {
         char file_base[KRT_MAX_PATH];
         KrtPathGetFilename(input_file, file_base, sizeof(file_base));
         KrtPathRemoveExtension(file_base, file_base, sizeof(file_base));
@@ -1318,6 +1333,9 @@ static int run_compiler(const char** input_files, int input_count, const char* o
         }
         case KRT_TARGET_CMD_KRO:
             strncpy(default_output, "output.exe", sizeof(default_output) - 1);
+            break;
+        case KRT_TARGET_CMD_ARM64:
+            strncpy(default_output, "output.kro", sizeof(default_output) - 1);
             break;
         default:
             strncpy(default_output, "output.asm", sizeof(default_output) - 1);

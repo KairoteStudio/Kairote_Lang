@@ -51,6 +51,7 @@ typedef struct KROWriter {
     bool has_entry;
 
     uint32_t flags;
+    uint32_t arch;
 } KROWriter;
 
 static bool allocate_writer_buffers(KROWriter* writer) {
@@ -113,11 +114,13 @@ static bool allocate_writer_buffers(KROWriter* writer) {
     return true;
 }
 
-KROWriter* kro_writer_create(void) {
+KROWriter* kro_writer_create(uint32_t arch) {
     KROWriter* writer = (KROWriter*)calloc(1, sizeof(KROWriter));
     if (!writer) {
         return NULL;
     }
+
+    writer->arch = arch;
 
     if (!allocate_writer_buffers(writer)) {
         kro_writer_destroy(writer);
@@ -500,6 +503,7 @@ bool kro_write_file(KROWriter* writer, const char* filename) {
     header.sym_count = writer->sym_count;
     header.strtab_size = writer->string_size;
     header.total_reloc_count = total_reloc_count;
+    header.arch = writer->arch;
 
     if (fwrite(&header, sizeof(header), 1, fp) != 1) {
         fclose(fp);

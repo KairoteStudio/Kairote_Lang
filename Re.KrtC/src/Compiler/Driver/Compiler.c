@@ -3,6 +3,7 @@
 #include "../Middle/Ir/IrOptimizer.h"
 #include "../Backend/X86/X86Codegen.h"
 #include "../Backend/Kro/KroCodegen.h"
+#include "../Backend/Arm64/Arm64Codegen.h"
 
 KrtCompiler* KrtCompilerCreate(const char* output_filename, KrtTargetPlatform target) {
     if (!output_filename || output_filename[0] == '\0') {
@@ -212,6 +213,10 @@ bool KrtCompilerCompile(KrtCompiler* compiler, ASTNode* ast, void* semantic_anal
     case KRT_TARGET_KRO_OBJ:
     case KRT_TARGET_EXE_PLATFORM: {
         KrtKrtGenerate(compiler->output_file, compiler->output_filename, ir_builder->module);
+        break;
+    }
+    case KRT_TARGET_ARM64_OBJ: {
+        KrtArm64Generate(compiler->output_file, compiler->output_filename, ir_builder->module);
         break;
     }
     default:

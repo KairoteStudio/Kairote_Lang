@@ -304,6 +304,14 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
         return ARK_LINK_ERR_MEMORY;
     }
 
+    out_plan->backend_input->arch = 0;
+    for (size_t i = 0; i < unit_count; i++) {
+        if (units[i] && units[i]->arch) {
+            out_plan->backend_input->arch = units[i]->arch;
+            break;
+        }
+    }
+
     size_t total_sections = 0;
     for (size_t i = 0; i < unit_count; i++) {
         if (units[i]) {

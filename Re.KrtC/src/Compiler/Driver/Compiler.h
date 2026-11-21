@@ -13,6 +13,7 @@ typedef enum {
     KRT_TARGET_WASM,
     KRT_TARGET_IR_TEXT,
     KRT_TARGET_KRO_OBJ,
+    KRT_TARGET_ARM64_OBJ,
     KRT_TARGET_EXE_PLATFORM
 } KrtTargetPlatform;
 

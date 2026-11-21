@@ -76,10 +76,13 @@ typedef struct {
 #define ET_EXEC 2
 #define ET_DYN 3
 #define EM_X86_64 0x3E
+#define EM_AARCH64 0xB7
+#define KRO_ARCH_ARM64 0xAA64u
 
 #define PT_LOAD 1
 #define PT_DYNAMIC 2
 #define PT_INTERP 3
+#define PT_PHDR 6
 #define PT_TLS 7
 #define PT_GNU_RELRO 0x6474e552
 #define PT_GNU_STACK 0x6474e551
@@ -1553,7 +1556,7 @@ static ArkLinkResult elf_write_headers(ElfLinkState* state) {
     } else {
         ehdr.e_type = ET_EXEC;
     }
-    ehdr.e_machine = EM_X86_64;
+    ehdr.e_machine = (state->input->arch == KRO_ARCH_ARM64) ? EM_AARCH64 : EM_X86_64;
     ehdr.e_version = EV_CURRENT;
     ehdr.e_entry = state->image_base;
     if (state->input->entry_section < state->ns) {
@@ -1569,6 +1572,22 @@ static ArkLinkResult elf_write_headers(ElfLinkState* state) {
 
     int has_relro = state->has_dynamic && state->func_import_count > 0;
     int needs_gnu_stack = 1;
+
+    /* PT_PHDR must come first: some loaders (notably proot) use it to locate
+     * the program header table of the tracee. */
+    size_t phdr_load_total = 1 + (state->has_dynamic ? 2 : (size_t)state->n_static_loads) +
+                             (state->has_tls ? 1 : 0) + (has_relro ? 1 : 0) + (needs_gnu_stack ? 1 : 0);
+    Elf64_Phdr phdr_phdr = {0};
+    phdr_phdr.p_type = PT_PHDR;
+    phdr_phdr.p_flags = PF_R;
+    phdr_phdr.p_offset = sizeof(Elf64_Ehdr);
+    phdr_phdr.p_vaddr = state->image_base + sizeof(Elf64_Ehdr);
+    phdr_phdr.p_paddr = phdr_phdr.p_vaddr;
+    phdr_phdr.p_filesz = (uint64_t)(phdr_load_total * sizeof(Elf64_Phdr));
+    phdr_phdr.p_memsz = phdr_phdr.p_filesz;
+    phdr_phdr.p_align = sizeof(uint64_t);
+    memcpy(state->out_buf + sizeof(Elf64_Ehdr), &phdr_phdr, sizeof(phdr_phdr));
+    state->phdr_load_count = 1;
     ehdr.e_shentsize = sizeof(Elf64_Shdr);
     ehdr.e_shnum = (uint16_t)state->elf_shnum;
     ehdr.e_shstrndx = (uint16_t)state->shstrtab_shidx;
@@ -1605,8 +1624,7 @@ static ArkLinkResult elf_write_headers(ElfLinkState* state) {
         state->phdr_load_count++;
     }
 
-    ehdr.e_phnum =
-        (uint16_t)(state->phdr_load_count + (state->has_tls ? 1 : 0) + (has_relro ? 1 : 0) + (needs_gnu_stack ? 1 : 0));
+    ehdr.e_phnum = (uint16_t)phdr_load_total;
     memcpy(state->out_buf, &ehdr, sizeof(ehdr));
 
     Elf64_Phdr phdr2 = {0}, phdr3 = {0}, phdr_tls = {0};

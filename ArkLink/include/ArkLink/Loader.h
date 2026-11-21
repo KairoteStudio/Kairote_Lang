@@ -129,6 +129,7 @@ typedef struct ArkLinkUnit {
     size_t symbol_count;
     ArkLinkRelocList relocations;
     uint64_t entry_point;
+    uint32_t arch;
 
     uint8_t* file_data;
     size_t file_size;

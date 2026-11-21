@@ -498,6 +498,9 @@ int KrtCompilePipelineCodegen(KrtCompilePipeline* pipeline) {
     case KRT_TARGET_KRO:
         target = KRT_TARGET_KRO_OBJ;
         break;
+    case KRT_TARGET_ARM64:
+        target = KRT_TARGET_ARM64_OBJ;
+        break;
     case KRT_TARGET_EXE:
         target = KRT_TARGET_EXE_PLATFORM;
         break;

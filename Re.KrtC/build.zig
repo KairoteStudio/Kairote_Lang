@@ -81,6 +81,7 @@ pub fn build(b: *std.Build) void {
             "src/Compiler/Middle/Ir/IrSsa.c",
             "src/Compiler/Middle/Ir/IrType.c",
             "src/Compiler/Backend/Kro/KroCodegen.c",
+            "src/Compiler/Backend/Arm64/Arm64Codegen.c",
             "src/Compiler/Backend/X86/X86CodeOpt.c",
             "src/Compiler/Backend/X86/X86Codegen.c",
             "src/Compiler/Backend/X86/X86RegAlloc.c",
