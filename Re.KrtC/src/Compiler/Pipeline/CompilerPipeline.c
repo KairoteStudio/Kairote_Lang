@@ -2,14 +2,12 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
-#include <string.h>
 #include "CompilerPipeline.h"
 #include "../Frontend/Semantic/NameMangling.h"
 #include "../Driver/ConsoleUtils.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
-#include <sys/stat.h>
 #include <limits.h>
 #include <stdint.h>
 
@@ -18,7 +16,6 @@
 #define KRT_PATH_SEP '\\'
 #define KRT_PATH_SEP_STR "\\"
 #else
-#include <unistd.h>
 #define KRT_PATH_SEP '/'
 #define KRT_PATH_SEP_STR "/"
 #endif
@@ -42,7 +39,6 @@ static void load_standard_macros(Preprocessor* preprocessor) {
 #include <windows.h>
 #else
 #include <dirent.h>
-#include <sys/stat.h>
 #endif
 
 static int scan_stdlib_directory(const char* dir_path, char** file_list, int max_files, int* file_count) {

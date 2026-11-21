@@ -55,6 +55,8 @@ extern MemorySafetyManager* g_memory_safety;
 void KrtMemorySafetyInit(void);
 void KrtMemorySafetyCleanup(void);
 
+/* Zero-sized requests return a unique non-NULL pointer; NULL always means the
+ * allocation itself failed. */
 void* KrtSafeMalloc(size_t size, const char* file, int line);
 void* KrtSafeCalloc(size_t count, size_t size, const char* file, int line);
 void* KrtSafeRealloc(void* ptr, size_t size, const char* file, int line);

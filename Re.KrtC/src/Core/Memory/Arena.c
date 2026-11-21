@@ -202,6 +202,7 @@ void KrtArenaStats(KrtArena* arena) {
         current = current->next;
     }
 
+#if KRT_DEBUG_ENABLED
     printf("\n");
     printf("╔══════════════════════════════════════════════════╗\n");
     printf("║              Arena Memory Statistics             ║\n");
@@ -214,6 +215,9 @@ void KrtArenaStats(KrtArena* arena) {
     printf("║ Utilization:        %10.2f %%               ║\n",
            arena->total_allocated > 0 ? (double)arena->total_used / arena->total_allocated * 100.0 : 0.0);
     printf("╚══════════════════════════════════════════════════╝\n");
+#else
+    (void)block_count;
+#endif
 
     KRT_ARENA_UNLOCK(arena);
 }

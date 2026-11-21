@@ -112,8 +112,14 @@ void KrtFreeChecked(void* ptr, const char* file, int line);
     } while (0)
 #define KRT_STRNCPY(dest, src, n)                                                                                      \
     do {                                                                                                               \
-        strncpy((dest), (src), (n));                                                                                   \
-        (dest)[(n) - 1] = '\0';                                                                                        \
+        size_t krt_copy_len = (n);                                                                                     \
+        if (krt_copy_len > 0) {                                                                                        \
+            if (krt_copy_len > sizeof(dest)) {                                                                         \
+                krt_copy_len = sizeof(dest);                                                                           \
+            }                                                                                                          \
+            strncpy((dest), (src), krt_copy_len);                                                                      \
+            (dest)[krt_copy_len - 1] = '\0';                                                                           \
+        }                                                                                                              \
     } while (0)
 #define KRT_STRNCPY_SAFE(dest, src) KRT_STRNCPY(dest, src, sizeof(dest))
 

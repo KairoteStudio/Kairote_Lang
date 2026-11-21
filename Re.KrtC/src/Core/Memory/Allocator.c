@@ -160,8 +160,10 @@ void KrtMemorySafetyCleanup(void) {
 }
 
 void* KrtSafeMalloc(size_t size, const char* file, int line) {
+    /* Zero-sized requests return a unique non-NULL pointer so that NULL always
+     * means allocation failure and callers need no separate size==0 branch. */
     if (size == 0) {
-        return NULL;
+        size = 1;
     }
 
     size_t actual_size = size;
@@ -223,10 +225,6 @@ void* KrtSafeMalloc(size_t size, const char* file, int line) {
 }
 
 void* KrtSafeCalloc(size_t count, size_t size, const char* file, int line) {
-    if (count == 0 || size == 0) {
-        return NULL;
-    }
-
     size_t total_size;
     if (!KrtSizeMultiply(count, size, &total_size)) {
         return NULL;
