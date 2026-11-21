@@ -3023,6 +3023,17 @@ static bool semantic_analyze_stmt_constructor_declaration(SemanticAnalyzer* anal
     }
     return true;
 }
+/* Like guarantees_return, but also covers break/continue. */
+static bool semantic_statement_terminates(ASTNode* stmt) {
+    if (!stmt) {
+        return false;
+    }
+    if (stmt->type == AST_BREAK_STATEMENT || stmt->type == AST_CONTINUE_STATEMENT) {
+        return true;
+    }
+    return semantic_statement_guarantees_return(stmt);
+}
+
 static bool semantic_check_uninitialized_locals(SemanticAnalyzer* analyzer, SymbolScope* scope,
                                                 ASTNode* node) {
     bool ok = true;
@@ -3043,6 +3054,11 @@ static bool semantic_analyze_stmt_block(SemanticAnalyzer* analyzer, ASTNode* stm
         ASTNode* current_stmt = stmt->data.block.statements[i];
         bool stmt_result = semantic_analyzer_analyze_statement(analyzer, current_stmt);
         if (!stmt_result) {
+            overall_result = false;
+        }
+        if (i + 1 < stmt->data.block.statement_count && semantic_statement_terminates(current_stmt)) {
+            semantic_analyzer_add_error_at(analyzer, stmt->data.block.statements[i + 1],
+                                           "Unreachable code after a statement that always exits");
             overall_result = false;
         }
     }
