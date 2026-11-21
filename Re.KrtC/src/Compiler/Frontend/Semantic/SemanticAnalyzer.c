@@ -1178,6 +1178,11 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
                                            "String values only support concatenation with another string");
             return false;
         }
+        if (left_ok && op != TOKEN_ASSIGN &&
+            (left_type == TOKEN_VOID || right_type == TOKEN_VOID)) {
+            semantic_analyzer_add_error_at(analyzer, expr, "A void value cannot be used here");
+            return false;
+        }
         if (left_ok && (op == TOKEN_DIVIDE || op == TOKEN_MODULO)) {
             ASTNode* divisor = expr->data.binary_op.right;
             if (divisor && divisor->type == AST_NUMBER && divisor->is_integer_literal &&
@@ -1589,8 +1594,10 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
         bool index_ok = semantic_analyzer_analyze_expression(analyzer, expr->data.array_access.index);
 
         if (index_ok) {
-            KrtSourceType index_type = expr->data.array_access.index->resolved_type;
-            if (KrtSourceIsPointer(index_type) || !KrtTokenIntegerBits(KrtSourceStorage(index_type))) {
+            KrtTokenType index_type =
+                semantic_analyzer_infer_expression_type(analyzer, expr->data.array_access.index);
+            if (index_type != TOKEN_EOF && index_type != TOKEN_UNKNOWN &&
+                KrtTokenIntegerBits(index_type) == 0) {
                 semantic_analyzer_add_error_at(analyzer, expr->data.array_access.index,
                                                "Array index must be an integer");
                 return false;
@@ -2259,6 +2266,17 @@ static bool semantic_analyze_stmt_array_assignment(SemanticAnalyzer* analyzer, A
     bool array_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.array_assignment.array);
     bool index_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.array_assignment.index);
     bool value_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.array_assignment.value);
+
+    if (index_ok) {
+        KrtTokenType index_type =
+            semantic_analyzer_infer_expression_type(analyzer, stmt->data.array_assignment.index);
+        if (index_type != TOKEN_EOF && index_type != TOKEN_UNKNOWN &&
+            KrtTokenIntegerBits(index_type) == 0) {
+            semantic_analyzer_add_error_at(analyzer, stmt->data.array_assignment.index,
+                                           "Array index must be an integer");
+            return false;
+        }
+    }
 
     if (array_ok && stmt->data.array_assignment.array->type == AST_IDENTIFIER) {
         const char* array_name = stmt->data.array_assignment.array->data.identifier_name;
