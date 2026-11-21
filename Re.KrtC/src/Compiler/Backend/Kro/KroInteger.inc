@@ -197,6 +197,23 @@ static void emit_load_for_type(KROCodegenContext* ctx, KrtIRValue* value, KrtTok
 }
 
 static void emit_load_condition(KROCodegenContext* ctx, KrtIRValue* value) {
+    if (value->value_type == TOKEN_FLOAT32 || value->value_type == TOKEN_FLOAT64) {
+        /* A floating-point condition becomes a bool by comparing against 0.0;
+         * unordered (NaN) counts as true. */
+        emit_load_for_type(ctx, value, value->value_type, KRT_REG_RAX, KRT_REG_RDX);
+        emit_bytes(ctx, (const uint8_t*)"\x66\x48\x0F\x7E\xC0", 5); /* movq xmm0, rax */
+        emit_bytes(ctx, (const uint8_t*)"\x66\x0F\xEF\xC9", 4); /* pxor xmm1, xmm1 */
+        if (value->value_type == TOKEN_FLOAT64) {
+            emit_bytes(ctx, (const uint8_t*)"\x66\x0F\x2E\xC8", 4); /* ucomisd xmm1, xmm0 */
+        } else {
+            emit_bytes(ctx, (const uint8_t*)"\x0F\x2E\xC8", 3); /* ucomiss xmm1, xmm0 */
+        }
+        emit_bytes(ctx, (const uint8_t*)"\x0F\x95\xC0", 3); /* setne al */
+        emit_bytes(ctx, (const uint8_t*)"\x0F\x9A\xC1", 3); /* setp cl */
+        emit_bytes(ctx, (const uint8_t*)"\x08\xC8", 2); /* or al, cl */
+        emit_bytes(ctx, (const uint8_t*)"\x48\x0F\xB6\xC0", 4); /* movzx rax, al */
+        return;
+    }
     emit_load_for_type(ctx, value, value->value_type, KRT_REG_RAX, KRT_REG_RDX);
     if (KrtTokenIntegerBits(value->value_type) > 64) {
         emit_reg_op(ctx, 0x09, KRT_REG_RAX, KRT_REG_RDX);
