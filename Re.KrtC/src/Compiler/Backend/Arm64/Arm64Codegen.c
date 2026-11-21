@@ -1047,12 +1047,17 @@ static void emit_function_body(Arm64Context* ctx, KrtIRFunction* func) {
                     break;
                 }
                 uint32_t number = 0;
+                uint64_t resolved = 0;
                 bool has_number = false;
                 if (inst->operands[0].type == KRT_IR_VALUE_IMM) {
                     number = arm64_syscall_number((uint32_t)(int64_t)inst->operands[0].data.imm);
                     has_number = true;
                 } else if (inst->operands[0].type == KRT_IR_VALUE_INTEGER) {
                     number = arm64_syscall_number((uint32_t)inst->operands[0].data.integer);
+                    has_number = true;
+                } else if (ctx->current_function &&
+                           resolve_const_count(ctx->current_function, &inst->operands[0], &resolved)) {
+                    number = arm64_syscall_number((uint32_t)resolved);
                     has_number = true;
                 }
                 if (has_number) {
