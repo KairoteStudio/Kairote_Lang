@@ -23,7 +23,9 @@ cmake --build build --target KrtC ArkLink -j4
 | 名称、类型和指针语义 | `Re.KrtC/src/Compiler/Frontend/Semantic/` |
 | AST 到 IR 的生成 | `Re.KrtC/src/Compiler/Middle/Codegen/IrGen.c` |
 | IR、内存操作和优化 | `Re.KrtC/src/Compiler/Middle/Ir/` |
-| KRO 原生后端 | `Re.KrtC/src/Compiler/Backend/Kro/` |
+| x86-64 文本汇编后端 | `Re.KrtC/src/Compiler/Backend/Asm/X86/` |
+| x86-64 KRO 二进制后端 | `Re.KrtC/src/Compiler/Backend/Kro/X86/` |
+| AArch64 KRO 二进制后端 | `Re.KrtC/src/Compiler/Backend/Kro/Arm64/` |
 | 运行时 Kairote 源码 | `Re.KrtC/src/Runtime/Krt/` |
 | 独立库源码 | `libs/System/` |
 | KRO 链接器 | `ArkLink/` |

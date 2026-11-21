@@ -1,5 +1,5 @@
 #include "Arm64Codegen.h"
-#include "../../Frontend/Lexer/Tokenizer.h"
+#include "../../../Frontend/Lexer/Tokenizer.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -75,10 +75,6 @@ typedef struct {
     int string_const_count;
     char sym_prefix[64];
 } Arm64Context;
-
-/* ------------------------------------------------------------------ */
-/* AArch64 encoders                                                    */
-/* ------------------------------------------------------------------ */
 
 static void emit_word(Arm64Context* ctx, uint32_t word) {
     if (ctx && ctx->writer) {
@@ -254,10 +250,6 @@ static int instruction_value_size(KrtIRInst* inst, int operand_index, int defaul
     return value == 1 || value == 2 || value == 4 || value == 8 || value == 16 ? value : default_size;
 }
 
-/* ------------------------------------------------------------------ */
-/* Frame planning                                                      */
-/* ------------------------------------------------------------------ */
-
 static bool value_is_const_int(KrtIRValue* value) {
     return value && (value->type == KRT_IR_VALUE_IMM || value->type == KRT_IR_VALUE_INTEGER);
 }
@@ -270,11 +262,6 @@ static uint64_t value_const_int(KrtIRValue* value) {
                                                : (uint64_t)(int64_t)value->data.imm;
 }
 
-/*
- * KrtIrStackAlloc casts its count to uint64, so the operand is normally a TEMP
- * produced by `cast <const>`.  Look through that so constant-sized requests can
- * still be placed statically inside the frame.
- */
 static bool resolve_const_count(KrtIRFunction* func, KrtIRValue* value, uint64_t* out) {
     if (!value) {
         return false;
@@ -307,7 +294,6 @@ static int alloc_slot(Arm64Context* ctx) {
     return ctx->slot_count++;
 }
 
-/* Reserve a byte range in the frame; returns its first slot index. */
 static int alloc_slot_for_bytes(Arm64Context* ctx, uint32_t bytes) {
     int base = ctx->slot_count;
     ctx->slot_count += (bytes + ARM64_SLOT_SIZE - 1) / ARM64_SLOT_SIZE;
@@ -318,8 +304,6 @@ static int local_slot(Arm64Context* ctx, const char* name) {
     if (!name) {
         return -1;
     }
-    /* Module-level objects are addressed through their symbol, not a frame
-     * slot; otherwise every function would get a private copy. */
     if (kro_find_symbol(ctx->writer, name) >= 0) {
         return -1;
     }
@@ -409,10 +393,6 @@ static int frame_size(Arm64Context* ctx) {
     return (bytes + 15) & ~15;
 }
 
-/* ------------------------------------------------------------------ */
-/* Block labels and fixups                                             */
-/* ------------------------------------------------------------------ */
-
 static void record_block_start(Arm64Context* ctx, KrtIRBasicBlock* block) {
     if (!block || block->id < 0 || block->id >= ARM64_MAX_BLOCKS) {
         return;
@@ -474,10 +454,6 @@ static void patch_fixups(Arm64Context* ctx) {
     }
 }
 
-/* ------------------------------------------------------------------ */
-/* Value access                                                        */
-/* ------------------------------------------------------------------ */
-
 static bool value_is_64(KrtIRValue* value) {
     if (!value) {
         return true;
@@ -493,12 +469,7 @@ static bool value_is_64(KrtIRValue* value) {
 }
 
 static void emit_load_value(Arm64Context* ctx, KrtIRValue* value, int reg);
-
-/*
- * String-constant symbols must be unique across objects: every module with
- * literals would otherwise define its own "str_const_0", and the linker
- * (which resolves relocations by name) hands out the first object's copy.
- */
+ 
 static void string_const_symbol_name(Arm64Context* ctx, int id, char* buffer, size_t size) {
     snprintf(buffer, size, "%sstr_const_%d", ctx->sym_prefix, id);
 }
@@ -628,7 +599,6 @@ static void emit_store_result(Arm64Context* ctx, KrtIRInst* inst, int reg) {
     }
 }
 
-/* Load the absolute address of a symbol: ADRP (page) + ADD (low 12 bits). */
 static void emit_symbol_address(Arm64Context* ctx, const char* name, int reg) {
     int sym = name ? kro_find_symbol(ctx->writer, name) : -1;
     if (sym < 0) {
@@ -642,10 +612,6 @@ static void emit_symbol_address(Arm64Context* ctx, const char* name, int reg) {
     emit_word(ctx, 0x91000000u | ((uint32_t)(reg & 0x1F) << 5) | (uint32_t)(reg & 0x1F));
     kro_add_reloc(ctx->writer, KRO_SEC_TEXT, add_offset, sym, KRO_RELOC_AARCH64_ADD_ABS_LO12_NC, 0);
 }
-
-/* ------------------------------------------------------------------ */
-/* Instruction selection                                               */
-/* ------------------------------------------------------------------ */
 
 static void emit_return_sequence(Arm64Context* ctx) {
     int size = frame_size(ctx);
@@ -991,12 +957,6 @@ static void emit_function_body(Arm64Context* ctx, KrtIRFunction* func) {
                 break;
             }
             case KRT_IR_POW: {
-                /*
-                 * Integer power by repeated multiplication.  TOKEN_POWER is
-                 * only produced by `**`, which the parser treats as pointer
-                 * syntax, so this opcode is currently unreachable - but keep it
-                 * correct rather than letting it fall into the generic error.
-                 */
                 if (inst->operand_count < 2) {
                     break;
                 }
@@ -1174,9 +1134,6 @@ static void emit_function_body(Arm64Context* ctx, KrtIRFunction* func) {
     }
 }
 
-/* Exception support: minimal setjmp/longjmp stubs emitted directly by the
- * backend (the target is a static, libc-free ELF).  The buffer layout must
- * match KRT_JMP_BUF_* in IrGen.c. */
 #define ARM64_JMP_BUF_REG_COUNT 12 /* x19..x30 */
 #define ARM64_JMP_BUF_FP_OFFSET 112
 
@@ -1258,10 +1215,6 @@ static void emit_function(Arm64Context* ctx, KrtIRFunction* func) {
     emit_return_sequence(ctx);
 }
 
-/* ------------------------------------------------------------------ */
-/* Entry point                                                         */
-/* ------------------------------------------------------------------ */
-
 void KrtArm64Generate(FILE* output_file, const char* output_filename, KrtIRModule* module) {
     (void)output_file;
     if (!module) {
@@ -1293,8 +1246,6 @@ void KrtArm64Generate(FILE* output_file, const char* output_filename, KrtIRModul
         return;
     }
 
-    /* Materialise module globals into .data so loads/stores can address them
-     * through their symbol. */
     for (int i = 0; i < module->global_count; i++) {
         KrtIRGlobal* global = &module->globals[i];
         if (!global || !global->name) {

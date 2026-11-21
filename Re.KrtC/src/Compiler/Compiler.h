@@ -9,7 +9,7 @@
 #include "Frontend/Semantic/Generics.h"
 #include "Frontend/Semantic/NameMangling.h"
 #include "Middle/Ir/Ir.h"
-#include "Backend/X86/X86Codegen.h"
+#include "Backend/Asm/X86/X86Codegen.h"
 #include "Driver/Compiler.h"
 #include "Driver/ParallelCompiler.h"
 #include "Driver/Preprocessor.h"

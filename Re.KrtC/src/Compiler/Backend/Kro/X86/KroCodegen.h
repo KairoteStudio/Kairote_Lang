@@ -1,8 +1,8 @@
 #ifndef KRT_KRO_CODEGEN_H
 #define KRT_KRO_CODEGEN_H
 
-#include "../../Middle/Ir/Ir.h"
-#include "../../../Tools/KroWriter.h"
+#include "../../../Middle/Ir/Ir.h"
+#include "../../../../Tools/KroWriter.h"
 #include <stdio.h>
 
 #define KRT_KRO_MAX_LOCAL_VARS 1024

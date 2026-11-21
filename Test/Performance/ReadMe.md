@@ -18,7 +18,7 @@
 | 重复 epilogue | 每个函数生成一份寄存器恢复、栈帧恢复和 `ret`，所有显式 `return` 跳到该位置 |
 | `_start` 后半段不可达 | `main` 正常返回，由 `_start` 执行自动退出序列 |
 | 零值加载过长 | 使用 `xor eax, eax` 等短指令；可补零扩展的非零立即数使用 32 位 `mov` |
-| 临时值全部落栈 | [KroRegisterPacking.inc](../../Re.KrtC/src/Compiler/Backend/Kro/KroRegisterPacking.inc) 对基本块内的临时值按活跃区间分配、复用剩余寄存器 |
+| 临时值全部落栈 | [KroRegisterPacking.inc](../../Re.KrtC/src/Compiler/Backend/Kro/X86/KroRegisterPacking.inc) 对基本块内的临时值按活跃区间分配、复用剩余寄存器 |
 | 参数先存栈再加载 | 可分配的整数参数从 ABI 入参寄存器直接转入保存值的寄存器；64 位参数占用完整寄存器，小整数仍可共享位段 |
 
 参数进入函数后存栈本身符合 AMD64 调用约定；本次优化减少这部分读写。寄存器分配仍会保存和恢复实际使用的 `RBX`、`R12`～`R15`。跨基本块的临时值、PHI、重复定义和寄存器不足时保留栈槽；本次没有启用实验性的 SSA 优化。

@@ -1,9 +1,9 @@
 #include "Compiler.h"
 #include "../Middle/Ir/IrSsa.h"
 #include "../Middle/Ir/IrOptimizer.h"
-#include "../Backend/X86/X86Codegen.h"
-#include "../Backend/Kro/KroCodegen.h"
-#include "../Backend/Arm64/Arm64Codegen.h"
+#include "../Backend/Asm/X86/X86Codegen.h"
+#include "../Backend/Kro/X86/KroCodegen.h"
+#include "../Backend/Kro/Arm64/Arm64Codegen.h"
 
 KrtCompiler* KrtCompilerCreate(const char* output_filename, KrtTargetPlatform target) {
     if (!output_filename || output_filename[0] == '\0') {

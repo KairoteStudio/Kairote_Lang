@@ -25,9 +25,10 @@ Kairote编译器采用经典的三段式架构设计：
 - **Re.KrtC/src/Compiler/Middle/**: 中端处理模块
   - `Ir/`: 中间表示定义与优化 (Ir.c, IrOptimizer.c)
   - `Codegen/`: IR生成 (IrGen.c)
-- **Re.KrtC/src/Compiler/Backend/**: 后端处理模块
-  - `X86/`: x86架构代码生成 (X86Codegen.c)
-  - `Kro/`: KRO目标文件代码生成 (KroCodegen.c)
+- **Re.KrtC/src/Compiler/Backend/**: 后端处理模块，按产物类型（Asm=文本汇编 / Kro=二进制对象）再按架构分层
+  - `Asm/X86/`: x86-64 文本汇编代码生成 (X86Codegen.c)
+  - `Kro/X86/`: x86-64 KRO 二进制代码生成 (KroCodegen.c)
+  - `Kro/Arm64/`: AArch64 KRO 二进制代码生成 (Arm64Codegen.c)
 - **Re.KrtC/src/Compiler/Driver/**: 驱动与项目管理
   - `Compiler.c`: 主编译器驱动
   - `Project.c`: 项目管理

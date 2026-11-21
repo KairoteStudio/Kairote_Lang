@@ -2,8 +2,8 @@
 #define KRT_X86_BACKEND_H
 
 #include <stdio.h>
-#include "../../../Core/Target/KairoteTarget.h"
-#include "../../Middle/Ir/Ir.h"
+#include "../../../../Core/Target/KairoteTarget.h"
+#include "../../../Middle/Ir/Ir.h"
 
 #define X86_MAX_REGISTERS 14
 #define X86_MAX_VAR_OFFSETS 100

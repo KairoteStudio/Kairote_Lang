@@ -1,6 +1,6 @@
 #include "X86RegAlloc.h"
-#include "../BackendAllocation.h"
-#include "../../Middle/Ir/IrSsa.h"
+#include "../../BackendAllocation.h"
+#include "../../../Middle/Ir/IrSsa.h"
 #include <limits.h>
 #include <string.h>
 

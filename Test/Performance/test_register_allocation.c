@@ -10,7 +10,7 @@
 #define KRT_MALLOC malloc
 #define KRT_CALLOC calloc
 #define KRT_FREE free
-#include "../../Re.KrtC/src/Compiler/Backend/Kro/KroCodegen.c"
+#include "../../Re.KrtC/src/Compiler/Backend/Kro/X86/KroCodegen.c"
 
 typedef struct {
     KROCodegenContext* context;

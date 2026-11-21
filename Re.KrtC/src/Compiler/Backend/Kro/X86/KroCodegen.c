@@ -1,5 +1,5 @@
 #include "KroCodegen.h"
-#include "../../Middle/Ir/IrSsa.h"
+#include "../../../Middle/Ir/IrSsa.h"
 #include <string.h>
 #include <stdio.h>
 
