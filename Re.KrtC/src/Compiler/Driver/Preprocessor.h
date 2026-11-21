@@ -3,6 +3,9 @@
 
 #include "../../Core/Utils/KrtCommon.h"
 
+/* Bounds macro re-expansion so a self-referential macro cannot loop forever. */
+#define KRT_PREPROCESSOR_MAX_PASSES 8
+
 typedef struct {
     char* name;
     char* replacement;

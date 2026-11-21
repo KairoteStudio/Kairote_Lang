@@ -1,6 +1,7 @@
 #include "Preprocessor.h"
 #include <string.h>
 #include <ctype.h>
+#include <limits.h>
 
 static bool is_identifier_char(unsigned char c) {
     return isalnum(c) || c == '_' || c >= 128;
@@ -15,7 +16,11 @@ static unsigned macro_hash(const char* name, size_t length) {
 }
 
 Preprocessor* PreprocessorCreate(void) {
-    return (Preprocessor*)KRT_CALLOC(1, sizeof(Preprocessor));
+    Preprocessor* preprocessor = (Preprocessor*)KRT_CALLOC(1, sizeof(Preprocessor));
+    if (!preprocessor) {
+        KrtError("Preprocessor: out of memory");
+    }
+    return preprocessor;
 }
 
 void PreprocessorDestroy(Preprocessor* preprocessor) {
@@ -48,9 +53,14 @@ static int find_macro(Preprocessor* preprocessor, const char* name, size_t lengt
 }
 
 static bool grow_macro_index(Preprocessor* preprocessor) {
+    if (preprocessor->bucket_count > INT_MAX / 2) {
+        KrtError("Preprocessor: macro index capacity exhausted");
+        return false;
+    }
     int count = preprocessor->bucket_count ? preprocessor->bucket_count * 2 : 16;
     int* buckets = (int*)KRT_CALLOC(count, sizeof(int));
     if (!buckets) {
+        KrtError("Preprocessor: out of memory growing the macro index");
         return false;
     }
     for (int i = 0; i < preprocessor->macro_count; i++) {
@@ -68,11 +78,13 @@ static bool grow_macro_index(Preprocessor* preprocessor) {
 
 bool PreprocessorAddMacro(Preprocessor* preprocessor, const char* name, const char* replacement) {
     if (!preprocessor || !name || !replacement || !*name || isdigit((unsigned char)*name)) {
+        KrtError("Preprocessor: invalid macro name");
         return false;
     }
     size_t length = strlen(name);
     for (size_t i = 0; i < length; i++) {
         if (!is_identifier_char((unsigned char)name[i])) {
+            KrtError("Preprocessor: invalid macro name: %s", name);
             return false;
         }
     }
@@ -80,6 +92,7 @@ bool PreprocessorAddMacro(Preprocessor* preprocessor, const char* name, const ch
     int existing = find_macro(preprocessor, name, length, hash);
     char* copy = KRT_STRDUP(replacement);
     if (!copy) {
+        KrtError("Preprocessor: out of memory copying replacement for macro '%s'", name);
         return false;
     }
     if (existing >= 0) {
@@ -88,14 +101,22 @@ bool PreprocessorAddMacro(Preprocessor* preprocessor, const char* name, const ch
         preprocessor->macros[existing].replacement_length = strlen(replacement);
         return true;
     }
-    if ((preprocessor->macro_count + 1) * 4 >= preprocessor->bucket_count * 3 && !grow_macro_index(preprocessor)) {
+    if ((preprocessor->bucket_count == 0 ||
+         (preprocessor->macro_count + 1) * 4 >= preprocessor->bucket_count * 3) &&
+        !grow_macro_index(preprocessor)) {
         KRT_FREE(copy);
         return false;
     }
     if (preprocessor->macro_count == preprocessor->macro_capacity) {
+        if (preprocessor->macro_capacity > INT_MAX / 2) {
+            KrtError("Preprocessor: macro table capacity exhausted");
+            KRT_FREE(copy);
+            return false;
+        }
         int capacity = preprocessor->macro_capacity ? preprocessor->macro_capacity * 2 : 8;
         Macro* macros = (Macro*)KRT_REALLOC(preprocessor->macros, capacity * sizeof(Macro));
         if (!macros) {
+            KrtError("Preprocessor: out of memory growing the macro table");
             KRT_FREE(copy);
             return false;
         }
@@ -104,6 +125,7 @@ bool PreprocessorAddMacro(Preprocessor* preprocessor, const char* name, const ch
     }
     char* name_copy = KRT_STRDUP(name);
     if (!name_copy) {
+        KrtError("Preprocessor: out of memory copying macro name '%s'", name);
         KRT_FREE(copy);
         return false;
     }
@@ -117,13 +139,7 @@ bool PreprocessorAddMacro(Preprocessor* preprocessor, const char* name, const ch
     return true;
 }
 
-char* PreprocessorProcess(Preprocessor* preprocessor, const char* source) {
-    if (!preprocessor || !source) {
-        return NULL;
-    }
-    if (!preprocessor->macro_count) {
-        return KRT_STRDUP(source);
-    }
+static char* expand_once(Preprocessor* preprocessor, const char* source) {
     size_t capacity = strlen(source) + 1, used = 0;
     char* result = (char*)KRT_MALLOC(capacity);
     if (!result) {
@@ -136,7 +152,7 @@ char* PreprocessorProcess(Preprocessor* preprocessor, const char* source) {
         if (*cursor == '"' || *cursor == '\'') {
             char quote = *cursor++;
             while (*cursor && *cursor != quote) {
-                if (*cursor == '\\' && cursor[1]) {
+                if (*cursor == '\\' && cursor[1] != '\0') {
                     cursor++;
                 }
                 cursor++;
@@ -188,4 +204,40 @@ char* PreprocessorProcess(Preprocessor* preprocessor, const char* source) {
     }
     result[used] = '\0';
     return result;
+}
+
+char* PreprocessorProcess(Preprocessor* preprocessor, const char* source) {
+    if (!preprocessor || !source) {
+        return NULL;
+    }
+    if (!preprocessor->macro_count) {
+        char* copy = KRT_STRDUP(source);
+        if (!copy) {
+            KrtError("Preprocessor: out of memory copying source");
+        }
+        return copy;
+    }
+
+    /* Re-scan the output so a replacement that names another macro expands too.
+     * The pass bound keeps self-referential macros from looping forever. */
+    char* current = KRT_STRDUP(source);
+    if (!current) {
+        KrtError("Preprocessor: out of memory copying source");
+        return NULL;
+    }
+    for (int pass = 0; pass < KRT_PREPROCESSOR_MAX_PASSES; pass++) {
+        char* next = expand_once(preprocessor, current);
+        if (!next) {
+            KRT_FREE(current);
+            KrtError("Preprocessor: out of memory while expanding macros");
+            return NULL;
+        }
+        bool changed = strcmp(next, current) != 0;
+        KRT_FREE(current);
+        current = next;
+        if (!changed) {
+            break;
+        }
+    }
+    return current;
 }

@@ -30,9 +30,15 @@ static void load_standard_macros(Preprocessor* preprocessor) {
         return;
     }
 
-    PreprocessorAddMacro(preprocessor, "println", "Console.WriteLine");
-    PreprocessorAddMacro(preprocessor, "print", "Console.Write");
-    PreprocessorAddMacro(preprocessor, "print_int", "Console.WriteInt");
+    if (!PreprocessorAddMacro(preprocessor, "println", "Console.WriteLine")) {
+        KrtError("Preprocessor: failed to register standard macro 'println'");
+    }
+    if (!PreprocessorAddMacro(preprocessor, "print", "Console.Write")) {
+        KrtError("Preprocessor: failed to register standard macro 'print'");
+    }
+    if (!PreprocessorAddMacro(preprocessor, "print_int", "Console.WriteInt")) {
+        KrtError("Preprocessor: failed to register standard macro 'print_int'");
+    }
 }
 
 #ifdef _WIN32
