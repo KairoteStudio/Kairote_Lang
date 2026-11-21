@@ -1845,12 +1845,24 @@ static KrtIRValue irgen_expr_array_literal(KrtIRBuilder* builder, ASTNode* expr)
                                        KrtIrImm(builder, 0));
     }
 
-    KrtIRValue total_size = KrtIrMul(builder, KrtIrImm(builder, element_count), KRT_IMM_PTR_SIZE(builder));
+    /* Match the declaration path: the stride comes from the element type, not
+     * from a hard-coded pointer width.  Reads through irgen_expr_array_access
+     * use the same element size, so both sides must agree. */
+    KrtTokenType element_type = irgen_array_element_type(builder, expr);
+    int element_size = irgen_size_from_token(element_type);
+    if (element_size <= 0) {
+        element_size = 8;
+    }
+
+    KrtIRValue total_size = KrtIrMul(builder, KrtIrImm(builder, element_count), KrtIrImm(builder, element_size));
     KrtIRValue array_ptr = irgen_allocate_memory(builder, total_size);
 
     for (int i = 0; i < element_count; i++) {
         KrtIRValue elem_val = krt_ir_generate_expression(builder, expr->data.array_literal.elements[i]);
-        KrtIrArrayStore(builder, array_ptr, KrtIrImm(builder, i), elem_val);
+        if (KrtTokenIntegerBits(element_type) || irgen_is_float_token(element_type)) {
+            elem_val = KrtIrCast(builder, elem_val, element_type);
+        }
+        KrtIrArrayStoreSized(builder, array_ptr, KrtIrImm(builder, i), elem_val, element_size);
     }
     return irgen_mark_array_length(builder, array_ptr, KrtIrImm(builder, element_count));
 }
