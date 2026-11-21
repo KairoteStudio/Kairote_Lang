@@ -192,6 +192,18 @@ static uint32_t arm64_syscall_number(uint32_t x86_number) {
     return x86_number;
 }
 
+static void emit_branch_at(Arm64Context* ctx, uint32_t insn_offset, uint32_t insn, uint32_t target) {
+    int64_t delta = (int64_t)target - (int64_t)insn_offset;
+    uint32_t word = insn;
+    if ((insn & 0xFC000000u) == 0x14000000u) { /* b */
+        word = 0x14000000u | ((uint32_t)((delta >> 2) & 0x03FFFFFFu));
+    } else if ((insn & 0x9F000000u) == 0x34000000u || (insn & 0x9F000000u) == 0x94000000u) {
+        /* cbz / cbnz: keep the register field, replace imm19 */
+        word = (insn & 0x9F00001Fu) | ((uint32_t)((delta >> 2) & 0x7FFFFu) << 5);
+    }
+    kro_patch_code(ctx->writer, insn_offset, &word, 4);
+}
+
 static void emit_load_indirect(Arm64Context* ctx, int address_reg, int size) {
     uint32_t base;
     switch (size) {
@@ -976,6 +988,54 @@ static void emit_function_body(Arm64Context* ctx, KrtIRFunction* func) {
                 emit_store_result(ctx, inst, 0);
                 break;
             }
+            case KRT_IR_POW: {
+                /*
+                 * Integer power by repeated multiplication.  TOKEN_POWER is
+                 * only produced by `**`, which the parser treats as pointer
+                 * syntax, so this opcode is currently unreachable - but keep it
+                 * correct rather than letting it fall into the generic error.
+                 */
+                if (inst->operand_count < 2) {
+                    break;
+                }
+                bool is64 = value_is_64(&inst->operands[0]);
+                emit_load_value(ctx, &inst->operands[0], 0); /* base */
+                emit_load_value(ctx, &inst->operands[1], 1); /* exponent */
+                emit_load_imm(ctx, 2, 1, is64);              /* accumulator */
+                uint32_t loop_start = kro_get_code_offset(ctx->writer);
+                uint32_t cbz_offset = kro_get_code_offset(ctx->writer);
+                emit_word(ctx, (is64 ? 0xB4000000u : 0x34000000u) | (1u << 5)); /* cbz x1, done */
+                emit_word(ctx, (is64 ? 0x9B007C00u : 0x1B007C00u) | (2u << 5) | 2u); /* x2 *= x0 */
+                emit_word(ctx, (is64 ? 0xD1000000u : 0x51000000u) | (1u << 10) | (1u << 5) | 1u);
+                uint32_t b_offset = kro_get_code_offset(ctx->writer);
+                emit_word(ctx, 0x14000000u); /* b loop_start */
+                uint32_t done_offset = kro_get_code_offset(ctx->writer);
+                emit_branch_at(ctx, cbz_offset, (is64 ? 0xB4000000u : 0x34000000u) | (1u << 5), done_offset);
+                emit_branch_at(ctx, b_offset, 0x14000000u, loop_start);
+                emit_word(ctx, 0xAA0003E0u | (2u << 16)); /* mov x0, x2 */
+                emit_store_result(ctx, inst, 0);
+                break;
+            }
+            case KRT_IR_STRCAT: {
+                /* Same contract as the X86 backend: the runtime provides it. */
+                if (inst->operand_count < 2) {
+                    break;
+                }
+                emit_load_value(ctx, &inst->operands[0], 0);
+                emit_load_value(ctx, &inst->operands[1], 1);
+                int sym = kro_find_symbol(ctx->writer, "KrtStringConcat");
+                if (sym < 0) {
+                    sym = kro_add_undefined_symbol(ctx->writer, "KrtStringConcat");
+                }
+                uint32_t reloc_offset = kro_get_code_offset(ctx->writer);
+                emit_word(ctx, 0x94000000u);
+                kro_add_reloc(ctx->writer, KRO_SEC_TEXT, reloc_offset, sym, KRO_RELOC_AARCH64_CALL26, 0);
+                emit_store_result(ctx, inst, 0);
+                break;
+            }
+            case KRT_IR_PHI:
+                KrtError("ARM64 backend: SSA phi nodes are not produced by this backend");
+                break;
             case KRT_IR_RETURN:
                 if (inst->operand_count >= 1) {
                     emit_load_value(ctx, &inst->operands[0], 0);
