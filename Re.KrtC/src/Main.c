@@ -111,18 +111,16 @@ typedef struct {
     int create_project;
     int keep_temp_files;
     const char* project_type;
-    int output_file_set;
-    int target_type_set;
     int optimization_level;
 } KrtCommandLineOptions;
 
 static void print_usage(const char* program_name) {
-    (void)program_name;
     const char* blue = KrtColor(KRT_COL_BLUE);
     const char* gray = KrtColor(KRT_COL_GRAY);
     const char* reset = KrtColor(KRT_COL_RESET);
 
     KrtPrintf("%s||Kairote Lang 使用说明%s\n", blue, reset);
+    KrtPrintf("用法: %s <命令> [参数]\n", program_name ? program_name : "krtc");
     KrtPrintf("%sbuild%s:%s构建%s  clean%s:%s清理\n", blue, gray, blue, blue, gray, blue);
     KrtPrintf("%scheck%s:%s检查%s  help%s:%s帮助信息\n", blue, gray, blue, blue, gray, blue);
     KrtPrintf("%s--keep-temp%s:%s保留临时文件 (.kro)\n", blue, gray, blue);
@@ -195,7 +193,6 @@ static KrtCommandLineOptions parse_command_line(int argc, char* argv[]) {
                 KrtError("缺少参数: target <类型>");
                 exit(1);
             }
-            options.target_type_set = 1;
             const char* target_type = argv[++i];
             if (strcmp(target_type, "asm") == 0) {
                 options.target_type = KRT_TARGET_CMD_ASM;
@@ -219,7 +216,6 @@ static KrtCommandLineOptions parse_command_line(int argc, char* argv[]) {
                 exit(1);
             }
             options.output_file = argv[++i];
-            options.output_file_set = 1;
         } else if (strcmp(arg, "--show-ir") == 0 || strcmp(arg, "--ir") == 0) {
             options.show_ir = 1;
         } else if (options.target_type != KRT_TARGET_CMD_CLEAN && options.target_type != KRT_TARGET_CMD_CHECK &&
@@ -979,7 +975,12 @@ static int build_project_independent(const char* project_file, const char* outpu
     for (int i = 0; i < project->source_count; i++) {
         const char* src = project->sources[i];
         if (!src || src[0] == '\0') {
-            continue;
+            KrtError("项目源列表第 %d 项为空", i);
+            ParallelCompilerDestroy(parallel_compiler);
+            KrtProjectKrtDestroy(project);
+            KrtConfigDestroy(config);
+            KrtPlatformDestroy(platform);
+            return 1;
         }
 
         char source_path[KRT_MAX_PATH];
@@ -1202,7 +1203,14 @@ static int build_project(const char* project_file, const char* output_path __att
     for (int i = 0; i < project->source_count; i++) {
         const char* src = project->sources[i];
         if (!src || src[0] == '\0') {
-            continue;
+            KrtError("项目源列表第 %d 项为空", i);
+            for (int j = 0; j < i; j++) {
+                free((void*)source_paths[j]);
+            }
+            free(source_paths);
+            KrtProjectKrtDestroy(project);
+            KrtPlatformDestroy(platform);
+            return 1;
         }
 
         char* source_path = (char*)malloc(KRT_MAX_PATH);
