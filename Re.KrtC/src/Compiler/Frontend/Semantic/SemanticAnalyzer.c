@@ -3440,7 +3440,8 @@ bool semantic_analyzer_analyze_statement(SemanticAnalyzer* analyzer, ASTNode* st
         return true;
 
     default:
-        return true;
+        semantic_analyzer_add_error_at(analyzer, stmt, "Unsupported statement type %d", (int)stmt->type);
+        return false;
     }
 }
 
@@ -3483,11 +3484,13 @@ FunctionAnalysisResult semantic_analyzer_analyze_function(SemanticAnalyzer* anal
         analyzer->type_arena, (KrtSourceType){.token = TOKEN_FN, .function = function_node->function_type});
     func_symbol->value_type = function_node->data.function_decl.return_type;
 
-    if (strcmp(func_name, "main") == 0) {
-        analyzer->has_entry_point = true;
+    if (analyzer->symbol_table == analyzer->global_symbol_table &&
+        !semantic_analyzer_get_current_class_context(analyzer) && strcmp(func_name, "main") == 0) {
         if (analyzer->entry_point_name) {
-            KRT_FREE(analyzer->entry_point_name);
+            semantic_analyzer_add_error_at(analyzer, function_node, "Multiple entry points named 'main'");
+            return result;
         }
+        analyzer->has_entry_point = true;
         analyzer->entry_point_name = KRT_STRDUP(func_name);
         func_symbol->is_entry_point = true;
     }
@@ -3507,8 +3510,11 @@ FunctionAnalysisResult semantic_analyzer_analyze_function(SemanticAnalyzer* anal
         SymbolEntry* param_symbol = symbol_table_define(analyzer->symbol_table, param_name, SYMBOL_VARIABLE, 0, NULL);
         if (param_symbol) {
             param_symbol->value_type = param_type;
-            param_symbol->source_type = function_node->function_type ? function_node->function_type->parameters[i]
-                                                                     : (KrtSourceType){.token = param_type};
+            if (function_node->function_type && i < function_node->function_type->parameter_count) {
+                param_symbol->source_type = function_node->function_type->parameters[i];
+            } else {
+                param_symbol->source_type = (KrtSourceType){.token = param_type};
+            }
             if (param_symbol->source_type.token == TOKEN_IDENTIFIER && param_symbol->source_type.type_name) {
                 param_symbol->class_type_name = KRT_STRDUP(param_symbol->source_type.type_name);
             }
@@ -3529,9 +3535,21 @@ FunctionAnalysisResult semantic_analyzer_analyze_function(SemanticAnalyzer* anal
                                                                       : function_node->data.static_function_decl.body;
 
     KrtSourceType saved_return = analyzer->current_return_type;
+    KrtTokenType declared_return = (function_node->type == AST_FUNCTION_DECLARATION)
+                                       ? function_node->data.function_decl.return_type
+                                       : function_node->data.static_function_decl.return_type;
     analyzer->current_return_type = function_node->function_type
                                         ? function_node->function_type->result
-                                        : (KrtSourceType){.token = function_node->data.function_decl.return_type};
+                                        : (KrtSourceType){.token = declared_return};
+    if (!body) {
+        /* Pure declaration: nothing to analyse, no control-flow requirement. */
+        analyzer->current_return_type = saved_return;
+        symbol_table_pop_scope(analyzer->symbol_table);
+        result.success = true;
+        result.param_count = param_count;
+        result.function_symbol = func_symbol;
+        return result;
+    }
     bool body_ok = semantic_analyzer_analyze_statement(analyzer, body);
     if (body_ok) {
         /*
@@ -3561,7 +3579,6 @@ FunctionAnalysisResult semantic_analyzer_analyze_function(SemanticAnalyzer* anal
     result.success = body_ok;
     result.param_count = param_count;
     result.function_symbol = func_symbol;
-    result.has_return_statement = true;
 
     return result;
 }

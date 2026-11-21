@@ -68,7 +68,6 @@ SemanticAnalysisResult* semantic_analyzer_analyze(SemanticAnalyzer* analyzer, AS
 typedef struct FunctionAnalysisResult {
     bool success;
     int param_count;
-    bool has_return_statement;
     SymbolEntry* function_symbol;
 } FunctionAnalysisResult;
 FunctionAnalysisResult semantic_analyzer_analyze_function(SemanticAnalyzer* analyzer, ASTNode* function_node);
