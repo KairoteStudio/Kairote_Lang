@@ -203,7 +203,13 @@ void ast_destroy_node(ASTNode* node) {
         break;
     case AST_CALL:
         if (node->data.call.name) {
-            KRT_FREE(node->data.call.name);
+            /* The semantic pass advances the pointer past "global::" in
+             * place; free the original allocation. */
+            char* allocated = node->data.call.name;
+            if (node->data.call.is_global_scope) {
+                allocated -= 8;
+            }
+            KRT_FREE(allocated);
         }
         free_ast_node_array(node->data.call.arguments, node->data.call.argument_count);
         free_string_array(node->data.call.argument_names, node->data.call.argument_count);

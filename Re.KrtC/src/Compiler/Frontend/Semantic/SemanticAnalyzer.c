@@ -1838,8 +1838,18 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
     case AST_CAST_EXPRESSION:
         return semantic_analyzer_analyze_expression(analyzer, expr->data.cast_expr.expression);
 
-    default:
+    case AST_THIS:
+    case AST_NULL:
         return true;
+
+    case AST_SIZEOF_EXPRESSION:
+        /* sizeof yields a machine word, not an int32; IR emits a 64-bit one. */
+        expr->resolved_type.token = KrtTokenIntegerType(64, true);
+        return true;
+
+    default:
+        semantic_analyzer_add_error_at(analyzer, expr, "Unsupported expression node kind %d", (int)expr->type);
+        return false;
     }
 }
 

@@ -258,7 +258,7 @@ bool semantic_analyzer_analyze_expression(SemanticAnalyzer* analyzer, ASTNode* e
                                   ? symbol_table_lookup_scope_chain(analyzer->symbol_table, expr->data.call.name)
                                   : NULL;
         KrtSourceType callee = symbol ? symbol->source_type : (KrtSourceType){0};
-        if (expr->data.call.object && !strcmp(expr->data.call.name, "__expr_call__")) {
+        if (expr->data.call.object && expr->data.call.name && !strcmp(expr->data.call.name, "__expr_call__")) {
             if (!semantic_analyzer_analyze_expression(analyzer, expr->data.call.object)) {
                 return false;
             }
