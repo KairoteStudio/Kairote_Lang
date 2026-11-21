@@ -513,11 +513,21 @@ static void emit_call(Arm64Context* ctx, KrtIRInst* inst) {
         return;
     }
     for (int i = 0; i < args; i++) {
-        KrtIRValue* arg = &inst->operands[i + 1];
-        emit_load_value(ctx, arg, i);
+        emit_load_value(ctx, &inst->operands[i + 1], i);
     }
-    add_fixup(ctx, 4, 0, -1, name);
-    emit_word(ctx, 0x94000000u); /* bl (patched) */
+    if (find_func_offset(ctx, name) != 0xFFFFFFFFu) {
+        add_fixup(ctx, 4, 0, -1, name);
+        emit_word(ctx, 0x94000000u); /* bl (patched) */
+    } else {
+        /* Defined in another object: leave a CALL26 relocation for the linker. */
+        int sym = kro_find_symbol(ctx->writer, name);
+        if (sym < 0) {
+            sym = kro_add_undefined_symbol(ctx->writer, name);
+        }
+        uint32_t reloc_offset = kro_get_code_offset(ctx->writer);
+        emit_word(ctx, 0x94000000u);
+        kro_add_reloc(ctx->writer, KRO_SEC_TEXT, reloc_offset, sym, KRO_RELOC_AARCH64_CALL26, 0);
+    }
     emit_store_result(ctx, inst, 0);
 }
 
