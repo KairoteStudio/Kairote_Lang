@@ -253,6 +253,7 @@ int KrtArkLinkLoadProjectLibraries(KrtArkLinkContext* ctx, KrtConfig* config) {
         if (lib_path) {
             fprintf(stderr, "[Project] Linking library: %s -> %s\n", proj->libraries[i], lib_path);
             if (KrtArkLinkAddObjectFile(ctx, lib_path) != 0) {
+                KrtError("Failed to add library object: %s", lib_path);
                 KRT_FREE(lib_path);
                 KrtProjectKrtDestroy(proj);
                 return -1;

@@ -25,7 +25,6 @@ typedef struct {
 
 void KrtTaskReport(const char* stage, const char* file, KrtTaskResult result, double duration, KrtTaskStats* stats);
 void KrtBuildSummaryReset(void);
-void KrtBuildSummaryAccumulate(const KrtTaskStats* stats, double duration, int failed);
 void KrtPrintBuildSummary(void);
 void KrtBuildSummarySetDuration(double duration);
 void KrtBuildSummarySetFailed(int failed);
