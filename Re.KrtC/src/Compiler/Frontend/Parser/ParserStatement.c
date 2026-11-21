@@ -595,6 +595,8 @@ static ASTNode* parser_parse_assignment_from_left(Parser* parser, ASTNode* left)
             node->data.assignment.name = KrtParserStrdup(parser, left->data.identifier_name);
             if (!node->data.assignment.name) {
                 parser_report_error(parser, line, col, "identifier assignment target has no name");
+                ast_destroy_node(node);
+                ast_destroy_node(left);
                 ast_destroy_node(value);
                 return NULL;
             }
@@ -603,6 +605,8 @@ static ASTNode* parser_parse_assignment_from_left(Parser* parser, ASTNode* left)
             node->data.compound_assignment.name = KrtParserStrdup(parser, left->data.identifier_name);
             if (!node->data.compound_assignment.name) {
                 parser_report_error(parser, line, col, "identifier assignment target has no name");
+                ast_destroy_node(node);
+                ast_destroy_node(left);
                 ast_destroy_node(value);
                 return NULL;
             }

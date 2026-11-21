@@ -1479,8 +1479,8 @@ static KrtIRValue irgen_expr_binary_operation(KrtIRBuilder* builder, ASTNode* ex
         return KrtIrLshift(builder, lhs, rhs);
     case TOKEN_RSHIFT:
         return KrtIrRshift(builder, lhs, rhs);
-    case TOKEN_POWER:
-        return KrtIrPow(builder, lhs, rhs);
+    /* `**` is only ever a double pointer dereference in the grammar; there is
+     * no binary power operator, so no POWER node is produced here. */
     case TOKEN_LESS:
         if (floating) {
             return KrtIrCompare(builder, KRT_IR_FLT, lhs, rhs);

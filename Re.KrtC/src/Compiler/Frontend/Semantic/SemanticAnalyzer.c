@@ -1257,14 +1257,26 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
 
     case AST_UNSAFE_CALL: {
         int old_mode = analyzer->is_unsafe_mode;
+        int old_mem = analyzer->unsafe_mem;
         analyzer->is_unsafe_mode = 1;
+        for (int i = 0; i < expr->data.unsafe_call.permission_count; i++) {
+            if (expr->data.unsafe_call.permissions[i] &&
+                strcmp(expr->data.unsafe_call.permissions[i], "krt.mem") == 0) {
+                analyzer->unsafe_mem = 1;
+            }
+        }
         bool result = semantic_analyzer_analyze_expression(analyzer, expr->data.unsafe_call.expression);
         analyzer->is_unsafe_mode = old_mode;
+        analyzer->unsafe_mem = old_mem;
         return result;
     }
 
     case AST_BINARY_OPERATION: {
         ASTNode* left = expr->data.binary_op.left;
+        if (!left || !expr->data.binary_op.right) {
+            semantic_analyzer_add_error_at(analyzer, expr, "Binary operation is missing an operand");
+            return false;
+        }
         if (expr->data.binary_op.operator == TOKEN_ASSIGN && left->type != AST_IDENTIFIER &&
             left->type != AST_ARRAY_ACCESS && left->type != AST_MEMBER_ACCESS &&
             left->type != AST_POINTER_DEREFERENCE) {
@@ -1326,8 +1338,21 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
         return left_ok && right_ok;
     }
 
-    case AST_UNARY_OPERATION:
-        return semantic_analyzer_analyze_expression(analyzer, expr->data.unary_op.operand);
+    case AST_UNARY_OPERATION: {
+        ASTNode* operand = expr->data.unary_op.operand;
+        if (!operand) {
+            semantic_analyzer_add_error_at(analyzer, expr, "Unary operation is missing its operand");
+            return false;
+        }
+        KrtTokenType op = expr->data.unary_op.operator;
+        KrtTokenType operand_type = semantic_analyzer_infer_expression_type(analyzer, operand);
+        if ((op == TOKEN_MINUS || op == TOKEN_PLUS) &&
+            (operand_type == TOKEN_STRING || operand_type == TOKEN_TYPE_STRING || operand_type == TOKEN_VOID)) {
+            semantic_analyzer_add_error_at(analyzer, expr, "Arithmetic unary operator cannot be applied here");
+            return false;
+        }
+        return semantic_analyzer_analyze_expression(analyzer, operand);
+    }
 
     case AST_ARRAY_LITERAL:
         for (int i = 0; i < expr->data.array_literal.element_count; i++) {
