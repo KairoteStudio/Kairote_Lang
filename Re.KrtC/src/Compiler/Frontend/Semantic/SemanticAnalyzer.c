@@ -2195,6 +2195,10 @@ bool semantic_analyzer_analyze_variable_decl(SemanticAnalyzer* analyzer, ASTNode
     if (!type.token) {
         type.token = var_decl->data.variable_decl.type;
     }
+    if (type.token == TOKEN_VOID || var_decl->data.variable_decl.type == TOKEN_VOID) {
+        semantic_analyzer_add_error_at(analyzer, var_decl, "Cannot declare a variable of type void");
+        return false;
+    }
     if (var_decl->data.variable_decl.value) {
         ASTNode* value = var_decl->data.variable_decl.value;
         if (!semantic_analyzer_analyze_expression(analyzer, value)) {
