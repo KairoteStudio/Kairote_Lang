@@ -142,6 +142,8 @@ void* KrtArenaRealloc(KrtArena* arena, void* ptr, size_t old_size, size_t new_si
     if (!ptr) {
         return KrtArenaAlloc(arena, new_size);
     }
+    /* Shrinking is a no-op by design: arena blocks are never split, so the
+     * caller keeps the original (larger) allocation. */
     if (new_size <= old_size) {
         return ptr;
     }

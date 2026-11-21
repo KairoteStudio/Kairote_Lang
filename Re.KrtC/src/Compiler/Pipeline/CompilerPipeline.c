@@ -566,6 +566,11 @@ int KrtCompilePipelineExecute(KrtCompilePipeline* pipeline, const char* input_fi
     if (!pipeline || !input_file || !output_file) {
         return 0;
     }
+    if (!pipeline->config) {
+        snprintf(pipeline->error_message, sizeof(pipeline->error_message), "编译流水线缺少配置");
+        pipeline->success = 0;
+        return 0;
+    }
 
     clock_t total_start = clock();
 
