@@ -189,6 +189,15 @@ void* KrtSafeMalloc(size_t size, const char* file, int line) {
         user_ptr = (char*)actual_ptr + KRT_CANARY_PREFIX;
     }
 
+    /* malloc can hand back a chunk that a previous KrtSafeFree poisoned with
+     * 0xDD. Clear the user region on allocation: otherwise a reused block that
+     * is never written still reads as all-0xDD and is misreported as
+     * USE_AFTER_FREE when it is later freed (the block is live and tracked, so
+     * the free-time poison check cannot tell it apart from a stale pointer). */
+    if (g_memory_safety->poison_enabled) {
+        memset(user_ptr, 0, size);
+    }
+
     block->actual_ptr = actual_ptr;
     block->user_ptr = user_ptr;
     block->user_size = size;
