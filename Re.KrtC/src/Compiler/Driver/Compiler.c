@@ -17,6 +17,7 @@ KrtCompiler* KrtCompilerCreate(const char* output_filename, KrtTargetPlatform ta
 
     KrtCompiler* compiler = (KrtCompiler*)KRT_MALLOC(sizeof(KrtCompiler));
     if (!compiler) {
+        KrtError("Failed to allocate compiler context");
         return NULL;
     }
 
@@ -207,10 +208,6 @@ bool KrtCompilerCompile(KrtCompiler* compiler, ASTNode* ast, void* semantic_anal
     case KRT_TARGET_X86_ASM:
         KrtX86Generate(compiler->output_file, ir_builder->module);
         break;
-    case KRT_TARGET_WASM:
-        KrtError("WebAssembly backend is not implemented");
-        KrtIrBuilderDestroy(ir_builder);
-        return false;
     case KRT_TARGET_KRO_OBJ:
     case KRT_TARGET_EXE_PLATFORM: {
         KrtKrtGenerate(compiler->output_file, compiler->output_filename, ir_builder->module);
