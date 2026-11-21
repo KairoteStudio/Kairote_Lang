@@ -123,6 +123,8 @@ int KrtArkLinkAddObjectFile(KrtArkLinkContext* ctx, const char* obj_path) {
     ArkLinkResult result = arklink_session_add_input(ctx->session, obj_path);
     if (result != ARK_LINK_OK) {
         KrtError("Failed to add object file: %s", obj_path);
+        KRT_FREE(ctx->obj_files[ctx->obj_count]);
+        ctx->obj_files[ctx->obj_count] = NULL;
         return -1;
     }
 

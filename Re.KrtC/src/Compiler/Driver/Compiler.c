@@ -162,6 +162,7 @@ bool KrtCompilerCompile(KrtCompiler* compiler, ASTNode* ast, void* semantic_anal
 
     KrtIRBuilder* ir_builder = KrtIrBuilderCreate();
     if (!ir_builder) {
+        KrtError("Failed to create IR builder");
         return false;
     }
 
