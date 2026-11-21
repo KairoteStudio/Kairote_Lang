@@ -387,13 +387,13 @@ void ark_reloc_apply_elf(uint8_t* data, size_t size, const ArkRelocProcessor* pr
     case ARK_RELOC_APPLY_AARCH64_ADRP: {
         uint64_t target_page = (proc->symbol_value + (uint64_t)proc->addend) & ~0xFFFu;
         uint64_t pc_page = p_vaddr & ~0xFFFu;
-        int64_t imm = ((int64_t)(target_page - pc_page)) >> 12;
+        int64_t imm = ((int64_t)target_page - (int64_t)pc_page) >> 12;
         uint32_t insn = 0;
         if (proc->offset + 4 <= size) {
             memcpy(&insn, data + proc->offset, 4);
         }
-        uint32_t immlo = (uint32_t)((imm >> 2) & 0x3u);
-        uint32_t immhi = (uint32_t)((imm >> 4) & 0x7FFFFu);
+        uint32_t immlo = (uint32_t)(imm & 0x3u);
+        uint32_t immhi = (uint32_t)((imm >> 2) & 0x7FFFFu);
         insn &= ~((0x7FFFFu << 5) | (0x3u << 29));
         insn |= (immhi << 5) | (immlo << 29);
         memcpy(data + proc->offset, &insn, 4);
