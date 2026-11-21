@@ -985,14 +985,17 @@ static bool source_type_equal(KrtSourceType a, KrtSourceType b);
 
 static KrtTokenType semantic_mangled_parameter_type(const char* suffix, int length) {
     if (length > 1) {
-        int bits = 0;
+        long bits = 0;
         for (int i = 1; i < length - 1; i++) {
-            if (bits > 128) {
+            if (suffix[i] < '0' || suffix[i] > '9') {
                 return TOKEN_EOF;
             }
-            bits = bits * 10 + suffix[i] - '0';
+            bits = bits * 10 + (suffix[i] - '0');
+            if (bits == 0 || bits > 128) {
+                return TOKEN_EOF;
+            }
         }
-        return KrtTokenIntegerType(bits, suffix[0] == 'u');
+        return KrtTokenIntegerType((int)bits, suffix[0] == 'u');
     }
     switch (*suffix) {
     case 'c':
@@ -1039,8 +1042,9 @@ static bool semantic_parameter_score(SemanticAnalyzer* analyzer, const SymbolEnt
         }
         KrtTokenType source = semantic_analyzer_infer_expression_type(analyzer, args[k]);
         KrtFunctionType* signature = method->source_type.function;
-        KrtSourceType parameter =
-            signature && signature->parameter_count == argc ? signature->parameters[k] : (KrtSourceType){0};
+        KrtSourceType parameter = (signature && signature->parameters && signature->parameter_count == argc)
+                                      ? signature->parameters[k]
+                                      : (KrtSourceType){0};
         if (parameter.is_ref) {
             parameter.is_ref = false;
             if (!source_type_equal(parameter, args[k]->resolved_type)) {
@@ -1116,47 +1120,66 @@ static SymbolEntry* semantic_lookup_method_by_arity(SemanticAnalyzer* analyzer, 
     if (!nested || !class_name || !method_name) {
         return NULL;
     }
-    char prefix[512];
-    snprintf(prefix, sizeof(prefix), "_ZN%u%s%u%sE", (unsigned)strlen(class_name), class_name,
-             (unsigned)strlen(method_name), method_name);
+    char* prefix = name_mangle_class_member(NULL, class_name, method_name);
+    if (!prefix) {
+        return NULL;
+    }
     size_t plen = strlen(prefix);
 
     SymbolEntry* best = NULL;
     KrtMethodScore best_score = {INT_MAX, INT_MAX, UINT64_MAX};
+    bool ambiguous = false;
 
     for (SymbolScope* sc = nested->current_scope; sc; sc = sc->parent) {
         for (SymbolEntry* e = sc->symbols; e; e = e->scope_next) {
-            if (!e || !e->name) {
+            if (!e || !e->name || e == best) {
                 continue;
             }
             if (strncmp(e->name, prefix, plen) != 0) {
                 continue;
             }
             KrtMethodScore score;
-            if (semantic_parameter_score(analyzer, e, e->name + plen, argc, args, &score) &&
-                semantic_method_score_better(score, best_score)) {
+            if (!semantic_parameter_score(analyzer, e, e->name + plen, argc, args, &score)) {
+                continue;
+            }
+            if (semantic_method_score_better(score, best_score)) {
                 best_score = score;
                 best = e;
+            } else if (best && score.worst_conversion == best_score.worst_conversion &&
+                       score.conversion_count == best_score.conversion_count &&
+                       score.width_distance == best_score.width_distance) {
+                ambiguous = true;
             }
         }
     }
     if (nested->hash_table) {
         for (int b = 0; b < nested->hash_size; b++) {
             for (SymbolEntry* e = nested->hash_table[b]; e; e = e->next) {
-                if (!e || !e->name) {
+                if (!e || !e->name || e == best) {
                     continue;
                 }
                 if (strncmp(e->name, prefix, plen) != 0) {
                     continue;
                 }
                 KrtMethodScore score;
-                if (semantic_parameter_score(analyzer, e, e->name + plen, argc, args, &score) &&
-                    semantic_method_score_better(score, best_score)) {
+                if (!semantic_parameter_score(analyzer, e, e->name + plen, argc, args, &score)) {
+                    continue;
+                }
+                if (semantic_method_score_better(score, best_score)) {
                     best_score = score;
                     best = e;
+                } else if (best && score.worst_conversion == best_score.worst_conversion &&
+                           score.conversion_count == best_score.conversion_count &&
+                           score.width_distance == best_score.width_distance) {
+                    ambiguous = true;
                 }
             }
         }
+    }
+
+    KRT_FREE(prefix);
+    if (ambiguous && best) {
+        semantic_analyzer_add_error(analyzer, "Ambiguous overload: %s::%s", class_name, method_name);
     }
     return best;
 }
@@ -1210,6 +1233,10 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
 
     case AST_IDENTIFIER: {
         const char* var_name = expr->data.identifier_name;
+        if (!var_name) {
+            semantic_analyzer_add_error_at(analyzer, expr, "Identifier is missing its name");
+            return false;
+        }
 
         if (!analyzer->is_unsafe_mode && var_name[0] == '_' && strncmp(var_name, "__lambda_", 9) != 0) {
             semantic_analyzer_add_error_at(
