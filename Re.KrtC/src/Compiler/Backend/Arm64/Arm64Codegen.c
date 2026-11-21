@@ -1263,6 +1263,38 @@ void KrtArm64Generate(FILE* output_file, const char* output_filename, KrtIRModul
         }
     }
 
+    /* Materialise global/const storage in .data and give each one a symbol. */
+    if (module->global_count > 0 && module->globals) {
+        for (int i = 0; i < module->global_count; i++) {
+            KrtIRGlobal* global = &module->globals[i];
+            if (!global || !global->name) {
+                continue;
+            }
+            uint32_t offset = kro_get_data_offset(ctx.writer);
+            int bits = KrtTokenIntegerBits(global->type);
+            int size = bits > 0 ? bits / 8 : (int)sizeof(KrtUInt128);
+            uint8_t buffer[16];
+            memset(buffer, 0, sizeof(buffer));
+            if (global->type == TOKEN_FLOAT32) {
+                float v = (float)(global->has_initializer ? global->init_number : 0.0);
+                memcpy(buffer, &v, sizeof(v));
+            } else if (global->type == TOKEN_FLOAT64) {
+                double v = global->has_initializer ? global->init_number : 0.0;
+                memcpy(buffer, &v, sizeof(v));
+            } else {
+                KrtUInt128 v = global->is_integer_initializer
+                                    ? global->init_integer
+                                    : (global->has_initializer ? (KrtUInt128)(int64_t)global->init_number : 0);
+                v = KrtIntegerNormalize(v, bits, KrtTokenIsUnsigned(global->type));
+                memcpy(buffer, &v, sizeof(v));
+            }
+            if (size > 0) {
+                kro_write_data(ctx.writer, buffer, (uint32_t)size);
+            }
+            kro_add_symbol(ctx.writer, global->name, KRO_SYM_OBJECT, KRO_BIND_GLOBAL, KRO_SEC_DATA, offset);
+        }
+    }
+
     if (func_count == 0) {
         kro_write_file(ctx.writer, ctx.output_filename);
         KRT_FREE(ctx.string_const_sym_indices);
