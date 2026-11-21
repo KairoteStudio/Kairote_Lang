@@ -1354,6 +1354,17 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
             if (!semantic_analyzer_analyze_expression(analyzer, expr->data.new_array_expr.size)) {
                 return false;
             }
+            ASTNode* size = expr->data.new_array_expr.size;
+            if (size && size->type == AST_NUMBER && size->is_integer_literal &&
+                (int64_t)size->integer_value <= 0) {
+                semantic_analyzer_add_error_at(analyzer, size, "Array size must be greater than zero");
+                return false;
+            }
+            if (size && size->type == AST_UNARY_OPERATION &&
+                size->data.unary_op.operator == TOKEN_MINUS) {
+                semantic_analyzer_add_error_at(analyzer, size, "Array size must be greater than zero");
+                return false;
+            }
             return true;
         }
 
