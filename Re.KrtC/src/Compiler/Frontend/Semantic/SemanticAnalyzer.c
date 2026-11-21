@@ -168,7 +168,7 @@ void semantic_analyzer_set_pipeline(SemanticAnalyzer* analyzer, void* pipeline) 
 
 bool semantic_analyzer_register_imported_file(SemanticAnalyzer* analyzer, const char* file_path) {
     if (!analyzer || !file_path || !analyzer->pipeline) {
-        return analyzer && file_path;
+        return false;
     }
 
     return KrtCompilePipelineAddImportedFile(analyzer->pipeline, file_path);
@@ -230,13 +230,17 @@ static void collect_exports_from_node(SemanticAnalyzer* analyzer, ASTNode* node)
     }
 }
 
-void semantic_analyzer_collect_project_namespaces(SemanticAnalyzer* analyzer, ASTNode* node) {
+static void collect_project_namespaces_recursive(SemanticAnalyzer* analyzer, ASTNode* node, int depth) {
     if (!analyzer || !node) {
+        return;
+    }
+    if (depth > 64) {
+        analyzer->project_namespace_collection_failed = true;
         return;
     }
     if (node->type == AST_PROGRAM || node->type == AST_BLOCK) {
         for (int i = 0; i < node->data.block.statement_count; i++) {
-            semantic_analyzer_collect_project_namespaces(analyzer, node->data.block.statements[i]);
+            collect_project_namespaces_recursive(analyzer, node->data.block.statements[i], depth + 1);
         }
         return;
     }
@@ -276,7 +280,11 @@ void semantic_analyzer_collect_project_namespaces(SemanticAnalyzer* analyzer, AS
     }
 
 collect_children:
-    semantic_analyzer_collect_project_namespaces(analyzer, node->data.namespace_decl.body);
+    collect_project_namespaces_recursive(analyzer, node->data.namespace_decl.body, depth + 1);
+}
+
+void semantic_analyzer_collect_project_namespaces(SemanticAnalyzer* analyzer, ASTNode* node) {
+    collect_project_namespaces_recursive(analyzer, node, 0);
 }
 
 void semantic_analyzer_collect_exports(SemanticAnalyzer* analyzer, ASTNode* ast) {
@@ -301,7 +309,10 @@ static void semantic_analyzer_set_project_libs_path(SemanticAnalyzer* analyzer) 
     }
 
     char project_root[PATH_MAX];
-    snprintf(project_root, sizeof(project_root), "%s", analyzer->input_file_path);
+    if (snprintf(project_root, sizeof(project_root), "%s", analyzer->input_file_path) >= (int)sizeof(project_root)) {
+        KrtError("源文件路径过长: %s", analyzer->input_file_path);
+        return;
+    }
     char* file_name = strrchr(project_root, '/');
     if (!file_name) {
         snprintf(project_root, sizeof(project_root), ".");
@@ -388,11 +399,16 @@ void semantic_analyzer_set_input_file(SemanticAnalyzer* analyzer, const char* fi
 
     if (file_path) {
         char abs_path[PATH_MAX];
+#ifdef _WIN32
         if (file_path[0] == '/' || file_path[0] == '\\') {
+#else
+        if (file_path[0] == '/') {
+#endif
             analyzer->input_file_path = KRT_STRDUP(file_path);
         } else if (realpath(file_path, abs_path) != NULL) {
             analyzer->input_file_path = KRT_STRDUP(abs_path);
         } else {
+            KrtError("无法解析源文件路径: %s", file_path);
             char cwd[PATH_MAX];
             if (getcwd(cwd, sizeof(cwd)) != NULL) {
                 int length = snprintf(abs_path, sizeof(abs_path), "%s/%s", cwd, file_path);
@@ -407,23 +423,34 @@ void semantic_analyzer_set_input_file(SemanticAnalyzer* analyzer, const char* fi
     }
 }
 
-void semantic_analyzer_push_class_context(SemanticAnalyzer* analyzer, const char* class_name) {
+bool semantic_analyzer_push_class_context(SemanticAnalyzer* analyzer, const char* class_name) {
     if (!analyzer || !class_name) {
-        return;
+        return false;
     }
 
     if (analyzer->class_stack_size >= analyzer->class_stack_capacity) {
+        if (analyzer->class_stack_capacity > INT_MAX / 2 ||
+            (size_t)analyzer->class_stack_capacity * 2 > SIZE_MAX / sizeof(*analyzer->class_name_stack)) {
+            KrtError("类上下文栈容量溢出");
+            return false;
+        }
         int new_capacity = analyzer->class_stack_capacity * 2;
-        char** new_stack = (char**)KRT_REALLOC(analyzer->class_name_stack, sizeof(char*) * new_capacity);
+        char** new_stack = (char**)KRT_REALLOC(analyzer->class_name_stack, sizeof(char*) * (size_t)new_capacity);
         if (!new_stack) {
-            return;
+            KrtError("类上下文栈分配失败");
+            return false;
         }
         analyzer->class_name_stack = new_stack;
         analyzer->class_stack_capacity = new_capacity;
     }
 
-    analyzer->class_name_stack[analyzer->class_stack_size] = KRT_STRDUP(class_name);
-    analyzer->class_stack_size++;
+    char* copy = KRT_STRDUP(class_name);
+    if (!copy) {
+        KrtError("类上下文名称分配失败");
+        return false;
+    }
+    analyzer->class_name_stack[analyzer->class_stack_size++] = copy;
+    return true;
 }
 
 void semantic_analyzer_pop_class_context(SemanticAnalyzer* analyzer) {
@@ -2732,7 +2759,11 @@ static bool semantic_analyze_stmt_class_declaration(SemanticAnalyzer* analyzer, 
         self_class_symbol->nested_table = class_sym->nested_table;
     }
 
-    semantic_analyzer_push_class_context(analyzer, class_name);
+    if (!semantic_analyzer_push_class_context(analyzer, class_name)) {
+        semantic_analyzer_add_error_at(analyzer, stmt, "类上下文入栈失败: %s", class_name);
+        analyzer->symbol_table = prev_table;
+        return false;
+    }
 
     bool body_ok = true;
     ASTNode* body_node = stmt->data.class_decl.body;

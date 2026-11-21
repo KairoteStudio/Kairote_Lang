@@ -98,7 +98,7 @@ void semantic_analyzer_add_warning(SemanticAnalyzer* analyzer, const char* forma
     __attribute__((format(printf, 2, 3)));
 const char* semantic_analyzer_get_symbol_type_name(SymbolType type);
 bool semantic_analyzer_is_valid_symbol_name(const char* name);
-void semantic_analyzer_push_class_context(SemanticAnalyzer* analyzer, const char* class_name);
+bool semantic_analyzer_push_class_context(SemanticAnalyzer* analyzer, const char* class_name);
 void semantic_analyzer_pop_class_context(SemanticAnalyzer* analyzer);
 void semantic_analyzer_set_input_file(SemanticAnalyzer* analyzer, const char* file_path);
 void semantic_analyzer_set_pipeline(SemanticAnalyzer* analyzer, void* pipeline);
