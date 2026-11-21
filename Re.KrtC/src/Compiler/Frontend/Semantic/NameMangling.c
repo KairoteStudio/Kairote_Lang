@@ -19,7 +19,7 @@ static int digit_count(int n) {
 const char* KrtMangleTypeName(KrtTokenType type) {
     switch (type) {
     case TOKEN_INT8:
-        return "c";
+        return "h";
     case TOKEN_INT16:
         return "s";
     case TOKEN_INT32:
@@ -43,8 +43,9 @@ const char* KrtMangleTypeName(KrtTokenType type) {
     case TOKEN_CHAR:
         return "c";
     case TOKEN_STRING:
+        return "t";
     case TOKEN_TYPE_STRING:
-        return "r";
+        return "T";
     case TOKEN_VOID:
         return "v";
     default:
@@ -130,7 +131,7 @@ char* name_mangle_constructor(const char* class_name, int parameter_count) {
         return NULL;
     }
 
-    snprintf(mangled, total_len, "%s__constructor_%s", class_name, count_str);
+    snprintf(mangled, total_len, "%s__0constructor_%s", class_name, count_str);
     return mangled;
 }
 
@@ -333,6 +334,16 @@ int name_demangle(const char* mangled_name, char*** out_names, int* out_count) {
 
         if (length <= 0 || !*ptr) {
 
+            name_demangle_free(*out_names, *out_count);
+            *out_names = NULL;
+            *out_count = 0;
+            return 0;
+        }
+
+        /* The length prefix is attacker-controlled; never read past the end of
+         * the mangled string. */
+        size_t remaining = strlen(ptr);
+        if ((size_t)length > remaining) {
             name_demangle_free(*out_names, *out_count);
             *out_names = NULL;
             *out_count = 0;
