@@ -441,6 +441,16 @@ static void sanitize_label_name(const char* name, char* out, size_t out_size) {
     out[j] = '\0';
 }
 
+static int emit_operand_is_unsigned(KrtIRValue* lhs, KrtIRValue* rhs) {
+    if (lhs && KrtTokenIntegerBits(lhs->value_type) > 0) {
+        return KrtTokenIsUnsigned(lhs->value_type);
+    }
+    if (rhs && KrtTokenIntegerBits(rhs->value_type) > 0) {
+        return KrtTokenIsUnsigned(rhs->value_type);
+    }
+    return 0;
+}
+
 static void emit_binary_op(Emitter* em, KrtIROpcode op, KrtIRValue* lhs, KrtIRValue* rhs, KrtIRValue* result) {
     if (!em || !lhs || !rhs || !result) {
         return;
@@ -465,14 +475,24 @@ static void emit_binary_op(Emitter* em, KrtIROpcode op, KrtIRValue* lhs, KrtIRVa
     case KRT_IR_DIV:
         fprintf(em->output, "    test r8, r8\n");
         fprintf(em->output, "    jz .Ldiv_by_zero_%s\n", safe_name);
-        fprintf(em->output, "    xor rdx, rdx\n");
-        fprintf(em->output, "    idiv r8\n");
+        if (emit_operand_is_unsigned(lhs, rhs)) {
+            fprintf(em->output, "    xor rdx, rdx\n");
+            fprintf(em->output, "    div r8\n");
+        } else {
+            fprintf(em->output, "    cqo\n");
+            fprintf(em->output, "    idiv r8\n");
+        }
         break;
     case KRT_IR_MOD:
         fprintf(em->output, "    test r8, r8\n");
         fprintf(em->output, "    jz .Ldiv_by_zero_%s\n", safe_name);
-        fprintf(em->output, "    xor rdx, rdx\n");
-        fprintf(em->output, "    idiv r8\n");
+        if (emit_operand_is_unsigned(lhs, rhs)) {
+            fprintf(em->output, "    xor rdx, rdx\n");
+            fprintf(em->output, "    div r8\n");
+        } else {
+            fprintf(em->output, "    cqo\n");
+            fprintf(em->output, "    idiv r8\n");
+        }
         fprintf(em->output, "    mov rax, rdx\n");
         break;
     case KRT_IR_AND:
@@ -501,6 +521,7 @@ static void emit_compare(Emitter* em, KrtIROpcode op, KrtIRValue* lhs, KrtIRValu
 
     fprintf(em->output, "    cmp rax, r9\n");
 
+    int is_unsigned = emit_operand_is_unsigned(lhs, rhs);
     switch (op) {
     case KRT_IR_EQ:
         fprintf(em->output, "    sete al\n");
@@ -509,16 +530,16 @@ static void emit_compare(Emitter* em, KrtIROpcode op, KrtIRValue* lhs, KrtIRValu
         fprintf(em->output, "    setne al\n");
         break;
     case KRT_IR_LT:
-        fprintf(em->output, "    setl al\n");
+        fprintf(em->output, is_unsigned ? "    setb al\n" : "    setl al\n");
         break;
     case KRT_IR_LE:
-        fprintf(em->output, "    setle al\n");
+        fprintf(em->output, is_unsigned ? "    setbe al\n" : "    setle al\n");
         break;
     case KRT_IR_GT:
-        fprintf(em->output, "    setg al\n");
+        fprintf(em->output, is_unsigned ? "    seta al\n" : "    setg al\n");
         break;
     case KRT_IR_GE:
-        fprintf(em->output, "    setge al\n");
+        fprintf(em->output, is_unsigned ? "    setae al\n" : "    setge al\n");
         break;
     default:
         break;
