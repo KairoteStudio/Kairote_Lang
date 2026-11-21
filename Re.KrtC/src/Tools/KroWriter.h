@@ -84,6 +84,8 @@ KROWriter* kro_writer_create(uint32_t arch);
 void kro_writer_destroy(KROWriter* writer);
 
 uint32_t kro_write_code(KROWriter* writer, const void* data, uint32_t size);
+/* Overwrite already-emitted code (used to patch jump targets). */
+bool kro_patch_code(KROWriter* writer, uint32_t offset, const void* data, uint32_t size);
 uint32_t kro_write_data(KROWriter* writer, const void* data, uint32_t size);
 uint32_t kro_write_rodata(KROWriter* writer, const void* data, uint32_t size);
 

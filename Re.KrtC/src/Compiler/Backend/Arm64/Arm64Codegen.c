@@ -4,19 +4,34 @@
 #include <string.h>
 
 /*
- * AArch64 (little endian) native backend, stage 1.
+ * AArch64 (little endian) native backend, stage 2.
  *
- * Values live in 8-byte stack slots addressed off sp, and are shuttled through
- * x0/x1.  That keeps instruction selection and the AAPCS64 frame layout correct
- * without a register allocator; a later stage can replace the slot traffic with
- * real register allocation.
+ * Values live in 8-byte stack slots addressed off sp and are shuttled through
+ * x0/x1, so no register allocator is needed yet.  Control flow is emitted with
+ * a fixup list: block starts are recorded as they are laid out and jumps are
+ * patched once every block has an offset.
  */
 
 #define ARM64_MAX_LOCALS 1024
 #define ARM64_MAX_TEMPS 8192
+#define ARM64_MAX_BLOCKS 4096
+#define ARM64_MAX_FIXUPS 8192
+#define ARM64_MAX_FUNCS 4096
 #define ARM64_SLOT_SIZE 8
 #define ARM64_NUM_ARG_REGS 8
 #define ARM64_NOP 0xD503201Fu
+
+/* condition codes */
+#define COND_EQ 0
+#define COND_NE 1
+#define COND_HS 2
+#define COND_LO 3
+#define COND_HI 8
+#define COND_LS 9
+#define COND_GE 10
+#define COND_LT 11
+#define COND_GT 12
+#define COND_LE 13
 
 typedef struct {
     char* name;
@@ -24,10 +39,19 @@ typedef struct {
 } Arm64Local;
 
 typedef struct {
+    uint32_t code_offset;
+    uint32_t kind; /* 0 b, 1 b.cond, 2 cbz, 3 cbnz, 4 bl */
+    uint32_t cond;
+    int block_id;
+    const char* func_name;
+} Arm64Fixup;
+
+typedef struct {
     KROWriter* writer;
     char output_filename[256];
     KrtIRModule* module;
     KrtIRFunction* current_function;
+    KrtIRBasicBlock* current_block;
     int optimization_level;
     int slot_count;
     int frame_slots;
@@ -35,6 +59,14 @@ typedef struct {
     int local_count;
     int temp_slot_of[ARM64_MAX_TEMPS];
     int temp_count;
+    uint32_t block_offset[ARM64_MAX_BLOCKS];
+    Arm64Fixup fixups[ARM64_MAX_FIXUPS];
+    int fixup_count;
+    struct {
+        const char* name;
+        uint32_t offset;
+    } funcs[ARM64_MAX_FUNCS];
+    int func_count;
     uint32_t entry_func_offset;
     bool has_entry_func;
 } Arm64Context;
@@ -44,10 +76,9 @@ typedef struct {
 /* ------------------------------------------------------------------ */
 
 static void emit_word(Arm64Context* ctx, uint32_t word) {
-    if (!ctx || !ctx->writer) {
-        return;
+    if (ctx && ctx->writer) {
+        kro_write_code(ctx->writer, &word, 4);
     }
-    kro_write_code(ctx->writer, &word, 4);
 }
 
 static uint32_t encode_movz(int rd, uint16_t imm, int shift, bool is_64) {
@@ -92,6 +123,32 @@ static void emit_store_to_slot(Arm64Context* ctx, int reg, int slot, bool is_64)
 
 static void emit_binary_reg(Arm64Context* ctx, uint32_t base, int rd, int rn, int rm) {
     emit_word(ctx, base | ((uint32_t)(rm & 0x1F) << 16) | ((uint32_t)(rn & 0x1F) << 5) | (uint32_t)(rd & 0x1F));
+}
+
+static void emit_sp_adjust(Arm64Context* ctx, uint32_t delta, bool subtract) {
+    while (delta > 0) {
+        uint32_t step = delta > 4095 ? 4095u : delta;
+        uint32_t base = subtract ? 0xD1000000u : 0x91000000u;
+        emit_word(ctx, base | (step << 10) | (31u << 5) | 31u);
+        delta -= step;
+    }
+}
+
+static void emit_extend(Arm64Context* ctx, int bits, bool is_unsigned, bool is_64, int src, int dst) {
+    uint32_t base;
+    if (bits <= 8) {
+        base = is_unsigned ? 0x53001C00u : 0x13001C00u; /* uxtb / sxtb */
+    } else if (bits <= 16) {
+        base = is_unsigned ? 0x53003C00u : 0x13003C00u; /* uxth / sxth */
+    } else if (bits <= 32) {
+        if (is_unsigned || !is_64) {
+            return; /* writing Wd already zero-extends */
+        }
+        base = 0x93407C00u; /* sxtw */
+    } else {
+        return;
+    }
+    emit_word(ctx, base | ((uint32_t)(src & 0x1F) << 5) | (uint32_t)(dst & 0x1F));
 }
 
 /* ------------------------------------------------------------------ */
@@ -154,7 +211,6 @@ static void plan_frame(Arm64Context* ctx, KrtIRFunction* func) {
     for (int i = 0; i < ARM64_MAX_TEMPS; i++) {
         ctx->temp_slot_of[i] = -1;
     }
-    /* Parameters occupy the first slots so the prologue can spill x0..x7. */
     for (int i = 0; i < func->param_count; i++) {
         alloc_slot(ctx);
     }
@@ -172,6 +228,72 @@ static void plan_frame(Arm64Context* ctx, KrtIRFunction* func) {
 static int frame_size(Arm64Context* ctx) {
     int bytes = ctx->frame_slots * ARM64_SLOT_SIZE;
     return (bytes + 15) & ~15;
+}
+
+/* ------------------------------------------------------------------ */
+/* Block labels and fixups                                             */
+/* ------------------------------------------------------------------ */
+
+static void record_block_start(Arm64Context* ctx, KrtIRBasicBlock* block) {
+    if (!block || block->id < 0 || block->id >= ARM64_MAX_BLOCKS) {
+        return;
+    }
+    ctx->block_offset[block->id] = kro_get_code_offset(ctx->writer);
+}
+
+static void add_fixup(Arm64Context* ctx, uint32_t kind, uint32_t cond, int block_id, const char* func_name) {
+    if (ctx->fixup_count >= ARM64_MAX_FIXUPS) {
+        return;
+    }
+    Arm64Fixup* fix = &ctx->fixups[ctx->fixup_count++];
+    fix->code_offset = kro_get_code_offset(ctx->writer);
+    fix->kind = kind;
+    fix->cond = cond;
+    fix->block_id = block_id;
+    fix->func_name = func_name;
+}
+
+static uint32_t find_func_offset(Arm64Context* ctx, const char* name) {
+    for (int i = 0; i < ctx->func_count; i++) {
+        if (ctx->funcs[i].name && strcmp(ctx->funcs[i].name, name) == 0) {
+            return ctx->funcs[i].offset;
+        }
+    }
+    return 0xFFFFFFFFu;
+}
+
+static void patch_fixups(Arm64Context* ctx) {
+    for (int i = 0; i < ctx->fixup_count; i++) {
+        Arm64Fixup* fix = &ctx->fixups[i];
+        uint32_t target;
+        if (fix->func_name) {
+            target = find_func_offset(ctx, fix->func_name);
+        } else if (fix->block_id >= 0 && fix->block_id < ARM64_MAX_BLOCKS) {
+            target = ctx->block_offset[fix->block_id];
+        } else {
+            continue;
+        }
+        int64_t distance = (int64_t)target - (int64_t)fix->code_offset;
+        uint32_t word;
+        switch (fix->kind) {
+        case 0: /* b */
+            word = 0x14000000u | ((uint32_t)((distance >> 2) & 0x03FFFFFF));
+            break;
+        case 1: /* b.cond */
+            word = 0x54000000u | ((uint32_t)((distance >> 2) & 0x7FFFF) << 5) | (fix->cond & 0xF);
+            break;
+        case 2: /* cbz */
+            word = 0x34000000u | ((uint32_t)((distance >> 2) & 0x7FFFF) << 5);
+            break;
+        case 3: /* cbnz */
+            word = 0x35000000u | ((uint32_t)((distance >> 2) & 0x7FFFF) << 5);
+            break;
+        default: /* bl */
+            word = 0x94000000u | ((uint32_t)((distance >> 2) & 0x03FFFFFF));
+            break;
+        }
+        kro_patch_code(ctx->writer, fix->code_offset, &word, 4);
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -245,17 +367,6 @@ static void emit_store_result(Arm64Context* ctx, KrtIRInst* inst, int reg) {
 /* Instruction selection                                               */
 /* ------------------------------------------------------------------ */
 
-static void emit_sp_adjust(Arm64Context* ctx, uint32_t delta, bool subtract) {
-    /* ADD/SUB (immediate) takes an unscaled 12-bit immediate, so a frame larger
-     * than 4095 bytes has to be applied in several steps. */
-    while (delta > 0) {
-        uint32_t step = delta > 4095 ? 4095u : delta;
-        uint32_t base = subtract ? 0xD1000000u : 0x91000000u;
-        emit_word(ctx, base | (step << 10) | (31u << 5) | 31u);
-        delta -= step;
-    }
-}
-
 static void emit_return_sequence(Arm64Context* ctx) {
     int size = frame_size(ctx);
     if (size > 0) {
@@ -265,8 +376,68 @@ static void emit_return_sequence(Arm64Context* ctx) {
     emit_word(ctx, 0xD65F03C0u); /* ret */
 }
 
+static uint32_t comparison_condition(KrtIROpcode opcode, bool is_unsigned) {
+    switch (opcode) {
+    case KRT_IR_EQ:
+        return COND_EQ;
+    case KRT_IR_NE:
+        return COND_NE;
+    case KRT_IR_LT:
+        return is_unsigned ? COND_LO : COND_LT;
+    case KRT_IR_GT:
+        return is_unsigned ? COND_HI : COND_GT;
+    case KRT_IR_LE:
+        return is_unsigned ? COND_LS : COND_LE;
+    case KRT_IR_GE:
+        return is_unsigned ? COND_HS : COND_GE;
+    default:
+        return COND_EQ;
+    }
+}
+
+static void emit_comparison(Arm64Context* ctx, KrtIRInst* inst) {
+    bool is_unsigned = KrtTokenIsUnsigned(inst->result.value_type);
+    uint32_t cond = comparison_condition(inst->opcode, is_unsigned);
+    bool is_64 = inst->operand_count >= 1 && value_is_64(&inst->operands[0]);
+    if (inst->operand_count >= 2) {
+        emit_load_value(ctx, &inst->operands[0], 0);
+        emit_load_value(ctx, &inst->operands[1], 1);
+        emit_word(ctx, (is_64 ? 0xEB00001Fu : 0x6B00001Fu) | (1u << 16));
+    } else {
+        emit_load_imm(ctx, 0, 0, true);
+    }
+    /* cset rd, cond  (the encoding stores cond ^ 1) */
+    emit_word(ctx, (is_64 ? 0x9A9F07E0u : 0x1A9F07E0u) | (((cond ^ 1) & 0xF) << 12));
+    emit_store_result(ctx, inst, 0);
+}
+
+static void emit_call(Arm64Context* ctx, KrtIRInst* inst) {
+    if (inst->operand_count < 1 || inst->operands[0].type != KRT_IR_VALUE_FUNCTION) {
+        return;
+    }
+    const char* name = inst->operands[0].data.function_name;
+    if (!name) {
+        return;
+    }
+    int args = inst->operand_count - 1;
+    if (args > ARM64_NUM_ARG_REGS) {
+        KrtError("ARM64 backend: %s takes %d arguments; only %d register arguments are supported", name, args,
+                 ARM64_NUM_ARG_REGS);
+        return;
+    }
+    for (int i = 0; i < args; i++) {
+        KrtIRValue* arg = &inst->operands[i + 1];
+        emit_load_value(ctx, arg, i);
+    }
+    add_fixup(ctx, 4, 0, -1, name);
+    emit_word(ctx, 0x94000000u); /* bl (patched) */
+    emit_store_result(ctx, inst, 0);
+}
+
 static void emit_function_body(Arm64Context* ctx, KrtIRFunction* func) {
     for (KrtIRBasicBlock* block = func->entry_block; block; block = block->next) {
+        ctx->current_block = block;
+        record_block_start(ctx, block);
         for (KrtIRInst* inst = block->first_inst; inst; inst = inst->next) {
             bool is_64 = value_is_64(&inst->result);
             switch (inst->opcode) {
@@ -279,6 +450,17 @@ static void emit_function_body(Arm64Context* ctx, KrtIRFunction* func) {
                     emit_store_result(ctx, inst, 0);
                 }
                 break;
+            case KRT_IR_CAST: {
+                if (inst->operand_count >= 1) {
+                    emit_load_value(ctx, &inst->operands[0], 0);
+                    int bits = KrtTokenIntegerBits(inst->result.value_type);
+                    if (bits > 0 && bits < 64) {
+                        emit_extend(ctx, bits, KrtTokenIsUnsigned(inst->result.value_type), is_64, 0, 0);
+                    }
+                    emit_store_result(ctx, inst, 0);
+                }
+                break;
+            }
             case KRT_IR_ADD:
             case KRT_IR_SUB:
             case KRT_IR_MUL:
@@ -296,12 +478,13 @@ static void emit_function_body(Arm64Context* ctx, KrtIRFunction* func) {
                 } else if (inst->opcode == KRT_IR_MUL) {
                     emit_binary_reg(ctx, is_64 ? 0x9B007C00u : 0x1B007C00u, 0, 0, 1);
                 } else {
-                    uint32_t div = KrtTokenIsUnsigned(inst->result.value_type) ? (is_64 ? 0x9AC00800u : 0x1AC00800u)
-                                                                             : (is_64 ? 0x9AC00C00u : 0x1AC00C00u);
-                    emit_binary_reg(ctx, div, 2, 0, 1); /* x2 = x0 / x1 */
+                    uint32_t div = KrtTokenIsUnsigned(inst->result.value_type)
+                                       ? (is_64 ? 0x9AC00800u : 0x1AC00800u)
+                                       : (is_64 ? 0x9AC00C00u : 0x1AC00C00u);
+                    emit_binary_reg(ctx, div, 2, 0, 1);
                     if (inst->opcode == KRT_IR_MOD) {
-                        emit_binary_reg(ctx, is_64 ? 0x9B007C00u : 0x1B007C00u, 2, 1, 2); /* x2 = x1 * x2 */
-                        emit_binary_reg(ctx, is_64 ? 0xCB000000u : 0x4B000000u, 0, 0, 2); /* x0 = x0 - x2 */
+                        emit_binary_reg(ctx, is_64 ? 0x9B007C00u : 0x1B007C00u, 2, 1, 2);
+                        emit_binary_reg(ctx, is_64 ? 0xCB000000u : 0x4B000000u, 0, 0, 2);
                     } else {
                         emit_word(ctx, 0xAA0003E0u | ((uint32_t)2 << 16)); /* mov x0, x2 */
                     }
@@ -309,6 +492,43 @@ static void emit_function_body(Arm64Context* ctx, KrtIRFunction* func) {
                 emit_store_result(ctx, inst, 0);
                 break;
             }
+            case KRT_IR_LT:
+            case KRT_IR_GT:
+            case KRT_IR_EQ:
+            case KRT_IR_LE:
+            case KRT_IR_GE:
+            case KRT_IR_NE:
+                emit_comparison(ctx, inst);
+                break;
+            case KRT_IR_JUMP: {
+                if (block->succ_count > 0 && block->succs[0] != block->next) {
+                    add_fixup(ctx, 0, 0, block->succs[0]->id, NULL);
+                    emit_word(ctx, 0x14000000u); /* b */
+                }
+                break;
+            }
+            case KRT_IR_BRANCH: {
+                if (inst->operand_count < 1 || block->succ_count < 2) {
+                    break;
+                }
+                emit_load_value(ctx, &inst->operands[0], 0);
+                if (block->succs[0] == block->next) {
+                    add_fixup(ctx, 2, 0, block->succs[1]->id, NULL);
+                    emit_word(ctx, 0x34000000u); /* cbz w0 */
+                } else {
+                    add_fixup(ctx, 3, 0, block->succs[0]->id, NULL);
+                    emit_word(ctx, 0x35000000u); /* cbnz w0 */
+                    if (block->succs[1] != block->next) {
+                        add_fixup(ctx, 0, 0, block->succs[1]->id, NULL);
+                        emit_word(ctx, 0x14000000u); /* b */
+                    }
+                }
+                break;
+            }
+            case KRT_IR_CALL:
+            case KRT_IR_CALL_INDIRECT:
+                emit_call(ctx, inst);
+                break;
             case KRT_IR_RETURN:
                 if (inst->operand_count >= 1) {
                     emit_load_value(ctx, &inst->operands[0], 0);
@@ -328,6 +548,8 @@ static void emit_function_body(Arm64Context* ctx, KrtIRFunction* func) {
 
 static void emit_function(Arm64Context* ctx, KrtIRFunction* func) {
     ctx->current_function = func;
+    ctx->current_block = NULL;
+    ctx->fixup_count = 0;
     plan_frame(ctx, func);
     int size = frame_size(ctx);
 
@@ -342,6 +564,7 @@ static void emit_function(Arm64Context* ctx, KrtIRFunction* func) {
     }
 
     emit_function_body(ctx, func);
+    patch_fixups(ctx);
 
     emit_load_imm(ctx, 0, 0, true);
     emit_return_sequence(ctx);
@@ -397,6 +620,11 @@ void KrtArm64Generate(FILE* output_file, const char* output_filename, KrtIRModul
         if (sym >= 0) {
             kro_update_symbol_value(ctx.writer, sym, actual);
         }
+        if (ctx.func_count < ARM64_MAX_FUNCS) {
+            ctx.funcs[ctx.func_count].name = func->name;
+            ctx.funcs[ctx.func_count].offset = actual;
+            ctx.func_count++;
+        }
         if (strcmp(func->name, "main") == 0 || strcmp(func->name, "_KrtMainEntry") == 0) {
             ctx.entry_func_offset = actual;
             ctx.has_entry_func = true;
@@ -413,10 +641,10 @@ void KrtArm64Generate(FILE* output_file, const char* output_filename, KrtIRModul
         kro_set_entry_point(ctx.writer, start_offset);
 
         uint32_t bl_pc = kro_get_code_offset(ctx.writer);
-        int32_t distance = (int32_t)(ctx.entry_func_offset - bl_pc) >> 2;
-        emit_word(&ctx, 0x94000000u | ((uint32_t)distance & 0x03FFFFFFu)); /* bl main */
-        emit_load_imm(&ctx, 8, 93, true);                                     /* mov x8, #__NR_exit */
-        emit_word(&ctx, 0xD4000001u);                                         /* svc #0 */
+        int64_t distance = (int64_t)ctx.entry_func_offset - (int64_t)bl_pc;
+        emit_word(&ctx, 0x94000000u | ((uint32_t)((distance >> 2) & 0x03FFFFFFu)));
+        emit_load_imm(&ctx, 8, 93, true);
+        emit_word(&ctx, 0xD4000001u);
     }
 
     kro_write_file(ctx.writer, ctx.output_filename);

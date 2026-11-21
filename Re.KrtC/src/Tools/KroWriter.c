@@ -240,6 +240,15 @@ static bool align_offset(uint32_t value, uint32_t alignment, uint32_t* result) {
     return true;
 }
 
+bool kro_patch_code(KROWriter* writer, uint32_t offset, const void* data, uint32_t size) {
+    if (!writer || !data || size == 0 || size > writer->text_offset ||
+        offset > writer->text_offset - size) {
+        return false;
+    }
+    memcpy(writer->text + offset, data, size);
+    return true;
+}
+
 uint32_t kro_write_code_aligned(KROWriter* writer, const void* data, uint32_t size, uint32_t align) {
     uint32_t aligned;
     if (!writer || !data || !size || !align_offset(writer->text_offset, align, &aligned) ||
