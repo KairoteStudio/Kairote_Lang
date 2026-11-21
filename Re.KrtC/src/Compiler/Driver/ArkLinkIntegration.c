@@ -23,8 +23,14 @@ struct KrtArkLinkContext {
 
 static void ark_link_logger_callback(ArkLogLevel level, const char* message, void* user_data) {
     (void)user_data;
-    (void)level;
-    (void)message;
+    if (!message) {
+        return;
+    }
+    if (level == ARK_LOG_ERROR) {
+        KrtError("%s", message);
+    } else if (level == ARK_LOG_WARN) {
+        KRT_WARNING("%s", message);
+    }
 }
 
 KrtArkLinkContext* KrtArkLinkContextCreate(KrtConfig* config) {
@@ -34,6 +40,7 @@ KrtArkLinkContext* KrtArkLinkContextCreate(KrtConfig* config) {
 
     KrtArkLinkContext* ctx = (KrtArkLinkContext*)KRT_MALLOC(sizeof(KrtArkLinkContext));
     if (!ctx) {
+        KrtError("Failed to allocate ArkLink context");
         return NULL;
     }
 
@@ -43,12 +50,14 @@ KrtArkLinkContext* KrtArkLinkContextCreate(KrtConfig* config) {
     ctx->obj_files = (char**)KRT_MALLOC(ctx->obj_capacity * sizeof(char*));
 
     if (!ctx->obj_files) {
+        KrtError("Failed to allocate ArkLink object table");
         KRT_FREE(ctx);
         return NULL;
     }
 
     ctx->session = arklink_session_create();
     if (!ctx->session) {
+        KrtError("Failed to create ArkLink session");
         KRT_FREE(ctx->obj_files);
         KRT_FREE(ctx);
         return NULL;
@@ -145,7 +154,10 @@ int KrtArkLinkAddRuntimeObjects(KrtArkLinkContext* ctx, const char* runtime_dir)
         snprintf(path, sizeof(path), "%s%c%s", runtime_dir, KRT_PATH_SEPARATOR, runtime_files[i]);
 
         if (KrtPathExists(path)) {
-            KrtArkLinkAddObjectFile(ctx, path);
+            if (KrtArkLinkAddObjectFile(ctx, path) != 0) {
+                KrtError("Failed to add runtime object: %s", path);
+                return -1;
+            }
         }
     }
 
