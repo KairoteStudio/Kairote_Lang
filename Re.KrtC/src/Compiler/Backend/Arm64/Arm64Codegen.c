@@ -151,6 +151,93 @@ static void emit_extend(Arm64Context* ctx, int bits, bool is_unsigned, bool is_6
     emit_word(ctx, base | ((uint32_t)(src & 0x1F) << 5) | (uint32_t)(dst & 0x1F));
 }
 
+/*
+ * The language's runtime and the libraries embed Linux/x86-64 syscall numbers
+ * (the frontend emits them straight into the IR).  AArch64 uses a different
+ * numbering, so translate the ones whose signatures match.  Numbers without an
+ * entry are passed through unchanged.
+ */
+static uint32_t arm64_syscall_number(uint32_t x86_number) {
+    switch (x86_number) {
+    case 0:
+        return 63; /* read */
+    case 1:
+        return 64; /* write */
+    case 3:
+        return 57; /* close */
+    case 5:
+        return 80; /* fstat */
+    case 8:
+        return 62; /* lseek */
+    case 9:
+        return 222; /* mmap */
+    case 10:
+        return 226; /* mprotect */
+    case 11:
+        return 215; /* munmap */
+    case 12:
+        return 214; /* brk */
+    case 16:
+        return 29; /* ioctl */
+    case 60:
+        return 93; /* exit */
+    case 231:
+        return 94; /* exit_group */
+    default:
+        return x86_number;
+    }
+}
+
+static void emit_load_indirect(Arm64Context* ctx, int address_reg, int size) {
+    uint32_t base;
+    switch (size) {
+    case 1:
+        base = 0x39400000u; /* ldrb wt, [xn] */
+        break;
+    case 2:
+        base = 0x79400000u; /* ldrh wt, [xn] */
+        break;
+    case 4:
+        base = 0xB9400000u; /* ldr wt, [xn] */
+        break;
+    default:
+        base = 0xF9400000u; /* ldr xt, [xn] */
+        break;
+    }
+    emit_word(ctx, base | ((uint32_t)(address_reg & 0x1F) << 5));
+}
+
+static void emit_store_indirect(Arm64Context* ctx, int address_reg, int value_reg, int size) {
+    uint32_t base;
+    switch (size) {
+    case 1:
+        base = 0x39000000u; /* strb wt, [xn] */
+        break;
+    case 2:
+        base = 0x79000000u; /* strh wt, [xn] */
+        break;
+    case 4:
+        base = 0xB9000000u; /* str wt, [xn] */
+        break;
+    default:
+        base = 0xF9000000u; /* str xt, [xn] */
+        break;
+    }
+    emit_word(ctx, base | ((uint32_t)(address_reg & 0x1F) << 5) | (uint32_t)(value_reg & 0x1F));
+}
+
+static int instruction_value_size(KrtIRInst* inst, int operand_index, int default_size) {
+    if (!inst || operand_index < 0 || operand_index >= inst->operand_count) {
+        return default_size;
+    }
+    KrtIRValue* size = &inst->operands[operand_index];
+    if (size->type != KRT_IR_VALUE_IMM) {
+        return default_size;
+    }
+    int value = (int)size->data.imm;
+    return value == 1 || value == 2 || value == 4 || value == 8 || value == 16 ? value : default_size;
+}
+
 /* ------------------------------------------------------------------ */
 /* Frame planning                                                      */
 /* ------------------------------------------------------------------ */
@@ -492,6 +579,44 @@ static void emit_function_body(Arm64Context* ctx, KrtIRFunction* func) {
                 emit_store_result(ctx, inst, 0);
                 break;
             }
+            case KRT_IR_AND:
+            case KRT_IR_OR:
+            case KRT_IR_XOR: {
+                if (inst->operand_count < 2) {
+                    break;
+                }
+                emit_load_value(ctx, &inst->operands[0], 0);
+                emit_load_value(ctx, &inst->operands[1], 1);
+                uint32_t base;
+                if (inst->opcode == KRT_IR_AND) {
+                    base = is_64 ? 0x8A000000u : 0x0A000000u;
+                } else if (inst->opcode == KRT_IR_OR) {
+                    base = is_64 ? 0xAA000000u : 0x2A000000u;
+                } else {
+                    base = is_64 ? 0xCA000000u : 0x4A000000u;
+                }
+                emit_binary_reg(ctx, base, 0, 0, 1);
+                emit_store_result(ctx, inst, 0);
+                break;
+            }
+            case KRT_IR_LSHIFT:
+            case KRT_IR_RSHIFT: {
+                if (inst->operand_count < 2) {
+                    break;
+                }
+                emit_load_value(ctx, &inst->operands[0], 0);
+                emit_load_value(ctx, &inst->operands[1], 1);
+                bool arithmetic = inst->opcode == KRT_IR_RSHIFT && !KrtTokenIsUnsigned(inst->result.value_type);
+                uint32_t base;
+                if (inst->opcode == KRT_IR_LSHIFT) {
+                    base = is_64 ? 0x9AC02000u : 0x1AC02000u;
+                } else {
+                    base = arithmetic ? (is_64 ? 0x9AC02800u : 0x1AC02800u) : (is_64 ? 0x9AC02400u : 0x1AC02400u);
+                }
+                emit_binary_reg(ctx, base, 0, 0, 1);
+                emit_store_result(ctx, inst, 0);
+                break;
+            }
             case KRT_IR_LT:
             case KRT_IR_GT:
             case KRT_IR_EQ:
@@ -537,6 +662,101 @@ static void emit_function_body(Arm64Context* ctx, KrtIRFunction* func) {
                 }
                 emit_return_sequence(ctx);
                 break;
+            case KRT_IR_ADDRESS_OF: {
+                if (inst->operand_count < 1) {
+                    break;
+                }
+                int slot = -1;
+                if (inst->operands[0].type == KRT_IR_VALUE_VAR) {
+                    slot = local_slot(ctx, inst->operands[0].data.name);
+                } else if (inst->operands[0].type == KRT_IR_VALUE_ARG) {
+                    slot = inst->operands[0].data.index;
+                }
+                if (slot < 0) {
+                    break;
+                }
+                uint32_t offset = (uint32_t)slot * ARM64_SLOT_SIZE;
+                if (offset <= 4095) {
+                    emit_word(ctx, 0x91000000u | (offset << 10) | (31u << 5)); /* add x0, sp, #offset */
+                } else {
+                    emit_load_imm(ctx, 0, offset, true);
+                    emit_word(ctx, 0x8B000000u | (31u << 5) | 0u); /* add x0, sp, x0 */
+                }
+                emit_store_result(ctx, inst, 0);
+                break;
+            }
+            case KRT_IR_LOADPTR: {
+                if (inst->operand_count < 1) {
+                    break;
+                }
+                emit_load_value(ctx, &inst->operands[0], 0);
+                if (inst->operand_count >= 2) {
+                    emit_load_value(ctx, &inst->operands[1], 1);
+                    emit_word(ctx, 0x8B010000u); /* add x0, x0, x1 */
+                }
+                int size = instruction_value_size(inst, 2, 8);
+                if (size == 16) {
+                    KrtError("ARM64 backend: 128-bit indirect loads are not supported");
+                    break;
+                }
+                emit_load_indirect(ctx, 0, size);
+                emit_store_result(ctx, inst, 0);
+                break;
+            }
+            case KRT_IR_STOREPTR: {
+                if (inst->operand_count < 3) {
+                    break;
+                }
+                emit_load_value(ctx, &inst->operands[0], 0);
+                emit_load_value(ctx, &inst->operands[1], 1);
+                emit_word(ctx, 0x8B010000u); /* add x0, x0, x1 */
+                emit_load_value(ctx, &inst->operands[2], 2);
+                int size = instruction_value_size(inst, 3, 8);
+                if (size == 16) {
+                    KrtError("ARM64 backend: 128-bit indirect stores are not supported");
+                    break;
+                }
+                emit_store_indirect(ctx, 0, 2, size);
+                break;
+            }
+            case KRT_IR_ARRAY_STORE: {
+                if (inst->operand_count < 3) {
+                    break;
+                }
+                int size = instruction_value_size(inst, 3, 8);
+                emit_load_value(ctx, &inst->operands[0], 0);
+                emit_load_value(ctx, &inst->operands[1], 1);
+                if (size > 1 && size <= 8) {
+                    emit_load_imm(ctx, 2, (uint32_t)size, true);
+                    emit_binary_reg(ctx, 0x9B007C00u, 1, 2, 1); /* x1 = x1 * size */
+                }
+                emit_word(ctx, 0x8B010000u); /* add x0, x0, x1 */
+                emit_load_value(ctx, &inst->operands[2], 2);
+                emit_store_indirect(ctx, 0, 2, size == 16 ? 8 : size);
+                break;
+            }
+            case KRT_IR_SYSCALL: {
+                if (inst->operand_count < 1) {
+                    break;
+                }
+                uint32_t number = 0;
+                if (inst->operands[0].type == KRT_IR_VALUE_IMM) {
+                    number = arm64_syscall_number((uint32_t)(int64_t)inst->operands[0].data.imm);
+                }
+                if (inst->operands[0].type == KRT_IR_VALUE_IMM) {
+                    emit_load_imm(ctx, 8, number, true);
+                } else {
+                    emit_load_value(ctx, &inst->operands[0], 8);
+                    /* dynamic number: translate at runtime via a small stub is not
+                     * available yet, so use it verbatim */
+                }
+                for (int i = 1; i < inst->operand_count && i <= ARM64_NUM_ARG_REGS; i++) {
+                    emit_load_value(ctx, &inst->operands[i], i - 1);
+                }
+                emit_word(ctx, 0xD4000001u); /* svc #0 */
+                emit_store_result(ctx, inst, 0);
+                break;
+            }
             default:
                 KrtError("ARM64 backend: unsupported opcode %d in %s", (int)inst->opcode,
                          ctx->current_function ? ctx->current_function->name : "?");
