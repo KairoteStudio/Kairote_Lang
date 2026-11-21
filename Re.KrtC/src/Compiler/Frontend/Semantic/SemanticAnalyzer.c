@@ -1963,7 +1963,12 @@ bool semantic_analyzer_analyze_function_call(SemanticAnalyzer* analyzer, ASTNode
 
         SymbolEntry* var_symbol = symbol_table_lookup_scope_chain(analyzer->symbol_table, func_name);
         if (var_symbol && var_symbol->type == SYMBOL_VARIABLE) {
-
+            /* A function-typed variable is callable (delegate); anything else is not. */
+            if (var_symbol->source_type.token != TOKEN_FN) {
+                semantic_analyzer_add_error_at(analyzer, call_expr, "'%s' is not a function", func_name);
+                KRT_FREE(func_name);
+                return false;
+            }
             KRT_FREE(func_name);
 
             for (int i = 0; i < call_expr->data.call.argument_count; i++) {
@@ -1982,7 +1987,11 @@ bool semantic_analyzer_analyze_function_call(SemanticAnalyzer* analyzer, ASTNode
     if (symbol->type != SYMBOL_FUNCTION) {
 
         if (symbol->type == SYMBOL_VARIABLE) {
-
+            if (symbol->source_type.token != TOKEN_FN) {
+                semantic_analyzer_add_error_at(analyzer, call_expr, "'%s' is not a function", func_name);
+                KRT_FREE(func_name);
+                return false;
+            }
             KRT_FREE(func_name);
 
             for (int i = 0; i < call_expr->data.call.argument_count; i++) {
