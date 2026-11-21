@@ -88,7 +88,11 @@ static int copy_file_checked(const char* source, const char* destination) {
     return result;
 }
 
-static int copy_directory_recursive(const char* src_dir, const char* dst_dir) {
+static int copy_directory_recursive(const char* src_dir, const char* dst_dir, int depth) {
+    if (depth > 64) {
+        KrtError("复制目录层级过深: %s", src_dir);
+        return -1;
+    }
     if (ensure_directory_exists(dst_dir) != 0) {
         return -1;
     }
@@ -121,8 +125,11 @@ static int copy_directory_recursive(const char* src_dir, const char* dst_dir) {
             break;
         }
 
+        if (find_data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
+            continue;
+        }
         if (find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-            if (copy_directory_recursive(src_path, dst_path) != 0) {
+            if (copy_directory_recursive(src_path, dst_path, depth + 1) != 0) {
                 result = -1;
                 break;
             }
@@ -171,12 +178,15 @@ static int copy_directory_recursive(const char* src_dir, const char* dst_dir) {
         }
 
         struct stat st;
-        if (stat(src_path, &st) != 0) {
+        if (lstat(src_path, &st) != 0) {
             result = -1;
             break;
         }
+        if (S_ISLNK(st.st_mode)) {
+            continue;
+        }
         if (S_ISDIR(st.st_mode)) {
-            if (copy_directory_recursive(src_path, dst_path) != 0) {
+            if (copy_directory_recursive(src_path, dst_path, depth + 1) != 0) {
                 result = -1;
                 break;
             }
@@ -305,6 +315,7 @@ static int resolve_bundled_stdlib(char* result, size_t result_size) {
 #else
     ssize_t len = readlink("/proc/self/exe", exe_dir, sizeof(exe_dir) - 1);
     if (len < 0) {
+        KrtError("无法解析可执行文件路径: %s", strerror(errno));
         return 0;
     }
     exe_dir[len] = '\0';
@@ -345,7 +356,6 @@ KrtProject* KrtProjCreate(const char* name, KrtProjectType type) {
     project->name = KRT_STRDUP(name);
     project->version = KRT_STRDUP("1.0.0");
     project->type = type;
-    project->output_type = KRT_STRDUP(type == KRT_PROJ_TYPE_LIBRARY ? "dll" : "exe");
     project->root_namespace = KRT_STRDUP(name);
     project->description = KRT_STRDUP("");
 
@@ -353,7 +363,8 @@ KrtProject* KrtProjCreate(const char* name, KrtProjectType type) {
 
     time_t now = time(NULL);
     char time_str[64];
-    struct tm* local_time = localtime(&now);
+    struct tm local_tm;
+    struct tm* local_time = localtime_r(&now, &local_tm);
     if (!local_time || strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", local_time) == 0) {
         KrtProjDestroy(project);
         return NULL;
@@ -361,7 +372,7 @@ KrtProject* KrtProjCreate(const char* name, KrtProjectType type) {
     project->created_date = KRT_STRDUP(time_str);
     project->modified_date = KRT_STRDUP(time_str);
 
-    if (!project->name || !project->version || !project->output_type || !project->root_namespace ||
+    if (!project->name || !project->version || !project->root_namespace ||
         !project->description || !project->sdk_version || !project->created_date || !project->modified_date) {
         KrtProjDestroy(project);
         return NULL;
@@ -377,7 +388,6 @@ void KrtProjDestroy(KrtProject* project) {
 
     KRT_FREE(project->name);
     KRT_FREE(project->version);
-    KRT_FREE(project->output_type);
     KRT_FREE(project->root_namespace);
     KRT_FREE(project->description);
     KRT_FREE(project->sdk_version);
@@ -440,7 +450,8 @@ int KrtProjAddFile(KrtProject* project, const char* file_path, const char* item_
 
     time_t now = time(NULL);
     char time_str[64];
-    struct tm* local_time = localtime(&now);
+    struct tm local_tm;
+    struct tm* local_time = localtime_r(&now, &local_tm);
     if (!local_time || strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", local_time) == 0) {
         KRT_FREE(item->file_path);
         KRT_FREE(item->item_type);
@@ -455,11 +466,37 @@ int KrtProjAddFile(KrtProject* project, const char* file_path, const char* item_
         return 0;
     }
 
-    item->next = project->items;
-    project->items = item;
+    if (!project->items) {
+        project->items = item;
+    } else {
+        KrtProjectItem* tail = project->items;
+        while (tail->next) {
+            tail = tail->next;
+        }
+        tail->next = item;
+    }
     KRT_FREE(project->modified_date);
     project->modified_date = modified_date;
     return 1;
+}
+
+void KrtProjRemoveFile(KrtProject* project, const char* file_path) {
+    if (!project || !file_path) {
+        return;
+    }
+
+    KrtProjectItem** link = &project->items;
+    while (*link) {
+        KrtProjectItem* item = *link;
+        if (item->file_path && strcmp(item->file_path, file_path) == 0) {
+            *link = item->next;
+            KRT_FREE(item->file_path);
+            KRT_FREE(item->item_type);
+            KRT_FREE(item);
+            return;
+        }
+        link = &item->next;
+    }
 }
 
 int KrtProjAddDependency(KrtProject* project, const char* name, const char* version, const char* path) {
@@ -722,7 +759,7 @@ int KrtProjCreateTemplate(KrtProject* project, const char* output_dir) {
                 if (!first) {
                     project_file_ok &= fprintf(pk, ", ") >= 0;
                 }
-                project_file_ok &= fprintf(pk, "\"%s\"", tok) >= 0;
+                project_file_ok &= write_krt_string_literal(pk, tok) == 0;
                 first = 0;
                 tok = strtok_r(NULL, " \t", &save);
             }
@@ -747,7 +784,7 @@ int KrtProjCreateTemplate(KrtProject* project, const char* output_dir) {
         KrtError("标准库目标路径过长");
         goto fail;
     }
-    if (create_directory_recursive(stdlib_dst) != 0 || copy_directory_recursive(stdlib_src, stdlib_dst) != 0) {
+    if (create_directory_recursive(stdlib_dst) != 0 || copy_directory_recursive(stdlib_src, stdlib_dst, 0) != 0) {
         KrtError("无法复制标准库到项目目录: %s", stdlib_dst);
         goto fail;
     }
