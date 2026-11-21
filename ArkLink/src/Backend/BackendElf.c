@@ -893,19 +893,31 @@ static ArkLinkResult elf_plan_layout(ElfLinkState* state) {
             uint32_t f = (k == ARK_SECTION_CODE) ? (PF_R | PF_X) : (k == ARK_SECTION_RODATA) ? PF_R : (PF_R | PF_W);
             uint64_t filesz_add = (k == ARK_SECTION_BSS) ? 0 : vsz;
 
-            if (state->n_static_loads > 0 && cur_flags == f) {
+            /*
+             * Merge neighbouring sections into one PT_LOAD.  Two rules:
+             *  - the combined flags must not become RWX (keep the image as
+             *    safe as the section classes allow);
+             *  - page-alignment gaps between sections are spanned, which is
+             *    what keeps the segment count low enough for loaders with a
+             *    small PT_LOAD budget (proot refuses >=17).
+             * `va - off` is constant across sections (both advance by the same
+             * aligned size), so spanning a gap keeps p_vaddr == p_offset
+             * (mod p_align) intact.
+             */
+            uint32_t merged_flags = cur_flags | f;
+            int runnable_and_writable = (merged_flags & PF_X) && (merged_flags & PF_W);
+            if (state->n_static_loads > 0 && !runnable_and_writable) {
                 Elf64_Phdr* c = &state->static_loads[state->n_static_loads - 1];
                 uint64_t fend = off + filesz_add;
                 uint64_t vend = va + vsz;
-                if ((uint64_t)(c->p_offset + c->p_filesz) >= off || fend <= (uint64_t)(c->p_offset + c->p_filesz)) {
-                    if (fend > (uint64_t)(c->p_offset + c->p_filesz)) {
-                        c->p_filesz = fend - c->p_offset;
-                    }
-                    if (vend > (uint64_t)(c->p_vaddr + c->p_memsz)) {
-                        c->p_memsz = vend - c->p_vaddr;
-                    }
-                    continue;
+                if (fend > (uint64_t)(c->p_offset + c->p_filesz)) {
+                    c->p_filesz = fend - c->p_offset;
                 }
+                if (vend > (uint64_t)(c->p_vaddr + c->p_memsz)) {
+                    c->p_memsz = vend - c->p_vaddr;
+                }
+                cur_flags = merged_flags;
+                continue;
             }
             if (state->n_static_loads >= 48) {
                 break;

@@ -195,6 +195,25 @@ void ark_buffer_align(ArkBuffer* buf, size_t alignment) {
     }
 }
 
+/* Permission-class rank used to keep same-class sections contiguous. */
+static int layout_section_class(ArkSectionKind kind) {
+    switch (kind) {
+    case ARK_SECTION_CODE:
+        return 0;
+    case ARK_SECTION_RODATA:
+        return 1;
+    case ARK_SECTION_DATA:
+        return 2;
+    case ARK_SECTION_BSS:
+        return 3;
+    case ARK_SECTION_TDATA:
+    case ARK_SECTION_TBSS:
+        return 4;
+    default:
+        return 5;
+    }
+}
+
 static ArkSegmentType classify_section_kind(ArkSectionKind kind) {
     switch (kind) {
     case ARK_SECTION_CODE:
@@ -247,7 +266,35 @@ ArkImageLayout* ark_layout_create(const ArkBackendInput* input, uint32_t section
     uint64_t current_va = layout->image_base + layout->headers_size;
     uint64_t current_file_offset = layout->headers_size;
 
+    /*
+     * Assign addresses grouped by permission class (code, rodata, data, bss,
+     * everything else).  Without this the sections of a multi-object image
+     * interleave (text, data, text, rodata, ...) and every section ends up in
+     * its own PT_LOAD; loaders with a small segment budget (proot refuses
+     * >=17) then fail to map the image at all.
+     */
+    size_t* order = (size_t*)malloc(input->section_count * sizeof(size_t));
+    if (!order) {
+        free(layout->sections);
+        free(layout);
+        return NULL;
+    }
     for (size_t i = 0; i < input->section_count; i++) {
+        order[i] = i;
+    }
+    for (size_t i = 1; i < input->section_count; i++) {
+        size_t key = order[i];
+        size_t cls = (size_t)layout_section_class(input->sections[key].kind);
+        size_t j = i;
+        while (j > 0 && (size_t)layout_section_class(input->sections[order[j - 1]].kind) > cls) {
+            order[j] = order[j - 1];
+            j--;
+        }
+        order[j] = key;
+    }
+
+    for (size_t oi = 0; oi < input->section_count; oi++) {
+        size_t i = order[oi];
         ArkSectionLayout* sec = &layout->sections[i];
         const ArkSectionBuffer* input_sec = &input->sections[i];
 
@@ -276,6 +323,7 @@ ArkImageLayout* ark_layout_create(const ArkBackendInput* input, uint32_t section
     layout->code_segment_end = layout->code_segment_start;
     layout->data_segment_start = current_va;
     layout->data_segment_end = layout->data_segment_start;
+    free(order);
 
     for (size_t i = 0; i < input->section_count; i++) {
         const ArkSectionLayout* sec = &layout->sections[i];
