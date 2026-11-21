@@ -2310,6 +2310,10 @@ bool semantic_analyzer_analyze_variable_decl(SemanticAnalyzer* analyzer, ASTNode
             semantic_analyzer_lookup_class(analyzer, var_decl->data.variable_decl.template_instantiation_type);
         if (cls_sym && cls_sym->type == SYMBOL_CLASS) {
             symbol->class_type_name = KRT_STRDUP(var_decl->data.variable_decl.template_instantiation_type);
+            if (!symbol->class_type_name) {
+                semantic_analyzer_add_error(analyzer, "Out of memory while naming class type");
+                return false;
+            }
         }
     }
 
@@ -2388,6 +2392,10 @@ bool semantic_analyzer_analyze_variable_decl(SemanticAnalyzer* analyzer, ASTNode
         }
         if (!symbol->class_type_name) {
             symbol->class_type_name = KRT_STRDUP(type.type_name);
+            if (!symbol->class_type_name) {
+                semantic_analyzer_add_error(analyzer, "Out of memory while naming class type");
+                return false;
+            }
         }
         var_decl->data.variable_decl.type = TOKEN_IDENTIFIER;
     }
@@ -2520,18 +2528,17 @@ static bool semantic_analyze_stmt_array_compound_assignment(SemanticAnalyzer* an
         }
     }
 
-    if (array_ok && index_ok && value_ok &&
-        KrtSourceIsPointer(stmt->data.array_compound_assignment.array->resolved_type)) {
+    if (!array_ok || !index_ok || !value_ok) {
+        return false;
+    }
+    stmt->resolved_type = stmt->data.array_compound_assignment.array->resolved_type;
+    if (KrtSourceIsPointer(stmt->data.array_compound_assignment.array->resolved_type)) {
         return analyze_pointer_index(analyzer, stmt, stmt->data.array_compound_assignment.array,
                                      stmt->data.array_compound_assignment.index, NULL) &&
                pointer_update_assignable(analyzer, stmt, stmt->resolved_type,
                                          stmt->data.array_compound_assignment.value->resolved_type,
                                          stmt->data.array_compound_assignment.operator);
     }
-    if (!array_ok || !index_ok || !value_ok) {
-        return false;
-    }
-    stmt->resolved_type = stmt->data.array_compound_assignment.array->resolved_type;
     return pointer_update_assignable(analyzer, stmt, stmt->resolved_type,
                                      stmt->data.array_compound_assignment.value->resolved_type,
                                      stmt->data.array_compound_assignment.operator);
