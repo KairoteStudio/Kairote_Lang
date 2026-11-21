@@ -205,6 +205,13 @@ bool KrtCompilerCompile(KrtCompiler* compiler, ASTNode* ast, void* semantic_anal
         ir_optimizer_destroy(optimizer);
     }
 
+    /* SSA 优化在流水线层统一执行一次，后端不再改写共享 IR。 */
+    if (compiler->target == KRT_TARGET_X86_ASM) {
+        for (KrtIRFunction* fn = ir_builder->module->functions; fn; fn = fn->next) {
+            KrtIrSsaOptimize(fn);
+        }
+    }
+
     if ((compiler->target == KRT_TARGET_KRO_OBJ || compiler->target == KRT_TARGET_EXE_PLATFORM) &&
         !module_fits_kro_limits(ir_builder->module)) {
         KrtIrBuilderDestroy(ir_builder);

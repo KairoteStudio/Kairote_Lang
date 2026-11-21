@@ -1155,8 +1155,6 @@ static void emit_function(FILE* output, KrtIRFunction* func, KrtIRModule* module
         return;
     }
 
-    KrtIrSsaOptimize(func);
-
     CodegenContext ctx;
     codegen_context_init(&ctx, func, module);
 
