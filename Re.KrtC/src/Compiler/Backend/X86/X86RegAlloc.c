@@ -211,6 +211,9 @@ void liveness_analysis_run(LivenessAnalysis* analysis, KrtIRFunction* func) {
 
         int max_temp = find_max_temp_index(func);
         int temp_capacity = max_temp > X86_LIVESET_BITS ? max_temp : X86_LIVESET_BITS;
+        if ((size_t)temp_capacity > ((size_t)-1) / sizeof(int)) {
+            return;
+        }
 
         int* def_pos = (int*)backend_allocate(temp_capacity * sizeof(int));
         int* last_use_pos = (int*)backend_allocate(temp_capacity * sizeof(int));
@@ -298,7 +301,13 @@ static ConflictNode* conflict_graph_get_or_create_node(ConflictGraph* graph, int
         }
     }
 
-    if (graph->node_count >= 256) {
+    if (graph->node_count >= X86_MAX_CONFLICT_NODES) {
+        static int limit_warned = 0;
+        if (!limit_warned) {
+            KrtError("X86 conflict graph limit reached (%d nodes); allocation may be incomplete",
+                     X86_MAX_CONFLICT_NODES);
+            limit_warned = 1;
+        }
         return NULL;
     }
 
@@ -641,8 +650,31 @@ int regalloc_get_stack_offset(RegAllocResult* result, int temp_idx) {
 }
 
 RegAllocResult* x86_allocate_registers(KrtIRFunction* func) {
+    if (!func) {
+        return NULL;
+    }
 
     LivenessAnalysis* liveness = liveness_analysis_create(func);
+    if (!liveness) {
+        return NULL;
+    }
+
+    /* The liveness sets and the per-instruction live arrays have fixed upper
+     * bounds; reject functions beyond them instead of silently dropping
+     * interference edges (which produced wrong register assignments). */
+    if (liveness->inst_count > X86_MAX_INSTRUCTIONS) {
+        KrtError("X86 register allocator supports at most %d instructions (function has %d)",
+                 X86_MAX_INSTRUCTIONS, liveness->inst_count);
+        liveness_analysis_destroy(liveness);
+        return NULL;
+    }
+    if (find_max_temp_index(func) > X86_LIVESET_BITS) {
+        KrtError("X86 register allocator supports at most %d temporaries (function needs %d)",
+                 X86_LIVESET_BITS, find_max_temp_index(func));
+        liveness_analysis_destroy(liveness);
+        return NULL;
+    }
+
     liveness_analysis_run(liveness, func);
 
     ConflictGraph* graph = conflict_graph_create();
