@@ -75,7 +75,8 @@ ArkLinkResult arklink_session_link_native(ArkLinkSession* session) {
     ArkResolverPlan plan = {0};
     ArkLinkResult result = ark_resolver_resolve(ctx, units, session->input_count, &plan);
     if (result != ARK_LINK_OK) {
-        strncpy(session->error_buffer, "Symbol resolution failed", sizeof(session->error_buffer) - 1);
+        snprintf(session->error_buffer, sizeof(session->error_buffer), "Symbol resolution failed (code %d)", result);
+        log_message(session, ARK_LOG_ERROR, session->error_buffer);
 
         for (size_t i = 0; i < session->input_count; i++) {
             if (units[i]) {

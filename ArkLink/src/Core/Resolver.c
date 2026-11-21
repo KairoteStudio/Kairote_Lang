@@ -30,8 +30,31 @@ static int symbol_table_init(SymbolTable* table, size_t initial_capacity) {
 
 static void symbol_table_free(SymbolTable* table) {
     if (table->symbols) {
+        for (size_t i = 0; i < table->symbol_count; i++) {
+            if (table->symbols[i].name_owned) {
+                free((char*)table->symbols[i].name);
+            }
+        }
         free(table->symbols);
     }
+}
+
+static int symbol_clone_name(ArkResolverSymbol* dst, const char* name) {
+    char* copy = name ? strdup(name) : NULL;
+    if (name && !copy) {
+        return 0;
+    }
+    dst->name = copy;
+    dst->name_owned = copy != NULL;
+    return 1;
+}
+
+static void symbol_release_name(ArkResolverSymbol* sym) {
+    if (sym->name_owned) {
+        free((char*)sym->name);
+    }
+    sym->name = NULL;
+    sym->name_owned = 0;
 }
 
 static int symbol_table_add(SymbolTable* table, const ArkResolverSymbol* sym) {
@@ -41,10 +64,20 @@ static int symbol_table_add(SymbolTable* table, const ArkResolverSymbol* sym) {
 
             if (!table->symbols[i].defined && sym->defined) {
 
-                table->symbols[i] = *sym;
+                symbol_release_name(&table->symbols[i]);
+                ArkResolverSymbol merged = *sym;
+                if (!symbol_clone_name(&merged, sym->name)) {
+                    return 0;
+                }
+                table->symbols[i] = merged;
             } else if (table->symbols[i].defined && sym->defined) {
                 if (table->symbols[i].binding == ARK_BIND_WEAK && sym->binding == ARK_BIND_GLOBAL) {
-                    table->symbols[i] = *sym;
+                    symbol_release_name(&table->symbols[i]);
+                    ArkResolverSymbol merged = *sym;
+                    if (!symbol_clone_name(&merged, sym->name)) {
+                        return 0;
+                    }
+                    table->symbols[i] = merged;
                     return 1;
                 }
                 if (table->symbols[i].binding == ARK_BIND_WEAK || sym->binding == ARK_BIND_WEAK) return 1;
@@ -61,7 +94,6 @@ static int symbol_table_add(SymbolTable* table, const ArkResolverSymbol* sym) {
                  * 原先在此返回 0 使整个链接失败, 导致任何 using 导入标准库的程序都无法生成可执行文件。
                  */
                 return 1;
-            } else {
             }
             return 1;
         }
@@ -77,7 +109,11 @@ static int symbol_table_add(SymbolTable* table, const ArkResolverSymbol* sym) {
         table->symbols = new_symbols;
         table->symbol_capacity = new_capacity;
     }
-    table->symbols[table->symbol_count++] = *sym;
+    ArkResolverSymbol stored = *sym;
+    if (!symbol_clone_name(&stored, sym->name)) {
+        return 0;
+    }
+    table->symbols[table->symbol_count++] = stored;
     return 1;
 }
 
@@ -253,29 +289,25 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
             if (sym_desc->section_index > 0 && sym_desc->binding == ARK_BIND_LOCAL && sym.name &&
                 find_symbol(&sym_table, sym.name) && find_symbol(&sym_table, sym.name)->defined) {
                 char renamed[512];
-                snprintf(renamed, sizeof(renamed), "%s@u%zu", sym.name, i);
+                int n = snprintf(renamed, sizeof(renamed), "%s@u%zu", sym.name, i);
+                if (n < 0 || (size_t)n >= sizeof(renamed)) {
+                    free(unit_sec_start);
+                    free(unit_sym_start);
+                    rename_table_free(&renames);
+                    reloc_table_free(&reloc_table);
+                    symbol_table_free(&sym_table);
+                    return ARK_LINK_ERR_FORMAT;
+                }
                 if (rename_table_add(&renames, i, sym.name, renamed)) {
-                    sym.name = strdup(renamed);
+                    /* symbol_table_add clones the name; `renamed` stays on the stack. */
+                    sym.name = renamed;
                 }
             }
 
             if (sym_desc->section_index > 0) {
                 sym.section_index = unit_sec_start[i] + sym_desc->section_index - 1;
-                if (sym.name && strstr(sym.name, "SYS_mmap")) {
-                }
             } else {
                 sym.section_index = 0;
-
-                if (sym.name && strcmp(sym.name, "main") == 0) {
-                    for (size_t s = 0; s < unit->section_count; s++) {
-                        ArkLinkSection* sec = &unit->sections[s];
-                        if (sec->kind == ARK_SECTION_CODE) {
-                            sym.section_index = unit_sec_start[i] + s;
-                            sym.defined = 1;
-                            break;
-                        }
-                    }
-                }
             }
             sym.value = sym_desc->value;
             sym.size = sym_desc->size;
@@ -321,6 +353,8 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
     }
 
     if (total_sections == 0) {
+        free(unit_sec_start);
+        free(unit_sym_start);
         reloc_table_free(&reloc_table);
         free(out_plan->backend_input);
         symbol_table_free(&sym_table);
@@ -329,6 +363,8 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
 
     out_plan->backend_input->sections = (ArkSectionBuffer*)calloc(total_sections, sizeof(ArkSectionBuffer));
     if (!out_plan->backend_input->sections) {
+        free(unit_sec_start);
+        free(unit_sym_start);
         reloc_table_free(&reloc_table);
         free(out_plan->backend_input);
         symbol_table_free(&sym_table);
@@ -423,11 +459,6 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
             for (size_t k = 0; k < sec->reloc_count; k++) {
                 ArkRelocationDesc* reloc_desc = &sec->relocs[k];
 
-                if (i == 1 && k == 0 && j == 0) {
-                    for (size_t d = 0; d < renames.count && d < 40; d++) {
-                    }
-                }
-
                 ArkResolverReloc reloc = {0};
                 reloc.section = &out_plan->backend_input->sections[global_sec_idx];
                 reloc.section_index = global_sec_idx;
@@ -457,7 +488,9 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
                     free(unit_sym_start);
                     rename_table_free(&renames);
                     out_plan->symbols = sym_table.symbols;
+                    out_plan->symbol_count = sym_table.symbol_count;
                     out_plan->relocs = reloc_table.relocs;
+                    out_plan->reloc_count = reloc_table.reloc_count;
                     ark_resolver_plan_destroy(ctx, out_plan);
                     return ARK_LINK_ERR_UNRESOLVED_SYMBOL;
                 }
@@ -469,7 +502,11 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
                     free(section_map);
                     free(unit_sec_start);
                     free(unit_sym_start);
+                    rename_table_free(&renames);
                     reloc_table_free(&reloc_table);
+                    for (size_t m = 0; m < out_plan->backend_input->section_count; m++) {
+                        free(out_plan->backend_input->sections[m].data);
+                    }
                     free(out_plan->backend_input->sections);
                     free(out_plan->backend_input);
                     symbol_table_free(&sym_table);
@@ -484,7 +521,8 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
 
     out_plan->backend_input->relocs = reloc_table.relocs;
     out_plan->backend_input->reloc_count = reloc_table.reloc_count;
-    out_plan->backend_input->image_base = 0x140000000;
+    /* image_base is chosen by the driver (LinkerNative) from the session
+     * target/configuration; the resolver does not hard-code one. */
 
     size_t import_count = 0;
     for (size_t i = 0; i < sym_table.symbol_count; i++) {
@@ -530,7 +568,6 @@ ArkLinkResult ark_resolver_resolve(ArkLinkContext* ctx, ArkLinkUnit* const* unit
         int is_import = s->import_module && strlen(s->import_module) > 0;
         if (s->is_export && !is_import) {
             export_count++;
-        } else {
         }
 
         if (!has_main_export && sym_table.symbols[i].name && strcmp(sym_table.symbols[i].name, "main") == 0 &&
@@ -607,6 +644,11 @@ void ark_resolver_plan_destroy(ArkLinkContext* ctx, ArkResolverPlan* plan) {
     }
 
     if (plan->symbols) {
+        for (size_t i = 0; i < plan->symbol_count; i++) {
+            if (plan->symbols[i].name_owned) {
+                free((char*)plan->symbols[i].name);
+            }
+        }
         free(plan->symbols);
         plan->symbols = NULL;
     }

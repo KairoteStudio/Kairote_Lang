@@ -14,9 +14,9 @@ typedef struct ArkResolverSymbol {
     const char* name;
     ArkSymbolBinding binding;
     ArkSymbolVisibility visibility;
-    /* Section indexes are zero based; zero is a valid definition.  This is
-     * the single source of truth for a symbol's section; there is no
-     * separate section pointer that could drift out of sync. */
+    /* Section indexes are 1-based; zero means undefined.  This is the single
+     * source of truth for a symbol's section; there is no separate section
+     * pointer that could drift out of sync. */
     uint32_t section_index;
     int defined;
     uint64_t value;
@@ -26,6 +26,8 @@ typedef struct ArkResolverSymbol {
     const char* import_module;
     uint32_t iat_entry_rva;
     uint8_t type;
+    /* The resolver table owns (and frees) the name when set. */
+    int name_owned;
 } ArkResolverSymbol;
 
 typedef struct ArkResolverReloc {
@@ -72,6 +74,7 @@ typedef struct ArkResolverPlan {
     size_t symbol_count;
     ArkResolverReloc* relocs;
     size_t reloc_count;
+    /* relocs borrows backend_input->relocs; the plan does not own a second copy. */
     ArkImportModule* import_modules;
     size_t import_module_count;
     ArkImportBinding* imports;
