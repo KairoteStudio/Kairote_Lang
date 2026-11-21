@@ -74,6 +74,7 @@ const char* codegen_alloc_register(CodegenContext* ctx);
 /** @brief Mark reg as available for subsequent allocation. */
 void codegen_free_register(CodegenContext* ctx, const char* reg);
 /** @brief Find or assign a frame offset for var_name. */
+/** @brief Return the stack offset for var_name, registering it on first use. Returns -1 on failure. */
 int codegen_get_var_offset(CodegenContext* ctx, const char* var_name);
 
 /** @brief Emit a load of temp_idx into target_reg. */

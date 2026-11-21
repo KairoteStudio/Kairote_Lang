@@ -1,6 +1,7 @@
 #include "X86RegAlloc.h"
 #include "../BackendAllocation.h"
 #include "../../Middle/Ir/IrSsa.h"
+#include <limits.h>
 #include <string.h>
 
 static const char* g_register_names[] = {"rax", "rbx", "rcx", "rdx", "rsi", "rdi", "r8",
@@ -66,11 +67,18 @@ static void temp_array_init(TempLocationArray* arr, int initial_capacity) {
 }
 
 static void temp_array_ensure_capacity(TempLocationArray* arr, int needed) {
+    if (!arr || needed <= 0) {
+        return;
+    }
     if (needed < arr->capacity) {
         return;
     }
-    int new_capacity = arr->capacity * X86_TEMP_GROWTH_FACTOR;
+    int new_capacity = arr->capacity > 0 ? arr->capacity : X86_TEMP_INITIAL_CAPACITY;
     while (new_capacity <= needed) {
+        if (new_capacity > (INT_MAX / X86_TEMP_GROWTH_FACTOR)) {
+            new_capacity = needed + 1;
+            break;
+        }
         new_capacity *= X86_TEMP_GROWTH_FACTOR;
     }
     TempLocation* new_locs = (TempLocation*)backend_reallocate(arr->locations, new_capacity * sizeof(TempLocation));
@@ -221,6 +229,10 @@ const char* codegen_alloc_register(CodegenContext* ctx) {
 }
 
 void codegen_free_register(CodegenContext* ctx, const char* reg) {
+    if (!ctx || !reg) {
+        return;
+    }
+
     for (int i = 0; i < g_register_count; i++) {
         if (strcmp(ctx->registers[i].name, reg) == 0) {
             ctx->registers[i].is_free = 1;
@@ -232,7 +244,7 @@ void codegen_free_register(CodegenContext* ctx, const char* reg) {
 
 int codegen_get_var_offset(CodegenContext* ctx, const char* var_name) {
     if (!ctx || !var_name) {
-        return 0;
+        return -1;
     }
 
     for (int i = 0; i < ctx->var_count; i++) {
@@ -253,7 +265,8 @@ int codegen_get_var_offset(CodegenContext* ctx, const char* var_name) {
         return ctx->var_offsets[ctx->var_count++].offset;
     }
 
-    return 0;
+    KrtError("X86 variable offset table full (%d entries) for '%s'", X86_MAX_VAR_OFFSETS, var_name);
+    return -1;
 }
 
 void codegen_emit_load_temp(FILE* output, CodegenContext* ctx, int temp_idx, const char* target_reg) {
@@ -301,12 +314,24 @@ void codegen_emit_store_temp(FILE* output, CodegenContext* ctx, int temp_idx, co
 }
 
 void codegen_emit_load_var(FILE* output, CodegenContext* ctx, const char* var_name, const char* target_reg) {
+    if (!output || !ctx || !var_name || !target_reg) {
+        return;
+    }
     int offset = codegen_get_var_offset(ctx, var_name);
+    if (offset < 0) {
+        return;
+    }
     fprintf(output, "    mov %s, [rbp - %d]\n", target_reg, offset);
 }
 
 void codegen_emit_store_var(FILE* output, CodegenContext* ctx, const char* var_name, const char* source_reg) {
+    if (!output || !ctx || !var_name || !source_reg) {
+        return;
+    }
     int offset = codegen_get_var_offset(ctx, var_name);
+    if (offset < 0) {
+        return;
+    }
     fprintf(output, "    mov [rbp - %d], %s\n", offset, source_reg);
 }
 
@@ -352,7 +377,9 @@ static void emit_load_value(Emitter* em, KrtIRValue* value, const char* target_r
         break;
     }
     case KRT_IR_VALUE_VAR:
-        codegen_emit_load_var(em->output, em->ctx, value->data.name, target_reg);
+        if (value->data.name) {
+            codegen_emit_load_var(em->output, em->ctx, value->data.name, target_reg);
+        }
         break;
     case KRT_IR_VALUE_TEMP:
         codegen_emit_load_temp(em->output, em->ctx, value->data.index, target_reg);
@@ -364,7 +391,9 @@ static void emit_load_value(Emitter* em, KrtIRValue* value, const char* target_r
             em->ctx->current_func->params[arg_idx].name) {
             const char* param_name = em->ctx->current_func->params[arg_idx].name;
             int offset = codegen_get_var_offset(em->ctx, param_name);
-            fprintf(em->output, "    mov %s, [rbp - %d]\n", target_reg, offset);
+            if (offset >= 0) {
+                fprintf(em->output, "    mov %s, [rbp - %d]\n", target_reg, offset);
+            }
         }
         break;
     }
@@ -381,7 +410,9 @@ static void emit_load_value(Emitter* em, KrtIRValue* value, const char* target_r
 static void emit_store_result(Emitter* em, KrtIRValue* result, const char* source_reg) {
     switch (result->type) {
     case KRT_IR_VALUE_VAR:
-        codegen_emit_store_var(em->output, em->ctx, result->data.name, source_reg);
+        if (result->data.name) {
+            codegen_emit_store_var(em->output, em->ctx, result->data.name, source_reg);
+        }
         break;
     case KRT_IR_VALUE_TEMP:
 
@@ -669,8 +700,6 @@ static void emit_call(Emitter* em, const char* func_name, KrtIRValue* args, int 
 
 static void emit_return(Emitter* em, KrtIRValue* value) {
     if (em->ctx->current_func && em->ctx->current_func->name && strcmp(em->ctx->current_func->name, "main") == 0) {
-
-        printf("[X86CodeGen] Generating sys_exit for main function\n");
 
         if (value && value->type != KRT_IR_VALUE_VOID) {
             emit_load_value(em, value, "rdi");
@@ -978,6 +1007,10 @@ static void emit_function_prologue(FILE* output, CodegenContext* ctx) {
         if (ctx->current_func->params && ctx->current_func->params[i].name) {
             const char* param_name = ctx->current_func->params[i].name;
             int offset = codegen_get_var_offset(ctx, param_name);
+            if (offset < 0) {
+                KrtError("X86 cannot assign a stack slot for parameter '%s'", param_name);
+                continue;
+            }
             if (i < g_arg_reg_count) {
                 fprintf(output, "    mov [rbp - %d], %s\n", offset, g_arg_regs[i]);
             } else {
@@ -1190,7 +1223,7 @@ void KrtX86Generate(FILE* output, KrtIRModule* module) {
         func = func->next;
     }
 
-    if (module->main_function && strcmp(module->main_function->name, "main") != 0) {
+    if (module->main_function && module->main_function->name && strcmp(module->main_function->name, "main") != 0) {
         fprintf(output, "\nglobal main\n");
         fprintf(output, "; Wrapper: main -> %s\n", module->main_function->name);
         fprintf(output, "main:\n");

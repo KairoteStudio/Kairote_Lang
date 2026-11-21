@@ -79,6 +79,7 @@ static bool match_redundant_load_store(KrtIRInst* inst1, KrtIRInst* inst2) {
     if (inst1->opcode == KRT_IR_STORE && inst2->opcode == KRT_IR_LOAD) {
         if (inst1->operand_count >= 2 && inst2->operand_count >= 1) {
             if (inst1->operands[0].type == KRT_IR_VALUE_VAR && inst2->operands[0].type == KRT_IR_VALUE_VAR &&
+                inst1->operands[0].data.name && inst2->operands[0].data.name &&
                 strcmp(inst1->operands[0].data.name, inst2->operands[0].data.name) == 0) {
                 return true;
             }

@@ -167,6 +167,9 @@ void liveness_analysis_destroy(LivenessAnalysis* analysis) {
 }
 
 void liveness_analysis_run(LivenessAnalysis* analysis, KrtIRFunction* func) {
+    if (!analysis || !func) {
+        return;
+    }
 
     int block_idx = 0;
     KrtIRBasicBlock* block = func->entry_block;
@@ -610,6 +613,10 @@ void regalloc_result_destroy(RegAllocResult* result) {
 }
 
 const char* regalloc_get_reg_name(RegAllocResult* result, int temp_idx) {
+    if (!result) {
+        return NULL;
+    }
+
     if (temp_idx < 0 || temp_idx >= result->capacity) {
         return NULL;
     }
@@ -623,6 +630,10 @@ const char* regalloc_get_reg_name(RegAllocResult* result, int temp_idx) {
 }
 
 int regalloc_get_stack_offset(RegAllocResult* result, int temp_idx) {
+    if (!result) {
+        return -1;
+    }
+
     if (temp_idx < 0 || temp_idx >= result->capacity) {
         return -1;
     }
