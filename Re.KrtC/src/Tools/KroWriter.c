@@ -499,7 +499,8 @@ bool kro_write_file(KROWriter* writer, const char* filename) {
     if (!fp) {
         return false;
     }
-    uint32_t total_reloc_count = writer->text_relocs.count + writer->rodata_relocs.count + writer->data_relocs.count;
+    uint32_t total_reloc_count = writer->text_relocs.count + writer->rodata_relocs.count +
+                                 writer->data_relocs.count + writer->bss_relocs.count;
     KROHeader header;
     memset(&header, 0, sizeof(header));
     header.magic = KRO_MAGIC;
@@ -513,6 +514,7 @@ bool kro_write_file(KROWriter* writer, const char* filename) {
     header.text_reloc_count = writer->text_relocs.count;
     header.rodata_reloc_count = writer->rodata_relocs.count;
     header.data_reloc_count = writer->data_relocs.count;
+    header.bss_reloc_count = writer->bss_relocs.count;
     header.bss_align = writer->bss_align;
     header.sym_count = writer->sym_count;
     header.strtab_size = writer->string_size;
@@ -569,6 +571,13 @@ bool kro_write_file(KROWriter* writer, const char* filename) {
     if (writer->data_relocs.count > 0) {
         if (fwrite(writer->data_relocs.relocs, sizeof(KRORelocation), writer->data_relocs.count, fp) !=
             writer->data_relocs.count) {
+            fclose(fp);
+            return false;
+        }
+    }
+    if (writer->bss_relocs.count > 0) {
+        if (fwrite(writer->bss_relocs.relocs, sizeof(KRORelocation), writer->bss_relocs.count, fp) !=
+            writer->bss_relocs.count) {
             fclose(fp);
             return false;
         }

@@ -17,6 +17,7 @@ typedef struct {
     uint32_t text_reloc_count;
     uint32_t rodata_reloc_count;
     uint32_t data_reloc_count;
+    uint32_t bss_reloc_count;
     uint32_t bss_align;
     uint32_t sym_count;
     uint32_t strtab_size;
@@ -100,7 +101,8 @@ ArkLinkResult ark_link_load_kro(const char* path, ArkLinkUnit** unit) {
     size_t text_reloc_offset = sym_offset + header.sym_count * sizeof(KroSymbol);
     size_t rodata_reloc_offset = text_reloc_offset + header.text_reloc_count * sizeof(KroReloc);
     size_t data_reloc_offset = rodata_reloc_offset + header.rodata_reloc_count * sizeof(KroReloc);
-    size_t strtab_offset = data_reloc_offset + header.data_reloc_count * sizeof(KroReloc);
+    size_t bss_reloc_offset = data_reloc_offset + header.data_reloc_count * sizeof(KroReloc);
+    size_t strtab_offset = bss_reloc_offset + header.bss_reloc_count * sizeof(KroReloc);
 
     if (header.text_size > 0) {
         uint8_t* code_data = (uint8_t*)malloc((size_t)header.text_size);
@@ -307,15 +309,17 @@ ArkLinkResult ark_link_load_kro(const char* path, ArkLinkUnit** unit) {
             {header.text_reloc_count, 1},
             {header.rodata_reloc_count, 2},
             {header.data_reloc_count, 3},
+            {header.bss_reloc_count, 4},
         };
 
         size_t reloc_offsets[] = {
             text_reloc_offset,
             rodata_reloc_offset,
             data_reloc_offset,
+            bss_reloc_offset,
         };
 
-        for (int r = 0; r < 3; r++) {
+        for (int r = 0; r < 4; r++) {
             if (reloc_sections[r].count == 0) {
                 continue;
             }

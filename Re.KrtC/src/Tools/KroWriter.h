@@ -53,6 +53,7 @@ typedef struct {
     uint32_t text_reloc_count;
     uint32_t rodata_reloc_count;
     uint32_t data_reloc_count;
+    uint32_t bss_reloc_count;
     uint32_t bss_align;
     uint32_t sym_count;
     uint32_t strtab_size;
