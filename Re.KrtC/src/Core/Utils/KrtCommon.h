@@ -72,7 +72,7 @@
     } while (0)
 
 #include "../Memory/Allocator.h"
-#include "../Memory/SmartPtr.h"
+#include "../Memory/LeakDetector.h"
 
 #define KRT_MALLOC(size) KrtSafeMalloc(size, __FILE__, __LINE__)
 #define KRT_FREE(ptr) KrtSafeFree(ptr, __FILE__, __LINE__)
@@ -171,8 +171,6 @@ double KrtGetTime(void);
 #define KRT_ARCH_UNKNOWN 1
 #define KRT_ARCH_NAME "Unknown"
 #endif
-
-#define KRT_LEAK_DETECTION_ENABLED 0
 
 typedef struct {
     void* ptr;

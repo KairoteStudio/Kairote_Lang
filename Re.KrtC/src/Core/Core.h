@@ -2,7 +2,6 @@
 #define KRT_CORE_H
 
 #include "Memory/Allocator.h"
-#include "Memory/SmartPtr.h"
 #include "Memory/LeakDetector.h"
 #include "Platform/Platform.h"
 #include "Platform/Threading.h"

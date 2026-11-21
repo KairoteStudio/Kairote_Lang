@@ -1,4 +1,6 @@
 #include "CompilerError.h"
+#include "../../Core/Utils/KrtCommon.h"
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -51,14 +53,14 @@ const char* KrtErrorSeverityName(KrtErrorSeverity severity) {
 }
 
 KrtErrorReport* KrtErrorReportCreate(void) {
-    KrtErrorReport* report = (KrtErrorReport*)malloc(sizeof(KrtErrorReport));
+    KrtErrorReport* report = (KrtErrorReport*)KRT_MALLOC(sizeof(KrtErrorReport));
     if (!report) {
         return NULL;
     }
 
-    report->errors = (KrtCompileError*)malloc(KRT_ERROR_INITIAL_CAPACITY * sizeof(KrtCompileError));
+    report->errors = (KrtCompileError*)KRT_MALLOC(KRT_ERROR_INITIAL_CAPACITY * sizeof(KrtCompileError));
     if (!report->errors) {
-        free(report);
+        KRT_FREE(report);
         return NULL;
     }
 
@@ -76,12 +78,12 @@ void KrtErrorReportDestroy(KrtErrorReport* report) {
         return;
     }
     if (report->errors) {
-        free(report->errors);
+        KRT_FREE(report->errors);
     }
     if (report->source_code) {
-        free(report->source_code);
+        KRT_FREE(report->source_code);
     }
-    free(report);
+    KRT_FREE(report);
 }
 
 void KrtErrorReportSetSourceCode(KrtErrorReport* report, const char* source_code) {
@@ -90,12 +92,12 @@ void KrtErrorReportSetSourceCode(KrtErrorReport* report, const char* source_code
     }
 
     if (report->source_code) {
-        free(report->source_code);
+        KRT_FREE(report->source_code);
         report->source_code = NULL;
     }
 
     if (source_code) {
-        report->source_code = strdup(source_code);
+        report->source_code = KRT_STRDUP(source_code);
     }
 }
 
@@ -143,8 +145,14 @@ void KrtErrorReportAddEx(KrtErrorReport* report, KrtErrorSeverity severity, KrtE
     }
 
     if (report->error_count >= report->error_capacity) {
+        if (report->error_capacity > INT_MAX / 2) {
+            KrtMemoryReportError("ERROR_REPORT_FULL", report, __FILE__, __LINE__,
+                                 "Error report capacity cannot grow beyond %d", report->error_capacity);
+            return;
+        }
         int new_capacity = report->error_capacity * 2;
-        KrtCompileError* new_errors = (KrtCompileError*)realloc(report->errors, new_capacity * sizeof(KrtCompileError));
+        KrtCompileError* new_errors =
+            (KrtCompileError*)KRT_REALLOC(report->errors, new_capacity * sizeof(KrtCompileError));
         if (!new_errors) {
             return;
         }

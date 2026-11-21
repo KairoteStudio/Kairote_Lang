@@ -42,7 +42,6 @@ pub fn build(b: *std.Build) void {
             "src/Core/Memory/Allocator.c",
             "src/Core/Memory/Arena.c",
             "src/Core/Memory/LeakDetector.c",
-            "src/Core/Memory/SmartPtr.c",
             "src/Core/Platform/ThreadPool.c",
             "src/Core/Utils/KrtString.c",
             "src/Core/Utils/KrtTime.c",

@@ -67,23 +67,13 @@ void KrtSafeFree(void* ptr, const char* file, int line);
 bool KrtBoundsCheck(const void* array, size_t index, size_t element_size, size_t array_size);
 bool KrtBufferCheck(const void* buffer, size_t offset, size_t size, size_t buffer_size);
 
-bool KrtMemoryProtect(void* ptr, MemoryProtectionFlags flags);
-bool KrtMemoryUnprotect(void* ptr);
-
 void KrtMemoryPoison(void* ptr, size_t size);
-bool KrtMemoryIsPoisoned(const void* ptr, size_t size);
 
 void KrtSetCanary(MemoryBlock* block);
 bool KrtCheckCanary(const MemoryBlock* block);
 
 bool KrtMemoryPtrIsValid(const void* ptr);
-bool KrtPtrIsFreed(const void* ptr);
 MemoryBlock* KrtPtrGetBlock(const void* ptr);
-
-bool KrtPtrIsDangling(const void* ptr);
-void KrtPtrTrackFree(void* ptr);
-
-bool KrtPtrCheckDoubleFree(const void* ptr, const char* file, int line);
 
 void KrtMemoryDumpBlocks(void);
 size_t KrtMemoryGetTotalUsage(void);
@@ -91,10 +81,6 @@ size_t KrtMemoryGetBlockCount(void);
 void KrtMemoryDumpStats(void);
 
 void KrtMemoryReportError(const char* error_type, const void* ptr, const char* file, int line, const char* format, ...);
-
-bool KrtMemoryValidateHeap(void);
-bool KrtMemoryCheckIntegrity(void);
-void KrtMemoryScanCorruption(void);
 
 #define KRT_SAFE_MALLOC(size) KrtSafeMalloc(size, __FILE__, __LINE__)
 #define KRT_SAFE_CALLOC(count, size) KrtSafeCalloc(count, size, __FILE__, __LINE__)
@@ -106,24 +92,6 @@ void KrtMemoryScanCorruption(void);
 
 #define KRT_BUFFER_CHECK(buffer, offset, size, buffer_size) KrtBufferCheck(buffer, offset, size, buffer_size)
 
-#define KRT_ARRAY_GET(array, index, array_size) (KRT_BOUNDS_CHECK(array, index, array_size) ? &((array)[index]) : NULL)
-
-#define KRT_ARRAY_SET(array, index, value, array_size)                                                                 \
-    do {                                                                                                               \
-        if (KRT_BOUNDS_CHECK(array, index, array_size)) {                                                              \
-            (array)[index] = (value);                                                                                  \
-        } else {                                                                                                       \
-            KrtMemoryReportError("ARRAY_BOUNDS", array, __FILE__, __LINE__, "Index %zu out of bounds [0, %zu)",        \
-                                 (size_t)(index), (size_t)(array_size));                                               \
-        }                                                                                                              \
-    } while (0)
-
 #define KRT_MEMORY_PTR_VALID(ptr) KrtMemoryPtrIsValid(ptr)
-#define KRT_PTR_NOT_FREED(ptr) (!KrtPtrIsFreed(ptr))
-#define KRT_PTR_NOT_DANGLING(ptr) (!KrtPtrIsDangling(ptr))
-
-void KrtMemorySafetyEnablePoison(bool enable);
-void KrtMemorySafetyEnableCanary(bool enable);
-void KrtMemorySafetySetStrictMode(bool strict);
 
 #endif

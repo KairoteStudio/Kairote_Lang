@@ -36,22 +36,17 @@ typedef struct {
     int has_mutex;
 } KrtArena;
 
-KrtArena* KrtArenaCreate(size_t block_size);
 /** Create a thread-confined arena without locking; return NULL if allocation fails. */
 KrtArena* KrtArenaCreateLocal(size_t block_size);
 void KrtArenaDestroy(KrtArena* arena);
 
 void* KrtArenaAlloc(KrtArena* arena, size_t size);
-void* KrtArenaCalloc(KrtArena* arena, size_t count, size_t size);
+/**
+ * Grow an arena allocation in place when it is the most recent allocation.
+ * `old_size` must be the exact size originally passed for `ptr`; a mismatched
+ * value makes the fast path miss and the slow path copies too much.
+ */
 void* KrtArenaRealloc(KrtArena* arena, void* ptr, size_t old_size, size_t new_size);
-/** Copy str into arena-owned storage; return NULL for invalid input or allocation failure. */
-char* KrtArenaStrdup(KrtArena* arena, const char* str);
-
-void KrtArenaReset(KrtArena* arena);
-void KrtArenaStats(KrtArena* arena);
-
-size_t KrtArenaGetUsage(KrtArena* arena);
-size_t KrtArenaGetBlockCount(KrtArena* arena);
 
 #ifdef _WIN32
 #define KRT_ARENA_LOCK(arena)                                                                                          \

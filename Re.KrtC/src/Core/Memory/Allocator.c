@@ -183,6 +183,7 @@ void* KrtSafeMalloc(size_t size, const char* file, int line) {
 
     MemoryBlock* block = __builtin_malloc(sizeof(MemoryBlock));
     if (!block) {
+        KrtMemoryReportError("MALLOC_FAILED", NULL, file, line, "Failed to allocate block metadata for %zu bytes", size);
         __builtin_free(actual_ptr);
         return NULL;
     }
@@ -217,6 +218,7 @@ void* KrtSafeMalloc(size_t size, const char* file, int line) {
     }
 
     if (!add_memory_block(block)) {
+        KrtMemoryReportError("MALLOC_FAILED", NULL, file, line, "Failed to track allocation of %zu bytes", size);
         __builtin_free(actual_ptr);
         __builtin_free(block);
         return NULL;
@@ -228,6 +230,7 @@ void* KrtSafeMalloc(size_t size, const char* file, int line) {
 void* KrtSafeCalloc(size_t count, size_t size, const char* file, int line) {
     size_t total_size;
     if (!KrtSizeMultiply(count, size, &total_size)) {
+        KrtMemoryReportError("MALLOC_FAILED", NULL, file, line, "Allocation size overflow: %zu * %zu", count, size);
         return NULL;
     }
     void* ptr = KrtSafeMalloc(total_size, file, line);
@@ -303,10 +306,6 @@ void KrtSafeFree(void* ptr, const char* file, int line) {
         KrtMemoryReportError("CANARY_CORRUPTED", ptr, file, line, "Memory canary corrupted for block %p", ptr);
     }
 
-    if (KrtMemoryIsPoisoned(ptr, block->user_size)) {
-        KrtMemoryReportError("USE_AFTER_FREE", ptr, file, line, "Use after free detected for block %p", ptr);
-    }
-
     block->is_freed = true;
 
     if (g_memory_safety->poison_enabled) {
@@ -339,20 +338,6 @@ bool KrtBufferCheck(const void* buffer, size_t offset, size_t size, size_t buffe
     }
 
     return true;
-}
-
-bool KrtPtrCheckDoubleFree(const void* ptr, const char* file, int line) {
-    if (!ptr) {
-        return false;
-    }
-
-    MemoryBlock* block = KrtPtrGetBlock(ptr);
-    if (block && block->is_freed) {
-        KrtMemoryReportError("DOUBLE_FREE", ptr, file, line, "Double free detected for block %p", ptr);
-        return true;
-    }
-
-    return false;
 }
 
 MemoryBlock* KrtPtrGetBlock(const void* ptr) {
@@ -417,20 +402,6 @@ void KrtMemoryPoison(void* ptr, size_t size) {
         return;
     }
     memset(ptr, KRT_POISON_VALUE, size);
-}
-
-bool KrtMemoryIsPoisoned(const void* ptr, size_t size) {
-    if (!ptr || size == 0) {
-        return false;
-    }
-
-    const unsigned char* bytes = (const unsigned char*)ptr;
-    for (size_t i = 0; i < size; i++) {
-        if (bytes[i] != KRT_POISON_VALUE) {
-            return false;
-        }
-    }
-    return true;
 }
 
 void KrtMemoryReportError(const char* error_type, const void* ptr, const char* file, int line, const char* format,
