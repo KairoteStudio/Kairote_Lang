@@ -564,6 +564,15 @@ void KrtCompilePipelineSetSemanticAnalyzer(KrtCompilePipeline* pipeline, Semanti
     pipeline->owns_semantic_analyzer = 0; /* 外部所有: 销毁责任在调用方 */
 }
 
+static int pipeline_finish_check_only(KrtCompilePipeline* pipeline, const char* input_file, clock_t total_start) {
+    if (!pipeline->config || !pipeline->config->check_only) {
+        return 0;
+    }
+    pipeline->total_duration = (double)(clock() - total_start) / CLOCKS_PER_SEC;
+    record_stage_result(pipeline, KRT_STAGE_COMPLETE, KRT_RESULT_SUCCESS, pipeline->total_duration, input_file);
+    return 1;
+}
+
 int KrtCompilePipelineExecute(KrtCompilePipeline* pipeline, const char* input_file, const char* output_file) {
     if (!pipeline || !input_file || !output_file) {
         return 0;
@@ -589,6 +598,10 @@ int KrtCompilePipelineExecute(KrtCompilePipeline* pipeline, const char* input_fi
     if (pipeline->ast) {
         if (!KrtCompilePipelineSemantic(pipeline)) {
             return 0;
+        }
+
+        if (pipeline_finish_check_only(pipeline, input_file, total_start)) {
+            return 1;
         }
 
         if (!KrtCompilePipelineCodegen(pipeline)) {
@@ -619,6 +632,10 @@ int KrtCompilePipelineExecute(KrtCompilePipeline* pipeline, const char* input_fi
 
     if (!KrtCompilePipelineSemantic(pipeline)) {
         return 0;
+    }
+
+    if (pipeline_finish_check_only(pipeline, input_file, total_start)) {
+        return 1;
     }
 
     if (!KrtCompilePipelineCodegen(pipeline)) {

@@ -28,6 +28,8 @@ typedef struct {
     int create_project;
     int keep_temp_files;
     int max_threads;
+    /** Stop after semantic analysis (the `check` command). */
+    int check_only;
     const char* project_type;
 
     int color_enabled;

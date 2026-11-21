@@ -15,7 +15,6 @@
 static bool import_krt_file(SemanticAnalyzer* analyzer, const char* file_path);
 static bool semantic_try_lazy_import_class(SemanticAnalyzer* analyzer, const char* class_name);
 
-#include "Core/Utils/OutputCache.h"
 #include "Core/Utils/KrtCommon.h"
 #include "Accelerator.h"
 #include "../Lexer/Tokenizer.h"
@@ -860,9 +859,10 @@ void semantic_analyzer_add_error(SemanticAnalyzer* analyzer, const char* format,
 
     va_list args;
     va_start(args, format);
-    KrtOutputCacheAddError("Error: ");
-    KrtOutputCacheAddErrorv(format, args);
-    KrtOutputCacheAddError("\n");
+    fprintf(stderr, "Error: ");
+    vfprintf(stderr, format, args);
+    fprintf(stderr, "\n");
+    fflush(stderr);
     va_end(args);
 }
 
@@ -879,9 +879,8 @@ void semantic_analyzer_add_error_ex(SemanticAnalyzer* analyzer, int line, int co
                           hint ? hint : "");
     }
 
-    KrtOutputCacheAddError("Error: ");
-    KrtOutputCacheAddError("%s", message);
-    KrtOutputCacheAddError("\n");
+    fprintf(stderr, "Error: %s\n", message);
+    fflush(stderr);
 }
 
 void semantic_analyzer_add_error_at(SemanticAnalyzer* analyzer, ASTNode* node, const char* format, ...) {
@@ -918,9 +917,8 @@ void semantic_analyzer_add_warning(SemanticAnalyzer* analyzer, const char* forma
     char buffer[1024];
     vsnprintf(buffer, sizeof(buffer), format, args);
 
-    KrtOutputCacheAdd("[SEMANTIC WARNING] ");
-    KrtOutputCacheAdd("%s", buffer);
-    KrtOutputCacheAdd("\n");
+    fprintf(stderr, "[SEMANTIC WARNING] %s\n", buffer);
+    fflush(stderr);
 
     va_end(args);
 }

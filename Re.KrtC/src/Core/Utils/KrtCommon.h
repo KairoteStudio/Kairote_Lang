@@ -13,48 +13,26 @@
 #endif
 #define KrtError(fmt, ...)                                                                                             \
     do {                                                                                                               \
-        extern int KrtOutputCacheIsEnabled(void);                                                                      \
-        extern void KrtOutputCacheAddError(const char* format, ...);                                                   \
-        if (KrtOutputCacheIsEnabled()) {                                                                               \
-            KrtOutputCacheAddError("[KrtError] " fmt "\n", ##__VA_ARGS__);                                             \
-        } else {                                                                                                       \
-            fprintf(stderr, "[KrtError] " fmt "\n", ##__VA_ARGS__);                                                    \
-            fflush(stderr);                                                                                            \
-        }                                                                                                              \
+        fprintf(stderr, "[KrtError] " fmt "\n", ##__VA_ARGS__);                                                        \
+        fflush(stderr);                                                                                                \
     } while (0)
 
 #define KrtError_LOC(file, line, fmt, ...)                                                                             \
     do {                                                                                                               \
-        extern int KrtOutputCacheIsEnabled(void);                                                                      \
-        extern void KrtOutputCacheAddError(const char* format, ...);                                                   \
-        if (KrtOutputCacheIsEnabled()) {                                                                               \
-            KrtOutputCacheAddError("[KrtError] %s:%d: " fmt "\n", file, line, ##__VA_ARGS__);                          \
-        } else {                                                                                                       \
-            fprintf(stderr, "[KrtError] %s:%d: " fmt "\n", file, line, ##__VA_ARGS__);                                 \
-            fflush(stderr);                                                                                            \
-        }                                                                                                              \
+        fprintf(stderr, "[KrtError] %s:%d: " fmt "\n", file, line, ##__VA_ARGS__);                                     \
+        fflush(stderr);                                                                                                \
     } while (0)
+
 #define KRT_WARNING(fmt, ...)                                                                                          \
     do {                                                                                                               \
-        extern int KrtOutputCacheIsEnabled(void);                                                                      \
-        extern void KrtOutputCacheAddError(const char* format, ...);                                                   \
-        if (KrtOutputCacheIsEnabled()) {                                                                               \
-            KrtOutputCacheAddError("[KRT_WARNING] " fmt "\n", ##__VA_ARGS__);                                          \
-        } else {                                                                                                       \
-            fprintf(stderr, "[KRT_WARNING] " fmt "\n", ##__VA_ARGS__);                                                 \
-            fflush(stderr);                                                                                            \
-        }                                                                                                              \
+        fprintf(stderr, "[KRT_WARNING] " fmt "\n", ##__VA_ARGS__);                                                     \
+        fflush(stderr);                                                                                                \
     } while (0)
+
 #define KRT_WARNING_LOC(file, line, fmt, ...)                                                                          \
     do {                                                                                                               \
-        extern int KrtOutputCacheIsEnabled(void);                                                                      \
-        extern void KrtOutputCacheAddError(const char* format, ...);                                                   \
-        if (KrtOutputCacheIsEnabled()) {                                                                               \
-            KrtOutputCacheAddError("[KRT_WARNING] %s:%d: " fmt "\n", file, line, ##__VA_ARGS__);                       \
-        } else {                                                                                                       \
-            fprintf(stderr, "[KRT_WARNING] %s:%d: " fmt "\n", file, line, ##__VA_ARGS__);                              \
-            fflush(stderr);                                                                                            \
-        }                                                                                                              \
+        fprintf(stderr, "[KRT_WARNING] %s:%d: " fmt "\n", file, line, ##__VA_ARGS__);                                  \
+        fflush(stderr);                                                                                                \
     } while (0)
 
 #define KRT_COMPILE_ERROR(fmt, ...)                                                                                    \
@@ -91,6 +69,10 @@
 #include "KrtString.h"
 #include <time.h>
 #include <stdarg.h>
+
+int KrtPrintf(const char* format, ...) KRT_PRINTF_FORMAT(1, 2);
+int KrtPrintFormat(const char* format, ...) KRT_PRINTF_FORMAT(1, 2);
+int KrtFprintf(FILE* stream, const char* format, ...) KRT_PRINTF_FORMAT(2, 3);
 
 /* Append value to a growing string list, deduplicating. Shared by the config
  * and pipeline imported-file tables. Returns false on an invalid argument or

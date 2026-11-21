@@ -46,7 +46,6 @@ pub fn build(b: *std.Build) void {
             "src/Core/Utils/KrtString.c",
             "src/Core/Utils/KrtTime.c",
             "src/Core/Utils/Logger.c",
-            "src/Core/Utils/OutputCache.c",
             "src/Core/Utils/Path.c",
             "src/Core/Utils/StackCalculator.c",
             "src/Compiler/Driver/ArkLinkIntegration.c",

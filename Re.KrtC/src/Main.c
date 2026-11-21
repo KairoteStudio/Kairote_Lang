@@ -44,7 +44,6 @@
 #include "Compiler/Driver/Preprocessor.h"
 #include "Compiler/Frontend/Semantic/Generics.h"
 #include "Compiler/Driver/ArkLinkIntegration.h"
-#include "Core/Utils/OutputCache.h"
 
 static const char* project_name_from_type(const char* type) {
     if (!type) {
@@ -180,6 +179,8 @@ static KrtCommandLineOptions parse_command_line(int argc, char* argv[]) {
             options.project_type = argv[++i];
             options.input_file = argv[++i];
         } else if (strcmp(arg, "build") == 0) {
+            /* `build <file>` replaces any positional input recorded earlier;
+             * positional arguments already collected stay in input_files. */
             if (i + 1 < argc) {
                 options.target_type = KRT_TARGET_CMD_BUILD;
                 options.input_file = argv[++i];
@@ -243,8 +244,8 @@ static KrtCommandLineOptions parse_command_line(int argc, char* argv[]) {
                 exit(1);
             }
             options.max_threads = threads;
-        } else if (options.target_type != KRT_TARGET_CMD_CLEAN && options.target_type != KRT_TARGET_CMD_CHECK &&
-                   options.target_type != KRT_TARGET_CMD_VERSION) {
+        } else if (options.target_type != KRT_TARGET_CMD_VERSION) {
+            /* clean/check accept an optional path; version takes none. */
 
             if (options.input_file_count < KRT_MAX_INPUT_FILES) {
                 options.input_files[options.input_file_count++] = arg;
@@ -434,6 +435,8 @@ static int compile_single_file(const char* input_file, const char* output_file, 
     case KRT_TARGET_CMD_CLEAN:
         break;
     case KRT_TARGET_CMD_CHECK:
+        config->target_type = KRT_TARGET_IR;
+        config->check_only = 1;
         break;
     case KRT_TARGET_CMD_VERSION:
         break;
@@ -1354,12 +1357,111 @@ static int build_project(const char* project_file, const char* output_path, int 
     return result;
 }
 
+static int remove_directory_recursive(const char* path) {
+    if (!path || path[0] == '\0') {
+        return -1;
+    }
+#ifdef _WIN32
+    char search_path[1024];
+    snprintf(search_path, sizeof(search_path), "%s\\*", path);
+    WIN32_FIND_DATAA find_data;
+    HANDLE find_handle = FindFirstFileA(search_path, &find_data);
+    if (find_handle != INVALID_HANDLE_VALUE) {
+        do {
+            if (strcmp(find_data.cFileName, ".") == 0 || strcmp(find_data.cFileName, "..") == 0) {
+                continue;
+            }
+            char child[1024];
+            snprintf(child, sizeof(child), "%s\\%s", path, find_data.cFileName);
+            if (find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                remove_directory_recursive(child);
+            } else {
+                DeleteFileA(child);
+            }
+        } while (FindNextFileA(find_handle, &find_data));
+        FindClose(find_handle);
+    }
+    return RemoveDirectoryA(path) ? 0 : -1;
+#else
+    DIR* dir = opendir(path);
+    if (!dir) {
+        return -1;
+    }
+    struct dirent* entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        char child[KRT_MAX_PATH];
+        snprintf(child, sizeof(child), "%s/%s", path, entry->d_name);
+        struct stat st;
+        if (lstat(child, &st) == 0) {
+            if (S_ISDIR(st.st_mode)) {
+                remove_directory_recursive(child);
+            } else {
+                unlink(child);
+            }
+        }
+    }
+    closedir(dir);
+    return rmdir(path);
+#endif
+}
+
+static int run_clean(const char* path) {
+    char root[KRT_MAX_PATH];
+    if (path && path[0] != '\0') {
+        const char* slash = strrchr(path, '/');
+        if (!slash) {
+            slash = strrchr(path, '\\');
+        }
+        if (slash) {
+            size_t length = (size_t)(slash - path);
+            if (length == 0) {
+                length = 1;
+            }
+            if (length >= sizeof(root)) {
+                length = sizeof(root) - 1;
+            }
+            memcpy(root, path, length);
+            root[length] = '\0';
+        } else {
+            snprintf(root, sizeof(root), ".");
+        }
+    } else {
+        snprintf(root, sizeof(root), ".");
+    }
+
+    char obj_dir[KRT_MAX_PATH];
+    char bin_dir[KRT_MAX_PATH];
+    snprintf(obj_dir, sizeof(obj_dir), "%s%cobj", root, KRT_PATH_SEPARATOR);
+    snprintf(bin_dir, sizeof(bin_dir), "%s%cbin", root, KRT_PATH_SEPARATOR);
+
+    int result = 0;
+    if (KrtPathExists(obj_dir) && remove_directory_recursive(obj_dir) != 0) {
+        KrtError("无法清理对象目录: %s", obj_dir);
+        result = 1;
+    }
+    if (KrtPathExists(bin_dir) && remove_directory_recursive(bin_dir) != 0) {
+        KrtError("无法清理输出目录: %s", bin_dir);
+        result = 1;
+    }
+    return result;
+}
+
 static int run_compiler(const char** input_files, int input_count, const char* output_file,
                         KrtCommandTargetType target_type, int show_ir, int keep_temp, int optimization_level,
                         int max_threads) {
     if (!input_files || input_count <= 0) {
+        if (target_type == KRT_TARGET_CMD_CLEAN) {
+            return run_clean(NULL);
+        }
         KrtError("未指定输入文件");
         return 1;
+    }
+
+    if (target_type == KRT_TARGET_CMD_CLEAN) {
+        return run_clean(input_files[0]);
     }
 
     int is_project = 0;
@@ -1470,7 +1572,6 @@ int main(int argc, char* argv[]) {
 
     if (options.show_help) {
         print_usage(argv[0]);
-        KrtOutputCacheCleanup();
         return 0;
     }
 
@@ -1480,7 +1581,6 @@ int main(int argc, char* argv[]) {
         int created = create_project(project_name, options.project_type);
         KrtBuildSummarySetDuration(KrtGetTime() - total_start);
         KrtPrintBuildSummary();
-        KrtOutputCacheCleanup();
         return created ? 0 : 1;
     }
 
@@ -1491,7 +1591,6 @@ int main(int argc, char* argv[]) {
 
         KrtPrintf("%sKairote Lang Compiler Version%s: %s %s (%s %s)\n", blue, reset, KRT_COMPILER_VERSION, gray,
                   __DATE__, __TIME__);
-        KrtOutputCacheCleanup();
         return 0;
     }
 
@@ -1504,6 +1603,5 @@ int main(int argc, char* argv[]) {
     }
     KrtPrintBuildSummary();
 
-    KrtOutputCacheCleanup();
     return result;
 }

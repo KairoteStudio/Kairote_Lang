@@ -314,6 +314,15 @@ int ParallelCompilerExecute(ParallelCompiler* compiler) {
     return compiler->any_failed ? -1 : 0;
 }
 
+static const char* const krt_runtime_subdirs[] = {
+    "obj" KRT_PATH_SEPARATOR_STR "runtime",
+    "obj" KRT_PATH_SEPARATOR_STR "core" KRT_PATH_SEPARATOR_STR "utils",
+    "obj" KRT_PATH_SEPARATOR_STR "core" KRT_PATH_SEPARATOR_STR "memory",
+    "obj" KRT_PATH_SEPARATOR_STR "compiler",
+    "obj" KRT_PATH_SEPARATOR_STR "common",
+    "build",
+};
+
 void FindRuntimeObj(const char* obj_name, char* result, size_t size) {
     char* current_dir = KrtGetCurrentDirectory();
 
@@ -325,15 +334,9 @@ void FindRuntimeObj(const char* obj_name, char* result, size_t size) {
         return;
     }
 
-    const char* subdirs[] = {"obj" KRT_PATH_SEPARATOR_STR "runtime",
-                             "obj" KRT_PATH_SEPARATOR_STR "core" KRT_PATH_SEPARATOR_STR "utils",
-                             "obj" KRT_PATH_SEPARATOR_STR "core" KRT_PATH_SEPARATOR_STR "memory",
-                             "obj" KRT_PATH_SEPARATOR_STR "compiler",
-                             "obj" KRT_PATH_SEPARATOR_STR "common",
-                             "build"};
-    for (size_t i = 0; i < sizeof(subdirs) / sizeof(subdirs[0]); i++) {
+    for (size_t i = 0; i < sizeof(krt_runtime_subdirs) / sizeof(krt_runtime_subdirs[0]); i++) {
         char temp[KRT_MAX_PATH];
-        KrtPathJoin(temp, sizeof(temp), subdirs[i], obj_name);
+        KrtPathJoin(temp, sizeof(temp), krt_runtime_subdirs[i], obj_name);
         if (KrtPathExists(temp)) {
             KRT_STRCPY_S(result, size, temp);
             if (current_dir) {
@@ -347,11 +350,11 @@ void FindRuntimeObj(const char* obj_name, char* result, size_t size) {
         char parent_obj[KRT_MAX_PATH];
         KrtPathJoin(parent_obj, sizeof(parent_obj), current_dir, "..");
 
-        for (size_t i = 0; i < sizeof(subdirs) / sizeof(subdirs[0]); i++) {
-            char full_path[KRT_MAX_PATH];
+        for (size_t i = 0; i < sizeof(krt_runtime_subdirs) / sizeof(krt_runtime_subdirs[0]); i++) {
+            char sub_path[KRT_MAX_PATH];
             char temp_path[KRT_MAX_PATH];
-            KrtPathJoin(full_path, sizeof(full_path), parent_obj, subdirs[i]);
-            KrtPathJoin(temp_path, sizeof(temp_path), full_path, obj_name);
+            KrtPathJoin(sub_path, sizeof(sub_path), parent_obj, krt_runtime_subdirs[i]);
+            KrtPathJoin(temp_path, sizeof(temp_path), sub_path, obj_name);
             if (KrtPathExists(temp_path)) {
                 KRT_STRCPY_S(result, size, temp_path);
                 KRT_FREE(current_dir);
@@ -371,19 +374,14 @@ void FindRuntimeObj(const char* obj_name, char* result, size_t size) {
             return;
         }
 
-        const char* exe_rel_base[] = {
-            ".." KRT_PATH_SEPARATOR_STR ".." KRT_PATH_SEPARATOR_STR "obj" KRT_PATH_SEPARATOR_STR "runtime",
-            ".." KRT_PATH_SEPARATOR_STR ".." KRT_PATH_SEPARATOR_STR "obj" KRT_PATH_SEPARATOR_STR
-            "core" KRT_PATH_SEPARATOR_STR "utils",
-            ".." KRT_PATH_SEPARATOR_STR ".." KRT_PATH_SEPARATOR_STR "obj" KRT_PATH_SEPARATOR_STR
-            "core" KRT_PATH_SEPARATOR_STR "memory",
-            ".." KRT_PATH_SEPARATOR_STR ".." KRT_PATH_SEPARATOR_STR "obj" KRT_PATH_SEPARATOR_STR "compiler",
-            ".." KRT_PATH_SEPARATOR_STR ".." KRT_PATH_SEPARATOR_STR "obj" KRT_PATH_SEPARATOR_STR "common",
-            ".." KRT_PATH_SEPARATOR_STR ".." KRT_PATH_SEPARATOR_STR "build"};
-        for (size_t i = 0; i < sizeof(exe_rel_base) / sizeof(exe_rel_base[0]); i++) {
+        char exe_parent[KRT_MAX_PATH];
+        KrtPathJoin(exe_parent, sizeof(exe_parent), exe_dir, "..");
+        char exe_grandparent[KRT_MAX_PATH];
+        KrtPathJoin(exe_grandparent, sizeof(exe_grandparent), exe_parent, "..");
+        for (size_t i = 0; i < sizeof(krt_runtime_subdirs) / sizeof(krt_runtime_subdirs[0]); i++) {
             char rel_path[KRT_MAX_PATH];
             char temp2[KRT_MAX_PATH];
-            KrtPathJoin(rel_path, sizeof(rel_path), exe_dir, exe_rel_base[i]);
+            KrtPathJoin(rel_path, sizeof(rel_path), exe_grandparent, krt_runtime_subdirs[i]);
             KrtPathJoin(temp2, sizeof(temp2), rel_path, obj_name);
             if (KrtPathExists(temp2)) {
                 KRT_STRCPY_S(result, size, temp2);

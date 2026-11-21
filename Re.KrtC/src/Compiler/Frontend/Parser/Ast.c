@@ -1,7 +1,6 @@
 #include "Ast.h"
 #include "Core/Utils/KrtCommon.h"
 #include "Accelerator.h"
-#include "Core/Utils/OutputCache.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>

@@ -7,7 +7,6 @@
 #include <stdint.h>
 #include "../Ir/Ir.h"
 #include "../../Compiler.h"
-#include "../../../Core/Utils/OutputCache.h"
 #include "../../../Core/Utils/KrtCommon.h"
 #include "../../Frontend/Semantic/SymbolTable.h"
 #include "../../Frontend/Semantic/NameMangling.h"

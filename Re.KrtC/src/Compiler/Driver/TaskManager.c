@@ -1,7 +1,6 @@
 #include "TaskManager.h"
 #include "ConsoleUtils.h"
 #include "../../Core/Utils/KrtCommon.h"
-#include "../../Core/Utils/OutputCache.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -63,7 +62,6 @@ void KrtTaskReport(const char* stage, const char* file, KrtTaskResult result, do
     }
 
     if (result == KRT_TASK_RESULT_FAILED) {
-        KrtOutputCacheFlush();
         g_current_task_line_active = 0;
     }
 }
@@ -91,7 +89,6 @@ void KrtPrintBuildSummary(void) {
     }
 
     show_idle_status();
-    KrtOutputCacheFlush();
 
     const char* status_text = g_build_summary.failed ? "FAILED" : "SUCCESSFUL";
     const char* status_color = g_build_summary.failed ? KRT_COL_RED : KRT_COL_GREEN;

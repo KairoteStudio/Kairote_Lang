@@ -4,7 +4,6 @@
 #include <string.h>
 #include "Accelerator.h"
 #include "ParserBase.h"
-#include "../../../Core/Utils/OutputCache.h"
 
 #define KRT_PARSER_DEFAULT_ARENA_SIZE (128 * 1024)
 #define KRT_PARSER_FUNCTION_CAPACITY_INIT 16
@@ -65,7 +64,8 @@ void parser_report_error(Parser* parser, int line, int col, const char* format, 
     va_start(args, format);
     vsnprintf(body, sizeof(body), format, args);
     va_end(args);
-    KrtOutputCacheAddError("%s\033[31merror:\033[0m %s\n", prefix, body);
+    fprintf(stderr, "%s\033[31merror:\033[0m %s\n", prefix, body);
+    fflush(stderr);
 }
 
 Parser* parser_create(Lexer* lexer) {
