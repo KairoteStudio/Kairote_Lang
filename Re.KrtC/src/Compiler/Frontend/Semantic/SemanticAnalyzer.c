@@ -1692,6 +1692,41 @@ bool semantic_analyzer_analyze_function_call(SemanticAnalyzer* analyzer, ASTNode
                         call_expr->data.call.argument_count, call_expr->data.call.arguments);
                 }
                 if (!method_symbol) {
+                    /*
+                     * Not a member of the current class.  That is legitimate
+                     * for a namespace-level function (IrGen mangles those
+                     * without a class qualifier), so look there before
+                     * complaining; otherwise an unresolved name only surfaces
+                     * as an "Undefined symbol" at link time.
+                     */
+                    KrtTokenType* gtypes = NULL;
+                    int gargc = call_expr->data.call.argument_count;
+                    if (gargc > 0) {
+                        gtypes = (KrtTokenType*)KRT_MALLOC(sizeof(KrtTokenType) * (size_t)gargc);
+                        if (gtypes) {
+                            for (int i = 0; i < gargc; i++) {
+                                gtypes[i] = semantic_analyzer_infer_expression_type(analyzer,
+                                                                                    call_expr->data.call.arguments[i]);
+                            }
+                        }
+                    }
+                    char* global_name =
+                        name_mangle_function(NULL, call_expr->data.call.name, gtypes, gargc);
+                    KRT_FREE(gtypes);
+                    SymbolTable* gtable =
+                        analyzer->global_symbol_table ? analyzer->global_symbol_table : analyzer->symbol_table;
+                    SymbolEntry* global = symbol_table_lookup_scope_chain(gtable, call_expr->data.call.name);
+                    if (!global && global_name) {
+                        global = symbol_table_lookup_scope_chain(gtable, global_name);
+                    }
+                    if (!global) {
+                        semantic_analyzer_add_error_at(analyzer, call_expr, "Undefined function: %s",
+                                                       call_expr->data.call.name);
+                        KRT_FREE(global_name);
+                        KRT_FREE(mangled_name);
+                        return false;
+                    }
+                    KRT_FREE(global_name);
                     KRT_FREE(mangled_name);
                     return true;
                 }
