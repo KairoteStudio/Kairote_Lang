@@ -2184,7 +2184,9 @@ bool semantic_analyzer_analyze_function_call(SemanticAnalyzer* analyzer, ASTNode
     }
 
     if (!call_expr->data.call.object) {
+        char* old_name = call_expr->data.call.name;
         call_expr->data.call.name = func_name;
+        KRT_FREE(old_name);
     } else {
         KRT_FREE(func_name);
     }
@@ -2276,6 +2278,8 @@ bool semantic_analyzer_analyze_variable_decl(SemanticAnalyzer* analyzer, ASTNode
                         KRT_FREE(base_type);
                     }
                 } else {
+                    semantic_analyzer_add_error_at(analyzer, var_decl,
+                                                   "Unterminated template instantiation: %s", template_type);
                     KRT_FREE(base_type);
                 }
             }
