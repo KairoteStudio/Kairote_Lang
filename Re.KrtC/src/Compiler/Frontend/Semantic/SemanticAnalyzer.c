@@ -2226,6 +2226,11 @@ bool semantic_analyzer_analyze_variable_decl(SemanticAnalyzer* analyzer, ASTNode
         return false;
     }
     if (type.token == TOKEN_IDENTIFIER && type.type_name && !KrtSourceIsPointer(type)) {
+        /* `NoSuchType x;` used to compile silently. */
+        if (!semantic_analyzer_lookup_class(analyzer, type.type_name)) {
+            semantic_analyzer_add_error_at(analyzer, var_decl, "Undefined type: %s", type.type_name);
+            return false;
+        }
         if (!symbol->class_type_name) {
             symbol->class_type_name = KRT_STRDUP(type.type_name);
         }
