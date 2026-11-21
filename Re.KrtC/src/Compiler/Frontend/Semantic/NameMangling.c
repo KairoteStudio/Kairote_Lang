@@ -42,10 +42,15 @@ const char* KrtMangleTypeName(KrtTokenType type) {
         return "b";
     case TOKEN_CHAR:
         return "c";
+    /*
+     * `string` (TOKEN_TYPE_STRING, what the `string` keyword parses to) and a
+     * string literal (TOKEN_STRING) must share one code: declarations mangle
+     * the declared token while call sites mangle the inferred one, and if the
+     * two differ the names stop matching.
+     */
     case TOKEN_STRING:
-        return "t";
     case TOKEN_TYPE_STRING:
-        return "T";
+        return "t";
     case TOKEN_VOID:
         return "v";
     default:

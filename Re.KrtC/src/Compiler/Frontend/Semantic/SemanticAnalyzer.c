@@ -939,7 +939,8 @@ static KrtTokenType semantic_mangled_parameter_type(const char* suffix, int leng
         return TOKEN_FLOAT64;
     case 'b':
         return TOKEN_BOOL;
-    case 'r':
+    case 'r': /* legacy code, kept so old objects still demangle */
+    case 't':
         return TOKEN_STRING;
     case 'v':
         return TOKEN_VOID;
