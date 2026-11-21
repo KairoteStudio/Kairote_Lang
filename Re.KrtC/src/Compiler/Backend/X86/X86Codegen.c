@@ -994,6 +994,10 @@ static void emit_instruction(Emitter* em, KrtIRInst* inst) {
     case KRT_IR_STRCAT:
 
         if (inst->operand_count >= 2) {
+            if (KrtTokenIntegerBits(inst->operands[0].value_type) > 0 ||
+                KrtTokenIntegerBits(inst->operands[1].value_type) > 0) {
+                KRT_WARNING("X86 STRCAT expects string operands");
+            }
 #ifdef __linux__
             emit_load_value(em, &inst->operands[0], "rdi");
             emit_load_value(em, &inst->operands[1], "rsi");
@@ -1009,6 +1013,9 @@ static void emit_instruction(Emitter* em, KrtIRInst* inst) {
     case KRT_IR_INT_TO_STRING:
 
         if (inst->operand_count >= 1) {
+            if (inst->operands[0].value_type == TOKEN_FLOAT32 || inst->operands[0].value_type == TOKEN_FLOAT64) {
+                KRT_WARNING("X86 INT_TO_STRING expects an integer operand");
+            }
 #ifdef __linux__
             emit_load_value(em, &inst->operands[0], "rdi");
 #else
@@ -1021,6 +1028,9 @@ static void emit_instruction(Emitter* em, KrtIRInst* inst) {
 
     case KRT_IR_DOUBLE_TO_STRING:
         if (inst->operand_count >= 1) {
+            if (inst->operands[0].value_type != TOKEN_FLOAT32 && inst->operands[0].value_type != TOKEN_FLOAT64) {
+                KRT_WARNING("X86 DOUBLE_TO_STRING expects a floating-point operand");
+            }
 #ifdef __linux__
             emit_load_value(em, &inst->operands[0], "rdi");
 #else
