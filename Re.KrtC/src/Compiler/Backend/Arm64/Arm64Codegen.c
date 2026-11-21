@@ -69,6 +69,8 @@ typedef struct {
     int func_count;
     uint32_t entry_func_offset;
     bool has_entry_func;
+    int32_t* string_const_sym_indices;
+    int string_const_count;
 } Arm64Context;
 
 /* ------------------------------------------------------------------ */
@@ -395,6 +397,8 @@ static bool value_is_64(KrtIRValue* value) {
     return bits == 0 || bits > 32;
 }
 
+static void emit_symbol_address(Arm64Context* ctx, const char* name, int reg);
+
 static void emit_load_value(Arm64Context* ctx, KrtIRValue* value, int reg) {
     if (!value) {
         return;
@@ -437,6 +441,18 @@ static void emit_load_value(Arm64Context* ctx, KrtIRValue* value, int reg) {
         }
         break;
     }
+    case KRT_IR_VALUE_STRING_CONST: {
+        int id = value->data.string_const_id;
+        if (id >= 0 && id < ctx->string_const_count && ctx->string_const_sym_indices &&
+            ctx->string_const_sym_indices[id] >= 0) {
+            char name[64];
+            snprintf(name, sizeof(name), "str_const_%d", id);
+            emit_symbol_address(ctx, name, reg);
+        } else {
+            emit_load_imm(ctx, reg, 0, true);
+        }
+        break;
+    }
     default:
         emit_load_imm(ctx, reg, 0, is_64);
         break;
@@ -448,6 +464,21 @@ static void emit_store_result(Arm64Context* ctx, KrtIRInst* inst, int reg) {
     if (slot >= 0) {
         emit_store_to_slot(ctx, reg, slot, value_is_64(&inst->result));
     }
+}
+
+/* Load the absolute address of a symbol: ADRP (page) + ADD (low 12 bits). */
+static void emit_symbol_address(Arm64Context* ctx, const char* name, int reg) {
+    int sym = name ? kro_find_symbol(ctx->writer, name) : -1;
+    if (sym < 0) {
+        emit_load_imm(ctx, reg, 0, true);
+        return;
+    }
+    uint32_t adrp_offset = kro_get_code_offset(ctx->writer);
+    emit_word(ctx, 0x90000000u | (uint32_t)(reg & 0x1F));
+    kro_add_reloc(ctx->writer, KRO_SEC_TEXT, adrp_offset, sym, KRO_RELOC_AARCH64_ADR_PREL_PG_HI21, 0);
+    uint32_t add_offset = kro_get_code_offset(ctx->writer);
+    emit_word(ctx, 0x91000000u | ((uint32_t)(reg & 0x1F) << 5) | (uint32_t)(reg & 0x1F));
+    kro_add_reloc(ctx->writer, KRO_SEC_TEXT, add_offset, sym, KRO_RELOC_AARCH64_ADD_ABS_LO12_NC, 0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -750,10 +781,15 @@ static void emit_function_body(Arm64Context* ctx, KrtIRFunction* func) {
                     break;
                 }
                 uint32_t number = 0;
+                bool has_number = false;
                 if (inst->operands[0].type == KRT_IR_VALUE_IMM) {
                     number = arm64_syscall_number((uint32_t)(int64_t)inst->operands[0].data.imm);
+                    has_number = true;
+                } else if (inst->operands[0].type == KRT_IR_VALUE_INTEGER) {
+                    number = arm64_syscall_number((uint32_t)inst->operands[0].data.integer);
+                    has_number = true;
                 }
-                if (inst->operands[0].type == KRT_IR_VALUE_IMM) {
+                if (has_number) {
                     emit_load_imm(ctx, 8, number, true);
                 } else {
                     emit_load_value(ctx, &inst->operands[0], 8);
@@ -828,8 +864,33 @@ void KrtArm64Generate(FILE* output_file, const char* output_filename, KrtIRModul
     for (KrtIRFunction* func = module->functions; func; func = func->next) {
         func_count++;
     }
+
+    /* Materialise string constants into .rodata and give each one a symbol. */
+    if (module->string_const_count > 0 && module->string_constants) {
+        ctx.string_const_sym_indices = (int32_t*)KRT_MALLOC(module->string_const_count * sizeof(int32_t));
+        if (!ctx.string_const_sym_indices) {
+            kro_writer_destroy(ctx.writer);
+            return;
+        }
+        ctx.string_const_count = module->string_const_count;
+        for (int i = 0; i < module->string_const_count; i++) {
+            const char* text = module->string_constants[i];
+            ctx.string_const_sym_indices[i] = -1;
+            if (!text) {
+                continue;
+            }
+            uint32_t offset = kro_get_rodata_offset(ctx.writer);
+            kro_write_rodata(ctx.writer, text, (uint32_t)strlen(text) + 1);
+            char name[64];
+            snprintf(name, sizeof(name), "str_const_%d", i);
+            ctx.string_const_sym_indices[i] =
+                kro_add_symbol(ctx.writer, name, KRO_SYM_OBJECT, KRO_BIND_LOCAL, KRO_SEC_RODATA, offset);
+        }
+    }
+
     if (func_count == 0) {
         kro_write_file(ctx.writer, ctx.output_filename);
+        KRT_FREE(ctx.string_const_sym_indices);
         kro_writer_destroy(ctx.writer);
         return;
     }
@@ -878,5 +939,6 @@ void KrtArm64Generate(FILE* output_file, const char* output_filename, KrtIRModul
     }
 
     kro_write_file(ctx.writer, ctx.output_filename);
+    KRT_FREE(ctx.string_const_sym_indices);
     kro_writer_destroy(ctx.writer);
 }
