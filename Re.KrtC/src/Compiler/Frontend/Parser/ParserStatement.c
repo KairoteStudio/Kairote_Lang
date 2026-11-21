@@ -225,6 +225,7 @@ static ASTNode* parser_parse_declaration_with_modifiers(Parser* parser) {
         declaration->type = AST_STATIC_FUNCTION_DECLARATION;
     } else if ((is_static || is_const) && declaration && declaration->type == AST_VARIABLE_DECLARATION) {
         declaration->type = AST_STATIC_VARIABLE_DECLARATION;
+        declaration->data.static_variable_decl.is_const = is_const;
     }
     return declaration;
 }

@@ -221,6 +221,7 @@ typedef struct ASTNode {
             char* name;
             struct ASTNode* value;
             KrtTokenType type;
+            int is_const; /* `const` (as opposed to plain `static`) */
         } static_variable_decl;
         struct {
             char* name;

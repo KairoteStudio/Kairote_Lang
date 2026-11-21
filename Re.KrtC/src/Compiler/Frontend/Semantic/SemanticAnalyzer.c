@@ -1085,6 +1085,15 @@ static SymbolEntry* semantic_lookup_method_by_arity(SemanticAnalyzer* analyzer, 
 
 #include "PointerAnalysis.inc"
 
+static bool semantic_check_assignable(SemanticAnalyzer* analyzer, ASTNode* node, const char* name,
+                                      SymbolEntry* symbol) {
+    if (symbol && symbol->is_const) {
+        semantic_analyzer_add_error_at(analyzer, node, "Cannot assign to constant: %s", name);
+        return false;
+    }
+    return true;
+}
+
 static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) {
     if (!analyzer || !expr) {
         return false;
@@ -1206,6 +1215,9 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
             semantic_analyzer_add_error_at(analyzer, expr, "Undefined variable: %s", var_name);
             return false;
         }
+        if (!semantic_check_assignable(analyzer, expr, var_name, symbol)) {
+            return false;
+        }
         return semantic_analyzer_analyze_expression(analyzer, expr->data.assignment.value);
     }
 
@@ -1214,6 +1226,9 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
         SymbolEntry* symbol = symbol_table_lookup_scope_chain(analyzer->symbol_table, var_name);
         if (!symbol) {
             semantic_analyzer_add_error_at(analyzer, expr, "Undefined variable: %s", var_name);
+            return false;
+        }
+        if (!semantic_check_assignable(analyzer, expr, var_name, symbol)) {
             return false;
         }
         return semantic_analyzer_analyze_expression(analyzer, expr->data.compound_assignment.value);
@@ -2145,6 +2160,7 @@ bool semantic_analyzer_analyze_static_variable_decl(SemanticAnalyzer* analyzer, 
         return false;
     }
     symbol->value_type = var_decl->data.static_variable_decl.type;
+    symbol->is_const = var_decl->data.static_variable_decl.is_const;
     symbol->source_type =
         var_decl->declared_type.token ? var_decl->declared_type : (KrtSourceType){.token = symbol->value_type};
 
@@ -2162,6 +2178,9 @@ static bool semantic_analyze_stmt_assignment(SemanticAnalyzer* analyzer, ASTNode
         semantic_analyzer_add_error_at(analyzer, stmt, "Undefined variable: %s", var_name);
         return false;
     }
+    if (!semantic_check_assignable(analyzer, stmt, var_name, symbol)) {
+        return false;
+    }
     stmt->is_ref_binding = symbol->source_type.is_ref;
     stmt->resolved_type = symbol->source_type;
     stmt->resolved_type.is_ref = false;
@@ -2173,6 +2192,9 @@ static bool semantic_analyze_stmt_compound_assignment(SemanticAnalyzer* analyzer
     SymbolEntry* symbol = symbol_table_lookup_scope_chain(analyzer->symbol_table, var_name);
     if (!symbol) {
         semantic_analyzer_add_error_at(analyzer, stmt, "Undefined variable: %s", var_name);
+        return false;
+    }
+    if (!semantic_check_assignable(analyzer, stmt, var_name, symbol)) {
         return false;
     }
     if (!semantic_analyzer_analyze_expression(analyzer, stmt->data.compound_assignment.value)) {

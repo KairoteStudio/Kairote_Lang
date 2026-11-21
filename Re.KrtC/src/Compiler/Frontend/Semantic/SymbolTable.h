@@ -23,6 +23,7 @@ typedef struct SymbolEntry {
     char* name;
     SymbolType type;
     SymbolState state;
+    int is_const; /* set for `const` declarations; assignment is rejected */
     KrtIRValue* ir_value;
     KrtIRFunction* ir_function;
     int stack_offset;
