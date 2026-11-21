@@ -1966,7 +1966,7 @@ bool semantic_analyzer_analyze_function_call(SemanticAnalyzer* analyzer, ASTNode
                     KRT_FREE(mangled_name);
                     return true;
                 }
-                if (strcmp(method_symbol->name, mangled_name) != 0) {
+                if (mangled_name && strcmp(method_symbol->name, mangled_name) != 0) {
                     KRT_FREE(mangled_name);
                     mangled_name = KRT_STRDUP(method_symbol->name);
                 }
@@ -2031,7 +2031,7 @@ bool semantic_analyzer_analyze_function_call(SemanticAnalyzer* analyzer, ASTNode
                 KRT_FREE(mangled_name);
                 return false;
             }
-            if (strcmp(method_symbol->name, mangled_name) != 0) {
+            if (mangled_name && strcmp(method_symbol->name, mangled_name) != 0) {
                 KRT_FREE(mangled_name);
                 mangled_name = KRT_STRDUP(method_symbol->name);
             }
@@ -2134,11 +2134,11 @@ bool semantic_analyzer_analyze_function_call(SemanticAnalyzer* analyzer, ASTNode
             func_name = KRT_STRDUP(method_name);
         } else {
 
-            size_t total_len = strlen(class_name) + strlen(method_name) + 3;
-            func_name = KRT_MALLOC(total_len);
+            func_name = name_mangle_simple(class_name, method_name);
             if (func_name) {
-                snprintf(func_name, total_len, "%s__%s", class_name, method_name);
-
+                if (call_expr->data.call.resolved_class_name) {
+                    KRT_FREE(call_expr->data.call.resolved_class_name);
+                }
                 call_expr->data.call.resolved_class_name = KRT_STRDUP(class_name);
             }
         }
@@ -2155,25 +2155,6 @@ bool semantic_analyzer_analyze_function_call(SemanticAnalyzer* analyzer, ASTNode
     SymbolEntry* symbol = symbol_table_lookup_scope_chain(analyzer->symbol_table, func_name);
 
     if (!symbol) {
-
-        SymbolEntry* var_symbol = symbol_table_lookup_scope_chain(analyzer->symbol_table, func_name);
-        if (var_symbol && var_symbol->type == SYMBOL_VARIABLE) {
-            /* A function-typed variable is callable (delegate); anything else is not. */
-            if (var_symbol->source_type.token != TOKEN_FN) {
-                semantic_analyzer_add_error_at(analyzer, call_expr, "'%s' is not a function", func_name);
-                KRT_FREE(func_name);
-                return false;
-            }
-            KRT_FREE(func_name);
-
-            for (int i = 0; i < call_expr->data.call.argument_count; i++) {
-                if (!semantic_analyzer_analyze_expression(analyzer, call_expr->data.call.arguments[i])) {
-                    return false;
-                }
-            }
-            return true;
-        }
-
         semantic_analyzer_add_error_at(analyzer, call_expr, "Undefined function: %s", func_name);
         KRT_FREE(func_name);
         return false;
