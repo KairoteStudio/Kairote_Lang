@@ -710,9 +710,32 @@ static KrtTokenType semantic_array_element_type(SemanticAnalyzer* analyzer, ASTN
 
 /* Value of a compile-time integer constant, or -1 when it is not one. */
 static long semantic_constant_int(SemanticAnalyzer* analyzer, ASTNode* expr) {
-    (void)analyzer;
-    if (expr && expr->type == AST_NUMBER && expr->is_integer_literal) {
+    if (!expr) {
+        return -1;
+    }
+    if (expr->type == AST_NUMBER && expr->is_integer_literal) {
         return (long)(int64_t)expr->integer_value;
+    }
+    if (expr->type == AST_UNARY_OPERATION && expr->data.unary_op.operator == TOKEN_MINUS) {
+        long v = semantic_constant_int(analyzer, expr->data.unary_op.operand);
+        return v == -1 ? -1 : -v;
+    }
+    if (expr->type == AST_BINARY_OPERATION) {
+        long a = semantic_constant_int(analyzer, expr->data.binary_op.left);
+        long b = semantic_constant_int(analyzer, expr->data.binary_op.right);
+        if (a == -1 || b == -1) {
+            return -1;
+        }
+        switch (expr->data.binary_op.operator) {
+        case TOKEN_PLUS:
+            return a + b;
+        case TOKEN_MINUS:
+            return a - b;
+        case TOKEN_MULTIPLY:
+            return a * b;
+        default:
+            return -1;
+        }
     }
     return -1;
 }
@@ -1388,15 +1411,10 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
             if (!semantic_analyzer_analyze_expression(analyzer, expr->data.new_array_expr.size)) {
                 return false;
             }
-            ASTNode* size = expr->data.new_array_expr.size;
-            if (size && size->type == AST_NUMBER && size->is_integer_literal &&
-                (int64_t)size->integer_value <= 0) {
-                semantic_analyzer_add_error_at(analyzer, size, "Array size must be greater than zero");
-                return false;
-            }
-            if (size && size->type == AST_UNARY_OPERATION &&
-                size->data.unary_op.operator == TOKEN_MINUS) {
-                semantic_analyzer_add_error_at(analyzer, size, "Array size must be greater than zero");
+            long size = semantic_constant_int(analyzer, expr->data.new_array_expr.size);
+            if (size <= 0) {
+                semantic_analyzer_add_error_at(analyzer, expr->data.new_array_expr.size,
+                                               "Array size must be greater than zero");
                 return false;
             }
             return true;
