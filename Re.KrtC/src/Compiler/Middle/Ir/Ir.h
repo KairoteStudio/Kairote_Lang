@@ -498,7 +498,7 @@ int KrtIrVarTypeIsUnmanaged(KrtIRBuilder* builder, const char* name);
 const char* KrtIrVarTypeResolveIRName(KrtIRBuilder* builder, const char* name);
 void KrtIrVarTypeTruncate(KrtIRBuilder* builder, int count);
 
-void KrtIrGenerateFromAst(KrtIRBuilder* builder, ASTNode* ast, void* semantic_analyzer);
+bool KrtIrGenerateFromAst(KrtIRBuilder* builder, ASTNode* ast, void* semantic_analyzer);
 void KrtIrPrint(KrtIRModule* module, FILE* output);
 
 typedef struct KrtIRFieldOffset {

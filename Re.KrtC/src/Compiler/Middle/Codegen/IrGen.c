@@ -3754,9 +3754,9 @@ static void irgen_declare_functions(KrtIRBuilder* builder, ASTNode* ast) {
     }
 }
 
-void KrtIrGenerateFromAst(KrtIRBuilder* builder, ASTNode* ast, void* semantic_analyzer) {
+bool KrtIrGenerateFromAst(KrtIRBuilder* builder, ASTNode* ast, void* semantic_analyzer) {
     if (!builder || !ast) {
-        return;
+        return false;
     }
 
     builder->semantic_analyzer = semantic_analyzer;
@@ -3855,6 +3855,8 @@ void KrtIrGenerateFromAst(KrtIRBuilder* builder, ASTNode* ast, void* semantic_an
             }
         }
     }
+
+    return true;
 }
 
 static void krt_ir_generate_print(KrtIRBuilder* builder, ASTNode** values, int count, bool has_newline) {

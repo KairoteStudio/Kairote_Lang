@@ -174,7 +174,11 @@ bool KrtCompilerCompile(KrtCompiler* compiler, ASTNode* ast, void* semantic_anal
         return false;
     }
 
-    KrtIrGenerateFromAst(ir_builder, ast, semantic_analyzer);
+    if (!KrtIrGenerateFromAst(ir_builder, ast, semantic_analyzer)) {
+        KrtError("AST 到 IR 生成失败");
+        KrtIrBuilderDestroy(ir_builder);
+        return false;
+    }
     if (compiler->target == KRT_TARGET_X86_ASM && module_has_native_pointers(ir_builder->module)) {
         KrtError("unsafe pointers require the KRO/native executable backend");
         KrtIrBuilderDestroy(ir_builder);
