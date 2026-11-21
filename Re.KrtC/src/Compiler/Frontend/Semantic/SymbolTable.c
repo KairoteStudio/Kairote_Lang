@@ -235,6 +235,8 @@ SymbolEntry* symbol_table_declare(SymbolTable* table, const char* name, SymbolTy
     if (!sym) {
         return NULL;
     }
+    sym->is_initialized = 1; /* only locals declared without a value clear this */
+    sym->const_array_size = -1;
 
     sym->name = KRT_STRDUP(name);
     if (!sym->name) {

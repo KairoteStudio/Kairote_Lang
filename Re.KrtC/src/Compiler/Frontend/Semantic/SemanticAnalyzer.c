@@ -1154,6 +1154,7 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
             semantic_analyzer_add_error_at(analyzer, expr, "Undefined identifier: %s", var_name);
             return false;
         }
+        symbol->was_read = 1;
 
         return true;
     }
@@ -1257,6 +1258,7 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
         if (!semantic_check_assignable(analyzer, expr, var_name, symbol)) {
             return false;
         }
+        symbol->is_initialized = 1;
         return semantic_analyzer_analyze_expression(analyzer, expr->data.assignment.value);
     }
 
@@ -1270,6 +1272,7 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
         if (!semantic_check_assignable(analyzer, expr, var_name, symbol)) {
             return false;
         }
+        symbol->is_initialized = 1;
         return semantic_analyzer_analyze_expression(analyzer, expr->data.compound_assignment.value);
     }
 
@@ -2149,6 +2152,8 @@ bool semantic_analyzer_analyze_variable_decl(SemanticAnalyzer* analyzer, ASTNode
 
     symbol->value_type = var_decl->data.variable_decl.type;
     symbol->const_array_size = -1;
+    symbol->is_initialized = var_decl->data.variable_decl.value != NULL;
+    symbol->was_read = 0;
 
     if (var_decl->data.variable_decl.type == TOKEN_IDENTIFIER &&
         var_decl->data.variable_decl.template_instantiation_type) {
@@ -2271,6 +2276,7 @@ static bool semantic_analyze_stmt_assignment(SemanticAnalyzer* analyzer, ASTNode
     if (!semantic_check_assignable(analyzer, stmt, var_name, symbol)) {
         return false;
     }
+    symbol->is_initialized = 1;
     stmt->is_ref_binding = symbol->source_type.is_ref;
     stmt->resolved_type = symbol->source_type;
     stmt->resolved_type.is_ref = false;
@@ -2290,6 +2296,7 @@ static bool semantic_analyze_stmt_compound_assignment(SemanticAnalyzer* analyzer
     if (!semantic_analyzer_analyze_expression(analyzer, stmt->data.compound_assignment.value)) {
         return false;
     }
+    symbol->is_initialized = 1;
     stmt->is_ref_binding = symbol->source_type.is_ref;
     stmt->resolved_type = symbol->source_type;
     stmt->resolved_type.is_ref = false;
@@ -3016,6 +3023,19 @@ static bool semantic_analyze_stmt_constructor_declaration(SemanticAnalyzer* anal
     }
     return true;
 }
+static bool semantic_check_uninitialized_locals(SemanticAnalyzer* analyzer, SymbolScope* scope,
+                                                ASTNode* node) {
+    bool ok = true;
+    for (SymbolEntry* local = scope ? scope->symbols : NULL; local; local = local->scope_next) {
+        if (local->type == SYMBOL_VARIABLE && !local->is_initialized && local->was_read) {
+            semantic_analyzer_add_error_at(analyzer, node,
+                                           "Variable '%s' is read before it is assigned", local->name);
+            ok = false;
+        }
+    }
+    return ok;
+}
+
 static bool semantic_analyze_stmt_block(SemanticAnalyzer* analyzer, ASTNode* stmt) {
     symbol_table_push_scope(analyzer->symbol_table);
     bool overall_result = true;
@@ -3025,6 +3045,10 @@ static bool semantic_analyze_stmt_block(SemanticAnalyzer* analyzer, ASTNode* stm
         if (!stmt_result) {
             overall_result = false;
         }
+    }
+    /* Locals of this block disappear at the pop, so check them here. */
+    if (!semantic_check_uninitialized_locals(analyzer, analyzer->symbol_table->current_scope, stmt)) {
+        overall_result = false;
     }
     symbol_table_pop_scope(analyzer->symbol_table);
     return overall_result;
@@ -3291,6 +3315,21 @@ FunctionAnalysisResult semantic_analyzer_analyze_function(SemanticAnalyzer* anal
                                         ? function_node->function_type->result
                                         : (KrtSourceType){.token = function_node->data.function_decl.return_type};
     bool body_ok = semantic_analyzer_analyze_statement(analyzer, body);
+    if (body_ok) {
+        /*
+         * Conservative "read before assignment": a local declared without a
+         * value and never assigned anywhere in this function.  Branches are
+         * deliberately ignored - `if (c) x = 1; use(x);` stays valid.
+         */
+        for (SymbolEntry* local = analyzer->symbol_table->current_scope->symbols; local;
+             local = local->scope_next) {
+            if (local->type == SYMBOL_VARIABLE && !local->is_initialized && local->was_read) {
+                semantic_analyzer_add_error_at(analyzer, function_node,
+                                               "Variable '%s' is read before it is assigned", local->name);
+                body_ok = false;
+            }
+        }
+    }
     if (body_ok && !(analyzer->current_return_type.token == TOKEN_VOID &&
                      analyzer->current_return_type.pointer_depth == 0) &&
         !semantic_statement_guarantees_return(body)) {
