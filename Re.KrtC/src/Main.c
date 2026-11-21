@@ -56,6 +56,9 @@ static const char* project_name_from_type(const char* type) {
     if (strcmp(type, "lib") == 0) {
         return "library";
     }
+    if (strcmp(type, "dll") == 0) {
+        return "library";
+    }
     if (strcmp(type, "library") == 0) {
         return "library";
     }
@@ -119,6 +122,7 @@ typedef struct {
     int keep_temp_files;
     const char* project_type;
     int optimization_level;
+    int max_threads;
 } KrtCommandLineOptions;
 
 static void print_usage(const char* program_name) {
@@ -131,6 +135,8 @@ static void print_usage(const char* program_name) {
     KrtPrintf("%sbuild%s:%s构建%s  clean%s:%s清理\n", blue, gray, blue, blue, gray, blue);
     KrtPrintf("%scheck%s:%s检查%s  help%s:%s帮助信息\n", blue, gray, blue, blue, gray, blue);
     KrtPrintf("%s--keep-temp%s:%s保留临时文件 (.kro)\n", blue, gray, blue);
+    KrtPrintf("%s--show-ir%s:%s打印生成的 IR\n", blue, gray, blue);
+    KrtPrintf("%s--threads%s:%s项目编译线程数，默认 8\n", blue, gray, blue);
     KrtPrintf("-O0 / -O1 / -O2 / -O3: 优化级别，默认 -O2\n");
     KrtPrintf("\n%s=========== %s其他 %s===========\n", gray, gray, gray);
     KrtPrintf("%starget%s:%s输出类型 %s<%sir%s/%sasm%s/%sexe%s/%skro%s/%sarm64%s>\n", blue, gray, blue, gray, blue, gray,
@@ -145,6 +151,7 @@ static KrtCommandLineOptions parse_command_line(int argc, char* argv[]) {
     memset(&options, 0, sizeof(options));
     options.target_type = KRT_TARGET_CMD_EXE;
     options.optimization_level = 2;
+    options.max_threads = 8;
 
     if (argc < 2) {
         options.show_help = 1;
@@ -225,6 +232,17 @@ static KrtCommandLineOptions parse_command_line(int argc, char* argv[]) {
             options.output_file = argv[++i];
         } else if (strcmp(arg, "--show-ir") == 0 || strcmp(arg, "--ir") == 0) {
             options.show_ir = 1;
+        } else if (strcmp(arg, "--threads") == 0 || strcmp(arg, "-j") == 0) {
+            if (i + 1 >= argc) {
+                KrtError("缺少参数: threads <数量>");
+                exit(1);
+            }
+            int threads = atoi(argv[++i]);
+            if (threads <= 0) {
+                KrtError("线程数必须为正整数");
+                exit(1);
+            }
+            options.max_threads = threads;
         } else if (options.target_type != KRT_TARGET_CMD_CLEAN && options.target_type != KRT_TARGET_CMD_CHECK &&
                    options.target_type != KRT_TARGET_CMD_VERSION) {
 
@@ -449,7 +467,7 @@ static int compile_single_file(const char* input_file, const char* output_file, 
             return 1;
         }
         KrtPathRemoveExtension(file_base, file_base, sizeof(file_base));
-        char file_base_truncated[1010];
+        char file_base_truncated[KRT_MAX_PATH];
         strncpy(file_base_truncated, file_base, sizeof(file_base_truncated) - 1);
         file_base_truncated[sizeof(file_base_truncated) - 1] = '\0';
         snprintf(temp_kro, sizeof(temp_kro), "%s.kro", file_base_truncated);
@@ -464,7 +482,7 @@ static int compile_single_file(const char* input_file, const char* output_file, 
             return 1;
         }
         KrtPathRemoveExtension(file_base, file_base, sizeof(file_base));
-        char file_base_truncated[1010];
+        char file_base_truncated[KRT_MAX_PATH];
         strncpy(file_base_truncated, file_base, sizeof(file_base_truncated) - 1);
         file_base_truncated[sizeof(file_base_truncated) - 1] = '\0';
         snprintf(temp_kro, sizeof(temp_kro), "%s.kro", file_base_truncated);
@@ -478,7 +496,7 @@ static int compile_single_file(const char* input_file, const char* output_file, 
             return 1;
         }
         KrtPathRemoveExtension(file_base, file_base, sizeof(file_base));
-        char file_base_truncated[1010];
+        char file_base_truncated[KRT_MAX_PATH];
         strncpy(file_base_truncated, file_base, sizeof(file_base_truncated) - 1);
         file_base_truncated[sizeof(file_base_truncated) - 1] = '\0';
         snprintf(temp_kro, sizeof(temp_kro), "%s.kro", file_base_truncated);
@@ -535,20 +553,6 @@ static int compile_single_file(const char* input_file, const char* output_file, 
             KrtTaskReport("compile", input_file, KRT_TASK_RESULT_EXECUTED, total_duration, KrtGetGlobalTaskStats());
 
             const char* kro_file = compile_output;
-
-            char default_exe_output[KRT_MAX_PATH];
-            if (!output_file || output_file[0] == '\0') {
-                strncpy(default_exe_output, kro_file, sizeof(default_exe_output) - 1);
-                default_exe_output[sizeof(default_exe_output) - 1] = '\0';
-
-                char* dot = strrchr(default_exe_output, '.');
-                if (dot) {
-                    strcpy(dot, ".exe");
-                } else {
-                    strncat(default_exe_output, ".exe", sizeof(default_exe_output) - strlen(default_exe_output) - 1);
-                }
-                output_file = default_exe_output;
-            }
             const char* exe_output = output_file;
 
             {
@@ -959,7 +963,7 @@ static int compile_multiple_files(const char** input_files, int input_count, con
 }
 
 static int build_project_independent(const char* project_file, const char* output_path, int keep_temp,
-                         int optimization_level) {
+                                     int optimization_level, int max_threads) {
 
     KrtPlatform* platform = KrtPlatformGetCurrent();
     if (!platform) {
@@ -976,13 +980,13 @@ static int build_project_independent(const char* project_file, const char* outpu
 
     const char* project_root = (project->base_dir && project->base_dir[0] != '\0') ? project->base_dir : ".";
 
-    int max_threads = 8;
     KrtConfig* config = KrtConfigCreate();
     if (config) {
         config->keep_temp_files = keep_temp;
         config->optimization_level = optimization_level;
         config->input_file = project_file;
         config->target_type = KRT_TARGET_KRO;
+        config->max_threads = max_threads > 0 ? max_threads : 8;
     }
     if (!config) {
         KrtError("Failed to create config");
@@ -999,7 +1003,7 @@ static int build_project_independent(const char* project_file, const char* outpu
         return 1;
     }
 
-    ParallelCompiler* parallel_compiler = ParallelCompilerCreate(max_threads, config);
+    ParallelCompiler* parallel_compiler = ParallelCompilerCreate(config->max_threads, config);
     if (!parallel_compiler) {
         KrtError("无法创建并行编译器");
         KrtProjectKrtDestroy(project);
@@ -1224,8 +1228,8 @@ static int compare_project_source_paths(const void* left, const void* right) {
     return strcmp(*a, *b);
 }
 
-static int build_project(const char* project_file, const char* output_path __attribute__((unused)), int keep_temp,
-                         int optimization_level) {
+static int build_project(const char* project_file, const char* output_path, int keep_temp, int optimization_level,
+                         int max_threads) {
     KrtPlatform* platform = KrtPlatformGetCurrent();
     if (!platform) {
         KrtError("Failed to create platform abstraction");
@@ -1251,7 +1255,7 @@ static int build_project(const char* project_file, const char* output_path __att
     if (!project->compile_together) {
         KrtProjectKrtDestroy(project);
         KrtPlatformDestroy(platform);
-        return build_project_independent(project_file, output_path, keep_temp, optimization_level);
+        return build_project_independent(project_file, output_path, keep_temp, optimization_level, max_threads);
     }
 
     const char** source_paths = (const char**)calloc((size_t)project->source_count, sizeof(const char*));
@@ -1323,6 +1327,9 @@ static int build_project(const char* project_file, const char* output_path __att
         KrtStrlcpy(project_filename, out_name ? out_name : "output", sizeof(project_filename));
     }
     KrtPlatformPathJoin(platform, project_output_path, sizeof(project_output_path), bin_dir, project_filename);
+    if (output_path && output_path[0] != '\0') {
+        KrtStrlcpy(project_output_path, output_path, sizeof(project_output_path));
+    }
     KrtPlatformPathJoin(platform, obj_dir, sizeof(obj_dir), project_root, "obj");
     if (KrtEnsureDirectoryRecursive(obj_dir) != 0) {
         KrtError("无法创建项目对象目录: %s", obj_dir);
@@ -1348,24 +1355,28 @@ static int build_project(const char* project_file, const char* output_path __att
 }
 
 static int run_compiler(const char** input_files, int input_count, const char* output_file,
-                        KrtCommandTargetType target_type, int show_ir, int keep_temp, int optimization_level) {
+                        KrtCommandTargetType target_type, int show_ir, int keep_temp, int optimization_level,
+                        int max_threads) {
     if (!input_files || input_count <= 0) {
         KrtError("未指定输入文件");
         return 1;
     }
 
     int is_project = 0;
-    const char* slash = strrchr(input_files[0], '/');
-    if (!slash) {
-        slash = strrchr(input_files[0], '\\');
-    }
-    const char* base = slash ? slash + 1 : input_files[0];
-    if (strcmp(base, "project.krt") == 0) {
-        is_project = 1;
-    } else {
-        const char* ext = strrchr(input_files[0], '.');
+    for (int i = 0; i < input_count; i++) {
+        const char* slash = strrchr(input_files[i], '/');
+        if (!slash) {
+            slash = strrchr(input_files[i], '\\');
+        }
+        const char* base = slash ? slash + 1 : input_files[i];
+        if (strcmp(base, "project.krt") == 0) {
+            is_project = 1;
+            break;
+        }
+        const char* ext = strrchr(input_files[i], '.');
         if (ext && (strcmp(ext, ".esproj") == 0 || strcmp(ext, ".json") == 0)) {
             is_project = 1;
+            break;
         }
     }
 
@@ -1380,7 +1391,7 @@ static int run_compiler(const char** input_files, int input_count, const char* o
         }
         KrtPathRemoveExtension(project_name, project_name, sizeof(project_name));
 #ifdef _WIN32
-        char project_name_truncated[1010];
+        char project_name_truncated[KRT_MAX_PATH];
         strncpy(project_name_truncated, project_name, sizeof(project_name_truncated) - 1);
         project_name_truncated[sizeof(project_name_truncated) - 1] = '\0';
         snprintf(default_output, sizeof(default_output), "%s.exe", project_name_truncated);
@@ -1396,7 +1407,7 @@ static int run_compiler(const char** input_files, int input_count, const char* o
             }
             KrtPathRemoveExtension(file_base, file_base, sizeof(file_base));
 #ifdef _WIN32
-            char file_base_truncated[1010];
+            char file_base_truncated[KRT_MAX_PATH];
             strncpy(file_base_truncated, file_base, sizeof(file_base_truncated) - 1);
             file_base_truncated[sizeof(file_base_truncated) - 1] = '\0';
             snprintf(default_output, sizeof(default_output), "%s.exe", file_base_truncated);
@@ -1415,7 +1426,7 @@ static int run_compiler(const char** input_files, int input_count, const char* o
             }
             KrtPathRemoveExtension(file_base, file_base, sizeof(file_base));
 #ifdef _WIN32
-            char file_base_truncated[1010];
+            char file_base_truncated[KRT_MAX_PATH];
             strncpy(file_base_truncated, file_base, sizeof(file_base_truncated) - 1);
             file_base_truncated[sizeof(file_base_truncated) - 1] = '\0';
             snprintf(default_output, sizeof(default_output), "%s.exe", file_base_truncated);
@@ -1437,7 +1448,7 @@ static int run_compiler(const char** input_files, int input_count, const char* o
     }
 
     if (is_project) {
-        return build_project(input_files[0], final_output, keep_temp, optimization_level);
+        return build_project(input_files[0], final_output, keep_temp, optimization_level, max_threads);
     } else if (input_count > 1) {
 
         return compile_multiple_files(input_files, input_count, final_output, target_type, show_ir, keep_temp,
@@ -1485,7 +1496,7 @@ int main(int argc, char* argv[]) {
     }
 
     int result = run_compiler(options.input_files, options.input_file_count, options.output_file, options.target_type,
-                              options.show_ir, options.keep_temp_files, options.optimization_level);
+                              options.show_ir, options.keep_temp_files, options.optimization_level, options.max_threads);
 
     KrtBuildSummarySetDuration(KrtGetTime() - total_start);
     if (result != 0) {

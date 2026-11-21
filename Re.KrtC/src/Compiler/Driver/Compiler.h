@@ -21,6 +21,8 @@ typedef struct {
     FILE* output_file;
     KrtTargetPlatform target;
     int optimization_level;
+    /** Print the generated IR to stderr before code generation. */
+    bool show_ir;
     /** True when the compiled IR contains functions or data that must participate in linking. */
     bool has_object_code;
     char output_filename[256];

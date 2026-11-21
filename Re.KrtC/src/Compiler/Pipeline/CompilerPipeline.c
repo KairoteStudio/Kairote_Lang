@@ -529,6 +529,7 @@ int KrtCompilePipelineCodegen(KrtCompilePipeline* pipeline) {
     }
 
     pipeline->compiler->optimization_level = pipeline->config->optimization_level;
+    pipeline->compiler->show_ir = pipeline->config->show_ir;
     if (!pipeline->semantic_result || !pipeline->semantic_result->success) {
         snprintf(pipeline->error_message, sizeof(pipeline->error_message), "语义分析未完成或失败: %s",
                  pipeline->input_file);

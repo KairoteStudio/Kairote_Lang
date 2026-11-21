@@ -217,6 +217,9 @@ bool KrtCompilerCompile(KrtCompiler* compiler, ASTNode* ast, void* semantic_anal
         KrtIrBuilderDestroy(ir_builder);
         return false;
     }
+    if (compiler->show_ir) {
+        KrtIrPrint(ir_builder->module, stderr);
+    }
     compiler->has_object_code = ir_builder->module->functions != NULL || ir_builder->module->global_count > 0 ||
                                 ir_builder->module->string_const_count > 0;
     switch (compiler->target) {

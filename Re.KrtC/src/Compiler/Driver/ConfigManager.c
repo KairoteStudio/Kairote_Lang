@@ -43,6 +43,7 @@ KrtConfig* KrtConfigCreate(void) {
     config->platform = KrtConfigDetectPlatform();
     config->linker_config = KrtConfigGetLinkerConfig(config->platform);
     config->keep_temp_files = 1;
+    config->max_threads = 8;
 
     return config;
 }

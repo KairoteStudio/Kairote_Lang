@@ -38,6 +38,7 @@ typedef struct {
     int show_help;
     int create_project;
     int keep_temp_files;
+    int max_threads;
     const char* project_type;
 
     const KrtLinkerConfig* linker_config;
