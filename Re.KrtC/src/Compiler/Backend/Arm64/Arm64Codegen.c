@@ -59,6 +59,7 @@ typedef struct {
     int local_count;
     int temp_slot_of[ARM64_MAX_TEMPS];
     int temp_count;
+    int stackalloc_of[ARM64_MAX_TEMPS];
     uint32_t block_offset[ARM64_MAX_BLOCKS];
     Arm64Fixup fixups[ARM64_MAX_FIXUPS];
     int fixup_count;
@@ -248,6 +249,13 @@ static int alloc_slot(Arm64Context* ctx) {
     return ctx->slot_count++;
 }
 
+/* Reserve a byte range in the frame; returns its first slot index. */
+static int alloc_slot_for_bytes(Arm64Context* ctx, uint32_t bytes) {
+    int base = ctx->slot_count;
+    ctx->slot_count += (bytes + ARM64_SLOT_SIZE - 1) / ARM64_SLOT_SIZE;
+    return base;
+}
+
 static int local_slot(Arm64Context* ctx, const char* name) {
     if (!name) {
         return -1;
@@ -299,6 +307,7 @@ static void plan_frame(Arm64Context* ctx, KrtIRFunction* func) {
     ctx->temp_count = 0;
     for (int i = 0; i < ARM64_MAX_TEMPS; i++) {
         ctx->temp_slot_of[i] = -1;
+        ctx->stackalloc_of[i] = -1;
     }
     for (int i = 0; i < func->param_count; i++) {
         alloc_slot(ctx);
@@ -309,6 +318,25 @@ static void plan_frame(Arm64Context* ctx, KrtIRFunction* func) {
                 value_slot(ctx, &inst->operands[i]);
             }
             value_slot(ctx, &inst->result);
+            if (inst->opcode == KRT_IR_STACKALLOC && inst->operand_count >= 2 &&
+                (inst->operands[0].type == KRT_IR_VALUE_IMM || inst->operands[0].type == KRT_IR_VALUE_INTEGER) &&
+                inst->operands[1].type == KRT_IR_VALUE_IMM) {
+                uint64_t count = inst->operands[0].type == KRT_IR_VALUE_INTEGER
+                                    ? (uint64_t)inst->operands[0].data.integer
+                                    : (uint64_t)(int64_t)inst->operands[0].data.imm;
+                uint64_t element = (uint64_t)(int64_t)inst->operands[1].data.imm;
+                uint64_t bytes = count * element;
+                if (bytes > 0 && bytes <= (uint64_t)(ARM64_MAX_TEMPS - ctx->slot_count) * ARM64_SLOT_SIZE) {
+                    if (inst->result.type == KRT_IR_VALUE_TEMP) {
+                        ctx->stackalloc_of[inst->result.data.index] = alloc_slot_for_bytes(ctx, (uint32_t)bytes);
+                    }
+                }
+            } else if (inst->opcode == KRT_IR_LOADPTR && inst->operand_count >= 3 &&
+                       instruction_value_size(inst, 2, 8) == 16 && inst->result.type == KRT_IR_VALUE_TEMP) {
+                /* A 128-bit value occupies two frame slots. */
+                temp_slot(ctx, inst->result.data.index);
+                alloc_slot(ctx);
+            }
         }
     }
     ctx->frame_slots = ctx->slot_count;
@@ -695,6 +723,25 @@ static void emit_function_body(Arm64Context* ctx, KrtIRFunction* func) {
             case KRT_IR_CALL_INDIRECT:
                 emit_call(ctx, inst);
                 break;
+            case KRT_IR_STACKALLOC: {
+                int base = -1;
+                if (inst->result.type == KRT_IR_VALUE_TEMP) {
+                    base = ctx->stackalloc_of[inst->result.data.index];
+                }
+                if (base < 0) {
+                    KrtError("ARM64 backend: dynamic stackalloc is not supported");
+                    break;
+                }
+                uint32_t offset = (uint32_t)base * ARM64_SLOT_SIZE;
+                if (offset <= 4095) {
+                    emit_word(ctx, 0x91000000u | (offset << 10) | (31u << 5)); /* add x0, sp, #offset */
+                } else {
+                    emit_load_imm(ctx, 0, offset, true);
+                    emit_word(ctx, 0x8B000000u | (31u << 5)); /* add x0, sp, x0 */
+                }
+                emit_store_result(ctx, inst, 0);
+                break;
+            }
             case KRT_IR_RETURN:
                 if (inst->operand_count >= 1) {
                     emit_load_value(ctx, &inst->operands[0], 0);
@@ -737,7 +784,14 @@ static void emit_function_body(Arm64Context* ctx, KrtIRFunction* func) {
                 }
                 int size = instruction_value_size(inst, 2, 8);
                 if (size == 16) {
-                    KrtError("ARM64 backend: 128-bit indirect loads are not supported");
+                    /* Split a 128-bit indirect load into two 64-bit halves. */
+                    emit_word(ctx, 0xF9400000u | ((uint32_t)(0 & 0x1F) << 5)); /* ldr x0, [x0] */
+                    emit_word(ctx, 0xF9400000u | (1u << 10) | (0u << 5) | 1u);  /* ldr x1, [x0, #8] */
+                    int slot = value_slot(ctx, &inst->result);
+                    if (slot >= 0) {
+                        emit_store_to_slot(ctx, 0, slot, true);
+                        emit_store_to_slot(ctx, 1, slot + 1, true);
+                    }
                     break;
                 }
                 emit_load_indirect(ctx, 0, size);
