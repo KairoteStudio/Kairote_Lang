@@ -2983,6 +2983,14 @@ bool semantic_analyzer_analyze_statement(SemanticAnalyzer* analyzer, ASTNode* st
 
         return semantic_analyzer_analyze_expression(analyzer, stmt);
 
+    case AST_TRY_STATEMENT:
+        semantic_analyzer_add_error_at(analyzer, stmt,
+                                       "exception handling (try/catch/finally) is not implemented yet");
+        return false;
+    case AST_THROW_STATEMENT:
+        semantic_analyzer_add_error_at(analyzer, stmt, "throw is not implemented yet");
+        return false;
+
     default:
         return true;
     }

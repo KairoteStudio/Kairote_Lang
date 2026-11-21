@@ -1256,6 +1256,111 @@ static ASTNode* parser_parse_keyword_function_declaration(Parser* parser) {
     return parser_parse_function_declaration(parser);
 }
 
+ASTNode* parser_parse_throw_statement(Parser* parser) {
+    int line = parser->current_token.line;
+    int col = parser->current_token.column;
+    parser_advance(parser);
+
+    ASTNode* exception_expr = NULL;
+    if (parser->current_token.type != TOKEN_SEMICOLON) {
+        exception_expr = parser_parse_expression(parser);
+        if (!exception_expr) {
+            return KrtParserFail(parser, parser->current_token.line, parser->current_token.column,
+                                 "expected expression after 'throw'");
+        }
+    }
+
+    if (parser->current_token.type != TOKEN_SEMICOLON) {
+        return KrtParserFail(parser, parser->current_token.line, parser->current_token.column,
+                             "expected ';' after 'throw'");
+    }
+    parser_advance(parser);
+
+    ASTNode* node = KrtParserCreateNode(parser, AST_THROW_STATEMENT, line, col);
+    node->data.throw_stmt.exception_expr = exception_expr;
+    node->data.throw_stmt.is_rethrow = (exception_expr == NULL);
+    return node;
+}
+
+ASTNode* parser_parse_try_statement(Parser* parser) {
+    int line = parser->current_token.line;
+    int col = parser->current_token.column;
+    parser_advance(parser);
+
+    ASTNode* try_block = parser_parse_block(parser);
+    if (!try_block) {
+        return KrtParserFail(parser, parser->current_token.line, parser->current_token.column, "expected block after 'try'");
+    }
+
+    ASTNode** catch_clauses = NULL;
+    int catch_count = 0;
+    int catch_capacity = 0;
+    ASTNode* finally_clause = NULL;
+
+    while (parser->current_token.type == TOKEN_CATCH) {
+        int cline = parser->current_token.line;
+        int ccol = parser->current_token.column;
+        parser_advance(parser);
+
+        if (parser->current_token.type != TOKEN_LEFT_PAREN) {
+            return KrtParserFail(parser, cline, ccol, "expected '(' after 'catch'");
+        }
+        parser_advance(parser);
+
+        char* exception_type = NULL;
+        char* exception_var = NULL;
+        if (parser->current_token.type == TOKEN_IDENTIFIER || parser_is_type_keyword(parser->current_token.type)) {
+            exception_type = KrtParserStrdup(parser, parser->current_token.value);
+            parser_advance(parser);
+            if (parser->current_token.type == TOKEN_IDENTIFIER) {
+                exception_var = KrtParserStrdup(parser, parser->current_token.value);
+                parser_advance(parser);
+            }
+        }
+        if (parser->current_token.type != TOKEN_RIGHT_PAREN) {
+            return KrtParserFail(parser, parser->current_token.line, parser->current_token.column,
+                                 "expected ')' after catch parameter");
+        }
+        parser_advance(parser);
+
+        ASTNode* catch_block = parser_parse_block(parser);
+        if (!catch_block) {
+            return KrtParserFail(parser, parser->current_token.line, parser->current_token.column,
+                                 "expected block after catch parameter");
+        }
+
+        ASTNode* clause = KrtParserCreateNode(parser, AST_CATCH_CLAUSE, cline, ccol);
+        clause->data.catch_clause.exception_type = exception_type;
+        clause->data.catch_clause.exception_var = exception_var;
+        clause->data.catch_clause.catch_block = catch_block;
+
+        if (!KrtParserReserveNodeArray(parser, &catch_clauses, &catch_capacity, catch_count + 1, cline, ccol)) {
+            return NULL;
+        }
+        catch_clauses[catch_count++] = clause;
+    }
+
+    if (parser->current_token.type == TOKEN_FINALLY) {
+        int fline = parser->current_token.line;
+        int fcol = parser->current_token.column;
+        parser_advance(parser);
+        ASTNode* finally_block = parser_parse_block(parser);
+        if (!finally_block) {
+            return KrtParserFail(parser, parser->current_token.line, parser->current_token.column,
+                                 "expected block after 'finally'");
+        }
+        finally_clause = KrtParserCreateNode(parser, AST_FINALLY_CLAUSE, fline, fcol);
+        finally_clause->data.finally_clause.finally_block = finally_block;
+    }
+
+    ASTNode* node = KrtParserCreateNode(parser, AST_TRY_STATEMENT, line, col);
+    node->data.try_stmt.try_block = try_block;
+    node->data.try_stmt.catch_clauses = catch_clauses;
+    node->data.try_stmt.catch_clause_count = catch_count;
+    node->data.try_stmt.finally_clause = finally_clause;
+    return node;
+}
+
 ASTNode* parser_parse_statement(Parser* parser) {
     Token token = parser->current_token;
 
@@ -1426,6 +1531,12 @@ ASTNode* parser_parse_statement(Parser* parser) {
 
     case TOKEN_ENUM:
         return parser_parse_enum(parser);
+
+    case TOKEN_TRY:
+        return parser_parse_try_statement(parser);
+
+    case TOKEN_THROW:
+        return parser_parse_throw_statement(parser);
 
     case TOKEN_CLASS:
     case TOKEN_STRUCT:
