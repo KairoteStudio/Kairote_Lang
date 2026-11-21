@@ -536,22 +536,14 @@ static ArkLinkResult elf_prepare(ElfLinkState* state) {
             state->relocs_per_sec[s]++;
         }
     }
-    state->has_dynamic = ark_backend_should_use_dynamic_elf(state->input) ? 1 : 0;
-
-    /*
-     * Relocations have already been applied to the section data, and a static
-     * ET_EXEC has no PT_DYNAMIC, so .rela sections there are pure dead weight
-     * (they were also written with x86-64 type codes regardless of the target
-     * architecture).  Only a dynamic image needs them.
-     */
     state->rela_sections = 0;
-    if (state->has_dynamic) {
-        for (size_t i = 0; i < state->ns; i++) {
-            if (state->relocs_per_sec[i] > 0) {
-                state->rela_sections++;
-            }
+    for (size_t i = 0; i < state->ns; i++) {
+        if (state->relocs_per_sec[i] > 0) {
+            state->rela_sections++;
         }
     }
+
+    state->has_dynamic = (state->input->import_count > 0) ? 1 : 0;
     state->has_tls = 0;
     for (size_t i = 0; i < state->ns; i++) {
         if (is_tls_kind((ArkSectionKind)state->input->sections[i].kind)) {
@@ -647,9 +639,7 @@ static ArkLinkResult elf_prepare(ElfLinkState* state) {
         state->sec_name_off[1 + i] = get_unique_name(&state->shstrtab, k, occ[kidx]++);
     }
     state->rela_idx = 0;
-    /* rela_sections is 0 for a static image: without this bound the loop
-     * writes section names past sec_name_off[] (sized elf_shnum). */
-    for (size_t i = 0; i < state->ns && state->rela_idx < state->rela_sections; i++) {
+    for (size_t i = 0; i < state->ns; i++) {
         if (state->relocs_per_sec[i] == 0) {
             continue;
         }
