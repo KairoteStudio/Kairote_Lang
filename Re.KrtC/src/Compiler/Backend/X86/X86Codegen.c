@@ -602,6 +602,25 @@ static void emit_jump(Emitter* em, const char* prefix, const char* label) {
     fprintf(em->output, "    jmp %s_%s\n", prefix, label);
 }
 
+static int x86_symbol_is_known(CodegenContext* ctx, const char* name) {
+    if (!ctx || !name) {
+        return 0;
+    }
+    if (strcmp(name, "_print_string") == 0 || strcmp(name, "_println_string") == 0 ||
+        strcmp(name, "KrtStringConcat") == 0 || strcmp(name, "KrtIntToString") == 0 ||
+        strcmp(name, "KrtDoubleToString") == 0 || strcmp(name, "KrtPow") == 0) {
+        return 1;
+    }
+    if (ctx->current_module) {
+        for (KrtIRFunction* fn = ctx->current_module->functions; fn; fn = fn->next) {
+            if (fn->name && strcmp(fn->name, name) == 0) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 static void emit_call(Emitter* em, const char* func_name, KrtIRValue* args, int arg_count, KrtIRValue* result) {
     if (!em || !func_name || (arg_count > 0 && !args)) {
         return;
@@ -719,6 +738,9 @@ static void emit_call(Emitter* em, const char* func_name, KrtIRValue* args, int 
         actual_func_name = "_print_string";
     } else if (strcmp(func_name, "println_string") == 0) {
         actual_func_name = "_println_string";
+    }
+    if (!x86_symbol_is_known(em->ctx, actual_func_name)) {
+        KRT_WARNING("X86 backend: call to unknown symbol '%s'", actual_func_name);
     }
     fprintf(em->output, "    call %s\n", actual_func_name);
 
