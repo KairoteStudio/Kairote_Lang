@@ -2831,6 +2831,30 @@ static void irgen_stmt_throw_statement(KrtIRBuilder* builder, ASTNode* stmt) {
 static void irgen_stmt_try_statement(KrtIRBuilder* builder, ASTNode* stmt) {
     irgen_ensure_exception_runtime(builder);
 
+    ASTNode* finally_block = NULL;
+    if (stmt->data.try_stmt.finally_clause) {
+        finally_block = stmt->data.try_stmt.finally_clause->data.finally_clause.finally_block;
+    }
+
+    /* A finally block runs on every exit path, including an exception that
+     * escapes the catches, so it gets an outer handler that rethrows. */
+    KrtIRBasicBlock* finally_handler_block = NULL;
+    if (finally_block) {
+        KrtIRValue finally_buf = irgen_allocate_memory(builder, KrtIrImm(builder, KRT_JMP_BUF_SIZE));
+        KrtIRValue enter_args[1] = {finally_buf};
+        KrtIrCall(builder, "__krt_try_enter", enter_args, 1);
+        KrtIRValue setjmp_args[1] = {finally_buf};
+        KrtIRValue resumed_finally = KrtIrCall(builder, "__krt_setjmp", setjmp_args, 1);
+
+        char labels[2][32];
+        snprintf(labels[0], sizeof(labels[0]), "finally_body_%d", builder->label_counter++);
+        snprintf(labels[1], sizeof(labels[1]), "finally_rethrow_%d", builder->label_counter++);
+        KrtIRBasicBlock* body_start = KrtIrBlockCreate(builder, labels[0]);
+        finally_handler_block = KrtIrBlockCreate(builder, labels[1]);
+        KrtIrBranch(builder, resumed_finally, finally_handler_block, body_start);
+        KrtIrBlockSetCurrent(builder, body_start);
+    }
+
     KrtIRValue buf = irgen_allocate_memory(builder, KrtIrImm(builder, KRT_JMP_BUF_SIZE));
 
     KrtIRValue enter_args[1] = {buf};
@@ -2862,6 +2886,9 @@ static void irgen_stmt_try_statement(KrtIRBuilder* builder, ASTNode* stmt) {
     KrtIrVarTypeTruncate(builder, vt_saved);
     KrtIrBlockSetCurrent(builder, handler_block);
     KrtIRValue exception = KrtIrLoad(builder, "__krt_exception");
+    /* Pop the handler before running the catch body so a throw inside the
+     * catch propagates to the enclosing handler. */
+    KrtIrCall(builder, "__krt_try_leave", NULL, 0);
 
     int catch_count = stmt->data.try_stmt.catch_clause_count;
     if (catch_count > 0 && stmt->data.try_stmt.catch_clauses) {
@@ -2875,14 +2902,23 @@ static void irgen_stmt_try_statement(KrtIRBuilder* builder, ASTNode* stmt) {
             krt_ir_generate_block(builder, clause->data.catch_clause.catch_block);
         }
     }
-    KrtIrCall(builder, "__krt_try_leave", NULL, 0);
     KrtIrJump(builder, after_block);
 
     KrtIrVarTypeTruncate(builder, vt_saved);
     KrtIrBlockSetCurrent(builder, after_block);
-    if (stmt->data.try_stmt.finally_clause &&
-        stmt->data.try_stmt.finally_clause->data.finally_clause.finally_block) {
-        krt_ir_generate_block(builder, stmt->data.try_stmt.finally_clause->data.finally_clause.finally_block);
+    if (finally_block) {
+        KrtIrCall(builder, "__krt_try_leave", NULL, 0);
+        krt_ir_generate_block(builder, finally_block);
+    }
+
+    if (finally_handler_block) {
+        KrtIrBlockSetCurrent(builder, finally_handler_block);
+        KrtIrVarTypeTruncate(builder, vt_saved);
+        KrtIrCall(builder, "__krt_try_leave", NULL, 0);
+        krt_ir_generate_block(builder, finally_block);
+        KrtIRValue escaping = KrtIrLoad(builder, "__krt_exception");
+        KrtIRValue throw_args[1] = {escaping};
+        KrtIrCall(builder, "__krt_throw", throw_args, 1);
     }
     return;
 }
