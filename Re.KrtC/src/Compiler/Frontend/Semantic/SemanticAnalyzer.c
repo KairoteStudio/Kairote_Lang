@@ -1161,6 +1161,14 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
                                            "String values only support concatenation with another string");
             return false;
         }
+        if (left_ok && (op == TOKEN_DIVIDE || op == TOKEN_MODULO)) {
+            ASTNode* divisor = expr->data.binary_op.right;
+            if (divisor && divisor->type == AST_NUMBER && divisor->is_integer_literal &&
+                divisor->integer_value == 0) {
+                semantic_analyzer_add_error_at(analyzer, expr, "Division by zero");
+                return false;
+            }
+        }
         if (left_ok && expr->data.binary_op.operator == TOKEN_ASSIGN &&
             left->type == AST_MEMBER_ACCESS &&
             left->data.member_access.resolved_builtin_member != KRT_BUILTIN_MEMBER_NONE) {
