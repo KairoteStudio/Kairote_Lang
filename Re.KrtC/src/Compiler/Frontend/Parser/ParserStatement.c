@@ -205,7 +205,9 @@ static ASTNode* parser_parse_declaration_with_modifiers(Parser* parser) {
     int is_const = 0;
     while (parser->current_token.type == TOKEN_PUBLIC || parser->current_token.type == TOKEN_PRIVATE ||
            parser->current_token.type == TOKEN_PROTECTED || parser->current_token.type == TOKEN_STATIC ||
-           parser->current_token.type == TOKEN_CONST || parser->current_token.type == TOKEN_EXTERN) {
+           parser->current_token.type == TOKEN_CONST || parser->current_token.type == TOKEN_EXTERN ||
+           parser->current_token.type == TOKEN_OVERRIDE || parser->current_token.type == TOKEN_VIRTUAL ||
+           parser->current_token.type == TOKEN_ABSTRACT) {
         if (parser->current_token.type == TOKEN_STATIC) {
             is_static = 1;
         } else if (parser->current_token.type == TOKEN_CONST) {

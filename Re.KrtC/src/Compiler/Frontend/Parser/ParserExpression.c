@@ -12,6 +12,9 @@ ASTNode* parser_parse_expression(Parser* parser);
 
 #define KRT_PARSER_UNLIKELY(x) (x)
 
+/* Guards against stack overflow on pathologically nested expressions. */
+#define KRT_MAX_EXPRESSION_DEPTH 512
+
 #define KRT_PARSER_ALLOC_FROM_ARENA(parser, size) KrtParserAlloc(parser, size)
 
 #define KRT_PARSER_CREATE_NODE(type, line, col) KrtParserCreateNode(parser, type, line, col)
@@ -654,8 +657,6 @@ int get_operator_precedence(KrtTokenType type) {
     case TOKEN_DIVIDE:
     case TOKEN_MODULO:
         return 10;
-    case TOKEN_NOT:
-        return 11;
     default:
         return 0;
     }
@@ -695,7 +696,7 @@ static ASTNode* parser_parse_unary_prefix(Parser* parser) {
     return node;
 }
 
-ASTNode* parser_parse_binary_operation(Parser* parser, int precedence) {
+static ASTNode* parser_parse_binary_operation_inner(Parser* parser, int precedence) {
     ASTNode* left;
     if (parser->current_token.type == TOKEN_POWER || parser->current_token.type == TOKEN_BITWISE_AND ||
         parser->current_token.type == TOKEN_MULTIPLY || parser->current_token.type == TOKEN_MINUS ||
@@ -753,6 +754,19 @@ ASTNode* parser_parse_binary_operation(Parser* parser, int precedence) {
     }
 
     return left;
+}
+
+ASTNode* parser_parse_binary_operation(Parser* parser, int precedence) {
+    if (parser->expression_depth >= KRT_MAX_EXPRESSION_DEPTH) {
+        parser_report_error(parser, parser->current_token.line, parser->current_token.column,
+                            "expression is nested too deeply");
+        return NULL;
+    }
+
+    parser->expression_depth++;
+    ASTNode* result = parser_parse_binary_operation_inner(parser, precedence);
+    parser->expression_depth--;
+    return result;
 }
 
 ASTNode* parser_parse_postfix_expression(Parser* parser) {

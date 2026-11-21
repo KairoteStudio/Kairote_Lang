@@ -88,6 +88,7 @@ Parser* parser_create_with_arena(Lexer* lexer, size_t arena_size) {
     parser->is_unsafe_mode = 0;
     parser->current_class = NULL;
     parser->error_count = 0;
+    parser->expression_depth = 0;
     parser->source_name = NULL;
     parser->hist_len = 0;
 

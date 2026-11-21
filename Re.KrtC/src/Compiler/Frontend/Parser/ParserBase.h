@@ -34,6 +34,68 @@ static inline ASTNode* KrtParserCreateNode(Parser* parser, ASTNodeType type, int
     return node;
 }
 
+/** @brief Report a parse error and return NULL (convenience for expression parsers). */
+static inline ASTNode* KrtParserFail(Parser* parser, int line, int col, const char* message) {
+    parser_report_error(parser, line, col, "%s", message);
+    return NULL;
+}
+
+/* Growable parser-owned lists.  They live in the parser arena, so they are
+ * reclaimed with the AST and must not be passed to KRT_FREE/KRT_REALLOC. */
+static inline bool KrtParserReserveNodeArray(Parser* parser, ASTNode*** items, int* capacity, int needed, int line,
+                                             int col) {
+    if (needed <= *capacity) {
+        return true;
+    }
+
+    int new_capacity = *capacity > 0 ? *capacity : 8;
+    while (new_capacity < needed) {
+        if (new_capacity > INT_MAX / 2) {
+            new_capacity = needed;
+            break;
+        }
+        new_capacity *= 2;
+    }
+
+    ASTNode** resized = (ASTNode**)KrtArenaRealloc(parser->arena, *items, (size_t)(*capacity) * sizeof(ASTNode*),
+                                                   (size_t)new_capacity * sizeof(ASTNode*));
+    if (!resized) {
+        parser_report_error(parser, line, col, "out of memory while building a statement list");
+        return false;
+    }
+
+    *items = resized;
+    *capacity = new_capacity;
+    return true;
+}
+
+static inline bool KrtParserReserveStringArray(Parser* parser, char*** items, int* capacity, int needed, int line,
+                                               int col) {
+    if (needed <= *capacity) {
+        return true;
+    }
+
+    int new_capacity = *capacity > 0 ? *capacity : 8;
+    while (new_capacity < needed) {
+        if (new_capacity > INT_MAX / 2) {
+            new_capacity = needed;
+            break;
+        }
+        new_capacity *= 2;
+    }
+
+    char** resized = (char**)KrtArenaRealloc(parser->arena, *items, (size_t)(*capacity) * sizeof(char*),
+                                             (size_t)new_capacity * sizeof(char*));
+    if (!resized) {
+        parser_report_error(parser, line, col, "out of memory while building a qualified name");
+        return false;
+    }
+
+    *items = resized;
+    *capacity = new_capacity;
+    return true;
+}
+
 void parser_add_declared_function(Parser* parser, const char* func_name);
 int parser_is_type_keyword(KrtTokenType type);
 void parser_advance(Parser* parser);

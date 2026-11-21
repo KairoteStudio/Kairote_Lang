@@ -16,6 +16,7 @@ typedef struct {
     char* current_class;
     KrtArena* arena;
     int error_count;
+    int expression_depth;
     const char* source_name;
     int hist_type[8];
     int hist_line[8];
