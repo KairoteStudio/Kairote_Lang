@@ -9,6 +9,9 @@ typedef unsigned __int128 KrtUInt128;
 
 /** Return the low-bit mask for an integer width in the range 1 through 128. */
 static inline KrtUInt128 KrtIntegerMask(int bits) {
+    if (bits <= 0) {
+        return 0;
+    }
     return bits >= 128 ? ~(KrtUInt128)0 : (((KrtUInt128)1 << bits) - 1);
 }
 
@@ -27,6 +30,9 @@ static inline KrtUInt128 KrtIntegerNormalize(KrtUInt128 value, int bits, bool is
 
 /** Parse decimal, 0x hexadecimal or 0b binary text; return false on malformed input or overflow. */
 static inline bool KrtIntegerParse(const char* text, KrtUInt128* result) {
+    if (!text || !result) {
+        return false;
+    }
     int base = 10;
     if (text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
         base = 16;
@@ -61,6 +67,8 @@ static inline bool KrtIntegerParse(const char* text, KrtUInt128* result) {
 
 /** Write a terminated decimal representation to the caller's buffer of at least 42 bytes. */
 static inline void KrtIntegerFormat(KrtUInt128 value, bool is_unsigned, char buffer[42]) {
+    /* UINT128 needs at most 39 decimal digits; plus a sign and the terminator. */
+    _Static_assert(42 >= 41, "KrtIntegerFormat buffer must hold sign + 39 digits + NUL");
     char digits[40];
     int count = 0, position = 0;
     bool negative = !is_unsigned && (value >> 127);

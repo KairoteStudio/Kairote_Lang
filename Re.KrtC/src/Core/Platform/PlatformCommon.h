@@ -145,7 +145,7 @@ static inline unsigned long long KrtTimeMs(void) {
 #define KrtFileExists(path) (GetFileAttributes(path) != INVALID_FILE_ATTRIBUTES)
 #define KrtDirectoryExists(path)                                                                                       \
     (GetFileAttributes(path) != INVALID_FILE_ATTRIBUTES && GetFileAttributes(path) & FILE_ATTRIBUTE_DIRECTORY)
-#define KrtCreateDirectory(path) CreateDirectory(path, NULL)
+#define KrtPlatformCreateDirectory(path) CreateDirectory(path, NULL)
 #define KrtRemoveDirectory(path) RemoveDirectory(path)
 #define KrtDeleteFile(path) DeleteFile(path)
 #define KRT_PATH_SEPARATOR '\\'
@@ -161,7 +161,7 @@ static inline int KrtDirectoryExists(const char* path) {
     struct stat st;
     return (stat(path, &st) == 0) && S_ISDIR(st.st_mode);
 }
-#define KrtCreateDirectory(path) mkdir(path, 0755)
+#define KrtPlatformCreateDirectory(path) mkdir(path, 0755)
 #define KrtRemoveDirectory(path) rmdir(path)
 #define KrtDeleteFile(path) unlink(path)
 #define KRT_PATH_SEPARATOR '/'

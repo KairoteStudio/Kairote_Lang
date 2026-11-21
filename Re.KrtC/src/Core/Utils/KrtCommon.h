@@ -93,13 +93,6 @@
 
 double KrtGetTime(void);
 
-void* KrtMallocChecked(size_t size, const char* file, int line);
-void* KrtCallocChecked(size_t count, size_t size, const char* file, int line);
-void* KrtReallocChecked(void* ptr, size_t size, const char* file, int line);
-char* KrtStrdupChecked(const char* str, const char* file, int line);
-void KrtFreeChecked(void* ptr, const char* file, int line);
-
-#define KRT_STRLEN(str) strlen(str)
 #define KRT_STRCPY(dest, src)                                                                                          \
     do {                                                                                                               \
         size_t src_len = strlen(src);                                                                                  \

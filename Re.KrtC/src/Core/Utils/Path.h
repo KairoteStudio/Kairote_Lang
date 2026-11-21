@@ -8,13 +8,11 @@ double KrtTimeNowSeconds(void);
 int KrtPathExists(const char* path);
 int KrtCreateDirectory(const char* path);
 char* KrtGetDirectory(const char* path);
-char* KrtGetFilename(const char* path);
-char* KrtGetExtension(const char* path);
-char* KrtJoinPath(const char* base, const char* relative);
-char* KrtResolvePath(const char* path);
+int KrtPathGetFilename(const char* path, char* filename, size_t size);
+int KrtPathRemoveExtension(const char* path, char* result, size_t size);
+int KrtPathJoin(char* result, size_t size, const char* path1, const char* path2);
 char* KrtGetCurrentDirectory(void);
-char* KrtReadFile(const char* filename, size_t* length);
-int KrtWriteFile(const char* filename, const char* content, size_t length);
 int KrtGetExecutableDirectory(char* result, size_t size);
+int KrtEnsureDirectoryRecursive(const char* path);
 
 #endif

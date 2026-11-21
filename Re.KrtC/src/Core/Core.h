@@ -10,7 +10,6 @@
 #include "Utils/KrtString.h"
 #include "Utils/Path.h"
 #include "Utils/Logger.h"
-#include "Utils/Error.h"
 #include "Utils/OutputCache.h"
 #include "Utils/StackCalculator.h"
 #include "Utils/KrtCommon.h"

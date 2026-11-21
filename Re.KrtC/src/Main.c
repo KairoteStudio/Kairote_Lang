@@ -442,7 +442,12 @@ static int compile_single_file(const char* input_file, const char* output_file, 
     char temp_kro[KRT_MAX_PATH];
     if (target_type == KRT_TARGET_CMD_EXE || target_type == KRT_TARGET_CMD_BUILD) {
         char file_base[KRT_MAX_PATH];
-        KrtPathGetFilename(input_file, file_base, sizeof(file_base));
+        if (KrtPathGetFilename(input_file, file_base, sizeof(file_base)) != 0) {
+            KrtCompilePipelineDestroy(pipeline);
+            KrtPlatformDestroy(platform);
+            KrtConfigDestroy(config);
+            return 1;
+        }
         KrtPathRemoveExtension(file_base, file_base, sizeof(file_base));
         char file_base_truncated[1010];
         strncpy(file_base_truncated, file_base, sizeof(file_base_truncated) - 1);
@@ -452,7 +457,12 @@ static int compile_single_file(const char* input_file, const char* output_file, 
     } else if (target_type == KRT_TARGET_CMD_KRO) {
 
         char file_base[KRT_MAX_PATH];
-        KrtPathGetFilename(input_file, file_base, sizeof(file_base));
+        if (KrtPathGetFilename(input_file, file_base, sizeof(file_base)) != 0) {
+            KrtCompilePipelineDestroy(pipeline);
+            KrtPlatformDestroy(platform);
+            KrtConfigDestroy(config);
+            return 1;
+        }
         KrtPathRemoveExtension(file_base, file_base, sizeof(file_base));
         char file_base_truncated[1010];
         strncpy(file_base_truncated, file_base, sizeof(file_base_truncated) - 1);
@@ -461,7 +471,12 @@ static int compile_single_file(const char* input_file, const char* output_file, 
         compile_output = temp_kro;
     } else if (target_type == KRT_TARGET_CMD_ARM64) {
         char file_base[KRT_MAX_PATH];
-        KrtPathGetFilename(input_file, file_base, sizeof(file_base));
+        if (KrtPathGetFilename(input_file, file_base, sizeof(file_base)) != 0) {
+            KrtCompilePipelineDestroy(pipeline);
+            KrtPlatformDestroy(platform);
+            KrtConfigDestroy(config);
+            return 1;
+        }
         KrtPathRemoveExtension(file_base, file_base, sizeof(file_base));
         char file_base_truncated[1010];
         strncpy(file_base_truncated, file_base, sizeof(file_base_truncated) - 1);
@@ -622,7 +637,11 @@ static int compile_multiple_files(const char** input_files, int input_count, con
     char default_output[KRT_MAX_PATH];
     if (!output_file || output_file[0] == '\0') {
         char file_base[KRT_MAX_PATH];
-        KrtPathGetFilename(input_files[0], file_base, sizeof(file_base));
+        if (KrtPathGetFilename(input_files[0], file_base, sizeof(file_base)) != 0) {
+            KrtConfigDestroy(config);
+            KrtPlatformDestroy(platform);
+            return 1;
+        }
         KrtPathRemoveExtension(file_base, file_base, sizeof(file_base));
 #ifdef _WIN32
         int output_length = snprintf(default_output, sizeof(default_output), "%s.exe", file_base);
@@ -787,7 +806,9 @@ static int compile_multiple_files(const char** input_files, int input_count, con
         }
 
         char file_base[KRT_MAX_PATH];
-        KrtPathGetFilename(input_file, file_base, sizeof(file_base));
+        if (KrtPathGetFilename(input_file, file_base, sizeof(file_base)) != 0) {
+            continue;
+        }
         KrtPathRemoveExtension(file_base, file_base, sizeof(file_base));
 
         kro_files[i] = (char*)malloc(KRT_MAX_PATH);
@@ -1015,7 +1036,13 @@ static int build_project_independent(const char* project_file, const char* outpu
         }
 
         char file_name[KRT_MAX_PATH];
-        KrtPathGetFilename(source_path, file_name, sizeof(file_name));
+        if (KrtPathGetFilename(source_path, file_name, sizeof(file_name)) != 0) {
+            ParallelCompilerDestroy(parallel_compiler);
+            KrtProjectKrtDestroy(project);
+            KrtConfigDestroy(config);
+            KrtPlatformDestroy(platform);
+            return 1;
+        }
         char file_name_no_ext[KRT_MAX_PATH];
         KrtPathRemoveExtension(file_name, file_name_no_ext, sizeof(file_name_no_ext));
 
@@ -1348,7 +1375,9 @@ static int run_compiler(const char** input_files, int input_count, const char* o
     memset(default_output, 0, sizeof(default_output));
     if (is_project) {
         char project_name[KRT_MAX_PATH];
-        KrtPathGetFilename(input_files[0], project_name, sizeof(project_name));
+        if (KrtPathGetFilename(input_files[0], project_name, sizeof(project_name)) != 0) {
+            return 1;
+        }
         KrtPathRemoveExtension(project_name, project_name, sizeof(project_name));
 #ifdef _WIN32
         char project_name_truncated[1010];
@@ -1362,7 +1391,9 @@ static int run_compiler(const char** input_files, int input_count, const char* o
         switch (target_type) {
         case KRT_TARGET_CMD_EXE: {
             char file_base[KRT_MAX_PATH];
-            KrtPathGetFilename(input_files[0], file_base, sizeof(file_base));
+            if (KrtPathGetFilename(input_files[0], file_base, sizeof(file_base)) != 0) {
+                return 1;
+            }
             KrtPathRemoveExtension(file_base, file_base, sizeof(file_base));
 #ifdef _WIN32
             char file_base_truncated[1010];
@@ -1379,7 +1410,9 @@ static int run_compiler(const char** input_files, int input_count, const char* o
             break;
         case KRT_TARGET_CMD_BUILD: {
             char file_base[KRT_MAX_PATH];
-            KrtPathGetFilename(input_files[0], file_base, sizeof(file_base));
+            if (KrtPathGetFilename(input_files[0], file_base, sizeof(file_base)) != 0) {
+                return 1;
+            }
             KrtPathRemoveExtension(file_base, file_base, sizeof(file_base));
 #ifdef _WIN32
             char file_base_truncated[1010];

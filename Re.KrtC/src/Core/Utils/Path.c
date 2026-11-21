@@ -19,22 +19,23 @@
 
 double KrtTimeNowSeconds(void) {
 #ifdef _WIN32
-    FILETIME ft;
-    GetSystemTimeAsFileTime(&ft);
-    ULARGE_INTEGER ull;
-    ull.LowPart = ft.dwLowDateTime;
-    ull.HighPart = ft.dwHighDateTime;
-    return ull.QuadPart / 10000000.0;
+    LARGE_INTEGER frequency;
+    LARGE_INTEGER counter;
+    QueryPerformanceFrequency(&frequency);
+    QueryPerformanceCounter(&counter);
+    return (double)counter.QuadPart / (double)frequency.QuadPart;
 #else
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
-    (void)ts;
     return ts.tv_sec + ts.tv_nsec / 1000000000.0;
 #endif
 }
 
 int KrtPathExists(const char* path) {
     struct stat st;
+    if (!path) {
+        return 0;
+    }
     return stat(path, &st) == 0;
 }
 
@@ -74,6 +75,8 @@ int KrtPathGetFilename(const char* path, char* filename, size_t size) {
         len++;
     }
     if (len >= size) {
+        filename[0] = '\0';
+        KrtError("File name is too long: %s", path);
         return -1;
     }
 
@@ -119,7 +122,8 @@ int KrtGetExecutableDirectory(char* result, size_t size) {
 #ifdef _WIN32
     char path[MAX_PATH];
     DWORD len = GetModuleFileNameA(NULL, path, MAX_PATH);
-    if (len == 0) {
+    if (len == 0 || len >= MAX_PATH - 1) {
+        KrtError("Cannot resolve the executable path");
         return -1;
     }
 
@@ -142,7 +146,8 @@ int KrtGetExecutableDirectory(char* result, size_t size) {
 #else
     char path[1024];
     ssize_t len = readlink("/proc/self/exe", path, sizeof(path) - 1);
-    if (len == -1) {
+    if (len <= 0 || (size_t)len >= sizeof(path) - 1) {
+        KrtError("Cannot resolve the executable path");
         return -1;
     }
     path[len] = '\0';
@@ -182,7 +187,7 @@ int KrtPathRemoveExtension(const char* path, char* result, size_t size) {
             backslash = p;
         }
     }
-    const char* last_sep = (slash > backslash) ? slash : backslash;
+    const char* last_sep = (slash && backslash) ? (slash > backslash ? slash : backslash) : (slash ? slash : backslash);
 
     if (dot && (!last_sep || dot > last_sep)) {
         size_t len = dot - path;
@@ -193,7 +198,6 @@ int KrtPathRemoveExtension(const char* path, char* result, size_t size) {
         for (size_t i = 0; i < len && path[i]; i++) {
             result[i] = path[i];
         }
-        result[len] = '\0';
         result[len] = '\0';
     } else {
 
@@ -231,7 +235,7 @@ int KrtPathJoin(char* result, size_t size, const char* path1, const char* path2)
     KRT_STRCPY_S(result, size, path1);
 
     if (len1 > 0 && path1[len1 - 1] != '/' && path1[len1 - 1] != '\\') {
-        KRT_STRCAT_S(result, size, "/");
+        KRT_STRCAT_S(result, size, KRT_PATH_SEPARATOR_STR);
     }
 
     KRT_STRCAT_S(result, size, path2);
@@ -269,6 +273,7 @@ int KrtEnsureDirectoryRecursive(const char* path) {
         len++;
     }
     if (len >= sizeof(temp)) {
+        KrtError("Directory path is too long: %s", path);
         return -1;
     }
 
@@ -294,6 +299,7 @@ int KrtEnsureDirectoryRecursive(const char* path) {
                 break;
             }
 
+            char saved_separator = *slash;
             *slash = '\0';
 
             size_t temp_len = 0;
@@ -311,7 +317,7 @@ int KrtEnsureDirectoryRecursive(const char* path) {
                 }
 #endif
             }
-            *slash = '/';
+            *slash = saved_separator;
             p = slash + 1;
         }
 
@@ -347,6 +353,7 @@ int KrtEnsureDirectoryRecursive(const char* path) {
             break;
         }
 
+        char saved_separator = *slash;
         *slash = '\0';
 
         size_t temp_len = 0;
@@ -364,7 +371,7 @@ int KrtEnsureDirectoryRecursive(const char* path) {
             }
 #endif
         }
-        *slash = '/';
+        *slash = saved_separator;
         p = slash + 1;
     }
 
