@@ -3,6 +3,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <stddef.h>
+#include <stdarg.h>
 #include "Tokenizer.h"
 #include "Accelerator.h"
 
@@ -196,6 +197,19 @@ static char lexer_current_char(Lexer* lexer) {
     return lexer->source[lexer->position];
 }
 
+static void lexer_report_error(Lexer* lexer, int line, const char* format, ...) {
+    lexer->error_count++;
+    if (lexer->error_line == 0) {
+        lexer->error_line = line;
+    }
+    if (lexer->error_message[0] == '\0') {
+        va_list args;
+        va_start(args, format);
+        vsnprintf(lexer->error_message, sizeof(lexer->error_message), format, args);
+        va_end(args);
+    }
+}
+
 static void lexer_skip_whitespace(Lexer* lexer) {
     while (lexer->source[lexer->position] != '\0') {
         if (lexer->source[lexer->position] == ' ' || lexer->source[lexer->position] == '\t' ||
@@ -222,8 +236,7 @@ static void lexer_skip_whitespace(Lexer* lexer) {
                 lexer_advance(lexer);
             }
             if (!terminated) {
-                lexer->error_count++;
-                lexer->error_line = comment_line;
+                lexer_report_error(lexer, comment_line, "unterminated block comment");
                 return;
             }
         } else {
@@ -304,6 +317,8 @@ static Token lexer_read_number(Lexer* lexer) {
     int length = lexer->position - start;
     char* value = (char*)KrtArenaAlloc(lexer->arena, length + 1);
     if (!value) {
+        lexer_report_error(lexer, line, "out of memory while reading a number literal");
+        KrtMemoryReportError("ARENA_ALLOC_FAILED", NULL, __FILE__, __LINE__, "lexer number allocation failed");
         return lexer_create_token(TOKEN_EOF, "", line, column);
     }
     strncpy(value, lexer->source + start, length);
@@ -325,6 +340,8 @@ static Token lexer_read_identifier(Lexer* lexer) {
     int length = lexer->position - start;
     char* value = (char*)KrtArenaAlloc(lexer->arena, length + 1);
     if (!value) {
+        lexer_report_error(lexer, line, "out of memory while reading an identifier");
+        KrtMemoryReportError("ARENA_ALLOC_FAILED", NULL, __FILE__, __LINE__, "lexer identifier allocation failed");
         return lexer_create_token(TOKEN_EOF, "", line, column);
     }
     strncpy(value, lexer->source + start, length);
@@ -400,19 +417,21 @@ static Token lexer_read_char(Lexer* lexer) {
     }
 
     if (lexer->source[lexer->position] != '\'') {
-        lexer->error_count++;
-        lexer->error_line = line;
+        lexer_report_error(lexer, line, "unterminated character literal");
         return lexer_create_token(TOKEN_EOF, "", line, column);
     }
     lexer_advance(lexer);
 
     char* char_str = (char*)KrtArenaAlloc(lexer->arena, 2);
-    if (char_str) {
-        char_str[0] = value[0];
-        char_str[1] = '\0';
+    if (!char_str) {
+        lexer_report_error(lexer, line, "out of memory while reading a character literal");
+        KrtMemoryReportError("ARENA_ALLOC_FAILED", NULL, __FILE__, __LINE__, "lexer char literal allocation failed");
+        return lexer_create_token(TOKEN_EOF, "", line, column);
     }
+    char_str[0] = value[0];
+    char_str[1] = '\0';
 
-    return lexer_create_token(TOKEN_CHAR_LITERAL, char_str ? char_str : value, line, column);
+    return lexer_create_token(TOKEN_CHAR_LITERAL, char_str, line, column);
 }
 
 static Token lexer_read_string(Lexer* lexer) {
@@ -425,6 +444,8 @@ static Token lexer_read_string(Lexer* lexer) {
     int length = 0;
     char* value = (char*)KrtArenaAlloc(lexer->arena, capacity);
     if (!value) {
+        lexer_report_error(lexer, line, "out of memory while reading a string literal");
+        KrtMemoryReportError("ARENA_ALLOC_FAILED", NULL, __FILE__, __LINE__, "lexer string allocation failed");
         return lexer_create_token(TOKEN_EOF, "", line, column);
     }
 
@@ -433,6 +454,9 @@ static Token lexer_read_string(Lexer* lexer) {
             capacity *= 2;
             char* new_value = (char*)KrtArenaRealloc(lexer->arena, value, capacity / 2, capacity);
             if (!new_value) {
+                lexer_report_error(lexer, line, "out of memory while growing a string literal");
+                KrtMemoryReportError("ARENA_REALLOC_FAILED", NULL, __FILE__, __LINE__,
+                                     "lexer string growth failed");
                 return lexer_create_token(TOKEN_EOF, "", line, column);
             }
             value = new_value;
@@ -441,6 +465,10 @@ static Token lexer_read_string(Lexer* lexer) {
         if (lexer->source[lexer->position] == '\\') {
             lexer_advance(lexer);
             char escape = lexer->source[lexer->position];
+            if (escape == '\0') {
+                lexer_report_error(lexer, line, "unterminated string literal (trailing backslash)");
+                return lexer_create_token(TOKEN_EOF, "", line, column);
+            }
             switch (escape) {
             case 'n':
                 value[length++] = '\n';
@@ -514,8 +542,7 @@ static Token lexer_read_string(Lexer* lexer) {
     }
 
     if (lexer->source[lexer->position] == '\0') {
-        lexer->error_count++;
-        lexer->error_line = line;
+        lexer_report_error(lexer, line, "unterminated string literal");
         return lexer_create_token(TOKEN_EOF, "", line, column);
     }
 
@@ -541,6 +568,7 @@ Lexer* lexer_create(const char* source) {
     lexer->position = 0;
     lexer->error_count = 0;
     lexer->error_line = 0;
+    lexer->error_message[0] = '\0';
     lexer->line = 1;
     lexer->column = 1;
     lexer->arena = KrtArenaCreateLocal(64 * 1024);
@@ -795,18 +823,20 @@ Token lexer_next_token(Lexer* lexer) {
         lexer_advance(lexer);
         return lexer_create_token(TOKEN_TILDE, "~", line, column);
     default:
-        if ((unsigned char)c >= 0xC0) {
+        if ((unsigned char)c >= 0xC0 && (unsigned char)c <= 0xF7) {
             int bytes_remaining;
             if ((unsigned char)c <= 0xDF) {
                 bytes_remaining = 1;
             } else if ((unsigned char)c <= 0xEF) {
                 bytes_remaining = 2;
-            } else if ((unsigned char)c <= 0xF7) {
-                bytes_remaining = 3;
             } else {
-                break;
+                bytes_remaining = 3;
             }
 
+            /* Consume the lead byte first; otherwise the recursive call below
+             * re-reads the same byte and never terminates. */
+            lexer_report_error(lexer, line, "non-ASCII byte 0x%02X is not allowed here", (unsigned char)c);
+            lexer_advance(lexer);
             while (bytes_remaining > 0 && lexer->source[lexer->position] != '\0') {
                 unsigned char next_byte = (unsigned char)lexer->source[lexer->position];
                 if (next_byte >= 0x80 && next_byte <= 0xBF) {
@@ -820,7 +850,6 @@ Token lexer_next_token(Lexer* lexer) {
         }
         lexer_advance(lexer);
         return lexer_create_token(TOKEN_UNKNOWN, "", line, column);
-        break;
     }
 
     return lexer_create_token(TOKEN_EOF, "", lexer->line, lexer->column);

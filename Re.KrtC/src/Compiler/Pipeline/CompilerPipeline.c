@@ -322,6 +322,16 @@ int KrtCompilePipelinePreprocess(KrtCompilePipeline* pipeline) {
     return 1;
 }
 
+static void apply_lexer_error(KrtCompilePipeline* pipeline) {
+    if (pipeline->lexer->error_message[0] != '\0') {
+        snprintf(pipeline->error_message, sizeof(pipeline->error_message), "%s near line %d",
+                 pipeline->lexer->error_message, pipeline->lexer->error_line);
+    } else {
+        snprintf(pipeline->error_message, sizeof(pipeline->error_message), "lexical error near line %d",
+                 pipeline->lexer->error_line);
+    }
+}
+
 int KrtCompilePipelineLex(KrtCompilePipeline* pipeline) {
     if (!pipeline || !pipeline->processed_source) {
         return 0;
@@ -340,8 +350,7 @@ int KrtCompilePipelineLex(KrtCompilePipeline* pipeline) {
     }
 
     if (pipeline->lexer->error_count > 0) {
-        snprintf(pipeline->error_message, sizeof(pipeline->error_message),
-                 "unterminated string or character literal near line %d", pipeline->lexer->error_line);
+        apply_lexer_error(pipeline);
         pipeline->success = 0;
         record_stage_result(pipeline, KRT_STAGE_LEX, KRT_RESULT_FAILED, (double)(clock() - start) / CLOCKS_PER_SEC,
                             pipeline->input_file);
@@ -372,8 +381,7 @@ int KrtCompilePipelineParse(KrtCompilePipeline* pipeline) {
 
     pipeline->parser->source_name = pipeline->input_file ? pipeline->input_file : NULL;
     if (pipeline->lexer->error_count > 0) {
-        snprintf(pipeline->error_message, sizeof(pipeline->error_message),
-                 "unterminated block comment or literal near line %d", pipeline->lexer->error_line);
+        apply_lexer_error(pipeline);
         pipeline->success = 0;
         record_stage_result(pipeline, KRT_STAGE_PARSE, KRT_RESULT_FAILED, (double)(clock() - start) / CLOCKS_PER_SEC,
                             pipeline->input_file);
@@ -382,8 +390,7 @@ int KrtCompilePipelineParse(KrtCompilePipeline* pipeline) {
     pipeline->ast = parser_parse(pipeline->parser);
 
     if (pipeline->lexer->error_count > 0) {
-        snprintf(pipeline->error_message, sizeof(pipeline->error_message),
-                 "unterminated block comment or literal near line %d", pipeline->lexer->error_line);
+        apply_lexer_error(pipeline);
         pipeline->success = 0;
         record_stage_result(pipeline, KRT_STAGE_PARSE, KRT_RESULT_FAILED, (double)(clock() - start) / CLOCKS_PER_SEC,
                             pipeline->input_file);

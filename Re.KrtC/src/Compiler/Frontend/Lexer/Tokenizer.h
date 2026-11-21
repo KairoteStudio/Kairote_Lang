@@ -216,6 +216,7 @@ typedef struct {
     KrtArena* arena;
     int error_count;
     int error_line;
+    char error_message[256];
 } Lexer;
 
 Lexer* lexer_create(const char* source);
