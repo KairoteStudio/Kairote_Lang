@@ -15,12 +15,14 @@ uint64_t ark_backend_calc_pc_relative(uint64_t p_vaddr, ArkRelocFieldSize field_
     case ARK_RELOC_FIELD_64:
         return p_vaddr + 8;
     default:
-        return p_vaddr + 4;
+        return 0;
     }
 }
 
 uint64_t ark_backend_align_up(uint64_t value, uint64_t alignment) {
+    /* alignment is a power-of-two hint; callers must pass a nonzero value. */
     if (alignment == 0) {
+        fprintf(stderr, "ArkLink: align_up called with zero alignment\n");
         return value;
     }
     uint64_t remainder = ark_backend_is_power_of_2(alignment) ? value & (alignment - 1) : value % alignment;
@@ -28,9 +30,17 @@ uint64_t ark_backend_align_up(uint64_t value, uint64_t alignment) {
     return value > UINT64_MAX - padding ? UINT64_MAX : value + padding;
 }
 
-uint32_t ark_backend_align_up_32(uint32_t value, uint32_t alignment) {
-    uint64_t aligned = ark_backend_align_up(value, alignment);
-    return aligned > UINT32_MAX ? UINT32_MAX : (uint32_t)aligned;
+int ark_backend_align_up_32(uint32_t value, uint32_t alignment, uint32_t* out) {
+    uint64_t aligned;
+    if (!out || alignment == 0) {
+        return -1;
+    }
+    aligned = ark_backend_align_up(value, alignment);
+    if (aligned > UINT32_MAX) {
+        return -1;
+    }
+    *out = (uint32_t)aligned;
+    return 0;
 }
 
 int ark_backend_should_use_dynamic_elf(const ArkBackendInput* input) {
@@ -95,9 +105,6 @@ static int ark_buffer_ensure_capacity(ArkBuffer* buf, size_t needed) {
     }
 
     size_t new_cap = buf->capacity <= SIZE_MAX / 2 ? buf->capacity * 2 : needed;
-    if (new_cap < needed) {
-        new_cap = needed;
-    }
 
     uint8_t* new_data = (uint8_t*)realloc(buf->data, new_cap);
     if (!new_data) {
@@ -116,8 +123,8 @@ size_t ark_buffer_append(ArkBuffer* buf, const void* data, size_t len) {
 
     /* Appending an existing slice must survive realloc and overlapping ranges. */
     size_t source_offset = 0;
-    int internal =
-        data && (uintptr_t)data >= (uintptr_t)buf->data && (uintptr_t)data - (uintptr_t)buf->data < buf->size;
+    int internal = data && (uintptr_t)data >= (uintptr_t)buf->data &&
+                   (uintptr_t)data - (uintptr_t)buf->data < buf->capacity;
     if (internal) {
         source_offset = (uintptr_t)data - (uintptr_t)buf->data;
         if (len > buf->size - source_offset) {
@@ -174,7 +181,7 @@ char* ark_buffer_get_string(ArkBuffer* buf, uint32_t offset) {
 
 uint32_t ark_buffer_get_rva(ArkBuffer* buf, size_t offset) {
     if (!buf) {
-        return 0;
+        return UINT32_MAX;
     }
     if (offset > UINT32_MAX - buf->base_rva) {
         return UINT32_MAX;
@@ -182,17 +189,23 @@ uint32_t ark_buffer_get_rva(ArkBuffer* buf, size_t offset) {
     return buf->base_rva + (uint32_t)offset;
 }
 
-void ark_buffer_align(ArkBuffer* buf, size_t alignment) {
+int ark_buffer_align(ArkBuffer* buf, size_t alignment) {
     if (!buf || alignment <= 1) {
-        return;
+        return 0;
     }
 
     size_t current = buf->size;
     size_t aligned = ark_backend_align_up(current, alignment);
 
-    if (aligned != SIZE_MAX && aligned > current) {
-        ark_buffer_append_zero(buf, aligned - current);
+    if (aligned == UINT64_MAX) {
+        return -1;
     }
+    if (aligned > current) {
+        if (ark_buffer_append_zero(buf, aligned - current) == (size_t)-1) {
+            return -1;
+        }
+    }
+    return 0;
 }
 
 /* Permission-class rank used to keep same-class sections contiguous. */
@@ -229,12 +242,12 @@ static ArkSegmentType classify_section_kind(ArkSectionKind kind) {
     case ARK_SECTION_TBSS:
         return ARK_SEGMENT_TLS;
     default:
-        return ARK_SEGMENT_DATA;
+        return ARK_SEGMENT_UNKNOWN;
     }
 }
 
 ArkImageLayout* ark_layout_create(const ArkBackendInput* input, uint32_t section_alignment, uint32_t file_alignment) {
-    if (!input) {
+    if (!input || (input->section_count && !input->sections)) {
         return NULL;
     }
 
@@ -300,6 +313,12 @@ ArkImageLayout* ark_layout_create(const ArkBackendInput* input, uint32_t section
 
         sec->section_index = (uint32_t)i;
         sec->segment_type = classify_section_kind(input_sec->kind);
+        if (sec->segment_type == ARK_SEGMENT_UNKNOWN) {
+            free(order);
+            free(layout->sections);
+            free(layout);
+            return NULL;
+        }
         sec->alignment = input_sec->alignment ? input_sec->alignment : section_alignment;
         current_va = ark_backend_align_up(current_va, sec->alignment);
         current_file_offset = ark_backend_align_up(current_file_offset, layout->file_alignment);
@@ -312,10 +331,23 @@ ArkImageLayout* ark_layout_create(const ArkBackendInput* input, uint32_t section
         sec->flags = 0;
 
         uint64_t aligned_size = ark_backend_align_up(input_sec->size, section_alignment);
+        if (aligned_size == UINT64_MAX || current_va > UINT64_MAX - aligned_size) {
+            free(order);
+            free(layout->sections);
+            free(layout);
+            return NULL;
+        }
         current_va += aligned_size;
 
         if (!is_bss) {
-            current_file_offset += ark_backend_align_up(input_sec->size, layout->file_alignment);
+            uint64_t file_advance = ark_backend_align_up(input_sec->size, layout->file_alignment);
+            if (file_advance == UINT64_MAX || current_file_offset > UINT64_MAX - file_advance) {
+                free(order);
+                free(layout->sections);
+                free(layout);
+                return NULL;
+            }
+            current_file_offset += file_advance;
         }
     }
 
@@ -327,7 +359,13 @@ ArkImageLayout* ark_layout_create(const ArkBackendInput* input, uint32_t section
 
     for (size_t i = 0; i < input->section_count; i++) {
         const ArkSectionLayout* sec = &layout->sections[i];
-        uint64_t sec_end = sec->virtual_address + ark_backend_align_up(sec->virtual_size, section_alignment);
+        uint64_t aligned_vsize = ark_backend_align_up(sec->virtual_size, section_alignment);
+        if (aligned_vsize == UINT64_MAX || sec->virtual_address > UINT64_MAX - aligned_vsize) {
+            free(layout->sections);
+            free(layout);
+            return NULL;
+        }
+        uint64_t sec_end = sec->virtual_address + aligned_vsize;
 
         switch (sec->segment_type) {
         case ARK_SEGMENT_CODE:
@@ -355,6 +393,9 @@ ArkImageLayout* ark_layout_create(const ArkBackendInput* input, uint32_t section
                 layout->data_segment_end = sec_end;
             }
             break;
+
+        default:
+            break;
         }
     }
 
@@ -363,6 +404,16 @@ ArkImageLayout* ark_layout_create(const ArkBackendInput* input, uint32_t section
         layout->data_segment_end = layout->data_segment_start;
     }
 
+    /*
+     * image_size spans the loaded image (including BSS), while file_size is the
+     * on-disk extent (excluding BSS).  They intentionally use different bases;
+     * do not collapse them into one formula.
+     */
+    if (layout->data_segment_end < layout->image_base) {
+        free(layout->sections);
+        free(layout);
+        return NULL;
+    }
     layout->image_size = layout->data_segment_end - layout->image_base;
     layout->file_size = current_file_offset;
 
@@ -391,45 +442,98 @@ uint64_t ark_layout_calc_total_size(const ArkImageLayout* layout, int include_bs
     return include_bss ? layout->image_size : layout->file_size;
 }
 
-void ark_reloc_apply_elf(uint8_t* data, size_t size, const ArkRelocProcessor* proc, uint64_t p_vaddr) {
-    if (!data || !proc || proc->offset >= size) {
-        return;
+static int ark_reloc_field_width(ArkRelocFieldSize field_size, size_t* width) {
+    switch (field_size) {
+    case ARK_RELOC_FIELD_8:
+        *width = 1;
+        return 0;
+    case ARK_RELOC_FIELD_16:
+        *width = 2;
+        return 0;
+    case ARK_RELOC_FIELD_32:
+        *width = 4;
+        return 0;
+    case ARK_RELOC_FIELD_64:
+        *width = 8;
+        return 0;
+    default:
+        return -1;
+    }
+}
+
+/* Bounds-checked field access; the offset+width sum is never formed, so it cannot wrap. */
+static int ark_reloc_read_u32(const uint8_t* data, size_t size, uint32_t offset, uint32_t* out) {
+    if (!data || !out || offset > size || 4 > size - offset) {
+        return -1;
+    }
+    uint32_t val = 0;
+    memcpy(&val, data + offset, 4);
+    *out = val;
+    return 0;
+}
+
+static int ark_reloc_write_field(uint8_t* data, size_t size, uint32_t offset, uint64_t value,
+                                 ArkRelocFieldSize field_size) {
+    size_t width = 0;
+    if (ark_reloc_field_width(field_size, &width) != 0) {
+        return -1;
+    }
+    if (offset > size || width > size - offset) {
+        return -1;
+    }
+
+    switch (field_size) {
+    case ARK_RELOC_FIELD_8:
+        data[offset] = (uint8_t)(value & 0xFF);
+        break;
+    case ARK_RELOC_FIELD_16: {
+        uint16_t val = (uint16_t)(value & 0xFFFF);
+        memcpy(data + offset, &val, 2);
+        break;
+    }
+    case ARK_RELOC_FIELD_32: {
+        uint32_t val = (uint32_t)(value & 0xFFFFFFFF);
+        memcpy(data + offset, &val, 4);
+        break;
+    }
+    case ARK_RELOC_FIELD_64:
+        memcpy(data + offset, &value, 8);
+        break;
+    }
+    return 0;
+}
+
+int ark_reloc_apply_elf(uint8_t* data, size_t size, const ArkRelocProcessor* proc, uint64_t p_vaddr) {
+    size_t width = 0;
+    if (!data || !proc || ark_reloc_field_width(proc->field_size, &width) != 0) {
+        return -1;
     }
 
     uint64_t result = 0;
 
-#ifdef ARK_DEBUG
-#endif
-
     switch (proc->action) {
     case ARK_RELOC_APPLY_ABSOLUTE:
+    case ARK_RELOC_APPLY_SECREL:
         result = proc->symbol_value + (uint64_t)proc->addend;
         break;
 
     case ARK_RELOC_APPLY_RELATIVE:
     case ARK_RELOC_APPLY_GOT: {
         uint64_t pc_addr = ark_backend_calc_pc_relative(p_vaddr, proc->field_size);
-#ifdef ARK_DEBUG
-#endif
         result = proc->symbol_value + (uint64_t)proc->addend - pc_addr;
         break;
     }
-
-    case ARK_RELOC_APPLY_SECREL:
-        result = proc->symbol_value + (uint64_t)proc->addend;
-        break;
 
     case ARK_RELOC_APPLY_AARCH64_CALL26: {
         /* AArch64 branch PC is the instruction address itself. */
         int64_t delta = (int64_t)(proc->symbol_value + (uint64_t)proc->addend) - (int64_t)p_vaddr;
         uint32_t insn = 0;
-        if (proc->offset + 4 <= size) {
-            memcpy(&insn, data + proc->offset, 4);
+        if (ark_reloc_read_u32(data, size, proc->offset, &insn) != 0) {
+            return -1;
         }
         insn &= ~0x03FFFFFFu;
         insn |= (uint32_t)((delta >> 2) & 0x03FFFFFFu);
-        memcpy(data + proc->offset, &insn, 4);
-        return;
+        return ark_reloc_write_field(data, size, proc->offset, insn, ARK_RELOC_FIELD_32);
     }
 
     case ARK_RELOC_APPLY_AARCH64_ADRP: {
@@ -437,66 +541,38 @@ void ark_reloc_apply_elf(uint8_t* data, size_t size, const ArkRelocProcessor* pr
         uint64_t pc_page = p_vaddr & ~0xFFFu;
         int64_t imm = ((int64_t)target_page - (int64_t)pc_page) >> 12;
         uint32_t insn = 0;
-        if (proc->offset + 4 <= size) {
-            memcpy(&insn, data + proc->offset, 4);
+        if (ark_reloc_read_u32(data, size, proc->offset, &insn) != 0) {
+            return -1;
         }
         uint32_t immlo = (uint32_t)(imm & 0x3u);
         uint32_t immhi = (uint32_t)((imm >> 2) & 0x7FFFFu);
         insn &= ~((0x7FFFFu << 5) | (0x3u << 29));
         insn |= (immhi << 5) | (immlo << 29);
-        memcpy(data + proc->offset, &insn, 4);
-        return;
+        return ark_reloc_write_field(data, size, proc->offset, insn, ARK_RELOC_FIELD_32);
     }
 
     case ARK_RELOC_APPLY_AARCH64_LO12: {
         uint32_t lo12 = (uint32_t)((proc->symbol_value + (uint64_t)proc->addend) & 0xFFFu);
         uint32_t insn = 0;
-        if (proc->offset + 4 <= size) {
-            memcpy(&insn, data + proc->offset, 4);
+        if (ark_reloc_read_u32(data, size, proc->offset, &insn) != 0) {
+            return -1;
         }
         insn &= ~(0xFFFu << 10);
         insn |= lo12 << 10;
-        memcpy(data + proc->offset, &insn, 4);
-        return;
+        return ark_reloc_write_field(data, size, proc->offset, insn, ARK_RELOC_FIELD_32);
     }
 
     default:
-        return;
+        return -1;
     }
 
-    switch (proc->field_size) {
-    case ARK_RELOC_FIELD_8:
-        if (proc->offset < size) {
-            data[proc->offset] = (uint8_t)(result & 0xFF);
-        }
-        break;
-
-    case ARK_RELOC_FIELD_16:
-        if (proc->offset + 2 <= size) {
-            uint16_t val = (uint16_t)(result & 0xFFFF);
-            memcpy(data + proc->offset, &val, 2);
-        }
-        break;
-
-    case ARK_RELOC_FIELD_32:
-        if (proc->offset + 4 <= size) {
-            uint32_t val = (uint32_t)(result & 0xFFFFFFFF);
-            memcpy(data + proc->offset, &val, 4);
-        }
-        break;
-
-    case ARK_RELOC_FIELD_64:
-        if (proc->offset + 8 <= size) {
-            uint64_t val = result;
-            memcpy(data + proc->offset, &val, 8);
-        }
-        break;
-    }
+    return ark_reloc_write_field(data, size, proc->offset, result, proc->field_size);
 }
 
-void ark_reloc_apply_pe_base(uint8_t* data, size_t size, const ArkRelocProcessor* proc, uint64_t p_vaddr) {
-    if (!data || !proc || !size) {
-        return;
+int ark_reloc_apply_pe_base(uint8_t* data, size_t size, const ArkRelocProcessor* proc, uint64_t p_vaddr) {
+    size_t width = 0;
+    if (!data || !proc || ark_reloc_field_width(proc->field_size, &width) != 0) {
+        return -1;
     }
 
     uint64_t result = 0;
@@ -512,38 +588,21 @@ void ark_reloc_apply_pe_base(uint8_t* data, size_t size, const ArkRelocProcessor
         break;
     }
 
-    case ARK_RELOC_GENERATE_BASE_REL:
-        return;
-
     default:
-        return;
+        return -1;
     }
 
-    switch (proc->field_size) {
-    case ARK_RELOC_FIELD_32:
-        if (size >= 4) {
-            uint32_t val = (uint32_t)(result & 0xFFFFFFFF);
-            memcpy(data, &val, 4);
-        }
-        break;
-
-    case ARK_RELOC_FIELD_64:
-        if (size >= 8) {
-            memcpy(data, &result, 8);
-        }
-        break;
-
-    default:
-        break;
-    }
+    return ark_reloc_write_field(data, size, proc->offset, result, proc->field_size);
 }
 
-void ark_reloc_process_all(ArkResolverReloc* relocs, size_t count, ArkRelocApplyFn apply_fn,
-                           ArkRelocShouldProcessFn filter_fn, void* user_data, uint8_t* section_data,
-                           size_t section_size, const ArkImageLayout* layout) {
+int ark_reloc_process_all(ArkResolverReloc* relocs, size_t count, ArkRelocApplyFn apply_fn,
+                          ArkRelocShouldProcessFn filter_fn, void* user_data, uint8_t* section_data,
+                          size_t section_size, const ArkImageLayout* layout) {
     if (!relocs || count == 0 || !apply_fn || !section_data) {
-        return;
+        return 0;
     }
+
+    int failures = 0;
 
     for (size_t i = 0; i < count; i++) {
         ArkResolverReloc* reloc = &relocs[i];
@@ -606,19 +665,43 @@ void ark_reloc_process_all(ArkResolverReloc* relocs, size_t count, ArkRelocApply
             break;
 
         default:
+            fprintf(stderr, "ArkLink: unsupported relocation type %d at section %u offset %u\n", (int)reloc->type,
+                    reloc->section_index, reloc->offset);
+            failures++;
             continue;
         }
 
-        uint64_t p_vaddr = 0;
-        if (layout) {
-            const ArkSectionLayout* sec = ark_layout_get_section(layout, reloc->section_index);
-            if (sec) {
-                p_vaddr = sec->virtual_address + reloc->offset;
-            }
+        if (!layout) {
+            fprintf(stderr, "ArkLink: no layout for relocation in section %u\n", reloc->section_index);
+            failures++;
+            continue;
         }
 
-        apply_fn(section_data, section_size, &proc, p_vaddr);
+        const ArkSectionLayout* sec = ark_layout_get_section(layout, reloc->section_index);
+        if (!sec) {
+            fprintf(stderr, "ArkLink: relocation section index %u out of range\n", reloc->section_index);
+            failures++;
+            continue;
+        }
+        if (sec->virtual_address > UINT64_MAX - reloc->offset) {
+            fprintf(stderr, "ArkLink: relocation virtual address overflow in section %u\n", reloc->section_index);
+            failures++;
+            continue;
+        }
+        uint64_t p_vaddr = sec->virtual_address + reloc->offset;
+
+        if (apply_fn(section_data, section_size, &proc, p_vaddr) != 0) {
+            fprintf(stderr, "ArkLink: failed to apply relocation type %d in section %u at offset %u\n", (int)reloc->type,
+                    reloc->section_index, reloc->offset);
+            failures++;
+        }
     }
+
+    return failures;
+}
+
+static int ark_import_module_equal(const char* a, const char* b) {
+    return a && b && strcmp(a, b) == 0;
 }
 
 ArkImportGroup* ark_import_group_create(const ArkImportEntry* imports, size_t count) {
@@ -631,6 +714,10 @@ ArkImportGroup* ark_import_group_create(const ArkImportEntry* imports, size_t co
         return NULL;
     }
     const char** unique_modules = (const char**)calloc(count, sizeof(char*));
+    if (!unique_modules) {
+        free(group);
+        return NULL;
+    }
     size_t unique_count = 0;
 
     for (size_t i = 0; i < count; i++) {
@@ -671,19 +758,25 @@ ArkImportGroup* ark_import_group_create(const ArkImportEntry* imports, size_t co
 
         size_t sym_count = 0;
         for (size_t i = 0; i < count; i++) {
-            if (strcmp(imports[i].module, unique_modules[m]) == 0) {
+            if (ark_import_module_equal(imports[i].module, unique_modules[m])) {
                 sym_count++;
             }
         }
 
         group->modules[m].symbols = (const char**)calloc(sym_count, sizeof(char*));
         if (!group->modules[m].symbols) {
-            continue;
+            for (size_t k = 0; k < m; k++) {
+                free(group->modules[k].symbols);
+            }
+            free(group->modules);
+            free(unique_modules);
+            free(group);
+            return NULL;
         }
 
         group->modules[m].symbol_count = 0;
         for (size_t i = 0; i < count; i++) {
-            if (strcmp(imports[i].module, unique_modules[m]) == 0 && imports[i].symbol) {
+            if (ark_import_module_equal(imports[i].module, unique_modules[m]) && imports[i].symbol) {
                 group->modules[m].symbols[group->modules[m].symbol_count++] = imports[i].symbol;
             }
         }

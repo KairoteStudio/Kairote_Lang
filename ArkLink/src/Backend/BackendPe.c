@@ -345,8 +345,17 @@ static size_t import_builder_append(ImportTableBuilder* builder, const void* dat
     return ark_buffer_append(builder, data, len);
 }
 
-static uint32_t import_builder_get_rva(ImportTableBuilder* builder, size_t offset) {
-    return ark_buffer_get_rva(builder, offset);
+static int import_builder_get_rva(ImportTableBuilder* builder, size_t offset, uint32_t* out_rva) {
+    uint32_t rva;
+    if (!out_rva) {
+        return -1;
+    }
+    rva = ark_buffer_get_rva(builder, offset);
+    if (rva == UINT32_MAX) {
+        return -1;
+    }
+    *out_rva = rva;
+    return 0;
 }
 
 static uint8_t* generate_import_table(ArkBackendInput* input, uint32_t idata_rva, size_t* out_size,
@@ -481,7 +490,12 @@ static uint8_t* generate_import_table(ArkBackendInput* input, uint32_t idata_rva
                 }
             }
 
-            uint64_t entry_value = import_builder_get_rva(builder, hint_name_offset);
+            uint32_t entry_rva = 0;
+            if (import_builder_get_rva(builder, hint_name_offset, &entry_rva) != 0) {
+                free(sym_indices);
+                goto fail;
+            }
+            uint64_t entry_value = entry_rva;
 
             memcpy(builder->data + ilt_offset + i * sizeof(entry_value), &entry_value, sizeof(entry_value));
 
@@ -490,11 +504,19 @@ static uint8_t* generate_import_table(ArkBackendInput* input, uint32_t idata_rva
 
         free(sym_indices);
 
-        descriptor.ImportLookupTableRVA = import_builder_get_rva(builder, ilt_offset);
+        uint32_t ilt_rva = 0;
+        uint32_t name_rva = 0;
+        uint32_t iat_rva = 0;
+        if (import_builder_get_rva(builder, ilt_offset, &ilt_rva) != 0 ||
+            import_builder_get_rva(builder, name_offset, &name_rva) != 0 ||
+            import_builder_get_rva(builder, iat_offset, &iat_rva) != 0) {
+            goto fail;
+        }
+        descriptor.ImportLookupTableRVA = ilt_rva;
         descriptor.TimeDateStamp = 0;
         descriptor.ForwarderChain = 0;
-        descriptor.NameRVA = import_builder_get_rva(builder, name_offset);
-        descriptor.ImportAddressTableRVA = import_builder_get_rva(builder, iat_offset);
+        descriptor.NameRVA = name_rva;
+        descriptor.ImportAddressTableRVA = iat_rva;
         memcpy(builder->data + idt_offset + m * sizeof(descriptor), &descriptor, sizeof(descriptor));
     }
 
@@ -536,8 +558,17 @@ static size_t export_builder_append(ExportTableBuilder* builder, const void* dat
     return ark_buffer_append(builder, data, size);
 }
 
-static uint32_t export_builder_get_rva(ExportTableBuilder* builder, size_t offset) {
-    return ark_buffer_get_rva(builder, offset);
+static int export_builder_get_rva(ExportTableBuilder* builder, size_t offset, uint32_t* out_rva) {
+    uint32_t rva;
+    if (!out_rva) {
+        return -1;
+    }
+    rva = ark_buffer_get_rva(builder, offset);
+    if (rva == UINT32_MAX) {
+        return -1;
+    }
+    *out_rva = rva;
+    return 0;
 }
 
 static int compare_export_entries(const void* a, const void* b) {
@@ -615,7 +646,12 @@ static uint8_t* generate_export_table(ArkBackendInput* input, uint32_t edata_rva
         ArkExportEntry* exp = &sorted_exports[i];
         memcpy(builder->data + name_offsets[i], exp->name, name_lens[i]);
 
-        uint32_t name_rva = export_builder_get_rva(builder, name_offsets[i]);
+        uint32_t name_rva = 0;
+        if (export_builder_get_rva(builder, name_offsets[i], &name_rva) != 0) {
+            free(name_lens);
+            free(name_offsets);
+            goto fail;
+        }
         uint16_t ordinal = (uint16_t)(exp->ordinal - input->export_ordinal_base);
         memcpy(ent + i * sizeof(name_rva), &name_rva, sizeof(name_rva));
         memcpy(eot + i * sizeof(ordinal), &ordinal, sizeof(ordinal));
@@ -637,13 +673,23 @@ static uint8_t* generate_export_table(ArkBackendInput* input, uint32_t edata_rva
     edt->TimeDateStamp = 0;
     edt->MajorVersion = 0;
     edt->MinorVersion = 0;
-    edt->NameRVA = export_builder_get_rva(builder, dll_name_offset);
+    uint32_t dll_name_rva = 0;
+    uint32_t eat_rva = 0;
+    uint32_t ent_rva = 0;
+    uint32_t eot_rva = 0;
+    if (export_builder_get_rva(builder, dll_name_offset, &dll_name_rva) != 0 ||
+        export_builder_get_rva(builder, eat_offset, &eat_rva) != 0 ||
+        export_builder_get_rva(builder, ent_offset, &ent_rva) != 0 ||
+        export_builder_get_rva(builder, eot_offset, &eot_rva) != 0) {
+        goto fail;
+    }
+    edt->NameRVA = dll_name_rva;
     edt->OrdinalBase = input->export_ordinal_base;
     edt->AddressTableEntries = (uint32_t)input->export_count;
     edt->NumberOfNamePointers = (uint32_t)input->export_count;
-    edt->ExportAddressTableRVA = export_builder_get_rva(builder, eat_offset);
-    edt->NamePointerRVA = export_builder_get_rva(builder, ent_offset);
-    edt->OrdinalTableRVA = export_builder_get_rva(builder, eot_offset);
+    edt->ExportAddressTableRVA = eat_rva;
+    edt->NamePointerRVA = ent_rva;
+    edt->OrdinalTableRVA = eot_rva;
 
     *out_size = builder->size;
 
@@ -747,7 +793,15 @@ ArkLinkResult ark_backend_pe_link(ArkLinkContext* ctx, ArkBackendInput* input, A
     uint32_t section_table_size = (uint32_t)(total_sections * sizeof(PE_SECTION_HEADER));
     uint32_t total_header_size = dos_header_size + pe_header_size + section_table_size;
 
-    uint32_t headers_size = ark_backend_align_up_32(total_header_size, file_alignment);
+    uint32_t headers_size = 0;
+    if (ark_backend_align_up_32(total_header_size, file_alignment, &headers_size) != 0) {
+        free(temp_maps);
+        ark_layout_destroy(layout);
+        free(reloc_data);
+        free(import_data);
+        free(export_data);
+        return ARK_LINK_ERR_FORMAT;
+    }
     uint32_t image_size = (uint32_t)ark_layout_calc_total_size(layout, 1);
 
     size_t total_file_size = headers_size;
@@ -1110,7 +1164,7 @@ ArkLinkResult ark_backend_pe_link(ArkLinkContext* ctx, ArkBackendInput* input, A
             }
 
             proc.target_section = reloc->section_index;
-            proc.offset = reloc->offset;
+            proc.offset = reloc_file_offset;
             proc.symbol_value = symbol_addr;
             proc.addend = reloc->addend;
 
@@ -1119,7 +1173,14 @@ ArkLinkResult ark_backend_pe_link(ArkLinkContext* ctx, ArkBackendInput* input, A
                 p_vaddr = output->image_base + output->section_maps[reloc->section_index].rva + reloc->offset;
             }
 
-            ark_reloc_apply_pe_base(output->data + reloc_file_offset, output->size - reloc_file_offset, &proc, p_vaddr);
+            if (ark_reloc_apply_pe_base(output->data, output->size, &proc, p_vaddr) != 0) {
+                ark_layout_destroy(layout);
+                free(temp_maps);
+                free(reloc_data);
+                free(import_data);
+                free(export_data);
+                return ARK_LINK_ERR_FORMAT;
+            }
         }
     }
 

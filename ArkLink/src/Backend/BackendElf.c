@@ -684,8 +684,12 @@ static ArkLinkResult elf_plan_layout(ElfLinkState* state) {
         }
 
         uint32_t target_sec_idx = (uint32_t)i;
-        ark_reloc_process_all(state->input->relocs, state->input->reloc_count, ark_reloc_apply_elf,
-                              reloc_filter_by_section, &target_sec_idx, target->data, target->size, state->layout);
+        int reloc_failures = ark_reloc_process_all(state->input->relocs, state->input->reloc_count, ark_reloc_apply_elf,
+                                                   reloc_filter_by_section, &target_sec_idx, target->data,
+                                                   target->size, state->layout);
+        if (reloc_failures > 0) {
+            return ARK_LINK_ERR_FORMAT;
+        }
     }
 
     if (state->elf_shnum > 0) {

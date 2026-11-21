@@ -3,6 +3,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Function-record flags in a native ABI manifest. */
+enum { ARK_ABI_FUNC_UNDEFINED = 0, ARK_ABI_FUNC_DEFINED = 1, ARK_ABI_FUNC_WEAK = 5 };
+
 typedef struct AbiRecord {
     const uint8_t* nominal;
     const uint8_t* contract;
@@ -131,13 +134,18 @@ static ArkLinkResult read_manifest(AbiIndex* index, const ArkLinkUnit* unit, con
                 return failure("E_ABI_MANIFEST", unit->path, "invalid canonical type record");
             record.kind = 2; record.defined = 1;
         } else {
-            if (referenced >= unit->symbol_count || (flags!=0&&flags!=1&&(flags!=5||version!=3)) || !required[referenced] || recorded[referenced] ||
-                nominal_size < 6 || contract_size < (uint64_t)nominal_size + 18)
+            if (referenced >= unit->symbol_count ||
+                (flags != ARK_ABI_FUNC_UNDEFINED && flags != ARK_ABI_FUNC_DEFINED &&
+                 (flags != ARK_ABI_FUNC_WEAK || version != 3)) ||
+                !required[referenced] || recorded[referenced] || nominal_size < 6 ||
+                contract_size < (uint64_t)nominal_size + 18)
                 return failure("E_ABI_MANIFEST", unit->path, "invalid or duplicate function contract record");
             const ArkSymbolDesc* symbol = &unit->symbols[referenced];
             const ArkLinkSection* code = symbol_section(unit,symbol);
-            if (symbol->type != ARK_SYM_FUNC || symbol->binding != (flags==5?ARK_BIND_WEAK:ARK_BIND_GLOBAL) ||
-                (flags && (!code || code->kind != ARK_SECTION_CODE || !range((size_t)symbol->value,symbol->size,code->size))) ||
+            if (symbol->type != ARK_SYM_FUNC ||
+                symbol->binding != (flags == ARK_ABI_FUNC_WEAK ? ARK_BIND_WEAK : ARK_BIND_GLOBAL) ||
+                (flags != ARK_ABI_FUNC_UNDEFINED &&
+                 (!code || code->kind != ARK_SECTION_CODE || !range((size_t)symbol->value,symbol->size,code->size))) ||
                 (!flags && (symbol->section_index || symbol->value || symbol->size)))
                 return failure("E_ABI_MANIFEST", unit->path, "function record disagrees with symbol definition");
             int named = prefix(symbol->name,"_KRT3$");
@@ -145,7 +153,7 @@ static ArkLinkResult read_manifest(AbiIndex* index, const ArkLinkUnit* unit, con
                 memcmp(record.contract,named?"KRTABI3":"KRTABI2",7) || memcmp(record.contract+7,record.nominal,nominal_size))
                 return failure("E_ABI_MANIFEST", unit->path, "invalid canonical function identity");
             uint64_t digest = hash_bytes(record.contract,contract_size);
-            size_t expected_size = 6 + nominal_size - 6 + 2 + 16;
+            size_t expected_size = nominal_size + 18;
             if (strlen(symbol->name) != expected_size || strncmp(symbol->name,named?"_KRT3$":"_KRT2$",6) ||
                 memcmp(symbol->name+6,record.nominal+6,nominal_size-6) || memcmp(symbol->name+nominal_size,"$H",2))
                 return failure("E_ABI_MANIFEST", unit->path, "invalid native fingerprint symbol");
@@ -154,7 +162,7 @@ static ArkLinkResult read_manifest(AbiIndex* index, const ArkLinkUnit* unit, con
                 if (symbol->name[nominal_size + 2 + digit] != (char)(value < 10 ? '0' + value : 'a' + value - 10))
                     return failure("E_ABI_MANIFEST", unit->path, "fingerprint disagrees with exact native contract");
             }
-            record.defined = flags != 0; record.weak=flags==5; recorded[referenced] = 1;
+            record.defined = flags != ARK_ABI_FUNC_UNDEFINED; record.weak = flags == ARK_ABI_FUNC_WEAK; recorded[referenced] = 1;
         }
         record.hash = hash_bytes(record.nominal,nominal_size);
         ArkLinkResult result = insert(index,&record); if (result != ARK_LINK_OK) return result;
