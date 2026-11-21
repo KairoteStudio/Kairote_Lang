@@ -90,17 +90,6 @@ typedef struct {
 #define PF_W 2
 #define PF_R 4
 
-#define DT_NULL 0
-#define DT_NEEDED 1
-#define DT_STRTAB 5
-#define DT_SYMTAB 6
-#define DT_STRSZ 10
-#define DT_SYMENT 11
-#define DT_RELA 7
-#define DT_RELASZ 8
-#define DT_RELAENT 9
-#define DT_DEBUG 21
-
 #define SHT_NULL 0
 #define SHT_PROGBITS 1
 #define SHT_SYMTAB 2
@@ -136,6 +125,13 @@ typedef struct {
 #define R_X86_64_GOTPC32 29
 #define R_X86_64_JUMP_SLOT 7
 #define R_X86_64_GLOB_DAT 6
+
+#define R_AARCH64_ABS64 257
+#define R_AARCH64_ABS32 258
+#define R_AARCH64_ADR_PREL_PG_HI21 275
+#define R_AARCH64_ADD_ABS_LO12_NC 277
+#define R_AARCH64_LDR_ABS_LO12_NC 278
+#define R_AARCH64_CALL26 283
 
 #define DT_NULL 0
 #define DT_NEEDED 1
@@ -223,7 +219,9 @@ static const char* kind_to_canonical(ArkSectionKind kind) {
     }
 }
 
-static uint32_t kind_to_sh_type(void) {
+static uint32_t kind_to_sh_type(ArkSectionKind kind) {
+    /* All non-BSS sections are PROGBITS here; BSS is chosen by the caller. */
+    (void)kind;
     return SHT_PROGBITS;
 }
 
@@ -263,13 +261,19 @@ static uint32_t get_unique_name(ElfStrBuilder* shstrtab, ArkSectionKind kind, si
     if (occurrence == 0) {
         return sb_add(shstrtab, kind_to_canonical(kind));
     }
-    snprintf(buf, sizeof(buf), "%s.%zu", kind_to_canonical(kind), occurrence);
+    int n = snprintf(buf, sizeof(buf), "%s.%zu", kind_to_canonical(kind), occurrence);
+    if (n < 0 || (size_t)n >= sizeof(buf)) {
+        return (uint32_t)-1;
+    }
     return sb_add(shstrtab, buf);
 }
 
 static uint32_t get_rela_name(ElfStrBuilder* shstrtab, const char* target_name) {
     char buf[80];
-    snprintf(buf, sizeof(buf), ".rela%s", target_name);
+    int n = snprintf(buf, sizeof(buf), ".rela%s", target_name);
+    if (n < 0 || (size_t)n >= sizeof(buf)) {
+        return (uint32_t)-1;
+    }
     return sb_add(shstrtab, buf);
 }
 
@@ -327,6 +331,14 @@ static int nim_add(NameIndexMap* m, const char* name, uint32_t idx) {
 static int reloc_filter_by_section(const ArkResolverReloc* reloc, void* user_data) {
     uint32_t target_sec_idx = *(const uint32_t*)user_data;
     return reloc->section_index == target_sec_idx;
+}
+
+static int elf_safe_mul(size_t a, size_t b, size_t* out) {
+    if (a != 0 && b > SIZE_MAX / a) {
+        return -1;
+    }
+    *out = a * b;
+    return 0;
 }
 
 typedef struct {
@@ -412,17 +424,29 @@ typedef struct {
 
 static uint64_t elf_section_vaddr(ElfLinkState* state, size_t index) {
     const ArkSectionLayout* section = ark_layout_get_section(state->layout, index);
-    return section ? section->virtual_address : 0;
+    if (!section) {
+        fprintf(stderr, "ArkLink: section %zu has no layout\n", index);
+        return 0;
+    }
+    return section->virtual_address;
 }
 
 static uint64_t elf_section_offset(ElfLinkState* state, size_t index) {
     const ArkSectionLayout* section = ark_layout_get_section(state->layout, index);
-    return section ? section->file_offset : 0;
+    if (!section) {
+        fprintf(stderr, "ArkLink: section %zu has no layout\n", index);
+        return 0;
+    }
+    return section->file_offset;
 }
 
 static uint64_t elf_section_vsize(ElfLinkState* state, size_t index) {
     const ArkSectionLayout* section = ark_layout_get_section(state->layout, index);
-    return section ? section->virtual_size : 0;
+    if (!section) {
+        fprintf(stderr, "ArkLink: section %zu has no layout\n", index);
+        return 0;
+    }
+    return section->virtual_size;
 }
 static uint64_t elf_meta_vaddr(ElfLinkState* state, size_t index) {
     return state->meta_secs ? state->meta_secs[index].vaddr : 0;
@@ -485,6 +509,13 @@ static int elf_intern_symbol(ElfLinkState* state, const char* name) {
 }
 
 static ArkLinkResult elf_prepare(ElfLinkState* state) {
+    /* ELF stores section indices and counts in 16 bits; reject oversized inputs
+     * up front so every later count/size stays representable. */
+    if (state->input->section_count > 65534 || state->input->import_count > (1u << 20) ||
+        state->input->export_count > (1u << 20) || state->input->reloc_count > (1u << 24)) {
+        return ARK_LINK_ERR_FORMAT;
+    }
+
     state->page_size = 0x1000;
     state->image_base = state->input->image_base ? state->input->image_base : 0x400000;
     state->ns = state->input->section_count;
@@ -523,7 +554,13 @@ static ArkLinkResult elf_prepare(ElfLinkState* state) {
 
     state->dynstr_actual_size = 1;
     if (state->has_dynamic) {
-        const char** seen_names = (const char**)calloc(state->input->import_count * 2 + 2, sizeof(const char*));
+        size_t seen_capacity = 0;
+        if (elf_safe_mul(state->input->import_count, 2, &seen_capacity) != 0 ||
+            seen_capacity > SIZE_MAX - 2) {
+            return ARK_LINK_ERR_FORMAT;
+        }
+        seen_capacity += 2;
+        const char** seen_names = (const char**)calloc(seen_capacity, sizeof(const char*));
         if (!seen_names) {
             return ARK_LINK_ERR_MEMORY;
         }
@@ -533,19 +570,29 @@ static ArkLinkResult elf_prepare(ElfLinkState* state) {
             const char* mod = state->input->imports[i].module;
             int sym_seen = 0, mod_seen = 0;
             for (size_t k = 0; k < seen_count; k++) {
-                if (!sym_seen && seen_names[k] && strcmp(seen_names[k], sym) == 0) {
+                if (sym && !sym_seen && seen_names[k] && strcmp(seen_names[k], sym) == 0) {
                     sym_seen = 1;
                 }
-                if (!mod_seen && seen_names[k] && strcmp(seen_names[k], mod) == 0) {
+                if (mod && !mod_seen && seen_names[k] && strcmp(seen_names[k], mod) == 0) {
                     mod_seen = 1;
                 }
             }
             if (sym && !sym_seen) {
-                state->dynstr_actual_size += (uint64_t)strlen(sym) + 1;
+                size_t len = strlen(sym);
+                if ((uint64_t)len + 1 > UINT64_MAX - state->dynstr_actual_size) {
+                    free(seen_names);
+                    return ARK_LINK_ERR_FORMAT;
+                }
+                state->dynstr_actual_size += (uint64_t)len + 1;
                 seen_names[seen_count++] = sym;
             }
             if (mod && !mod_seen) {
-                state->dynstr_actual_size += (uint64_t)strlen(mod) + 1;
+                size_t len = strlen(mod);
+                if ((uint64_t)len + 1 > UINT64_MAX - state->dynstr_actual_size) {
+                    free(seen_names);
+                    return ARK_LINK_ERR_FORMAT;
+                }
+                state->dynstr_actual_size += (uint64_t)len + 1;
                 seen_names[seen_count++] = mod;
             }
         }
@@ -553,6 +600,10 @@ static ArkLinkResult elf_prepare(ElfLinkState* state) {
     }
     const size_t dyn_extra = (size_t)(state->has_dynamic ? 10 : 0);
     state->elf_shnum = 1 + state->ns + state->rela_sections + 3 + dyn_extra;
+    if (state->elf_shnum > 65535) {
+        fprintf(stderr, "ArkLink: ELF section count %zu exceeds 16 bits\n", state->elf_shnum);
+        return ARK_LINK_ERR_FORMAT;
+    }
     state->rela_shidx_base = 1 + state->ns;
     state->symtab_shidx = state->rela_shidx_base + state->rela_sections;
     state->strtab_shidx = state->symtab_shidx + 1;
@@ -611,16 +662,19 @@ static ArkLinkResult elf_prepare(ElfLinkState* state) {
         state->sec_name_off[state->plt_shidx] = sb_add(&state->shstrtab, ".plt");
         state->sec_name_off[state->gotplt_shidx] = sb_add(&state->shstrtab, ".got.plt");
     }
-    if (state->sec_name_off[state->symtab_shidx] == (uint32_t)-1 ||
-        state->sec_name_off[state->strtab_shidx] == (uint32_t)-1 ||
-        state->sec_name_off[state->shstrtab_shidx] == (uint32_t)-1) {
-        return ARK_LINK_ERR_MEMORY;
+    for (size_t i = 1; i < state->elf_shnum; i++) {
+        if (state->sec_name_off[i] == (uint32_t)-1) {
+            fprintf(stderr, "ArkLink: failed to append section name %zu\n", i);
+            return ARK_LINK_ERR_MEMORY;
+        }
     }
 
     if (!sb_init(&state->strtab)) {
         return ARK_LINK_ERR_MEMORY;
     }
-    sb_add(&state->strtab, "");
+    if (sb_add(&state->strtab, "") == UINT32_MAX) {
+        return ARK_LINK_ERR_MEMORY;
+    }
 
     state->next_sym_idx = 1 + state->ns;
 
@@ -628,6 +682,11 @@ static ArkLinkResult elf_prepare(ElfLinkState* state) {
         const char* n = state->input->exports[i].name;
         if (!n) {
             continue;
+        }
+        if (state->input->exports[i].section_index < state->ns &&
+            state->input->exports[i].offset != state->input->exports[i].value) {
+            fprintf(stderr, "ArkLink: export '%s' has inconsistent offset/value\n", n);
+            return ARK_LINK_ERR_FORMAT;
         }
         if (!elf_intern_symbol(state, n)) {
             return ARK_LINK_ERR_MEMORY;
@@ -653,6 +712,10 @@ static ArkLinkResult elf_prepare(ElfLinkState* state) {
     }
 
     state->total_syms = state->next_sym_idx;
+    if (state->total_syms > (1u << 25)) {
+        fprintf(stderr, "ArkLink: symbol count %zu too large\n", state->total_syms);
+        return ARK_LINK_ERR_FORMAT;
+    }
     nim_free(&state->sym_map);
 
     return ARK_LINK_OK;
@@ -677,6 +740,10 @@ static ArkLinkResult elf_plan_layout(ElfLinkState* state) {
     for (size_t i = 0; i < state->ns; i++) {
         ArkSectionBuffer* target = &state->input->sections[i];
         if (!target->data) {
+            if (target->size > 0) {
+                fprintf(stderr, "ArkLink: section %zu has size %zu but no data\n", i, target->size);
+                return ARK_LINK_ERR_FORMAT;
+            }
             continue;
         }
         if (is_bss_kind((ArkSectionKind)target->kind)) {
@@ -767,7 +834,7 @@ static ArkLinkResult elf_plan_layout(ElfLinkState* state) {
                     hash_export_func_count++;
                 }
             }
-            size_t hash_nchain = 1 + state->input->import_count + hash_export_func_count + 1;
+            size_t hash_nchain = 1 + state->input->import_count + hash_export_func_count;
             size_t hash_size = (2 + hash_nbuckets + hash_nchain) * sizeof(uint32_t);
             cur_offset = ark_backend_align_up(cur_offset, sizeof(uint64_t));
             state->meta_secs[state->hash_shidx].offset = cur_offset;
@@ -846,7 +913,9 @@ static ArkLinkResult elf_plan_layout(ElfLinkState* state) {
         rw_cur = ark_backend_align_up(rw_cur, sizeof(uint64_t));
         state->meta_secs[state->dynamic_shidx].offset = rw_cur;
         state->meta_secs[state->dynamic_shidx].vaddr = state->image_base + rw_cur;
-        size_t dynamic_upper = 10 + state->input->import_count + (state->rela_sections > 0 ? 3 : 0);
+        /* 14 base slots: STRTAB/SYMTAB/STRSZ/SYMENT/HASH + INIT_ARRAY/SZ +
+         * FINI_ARRAY/SZ + 4 PLT tags (JMPREL/PLTRELSZ/PLTGOT/PLTREL). */
+        size_t dynamic_upper = 14 + state->input->import_count + (state->rela_sections > 0 ? 3 : 0);
         state->meta_secs[state->dynamic_shidx].size = (uint64_t)(dynamic_upper * sizeof(Elf64_Dyn));
         rw_cur += state->meta_secs[state->dynamic_shidx].size;
     }
@@ -914,7 +983,9 @@ static ArkLinkResult elf_plan_layout(ElfLinkState* state) {
             ArkSectionKind k = (ArkSectionKind)state->input->sections[i].kind;
             if (k != ARK_SECTION_CODE && k != ARK_SECTION_DATA && k != ARK_SECTION_RODATA && k != ARK_SECTION_BSS &&
                 k != ARK_SECTION_TDATA) {
-                continue;
+                fprintf(stderr, "ArkLink: unsupported section kind %d\n", (int)k);
+                free(sec_order);
+                return ARK_LINK_ERR_FORMAT;
             }
             const ArkSectionLayout* lsec = ark_layout_get_section(state->layout, i);
             uint64_t va = elf_section_vaddr(state, i);
@@ -950,8 +1021,9 @@ static ArkLinkResult elf_plan_layout(ElfLinkState* state) {
                 continue;
             }
             if (state->n_static_loads >= 48) {
-                oi = state->ns; /* stop, but still reach the free() below */
-                continue;
+                fprintf(stderr, "ArkLink: static PT_LOAD count exceeds 48\n");
+                free(sec_order);
+                return ARK_LINK_ERR_FORMAT;
             }
             Elf64_Phdr* seg = &state->static_loads[state->n_static_loads++];
             memset(seg, 0, sizeof(*seg));
@@ -1021,7 +1093,7 @@ static ArkLinkResult elf_build_symbols(ElfLinkState* state) {
             if (state->input->exports[i].section_index < state->ns) {
                 s->st_shndx = (uint16_t)state->input->exports[i].section_index;
                 s->st_value =
-                    elf_section_vaddr(state, state->input->exports[i].section_index) + state->input->exports[i].offset;
+                    elf_section_vaddr(state, state->input->exports[i].section_index) + state->input->exports[i].value;
                 s->st_size = 0;
             } else {
                 s->st_shndx = SHN_ABS;
@@ -1078,7 +1150,6 @@ static ArkLinkResult elf_build_symbols(ElfLinkState* state) {
             }
         }
     }
-    nim_free(&state->sym_map2);
     sb_free(&state->strtab);
     if (!sb_init(&state->strtab)) {
         return ARK_LINK_ERR_MEMORY;
@@ -1181,37 +1252,50 @@ static ArkLinkResult elf_build_relocations(ElfLinkState* state) {
             }
             uint32_t sym_idx = 0;
             if (r->symbol && r->symbol->name) {
-                for (uint32_t k = 1 + (uint32_t)state->ns; k < state->total_syms; k++) {
-                    if (state->symtab[k].st_name < state->strtab.buffer->size &&
-                        strcmp((const char*)state->strtab.buffer->data + state->symtab[k].st_name, r->symbol->name) ==
-                            0) {
-                        sym_idx = k;
-                        break;
-                    }
+                if (!nim_lookup(&state->sym_map2, r->symbol->name, &sym_idx)) {
+                    fprintf(stderr, "ArkLink: relocation symbol '%s' not in symtab\n", r->symbol->name);
+                    return ARK_LINK_ERR_FORMAT;
                 }
             }
             uint32_t r_type = 0;
             switch (r->type) {
-            case 1:
+            case ARK_RELOC_ABS64:
                 r_type = R_X86_64_64;
                 break;
-            case 2:
+            case ARK_RELOC_ADDR32:
+            case ARK_RELOC_SECREL32:
                 r_type = R_X86_64_32;
                 break;
-            case 3:
+            case ARK_RELOC_PC32:
                 r_type = R_X86_64_PC32;
                 break;
-            case 4:
+            case ARK_RELOC_GOTPC32:
                 r_type = R_X86_64_GOTPC32;
                 break;
-            case 5:
-                r_type = R_X86_64_32;
+            case ARK_RELOC_AARCH64_ADR_PREL_PG_HI21:
+                r_type = R_AARCH64_ADR_PREL_PG_HI21;
+                break;
+            case ARK_RELOC_AARCH64_ADD_ABS_LO12_NC:
+                r_type = R_AARCH64_ADD_ABS_LO12_NC;
+                break;
+            case ARK_RELOC_AARCH64_LDR_ABS_LO12_NC:
+                r_type = R_AARCH64_LDR_ABS_LO12_NC;
+                break;
+            case ARK_RELOC_AARCH64_CALL26:
+                r_type = R_AARCH64_CALL26;
+                break;
+            case ARK_RELOC_AARCH64_ABS32:
+                r_type = R_AARCH64_ABS32;
                 break;
             default:
-                r_type = R_X86_64_64;
-                break;
+                fprintf(stderr, "ArkLink: unsupported ELF relocation type %d\n", (int)r->type);
+                return ARK_LINK_ERR_FORMAT;
             }
             if (r->symbol && r->symbol->section_index == 0 && r->symbol->import_module != NULL) {
+                if (!state->has_dynamic) {
+                    fprintf(stderr, "ArkLink: import relocation without dynamic linking\n");
+                    return ARK_LINK_ERR_FORMAT;
+                }
                 continue;
             }
             state->rela_arrays[state->rela_idx][cur].r_offset = elf_section_vaddr(state, r->section_index) + r->offset;
@@ -1221,6 +1305,8 @@ static ArkLinkResult elf_build_relocations(ElfLinkState* state) {
         }
         state->rela_idx++;
     }
+
+    nim_free(&state->sym_map2);
 
     state->dynsym = NULL;
     memset(&state->dynstr, 0, sizeof(state->dynstr));
@@ -1287,7 +1373,12 @@ static ArkLinkResult elf_build_dynamic(ElfLinkState* state) {
             s->st_shndx = state->input->exports[i].section_index < state->ns
                               ? (uint16_t)(state->input->exports[i].section_index + 1)
                               : SHN_ABS;
-            s->st_value = state->input->exports[i].offset;
+            if (state->input->exports[i].section_index < state->ns) {
+                s->st_value = elf_section_vaddr(state, state->input->exports[i].section_index) +
+                              state->input->exports[i].offset;
+            } else {
+                s->st_value = state->input->exports[i].value;
+            }
             s->st_size = 0;
             uint32_t name_off = 0;
             if (sym && !nim_lookup(&state->symbol_off, sym, &name_off)) {
@@ -1316,7 +1407,9 @@ static ArkLinkResult elf_build_dynamic(ElfLinkState* state) {
         }
 
         size_t rela_count_for_dyn = state->rela_sections;
-        state->dyntab_count = 5 + unique_modules + 4 + (rela_count_for_dyn > 0 ? 3 : 0) + 1;
+        /* 14 base slots (STRTAB/SYMTAB/STRSZ/SYMENT/HASH, INIT_ARRAY/SZ,
+         * FINI_ARRAY/SZ, 4 PLT tags, DT_NULL) plus one DT_NEEDED per module. */
+        state->dyntab_count = 14 + unique_modules + (rela_count_for_dyn > 0 ? 3 : 0);
         state->dyntab = (Elf64_Dyn*)calloc(state->dyntab_count, sizeof(Elf64_Dyn));
         if (!state->dyntab) {
             return ARK_LINK_ERR_MEMORY;
@@ -1398,9 +1491,6 @@ static ArkLinkResult elf_build_dynamic(ElfLinkState* state) {
             state->dyntab[di].d_val = sizeof(Elf64_Rela);
             di++;
         }
-        state->dyntab[di].d_tag = DT_NULL;
-        state->dyntab[di].d_val = 0;
-        di++;
 
         state->meta_secs[state->dynsym_shidx].size = (uint64_t)(dynsym_n * sizeof(Elf64_Sym));
         state->meta_secs[state->dynstr_shidx].size = (uint64_t)state->dynstr.buffer->size;
@@ -1466,6 +1556,33 @@ static ArkLinkResult elf_build_dynamic(ElfLinkState* state) {
             if (!state->rela_plt_data) {
                 return ARK_LINK_ERR_MEMORY;
             }
+        }
+
+        if (state->func_import_count > 0 && state->rela_plt_count > 0) {
+            if (state->rela_plt_count > UINT32_MAX / sizeof(Elf64_Rela)) {
+                fprintf(stderr, "ArkLink: PLT relocation count overflow\n");
+                return ARK_LINK_ERR_FORMAT;
+            }
+            state->dyntab[di].d_tag = DT_JMPREL;
+            state->dyntab[di].d_val =
+                elf_meta_vaddr(state, state->reladyn_shidx) + elf_meta_size(state, state->reladyn_shidx);
+            di++;
+            state->dyntab[di].d_tag = DT_PLTRELSZ;
+            state->dyntab[di].d_val = (uint64_t)(state->rela_plt_count * sizeof(Elf64_Rela));
+            di++;
+            state->dyntab[di].d_tag = DT_PLTGOT;
+            state->dyntab[di].d_val = elf_meta_vaddr(state, state->gotplt_shidx);
+            di++;
+            state->dyntab[di].d_tag = DT_PLTREL;
+            state->dyntab[di].d_val = sizeof(Elf64_Rela);
+            di++;
+        }
+        state->dyntab[di].d_tag = DT_NULL;
+        state->dyntab[di].d_val = 0;
+        di++;
+        if (di > state->dyntab_count) {
+            fprintf(stderr, "ArkLink: dynamic table overflow\n");
+            return ARK_LINK_ERR_FORMAT;
         }
 
         size_t current_plt_idx = 1;
@@ -1537,41 +1654,6 @@ static ArkLinkResult elf_build_dynamic(ElfLinkState* state) {
             }
         }
 
-        if (state->func_import_count > 0 && state->rela_plt_count > 0) {
-            size_t null_idx = 0;
-            for (size_t i = 0; i < state->dyntab_count; i++) {
-                if (state->dyntab[i].d_tag == DT_NULL) {
-                    null_idx = i;
-                    break;
-                }
-            }
-
-            if (null_idx >= 5) {
-                state->dyntab[null_idx - 5].d_tag = DT_JMPREL;
-                state->dyntab[null_idx - 5].d_val =
-                    elf_meta_vaddr(state, state->reladyn_shidx) + elf_meta_size(state, state->reladyn_shidx);
-                if (state->rela_plt_count == 0 || state->rela_plt_count > UINT32_MAX / sizeof(Elf64_Rela)) {
-                    state->rela_plt_count = state->func_import_count > 0 ? state->func_import_count : 0;
-                }
-                state->dyntab[null_idx - 4].d_tag = DT_PLTRELSZ;
-                state->dyntab[null_idx - 4].d_val = (uint64_t)(state->rela_plt_count * sizeof(Elf64_Rela));
-                state->dyntab[null_idx - 3].d_tag = DT_PLTGOT;
-                state->dyntab[null_idx - 3].d_val = elf_meta_vaddr(state, state->gotplt_shidx);
-                state->dyntab[null_idx - 2].d_tag = DT_PLTREL;
-                state->dyntab[null_idx - 2].d_val = sizeof(Elf64_Rela);
-
-                int use_lazy_binding = 1;
-                if (!use_lazy_binding) {
-                    state->dyntab[null_idx - 1].d_tag = DT_BIND_NOW;
-                    state->dyntab[null_idx - 1].d_val = 0;
-
-                } else {
-                }
-
-                (void)elf_meta_offset(state, state->reladyn_shidx);
-            }
-        }
-
         nim_free(&state->module_off);
         nim_free(&state->symbol_off);
     }
@@ -1602,12 +1684,12 @@ static ArkLinkResult elf_write_headers(ElfLinkState* state) {
     }
     ehdr.e_machine = (state->input->arch == KRO_ARCH_ARM64) ? EM_AARCH64 : EM_X86_64;
     ehdr.e_version = EV_CURRENT;
-    ehdr.e_entry = state->image_base;
-    if (state->input->entry_section < state->ns) {
-        ehdr.e_entry = elf_section_vaddr(state, state->input->entry_section) + state->input->entry_offset;
-    } else {
-        // 留空,别动
+    if (state->input->entry_section >= state->ns) {
+        fprintf(stderr, "ArkLink: entry section %u out of range (%zu sections)\n", state->input->entry_section,
+                state->ns);
+        return ARK_LINK_ERR_FORMAT;
     }
+    ehdr.e_entry = elf_section_vaddr(state, state->input->entry_section) + state->input->entry_offset;
     ehdr.e_phoff = sizeof(Elf64_Ehdr);
     ehdr.e_shoff = state->shdr_offset;
     ehdr.e_flags = 0;
@@ -1620,7 +1702,8 @@ static ArkLinkResult elf_write_headers(ElfLinkState* state) {
     /* PT_PHDR must come first: some loaders (notably proot) use it to locate
      * the program header table of the tracee. */
     size_t phdr_load_total = 1 + (state->has_dynamic ? 2 : (size_t)state->n_static_loads) +
-                             (state->has_tls ? 1 : 0) + (has_relro ? 1 : 0) + (needs_gnu_stack ? 1 : 0);
+                             (state->has_dynamic ? 2 : 0) + (state->has_tls ? 1 : 0) +
+                             (has_relro ? 1 : 0) + (needs_gnu_stack ? 1 : 0);
     Elf64_Phdr phdr_phdr = {0};
     phdr_phdr.p_type = PT_PHDR;
     phdr_phdr.p_flags = PF_R;
@@ -1651,7 +1734,8 @@ static ArkLinkResult elf_write_headers(ElfLinkState* state) {
         phdr0.p_filesz = state->seg1_filesz;
         phdr0.p_memsz = state->seg1_memsz;
         phdr0.p_align = state->page_size;
-        memcpy(state->out_buf + sizeof(Elf64_Ehdr), &phdr0, sizeof(phdr0));
+        memcpy(state->out_buf + sizeof(Elf64_Ehdr) + state->phdr_load_count * sizeof(Elf64_Phdr), &phdr0,
+               sizeof(phdr0));
         state->phdr_load_count++;
 
         Elf64_Phdr phdr1 = {0};
@@ -1724,6 +1808,7 @@ static ArkLinkResult elf_write_headers(ElfLinkState* state) {
 
         memcpy(state->out_buf + sizeof(Elf64_Ehdr) + phdr_write_idx * sizeof(Elf64_Phdr), &phdr_relro,
                sizeof(phdr_relro));
+        phdr_write_idx++;
     }
 
     if (needs_gnu_stack) {
@@ -1739,6 +1824,13 @@ static ArkLinkResult elf_write_headers(ElfLinkState* state) {
 
         memcpy(state->out_buf + sizeof(Elf64_Ehdr) + phdr_write_idx * sizeof(Elf64_Phdr), &phdr_stack,
                sizeof(phdr_stack));
+        phdr_write_idx++;
+    }
+
+    if (phdr_write_idx != phdr_load_total) {
+        fprintf(stderr, "ArkLink: program header count mismatch (%zu written vs %zu planned)\n", phdr_write_idx,
+                phdr_load_total);
+        return ARK_LINK_ERR_FORMAT;
     }
 
     return ARK_LINK_OK;
@@ -1785,7 +1877,13 @@ static ArkLinkResult elf_write_contents(ElfLinkState* state) {
 
         if (elf_meta_offset(state, state->hash_shidx) > 0 && elf_meta_size(state, state->hash_shidx) > 0) {
             size_t hash_nbuckets = 1;
-            size_t hash_nchain = 1 + state->input->import_count + 1;
+            size_t hash_export_func_count = 0;
+            for (size_t i = 0; i < state->input->export_count; i++) {
+                if (state->input->exports[i].is_function) {
+                    hash_export_func_count++;
+                }
+            }
+            size_t hash_nchain = 1 + state->input->import_count + hash_export_func_count;
             uint8_t* hash_data = state->out_buf + elf_meta_offset(state, state->hash_shidx);
             uint32_t hash_header[3] = {(uint32_t)hash_nbuckets, (uint32_t)hash_nchain, 0};
             memcpy(hash_data, hash_header, sizeof(hash_header));
@@ -1825,7 +1923,8 @@ static ArkLinkResult elf_write_contents(ElfLinkState* state) {
 
                 size_t expected_plt_size = (1 + state->func_import_count) * 16;
                 if (elf_meta_size(state, state->plt_shidx) < expected_plt_size) {
-                    state->func_import_count = (elf_meta_size(state, state->plt_shidx) / 16) - 1;
+                    fprintf(stderr, "ArkLink: PLT size mismatch\n");
+                    return ARK_LINK_ERR_FORMAT;
                 }
 
                 plt_base[0] = 0xff;
@@ -1870,10 +1969,8 @@ static ArkLinkResult elf_write_contents(ElfLinkState* state) {
 
             size_t required_got_entries = 3 + state->func_import_count;
             if (elf_meta_size(state, state->gotplt_shidx) < required_got_entries * sizeof(uint64_t)) {
-                state->func_import_count = (elf_meta_size(state, state->gotplt_shidx) / sizeof(uint64_t)) - 3;
-                if ((int64_t)state->func_import_count < 0) {
-                    state->func_import_count = 0;
-                }
+                fprintf(stderr, "ArkLink: GOT.plt size mismatch\n");
+                return ARK_LINK_ERR_FORMAT;
             }
 
             uint64_t dynamic_addr = elf_meta_vaddr(state, state->dynamic_shidx);
@@ -1905,7 +2002,9 @@ static ArkLinkResult elf_write_section_headers(ElfLinkState* state) {
         Elf64_Shdr* sh = &state->shdrs[1 + i];
         const ArkSectionLayout* sl = ark_layout_get_section(state->layout, i);
         sh->sh_name = state->sec_name_off[1 + i];
-        sh->sh_type = is_bss_kind((ArkSectionKind)state->input->sections[i].kind) ? SHT_NOBITS : kind_to_sh_type();
+        sh->sh_type = is_bss_kind((ArkSectionKind)state->input->sections[i].kind)
+                          ? SHT_NOBITS
+                          : kind_to_sh_type((ArkSectionKind)state->input->sections[i].kind);
         sh->sh_flags =
             kind_to_sh_flags((ArkSectionKind)state->input->sections[i].kind, state->input->sections[i].flags);
         sh->sh_addr = elf_section_vaddr(state, i);
@@ -2098,13 +2197,24 @@ static ArkLinkResult elf_publish(ElfLinkState* state, ArkBackendOutput* output) 
             return ARK_LINK_ERR_MEMORY;
         }
         for (size_t i = 0; i < state->ns; i++) {
-            maps[i].rva = (uint32_t)(elf_section_vaddr(state, i) - state->image_base);
-            maps[i].size = (uint32_t)elf_section_vsize(state, i);
-            maps[i].file_offset = (uint32_t)elf_section_offset(state, i);
+            uint64_t rva = elf_section_vaddr(state, i) - state->image_base;
+            uint64_t vsize = elf_section_vsize(state, i);
+            uint64_t offset = elf_section_offset(state, i);
+            if (rva > UINT32_MAX || vsize > UINT32_MAX || offset > UINT32_MAX) {
+                fprintf(stderr, "ArkLink: section %zu address or size exceeds 32 bits\n", i);
+                free(maps);
+                return ARK_LINK_ERR_FORMAT;
+            }
+            maps[i].rva = (uint32_t)rva;
+            maps[i].size = (uint32_t)vsize;
+            maps[i].file_offset = (uint32_t)offset;
             maps[i].flags = state->input->sections[i].flags;
         }
         output->section_maps = maps;
         output->section_count = state->ns;
+    } else {
+        output->section_maps = NULL;
+        output->section_count = 0;
     }
     output->data = state->out_buf;
     output->size = state->file_size;
