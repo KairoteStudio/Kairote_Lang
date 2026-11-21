@@ -24,6 +24,19 @@ struct ArkLinkSession {
     char error_buffer[1024];
 };
 
+static ArkOutputType native_output_type(ArkLinkOutputKind kind) {
+    switch (kind) {
+    case ARK_LINK_OUTPUT_EXECUTABLE:
+        return ARK_OUTPUT_EXECUTABLE;
+    case ARK_LINK_OUTPUT_SHARED_LIBRARY:
+        return ARK_OUTPUT_SHARED_LIB;
+    case ARK_LINK_OUTPUT_STATIC_LIBRARY:
+        return ARK_OUTPUT_OBJECT;
+    default:
+        return ARK_OUTPUT_EXECUTABLE;
+    }
+}
+
 static void log_message(struct ArkLinkSession* session, ArkLogLevel level, const char* message) {
     if (session && session->logger) {
         session->logger(level, message, session->logger_user_data);
@@ -88,15 +101,31 @@ ArkLinkResult arklink_session_link_native(ArkLinkSession* session) {
         return result;
     }
 
-    if (plan.backend_input) {
-        if (session->image_base) {
-            plan.backend_input->image_base = session->image_base;
-        } else if (session->target == ARK_LINK_TARGET_PE) {
-            plan.backend_input->image_base = 0x140000000ULL;
-        } else {
-            plan.backend_input->image_base = 0x400000ULL;
+    if (!plan.backend_input) {
+        snprintf(session->error_buffer, sizeof(session->error_buffer), "Resolver produced no backend input");
+        log_message(session, ARK_LOG_ERROR, session->error_buffer);
+        for (size_t i = 0; i < session->input_count; i++) {
+            if (units[i]) {
+                ark_link_unit_destroy(units[i]);
+            }
         }
+        free(units);
+        ark_context_destroy(ctx);
+        return ARK_LINK_ERR_FORMAT;
     }
+
+    if (session->image_base) {
+        plan.backend_input->image_base = session->image_base;
+    } else if (session->target == ARK_LINK_TARGET_PE) {
+        plan.backend_input->image_base = 0x140000000ULL;
+    } else {
+        plan.backend_input->image_base = 0x400000ULL;
+    }
+
+    /* Carry the session configuration through to the backend. */
+    plan.backend_input->subsystem = (uint32_t)session->subsystem;
+    plan.backend_input->stack_size = session->stack_size;
+    plan.backend_input->output_type = native_output_type(session->output_kind);
 
     log_message(session, ARK_LOG_INFO, "Linking with backend...");
 

@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <stdbool.h>
 
 struct ArkLinkSession {
@@ -20,6 +21,26 @@ struct ArkLinkSession {
     void* logger_user_data;
     char error_buffer[1024];
 };
+
+/* Keep a running diagnostic instead of overwriting the previous failure. */
+static void session_record_error(ArkLinkSession* session, const char* fmt, ...) {
+    char msg[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(msg, sizeof(msg), fmt, ap);
+    va_end(ap);
+
+    size_t len = strlen(session->error_buffer);
+    if (len == 0) {
+        snprintf(session->error_buffer, sizeof(session->error_buffer), "%s", msg);
+        return;
+    }
+    if (len + 3 < sizeof(session->error_buffer)) {
+        strncat(session->error_buffer, " | ", sizeof(session->error_buffer) - len - 1);
+        len = strlen(session->error_buffer);
+        strncat(session->error_buffer, msg, sizeof(session->error_buffer) - len - 1);
+    }
+}
 
 ArkLinkSession* arklink_session_create(void) {
     ArkLinkSession* session = (ArkLinkSession*)calloc(1, sizeof(ArkLinkSession));
@@ -79,6 +100,9 @@ ArkLinkResult arklink_session_set_output_kind(ArkLinkSession* session, ArkLinkOu
     if (!session) {
         return ARK_LINK_ERR_INVALID_ARGUMENT;
     }
+    if (kind < ARK_LINK_OUTPUT_EXECUTABLE || kind > ARK_LINK_OUTPUT_STATIC_LIBRARY) {
+        return ARK_LINK_ERR_INVALID_ARGUMENT;
+    }
     session->output_kind = kind;
     return ARK_LINK_OK;
 }
@@ -102,6 +126,9 @@ ArkLinkResult arklink_session_set_subsystem(ArkLinkSession* session, ArkSubsyste
     if (!session) {
         return ARK_LINK_ERR_INVALID_ARGUMENT;
     }
+    if (subsystem < ARK_SUBSYSTEM_CONSOLE || subsystem > ARK_SUBSYSTEM_WINDOWS) {
+        return ARK_LINK_ERR_INVALID_ARGUMENT;
+    }
     session->subsystem = subsystem;
     return ARK_LINK_OK;
 }
@@ -116,6 +143,9 @@ ArkLinkResult arklink_session_set_image_base(ArkLinkSession* session, uint64_t i
 
 ArkLinkResult arklink_session_set_stack_size(ArkLinkSession* session, uint64_t stack_size) {
     if (!session) {
+        return ARK_LINK_ERR_INVALID_ARGUMENT;
+    }
+    if (stack_size == 0) {
         return ARK_LINK_ERR_INVALID_ARGUMENT;
     }
     session->stack_size = stack_size;
@@ -170,23 +200,21 @@ ArkLinkResult arklink_session_link(ArkLinkSession* session) {
     }
 
     if (session->input_count == 0) {
-        strncpy(session->error_buffer, "No input files specified", sizeof(session->error_buffer) - 1);
+        session_record_error(session, "No input files specified");
         return ARK_LINK_ERR_INVALID_ARGUMENT;
     }
 
     if (!session->output_path) {
-        strncpy(session->error_buffer, "No output path specified", sizeof(session->error_buffer) - 1);
+        session_record_error(session, "No output path specified");
         return ARK_LINK_ERR_INVALID_ARGUMENT;
     }
 
     log_message(session, ARK_LOG_INFO, "Starting link process...");
 
-    switch (session->target) {
-    case ARK_LINK_TARGET_PE:
-    case ARK_LINK_TARGET_ELF:
-        return arklink_session_link_native(session);
-    default:
-        snprintf(session->error_buffer, sizeof(session->error_buffer), "Unsupported target: %d", session->target);
+    /* Target is validated once here; the native layer only dispatches. */
+    if (session->target != ARK_LINK_TARGET_PE && session->target != ARK_LINK_TARGET_ELF) {
+        session_record_error(session, "Unsupported target: %d", session->target);
         return ARK_LINK_ERR_UNSUPPORTED;
     }
+    return arklink_session_link_native(session);
 }

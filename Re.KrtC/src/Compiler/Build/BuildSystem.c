@@ -6,6 +6,7 @@
 KrtBuildContext* KrtBuildContextCreate(KrtConfig* config, KrtPlatform* platform) {
     KrtBuildContext* ctx = (KrtBuildContext*)KRT_MALLOC(sizeof(KrtBuildContext));
     if (!ctx) {
+        KrtError("无法分配构建上下文");
         return NULL;
     }
 
@@ -61,7 +62,9 @@ int KrtBuildExecute(KrtBuildContext* ctx, const char* input_file, const char* ou
 
     int result = KrtArkLinkLink(ark_ctx);
     if (result != 0) {
-        snprintf(ctx->error_message, sizeof(ctx->error_message), "ArkLink link failed");
+        const char* ark_error = KrtArkLinkGetError(ark_ctx);
+        snprintf(ctx->error_message, sizeof(ctx->error_message), "ArkLink link failed (result %d): %s", result,
+                 ark_error ? ark_error : "unknown error");
         KrtArkLinkContextDestroy(ark_ctx);
         return 0;
     }

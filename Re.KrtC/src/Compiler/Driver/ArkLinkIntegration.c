@@ -208,6 +208,13 @@ int KrtArkLinkLink(KrtArkLinkContext* ctx) {
     return 0;
 }
 
+const char* KrtArkLinkGetError(KrtArkLinkContext* ctx) {
+    if (!ctx || !ctx->session) {
+        return NULL;
+    }
+    return arklink_session_get_error(ctx->session);
+}
+
 int KrtArkLinkLoadProjectLibraries(KrtArkLinkContext* ctx, KrtConfig* config) {
     if (!ctx) {
         return -1;

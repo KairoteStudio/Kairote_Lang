@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdint.h>
 #include <time.h>
 #include <stdarg.h>
@@ -65,6 +66,12 @@ static const char* project_name_from_type(const char* type) {
 }
 
 static int create_project(const char* name, const char* type) {
+    if (type && strcmp(type, "console") != 0 && strcmp(type, "lib") != 0 && strcmp(type, "library") != 0 &&
+        strcmp(type, "dll") != 0 && strcmp(type, "web") != 0 && strcmp(type, "system") != 0) {
+        KrtError("未知项目类型: %s", type ? type : "(null)");
+        return 0;
+    }
+
     KrtProjectType ptype = KRT_PROJ_TYPE_CONSOLE;
     if (type && (strcmp(type, "lib") == 0 || strcmp(type, "library") == 0 || strcmp(type, "dll") == 0)) {
         ptype = KRT_PROJ_TYPE_LIBRARY;
@@ -239,6 +246,12 @@ static KrtCommandLineOptions parse_command_line(int argc, char* argv[]) {
     return options;
 }
 
+/**
+ * @brief Derive the .kro path for a .krt source path.
+ * @param kro_file_size Size of the kro_file buffer; must be at least KRT_MAX_PATH.
+ * @note The output is silently truncated if the buffer is too small; callers
+ *       must pass a buffer of KRT_MAX_PATH bytes.
+ */
 static void get_kro_filename(const char* krt_file, char* kro_file, int kro_file_size);
 static int link_kro_executable(KrtConfig* config, KrtPlatform* platform, const char* kro_file, const char* exe_output) {
     if (!KrtPlatformPathExists(platform, kro_file)) {
@@ -270,6 +283,12 @@ static int link_kro_executable(KrtConfig* config, KrtPlatform* platform, const c
                     if (import_result && import_pipeline->compiler) {
                         if (import_pipeline->compiler->has_object_code) {
                             if (import_kro_count >= import_kro_capacity) {
+                                if (import_kro_capacity > INT_MAX / 2) {
+                                    imports_ok = 0;
+                                    KrtError("导入文件数量超出上限");
+                                    KrtCompilePipelineDestroy(import_pipeline);
+                                    break;
+                                }
                                 import_kro_capacity *= 2;
                                 char** expanded =
                                     (char**)realloc(import_kro_files, import_kro_capacity * sizeof(char*));
@@ -909,7 +928,7 @@ static int compile_multiple_files(const char** input_files, int input_count, con
     KrtPlatformDestroy(platform);
 
     if (link_result != 0) {
-        KrtError("Linking failed");
+        KrtError("Linking failed (result %d)", link_result);
         return 1;
     }
 
@@ -1002,6 +1021,15 @@ static int build_project_independent(const char* project_file, const char* outpu
 
         char intermediate_obj[KRT_MAX_PATH];
 
+        if (strlen(obj_dir) >= 500 || strlen(file_name_no_ext) >= 500) {
+            KrtError("项目对象路径过长: %s", obj_dir);
+            ParallelCompilerDestroy(parallel_compiler);
+            KrtProjectKrtDestroy(project);
+            KrtConfigDestroy(config);
+            KrtPlatformDestroy(platform);
+            return 1;
+        }
+
         char obj_dir_truncated[500];
         strncpy(obj_dir_truncated, obj_dir, sizeof(obj_dir_truncated) - 1);
         obj_dir_truncated[sizeof(obj_dir_truncated) - 1] = '\0';
@@ -1029,7 +1057,7 @@ static int build_project_independent(const char* project_file, const char* outpu
     ParallelCompilerGetStats(parallel_compiler, &total_files, &succeeded_files, &failed_files);
 
     if (compile_result != 0 || failed_files > 0) {
-        KrtError("并行编译失败：%d 个文件编译失败", failed_files);
+        KrtError("并行编译失败：result=%d，%d/%d 个文件编译失败", compile_result, failed_files, total_files);
         ParallelCompilerDestroy(parallel_compiler);
         KrtProjectKrtDestroy(project);
         KrtConfigDestroy(config);
@@ -1102,9 +1130,16 @@ static int compile_project_sources_together(const char** sources, int source_cou
 #endif
     char aggregate_path[KRT_MAX_PATH];
     char aggregate_kro[KRT_MAX_PATH];
-    snprintf(aggregate_path, sizeof(aggregate_path), "%s%ckrt_project_aggregate_%ld.krt", object_dir,
-             KRT_PATH_SEPARATOR, process_id);
-    snprintf(aggregate_kro, sizeof(aggregate_kro), "krt_project_aggregate_%ld.kro", process_id);
+    if (snprintf(aggregate_path, sizeof(aggregate_path), "%s%ckrt_project_aggregate_%ld.krt", object_dir,
+                 KRT_PATH_SEPARATOR, process_id) >= (int)sizeof(aggregate_path)) {
+        KrtError("合并项目源码路径过长: %s", object_dir);
+        return 1;
+    }
+    if (snprintf(aggregate_kro, sizeof(aggregate_kro), "krt_project_aggregate_%ld.kro", process_id) >=
+        (int)sizeof(aggregate_kro)) {
+        KrtError("合并项目产物路径过长");
+        return 1;
+    }
 
     FILE* aggregate = fopen(aggregate_path, "wb");
     if (!aggregate) {
