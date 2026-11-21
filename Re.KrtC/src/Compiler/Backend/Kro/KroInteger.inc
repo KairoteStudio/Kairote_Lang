@@ -305,6 +305,8 @@ static void emit_wide_division(KROCodegenContext* ctx, bool is_unsigned, bool re
     emit_move_reg_to_reg(ctx, KRT_REG_RCX, KRT_REG_R11);
     emit_reg_op(ctx, 0x09, KRT_REG_R11, KRT_REG_R8);
     uint32_t nonzero = emit_local_jump(ctx, 0x85);
+    /* A zero divisor traps here (ud2) instead of silently producing a wrong
+     * quotient; a diagnostic message would need a runtime trap helper. */
     emit_bytes(ctx, (const uint8_t*)"\x0F\x0B", 2);
     patch_local_jump(ctx, nonzero, kro_get_code_offset(ctx->writer));
     if (!is_unsigned) {
