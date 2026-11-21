@@ -113,6 +113,9 @@ static bool build_tail_update_plan(KROCodegenContext* ctx, KrtIRBasicBlock* bloc
         return false;
     }
     unsigned remaining = 0;
+    if (call->operand_count < function->param_count + 1) {
+        return false;
+    }
     for (int i = 0; i < function->param_count; i++) {
         KROTailUpdate* update = &plan->updates[i];
         KrtIRValue value = call->operands[i + 1];

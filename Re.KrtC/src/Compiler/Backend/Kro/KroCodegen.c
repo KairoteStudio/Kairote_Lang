@@ -1333,7 +1333,8 @@ static bool generate_function(KROCodegenContext* ctx, KrtIRFunction* func, KrtIR
         return false;
     }
 
-    // KrtIrSsaOptimize(func);  //禁用SSA优化,除了Airs_td以外的人不要打开它,SSA不稳定
+    // SSA 优化在 Kro 后端暂不启用：寄存器分配直接消费原始 IR。若要在流水
+    // 线层统一启用，应只执行一次，避免后端改写共享 IR（详见审计条目 24/75）。
 
     bool has_mangled_main = kro_module_has_mangled_main(module);
     int is_entry_point = is_entry_point_function(func->name, has_mangled_main);

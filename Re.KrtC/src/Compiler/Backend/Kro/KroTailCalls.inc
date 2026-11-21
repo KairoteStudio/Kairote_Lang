@@ -285,6 +285,10 @@ static bool emit_tail_register_copies(KROCodegenContext* ctx, KrtIRInst* call) {
         func->param_count > 5) {
         return false;
     }
+    /* operands[0] is the callee; one operand per parameter follows. */
+    if (call->operand_count < func->param_count + 1) {
+        return false;
+    }
     const int scratch[] = {KRT_REG_RAX, KRT_REG_RCX, KRT_REG_RDX, KRT_REG_R8, KRT_REG_R9};
     unsigned occupied = 0;
     for (int i = 0; i < func->param_count; i++) {

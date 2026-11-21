@@ -171,7 +171,11 @@ static void emit_load_for_type(KROCodegenContext* ctx, KrtIRValue* value, KrtTok
         emit_load_high(ctx, value, low, high);
         emit_integer_float_cast(ctx, low, high, KrtTokenIsUnsigned(value->value_type), type == TOKEN_FLOAT32 ? 4 : 8);
     } else if (source_float && KrtTokenIntegerBits(type) > 64) {
-        emit_float_wide_cast(ctx, low, high);
+        if (value->value_type != TOKEN_FLOAT64) {
+            KrtError("KRO cast: widening from a non-double float is unsupported");
+        } else {
+            emit_float_wide_cast(ctx, low, high);
+        }
         return;
     } else if (source_float && KrtTokenIntegerBits(type)) {
         emit_byte(ctx, 0x66);
@@ -810,7 +814,10 @@ static void emit_integer_binary(KROCodegenContext* ctx, KrtIRInst* inst) {
                 emit_reg_op(ctx, 0x39, KRT_REG_RAX, KRT_REG_R9);
                 uint32_t ordinary_dividend = emit_local_jump(ctx, 0x85);
                 if (inst->opcode == KRT_IR_MOD) {
+                    /* INT_MIN % -1 traps on x86; the defined result is 0 for
+                     * both quotient and remainder. */
                     emit_load_imm64_to_reg(ctx, 0, KRT_REG_RAX);
+                    emit_load_imm64_to_reg(ctx, 0, KRT_REG_RDX);
                 }
                 overflow_done = emit_local_jump(ctx, 0);
                 uint32_t ordinary = kro_get_code_offset(ctx->writer);
