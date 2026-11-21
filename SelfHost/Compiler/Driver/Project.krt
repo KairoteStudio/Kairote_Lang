@@ -213,8 +213,8 @@ int32 KrtProjectOptimization(int64 text) {
 }
 int32 KrtProjectTarget(int64 text) {
     if (KrtProjectEqual(text,"elf") || KrtProjectEqual(text,"linux-x86_64") || KrtProjectEqual(text,"exe")) { return 0; }
-    if (KrtProjectEqual(text,"eo")) { return 1; } if (KrtProjectEqual(text,"ir")) { return 2; }
-    if (KrtProjectEqual(text,"asm")) { return 3; } if (KrtProjectEqual(text,"vm")) { return 4; } return -1;
+    if (KrtProjectEqual(text,"kro")) { return 1; } if (KrtProjectEqual(text,"ir")) { return 2; }
+    if (KrtProjectEqual(text,"asm")) { return 3; } return -1;
 }
 bool KrtProjectExecutable(KrtDriverOptions options) {
     return !options.object_mode && options.target < 2;
@@ -233,7 +233,7 @@ KrtProject KrtProjectLoad(int64 path, int64 configuration, int64 library_root, b
     if (project.optimization == 0) { project.optimization = (int64)"2"; } if (project.target == 0) { project.target = (int64)"elf"; }
     if (!KrtProjectKind(project.kind)) { KrtDriverError("E_PROJECT","unsupported project type; choose console, system, or library"); return null; }
     if (KrtProjectOptimization(project.optimization) < 0) { KrtDriverError("E_OPTION","project optimization level must be 0, 1, 2 or 3"); return null; }
-    if (KrtProjectTarget(project.target) < 0) { KrtDriverError("E_OPTION","native project target must be elf, linux-x86_64, exe, eo, ir, asm or vm"); return null; }
+    if (KrtProjectTarget(project.target) < 0) { KrtDriverError("E_OPTION","native project target must be elf, linux-x86_64, exe, kro, ir or asm"); return null; }
     KrtDriverPath include = project.includes;
     while (include != null) { include.value = KrtDriverAbsolutePath(KrtDriverJoinPath(project.directory,include.value)); include = include.next; }
     if (!clean) {
@@ -329,7 +329,7 @@ uint64 KrtProjectBuildKey(KrtProject project, KrtDriverOptions options, KrtSourc
     hash = KrtProjectHashString(hash,KrtProjectDecimal(options.optimization)); hash = KrtProjectHashString(hash,KrtProjectDecimal(options.target));
     hash = KrtProjectHashString(hash,project.compile_together ? (int64)"compile-together" : (int64)"compile-separately");
     hash = KrtProjectHashString(hash,options.object_mode ? (int64)"object-output" : (int64)"executable-output");
-    int64 target_kind = (int64)"native-target"; if (options.eo_executable) { target_kind = (int64)"eo-executable"; }
+    int64 target_kind = (int64)"native-target"; if (options.kro_executable) { target_kind = (int64)"kro-executable"; }
     hash = KrtProjectHashString(hash,target_kind);
     if (options.keep_temp) { hash = KrtProjectHashString(hash,(int64)"keep-temp"); hash = KrtProjectHashString(hash,KrtDriverRetainedObject(options,bundle)); }
     KrtDriverBuffer configuration = new KrtDriverBuffer(); KrtDriverReadFile(project.path,configuration); hash = KrtProjectHashBytes(hash,configuration.data,configuration.length);
@@ -346,7 +346,7 @@ KrtDriverOptions KrtProjectOptions(KrtDriverOptions original) {
     result.library_root = original.library_root; result.configuration = original.configuration; result.includes = original.includes;
     result.object_mode = original.object_mode; result.check = original.check; result.rebuild = original.rebuild;
     result.optimization = original.optimization; result.optimization_set = original.optimization_set;
-    result.target = original.target; result.target_set = original.target_set; result.eo_executable = original.eo_executable;
+    result.target = original.target; result.target_set = original.target_set; result.kro_executable = original.kro_executable;
     result.keep_temp = original.keep_temp; result.show_ir = original.show_ir;
     result.retained_output = original.retained_output; result.jobs = original.jobs;
     return result;
@@ -383,14 +383,14 @@ int32 KrtProjectBuild(KrtProject project, KrtDriverOptions original) {
         KrtDriverError("E_OPTION","CompileTogether(false) requires an executable project"); return 1;
     }
     if (!original.optimization_set && project.optimization_set) { options.optimization = KrtProjectOptimization(project.optimization); }
-    if (!original.target_set && project.target_set) { options.target = KrtProjectTarget(project.target); options.eo_executable = options.target == 1; }
+    if (!original.target_set && project.target_set) { options.target = KrtProjectTarget(project.target); options.kro_executable = options.target == 1; }
     if (!project.compile_together && options.target >= 2) {
         KrtDriverError("E_OPTION","CompileTogether(false) supports executable targets only"); return 1;
     }
     if (!project.compile_together && options.show_ir) {
         KrtDriverError("E_OPTION","--show-ir requires CompileTogether(true)"); return 1;
     }
-    if (options.eo_executable) { options.keep_temp = true; }
+    if (options.kro_executable) { options.keep_temp = true; }
     options.output = project.output; if (original.output != 0) { options.output = KrtDriverAbsolutePath(original.output); }
     options.includes = null; KrtDriverPath include = project.includes;
     while (include != null) { options.includes = KrtProjectAppend(options.includes,include.value,true); include = include.next; }
@@ -398,9 +398,7 @@ int32 KrtProjectBuild(KrtProject project, KrtDriverOptions original) {
     KrtSourceBundle bundle = new KrtSourceBundle(); if (!KrtSourcesCollectModules(options.sources,options.includes,options.library_root,bundle,options.objects)) { return 1; }
     int64 cache = KrtProjectCache(project); if (!KrtProjectOutputSafe(project,options,bundle,options.output,cache)) { return 1; }
     int64 retained = project.compile_together ? KrtDriverRetainedObject(options,bundle) : 0;
-    int64 vm_sidecar = 0; if (options.target == 4) { vm_sidecar = KrtProjectCat(options.output,(int64)".ebc"); }
-    if ((retained != 0 && !KrtProjectOutputSafe(project,options,bundle,retained,cache)) ||
-        (vm_sidecar != 0 && !KrtProjectOutputSafe(project,options,bundle,vm_sidecar,cache))) { return 1; }
+    if (retained != 0 && !KrtProjectOutputSafe(project,options,bundle,retained,cache)) { return 1; }
     if (options.check) {
         int32 status = 0;
         if (project.compile_together) { status = KrtDriverCompileBundle(options,bundle); }
@@ -437,7 +435,7 @@ int32 KrtProjectBuild(KrtProject project, KrtDriverOptions original) {
         int64 object_output = KrtProjectObjectOutput(project,source.value);
         if (!KrtProjectOutputSafe(project,options,bundle,object_output,cache) || KrtDriverStringEqual(object_output,output)) { KrtDriverRemoveTree(temporary); return 1; }
         int64 cache_name = KrtProjectCat(KrtProjectCat((int64)"unit-",KrtProjectDecimal(index)),(int64)".kro");
-        KrtDriverOptions unit = KrtProjectOptions(options); unit.sources = KrtProjectAppend(null,source.value,false); unit.objects = project.objects; unit.object_mode = true; unit.target = 1; unit.eo_executable = false; unit.show_ir = false; unit.keep_temp = false; unit.check = false; unit.quiet = true;
+        KrtDriverOptions unit = KrtProjectOptions(options); unit.sources = KrtProjectAppend(null,source.value,false); unit.objects = project.objects; unit.object_mode = true; unit.target = 1; unit.kro_executable = false; unit.show_ir = false; unit.keep_temp = false; unit.check = false; unit.quiet = true;
         unit.output = KrtDriverJoinPath(temporary,cache_name);
         KrtDriverCompileTask task = new KrtDriverCompileTask(); task.options = unit; task.source = source.value; task.output = object_output; task.cached = cache_name;
         task.defer_failures = project.compile_together;
@@ -467,11 +465,6 @@ int32 KrtProjectBuild(KrtProject project, KrtDriverOptions original) {
     if (retained != 0) {
         if (!KrtDriverFileExists(options.retained_output) || !KrtProjectPublish(options.retained_output,retained,false) || !KrtProjectPublish(options.retained_output,KrtDriverJoinPath(cache,(int64)"retained.kro"),false)) { KrtDriverRemoveTree(temporary); return 1; }
         KrtProjectRecord record = new KrtProjectRecord(); record.output = retained; record.cached = (int64)"retained.kro"; record.hash = KrtProjectFileHash(options.retained_output);
-        if (tail == null) { manifest.objects = record; } else { tail.next = record; } tail = record;
-    }
-    if (vm_sidecar != 0) {
-        if (!KrtProjectPublish(candidate,vm_sidecar,false)) { KrtDriverRemoveTree(temporary); return 1; }
-        KrtProjectRecord record = new KrtProjectRecord(); record.output = vm_sidecar; record.cached = (int64)"artifact"; record.hash = KrtProjectFileHash(candidate);
         if (tail == null) { manifest.objects = record; } else { tail.next = record; } tail = record;
     }
     KrtProjectRecord old = previous.objects;

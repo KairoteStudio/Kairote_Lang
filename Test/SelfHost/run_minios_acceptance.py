@@ -79,7 +79,7 @@ def main():
              "-T", args.minios / "sdk/user.ld", "-o", binary,
              args.sdk_build / "sdk/crt0.o", obj, args.sdk_build / "sdk/libminios.a"], "init-link.log")
         packs = [f"init={binary}", f"krtc={args.krtc}", f"ArkLink={args.arklink}"]
-        fixtures = ["answer.krt", "bad.krt", "vm.krt"] if args.mode == "smoke" else (["bad-name.krt", "bad-type.krt", "bad-parse.krt"] if args.mode == "bootstrap" else [])
+        fixtures = ["answer.krt", "bad.krt"] if args.mode == "smoke" else (["bad-name.krt", "bad-type.krt", "bad-parse.krt"] if args.mode == "bootstrap" else [])
         for name in fixtures:
             path = FIXTURES / name
             report["inputs"][str(path)] = sha(path)
@@ -109,7 +109,7 @@ def main():
         report["seconds"] = time.monotonic() - start
         report["qemu_returncode"] = proc.returncode
         text = serial.read_text(errors="replace") if serial.exists() else ""
-        expected = ["PORT-SMOKE-PASS", "VM-SERVICE-PASS", "minios-answer: 42"] if args.mode == "smoke" else (["BOOTSTRAP-RAW-BYTES-PASS", "BOOTSTRAP-DIAGNOSTICS-PASS"] if args.mode == "bootstrap" else ["SYS-RUNTIME-PASS", "minios-answer: 42"])
+        expected = ["PORT-SMOKE-PASS", "minios-answer: 42"] if args.mode == "smoke" else (["BOOTSTRAP-RAW-BYTES-PASS", "BOOTSTRAP-DIAGNOSTICS-PASS"] if args.mode == "bootstrap" else ["SYS-RUNTIME-PASS", "minios-answer: 42"])
         report["expected_markers"] = {marker: marker in text for marker in expected}
         report["inputs_unchanged"] = all(sha(Path(path)) == value for path, value in report["inputs"].items())
         report["status"] = "passed" if proc.returncode == 1 and all(report["expected_markers"].values()) and report["inputs_unchanged"] else "failed"

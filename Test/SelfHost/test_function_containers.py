@@ -5,22 +5,13 @@ from Test.SelfHost.test_native_optimizer import COMPILER, NativeCompilerFixture
 
 
 class FunctionContainerTests(NativeCompilerFixture):
-    def execute_vm_and_native(self, source):
+    def execute_native(self, source):
         self.execute(source)
-        path = self.work / 'function-containers.krt'
-        path.write_text(source)
-        for level in range(4):
-            with self.subTest(vm_level=level):
-                output = self.work / f'function-containers-o{level}.ebc'
-                self.command(path, 'target', 'vm', f'-O{level}', '-o', output)
-                result = subprocess.run([str(COMPILER), 'run-vm', str(output)], cwd=self.work,
-                                        env=self.env, capture_output=True, timeout=15)
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def reject_preserving_output(self, source):
         path = self.work / 'invalid-function-container.krt'
         path.write_text(source)
-        for target, flags in [('kro', ['-c']), ('vm', ['target', 'vm'])]:
+        for target, flags in [('kro', ['-c'])]:
             for existing in (False, True):
                 with self.subTest(target=target, existing=existing):
                     output = self.work / f'invalid-{target}-{existing}.artifact'
@@ -38,7 +29,6 @@ class FunctionContainerTests(NativeCompilerFixture):
                         self.assertEqual(output.read_bytes(), preserved)
                     else:
                         self.assertFalse(output.exists())
-                    self.assertFalse(output.with_name(output.name + '.ebc').exists())
 
     def test_local_arrays_cannot_be_called_or_used_as_scalar_callbacks(self):
         prefix = '''int32 Read(){return 17;}
@@ -50,7 +40,7 @@ int32 main(){fn()->int32 callbacks[1];callbacks[0]=&Read;'''
                 self.reject_preserving_output(prefix + body + '}')
 
     def test_indexed_local_callbacks_are_scalar_values(self):
-        self.execute_vm_and_native('''
+        self.execute_native('''
 int32 Add(int32 value){return value+7;}
 int32 Twice(int32 value){return value*2;}
 int32 Invoke(fn(int32)->int32 callback,int32 value){return callback(value);}
@@ -64,7 +54,7 @@ int32 main(){
 ''')
 
     def test_dynamic_function_arrays_are_indexed_before_call_or_conversion(self):
-        self.execute_vm_and_native('''
+        self.execute_native('''
 int32 Add(int32 value){return value+7;}
 int32 Twice(int32 value){return value*2;}
 int32 Invoke(fn(int32)->int32 callback,int32 value){return callback(value);}
@@ -79,7 +69,7 @@ int32 main(){
 ''')
 
     def test_function_pointer_storage_requires_dereference(self):
-        self.execute_vm_and_native('''
+        self.execute_native('''
 int32 Add(int32 value){return value+7;}
 int32 Twice(int32 value){return value*2;}
 int32 Invoke(fn(int32)->int32 callback,int32 value){return callback(value);}
@@ -99,7 +89,7 @@ int32 main(){return Wrong(&Read);}
 ''')
 
     def test_fixed_class_callback_fields_copy_through_generic_value_abi(self):
-        self.execute_vm_and_native('''
+        self.execute_native('''
 int32 Add(int32 value){return value+7;}
 int32 Twice(int32 value){return value*2;}
 class Calls{fn(int32)->int32 callbacks[2];int32 Invoke(int32 value){return callbacks[0](value);}}

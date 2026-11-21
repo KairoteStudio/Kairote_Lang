@@ -148,16 +148,13 @@ class ForeachBindingTests(NativeCompilerFixture):
     def execute_case(self, name):
         path = self.work / (name + '.krt')
         path.write_text(POSITIVE_CASES[name])
-        for target in ('native', 'vm'):
-            for level in (0, 2):
-                with self.subTest(case=name, target=target, optimization=level):
-                    output = self.work / f'{name}-{target}-o{level}'
-                    flags = ['target', 'vm'] if target == 'vm' else []
-                    self.command(path, f'-O{level}', *flags, '-o', output)
-                    argv = [str(COMPILER), 'run-vm', str(output)] if target == 'vm' else [str(output)]
-                    result = subprocess.run(argv, cwd=self.work, env=self.env,
-                                            capture_output=True, timeout=15)
-                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for level in (0, 2):
+            with self.subTest(case=name, optimization=level):
+                output = self.work / f'{name}-native-o{level}'
+                self.command(path, f'-O{level}', '-o', output)
+                result = subprocess.run([str(output)], cwd=self.work, env=self.env,
+                                        capture_output=True, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_auto_preserves_numeric_element_identity_and_writable_copies(self):
         self.execute_case('numeric-arrays')
@@ -181,19 +178,17 @@ class ForeachBindingTests(NativeCompilerFixture):
             position = source.index(marker)
             line = source.count('\n', 0, position) + 1
             column = position - source.rfind('\n', 0, position)
-            for target in ('native', 'vm'):
-                for level in (0, 2):
-                    with self.subTest(case=name, target=target, optimization=level):
-                        output = self.work / f'{name}-{target}-o{level}'
-                        flags = ['target', 'vm'] if target == 'vm' else []
-                        result = subprocess.run([str(COMPILER), '--linker', str(LINKER), str(path),
-                                                 f'-O{level}', *flags, '-o', str(output)],
-                                                cwd=self.work, env=self.env, capture_output=True,
-                                                text=True, timeout=60)
-                        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-                        self.assertRegex(result.stderr, re.escape(f':{line}:{column}: E_LOWER:'))
-                        self.assertNotIn('E_PARSE', result.stderr)
-                        self.assertFalse(output.exists(), 'rejection created an output artifact')
+            for level in (0, 2):
+                with self.subTest(case=name, optimization=level):
+                    output = self.work / f'{name}-native-o{level}'
+                    result = subprocess.run([str(COMPILER), '--linker', str(LINKER), str(path),
+                                             f'-O{level}', '-o', str(output)],
+                                            cwd=self.work, env=self.env, capture_output=True,
+                                            text=True, timeout=60)
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertRegex(result.stderr, re.escape(f':{line}:{column}: E_LOWER:'))
+                    self.assertNotIn('E_PARSE', result.stderr)
+                    self.assertFalse(output.exists(), 'rejection created an output artifact')
 
 
 if __name__ == '__main__':

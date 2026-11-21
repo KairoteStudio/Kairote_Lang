@@ -431,18 +431,15 @@ class ClosureTests(NativeCompilerFixture):
     def execute_targets(self, name):
         path = self.work / (name + '.krt')
         path.write_text(POSITIVE_CASES[name], encoding='utf-8')
-        for target in ('native', 'vm'):
-            for level in (0, 2):
-                with self.subTest(program=name, target=target, optimization=level):
-                    output = self.work / f'{name}-{target}-o{level}'
-                    flags = ['target', 'vm'] if target == 'vm' else []
-                    self.command(path, f'-O{level}', *flags, '-o', output)
-                    argv = [str(COMPILER), 'run-vm', str(output)] if target == 'vm' else [str(output)]
-                    result = subprocess.run(argv, cwd=self.work, env=self.env,
-                                            capture_output=True, timeout=15)
-                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                    self.assertEqual(result.stdout, b'')
-                    self.assertEqual(result.stderr, b'')
+        for level in (0, 2):
+            with self.subTest(program=name, optimization=level):
+                output = self.work / f'{name}-native-o{level}'
+                self.command(path, f'-O{level}', '-o', output)
+                result = subprocess.run([str(output)], cwd=self.work, env=self.env,
+                                        capture_output=True, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(result.stdout, b'')
+                self.assertEqual(result.stderr, b'')
 
     def reject_targets(self, name, source, marker, code):
         path = self.work / (name + '.krt')
@@ -450,31 +447,28 @@ class ClosureTests(NativeCompilerFixture):
         position = source.index(marker)
         line = source.count('\n', 0, position) + 1
         column = position - source.rfind('\n', 0, position)
-        for target in ('native', 'vm'):
-            for level in (0, 2):
-                for previous in (None, b'previous closure artifact\x00'):
-                    with self.subTest(program=name, target=target, optimization=level,
-                                      existing=previous is not None):
-                        output = self.work / f'{name}-{target}-o{level}-{previous is not None}'
-                        if previous is not None:
-                            output.write_bytes(previous)
-                        flags = ['target', 'vm'] if target == 'vm' else []
-                        argv = [str(COMPILER), '--linker', str(LINKER), str(path),
-                                f'-O{level}', *flags, '-o', str(output)]
-                        first = subprocess.run(argv, cwd=self.work, env=self.env,
-                                               capture_output=True, text=True, timeout=60)
-                        second = subprocess.run(argv, cwd=self.work, env=self.env,
-                                                capture_output=True, text=True, timeout=60)
-                        self.assertEqual(first.returncode, 1, first.stdout + first.stderr)
-                        self.assertEqual(second.returncode, 1, second.stdout + second.stderr)
-                        self.assertEqual(first.stderr, second.stderr)
-                        self.assertEqual(re.findall(r':\d+:\d+: E_[A-Z_]+:', first.stderr),
-                                         [f':{line}:{column}: {code}:'], first.stderr)
-                        if previous is None:
-                            self.assertFalse(output.exists())
-                        else:
-                            self.assertEqual(output.read_bytes(), previous)
-                        self.assertFalse(output.with_name(output.name + '.ebc').exists())
+        for level in (0, 2):
+            for previous in (None, b'previous closure artifact\x00'):
+                with self.subTest(program=name, optimization=level,
+                                  existing=previous is not None):
+                    output = self.work / f'{name}-native-o{level}-{previous is not None}'
+                    if previous is not None:
+                        output.write_bytes(previous)
+                    argv = [str(COMPILER), '--linker', str(LINKER), str(path),
+                            f'-O{level}', '-o', str(output)]
+                    first = subprocess.run(argv, cwd=self.work, env=self.env,
+                                           capture_output=True, text=True, timeout=60)
+                    second = subprocess.run(argv, cwd=self.work, env=self.env,
+                                            capture_output=True, text=True, timeout=60)
+                    self.assertEqual(first.returncode, 1, first.stdout + first.stderr)
+                    self.assertEqual(second.returncode, 1, second.stdout + second.stderr)
+                    self.assertEqual(first.stderr, second.stderr)
+                    self.assertEqual(re.findall(r':\d+:\d+: E_[A-Z_]+:', first.stderr),
+                                     [f':{line}:{column}: {code}:'], first.stderr)
+                    if previous is None:
+                        self.assertFalse(output.exists())
+                    else:
+                        self.assertEqual(output.read_bytes(), previous)
 
     def test_noncapturing_expression_and_block_callbacks(self):
         self.execute_targets('noncapturing-expression-and-blocks')
@@ -654,38 +648,35 @@ int32 main(){return Apply(&AddSeven,5)==12?0:1;}
                 values[key] = int(match.group(1)) * 1024
             return values
 
-        for target in ('native', 'vm'):
-            for level in (0, 2):
-                with self.subTest(target=target, optimization=level):
-                    output = self.work / f'closure-lifetimes-{target}-o{level}'
-                    flags = ['target', 'vm'] if target == 'vm' else []
-                    self.command(path, f'-O{level}', *flags, '-o', output)
-                    argv = [str(COMPILER), 'run-vm', str(output)] if target == 'vm' else [str(output)]
-                    process = subprocess.Popen(argv, cwd=self.work, env=self.env,
-                                               stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                               stderr=subprocess.PIPE)
-                    try:
-                        read_marker(process, b'READY\n')
-                        before = memory(process)
-                        process.stdin.write(b'1');process.stdin.flush()
-                        read_marker(process, b'DONE\n')
-                        after = memory(process)
-                        print(f'closure memory target={target} O{level} before={before} after={after}')
-                        # One leaked touched mmap page per iteration is about
-                        # 100 MiB. Retained VM metadata must also stay bounded.
-                        self.assertLessEqual(after['VmRSS'] - before['VmRSS'], 16 * 1024 * 1024,
-                                             (before, after))
-                        self.assertLessEqual(after['VmSize'] - before['VmSize'], 32 * 1024 * 1024,
-                                             (before, after))
-                        process.stdin.write(b'2');process.stdin.flush()
-                        stdout, stderr = process.communicate(timeout=15)
-                        self.assertEqual(process.returncode, 0, stdout + stderr)
-                        self.assertEqual(stdout, b'')
-                        self.assertEqual(stderr, b'')
-                    finally:
-                        if process.poll() is None:
-                            process.kill()
-                        process.communicate(timeout=3)
+        for level in (0, 2):
+            with self.subTest(optimization=level):
+                output = self.work / f'closure-lifetimes-native-o{level}'
+                self.command(path, f'-O{level}', '-o', output)
+                process = subprocess.Popen([str(output)], cwd=self.work, env=self.env,
+                                           stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                           stderr=subprocess.PIPE)
+                try:
+                    read_marker(process, b'READY\n')
+                    before = memory(process)
+                    process.stdin.write(b'1');process.stdin.flush()
+                    read_marker(process, b'DONE\n')
+                    after = memory(process)
+                    print(f'closure memory O{level} before={before} after={after}')
+                    # One leaked touched mmap page per iteration is about
+                    # 100 MiB. Retained VM metadata must also stay bounded.
+                    self.assertLessEqual(after['VmRSS'] - before['VmRSS'], 16 * 1024 * 1024,
+                                         (before, after))
+                    self.assertLessEqual(after['VmSize'] - before['VmSize'], 32 * 1024 * 1024,
+                                         (before, after))
+                    process.stdin.write(b'2');process.stdin.flush()
+                    stdout, stderr = process.communicate(timeout=15)
+                    self.assertEqual(process.returncode, 0, stdout + stderr)
+                    self.assertEqual(stdout, b'')
+                    self.assertEqual(stderr, b'')
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                    process.communicate(timeout=3)
 
     def test_callback_and_named_argument_evaluation_order(self):
         self.execute_targets('evaluation-order-and-one-time-callback-evaluation')

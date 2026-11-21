@@ -101,18 +101,15 @@ class NestedCallbackContractTests(NativeCompilerFixture):
     def execute_targets(self, name):
         path = self.work / (name + '.krt')
         path.write_text(POSITIVE_CASES[name], encoding='utf-8')
-        for target in ('native', 'vm'):
-            for level in (0, 2):
-                with self.subTest(program=name, target=target, optimization=level):
-                    output = self.work / f'{name}-{target}-o{level}'
-                    flags = ['target', 'vm'] if target == 'vm' else []
-                    self.command(path, f'-O{level}', *flags, '-o', output)
-                    argv = [str(COMPILER), 'run-vm', str(output)] if target == 'vm' else [str(output)]
-                    result = subprocess.run(argv, cwd=self.work, env=self.env,
-                                            capture_output=True, timeout=15)
-                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                    self.assertEqual(result.stdout, b'')
-                    self.assertEqual(result.stderr, b'')
+        for level in (0, 2):
+            with self.subTest(program=name, optimization=level):
+                output = self.work / f'{name}-native-o{level}'
+                self.command(path, f'-O{level}', '-o', output)
+                result = subprocess.run([str(output)], cwd=self.work, env=self.env,
+                                        capture_output=True, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(result.stdout, b'')
+                self.assertEqual(result.stderr, b'')
 
     def reject_targets(self, name):
         source, marker, code = NEGATIVE_CASES[name]

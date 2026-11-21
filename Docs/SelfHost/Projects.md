@@ -104,11 +104,10 @@ reported as `object deferred`. Semantic dependency failures are distinguished
 from filesystem and worker failures. The combined build must still succeed; deferred objects are
 never substituted into its link.
 
-`target ir`, `target asm`, and `target vm` publish native IR, assembly, and real
-EBC bytecode artifacts respectively. VM artifacts execute with `run-vm`; see
-[the bytecode format and runtime](Vm.md). `--keep-temp` and `target eo` retain
-the combined KRO alongside the executable. Retained objects and VM sidecars
-are recorded for cache restore and protected cleanup.
+`target ir`, `target asm`, and `target kro` publish native IR, assembly, and
+KRO object artifacts respectively. `--keep-temp` retains the combined KRO
+alongside the executable. Retained objects are recorded for cache restore and
+protected cleanup.
 
 `new library`, `Type("library")`, and `Type("lib")` produce a `.kro` instead of
 an executable. Sources with no `main` have no startup or process-exit stub.
@@ -202,8 +201,7 @@ Two ordinary strong definitions of a public function or mutable global are
 rejected. Imported closed generic owners and their shared static storage use
 exact nominal identities and weak merging; descriptor records also compare
 their bytes and relocations before merging. Public class and struct constructors
-can be imported through metadata or declared `extern`. VM bytecode executes
-source modules together and does not load native KRO libraries.
+can be imported through metadata or declared `extern`.
 
 The native ABI supports integer widths through 128 bits, floating-point values,
 `ref`, arrays, strings, function pointers, named types, constructors, virtual

@@ -242,16 +242,13 @@ NEGATIVE_CASES = {
 class NativeGeneratorTests(NativeCompilerFixture):
     def check_case(self, name):
         path = self.work / (name + '.krt'); path.write_text(PREFIX + POSITIVE_CASES[name], encoding='utf-8')
-        for target in ('native', 'vm'):
-            for level in range(4):
-                with self.subTest(fixture=name, target=target, optimization=level):
-                    output = self.work / f'{name}-{target}-o{level}'
-                    flags = ['target', 'vm'] if target == 'vm' else []
-                    self.command(path, f'-O{level}', *flags, '-o', output)
-                    command = [str(COMPILER), 'run-vm', str(output)] if target == 'vm' else [str(output)]
-                    result = subprocess.run(command, cwd=self.work, env=self.env, capture_output=True, timeout=15)
-                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                    self.assertEqual(result.stdout, b''); self.assertEqual(result.stderr, b'')
+        for level in range(4):
+            with self.subTest(fixture=name, optimization=level):
+                output = self.work / f'{name}-native-o{level}'
+                self.command(path, f'-O{level}', '-o', output)
+                result = subprocess.run([str(output)], cwd=self.work, env=self.env, capture_output=True, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(result.stdout, b''); self.assertEqual(result.stderr, b'')
 
     def test_lazy_factory_independent_cursors_replay_and_completion(self):
         self.check_case('lazy-independent-cursors')
@@ -327,41 +324,36 @@ class NativeGeneratorTests(NativeCompilerFixture):
                 self.assertIsNotNone(found, status); result[key] = int(found.group(1)) * 1024
             return result
 
-        for target in ('native', 'vm'):
-            for level in (0, 2):
-                with self.subTest(target=target, optimization=level):
-                    output = self.work / f'generator-lifetimes-{target}-o{level}'
-                    flags = ['target', 'vm'] if target == 'vm' else []
-                    self.command(path, f'-O{level}', *flags, '-o', output)
-                    argv = [str(COMPILER), 'run-vm', str(output)] if target == 'vm' else [str(output)]
-                    process = subprocess.Popen(argv, cwd=self.work, env=self.env, stdin=subprocess.PIPE,
-                                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    try:
-                        marker(process, b'READY\n'); before = memory(process)
-                        process.stdin.write(b'1'); process.stdin.flush(); marker(process, b'DONE\n'); after = memory(process)
-                        print(f'generator memory target={target} O{level} before={before} after={after}')
-                        self.assertLessEqual(after['VmRSS'] - before['VmRSS'], 16 * 1024 * 1024, (before, after))
-                        self.assertLessEqual(after['VmSize'] - before['VmSize'], 32 * 1024 * 1024, (before, after))
-                        process.stdin.write(b'2'); process.stdin.flush(); stdout, stderr = process.communicate(timeout=15)
-                        self.assertEqual(process.returncode, 0, stdout + stderr)
-                        self.assertEqual(stdout, b''); self.assertEqual(stderr, b'')
-                    finally:
-                        if process.poll() is None:
-                            process.kill()
-                        process.communicate(timeout=3)
+        for level in (0, 2):
+            with self.subTest(optimization=level):
+                output = self.work / f'generator-lifetimes-native-o{level}'
+                self.command(path, f'-O{level}', '-o', output)
+                process = subprocess.Popen([str(output)], cwd=self.work, env=self.env, stdin=subprocess.PIPE,
+                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                try:
+                    marker(process, b'READY\n'); before = memory(process)
+                    process.stdin.write(b'1'); process.stdin.flush(); marker(process, b'DONE\n'); after = memory(process)
+                    print(f'generator memory O{level} before={before} after={after}')
+                    self.assertLessEqual(after['VmRSS'] - before['VmRSS'], 16 * 1024 * 1024, (before, after))
+                    self.assertLessEqual(after['VmSize'] - before['VmSize'], 32 * 1024 * 1024, (before, after))
+                    process.stdin.write(b'2'); process.stdin.flush(); stdout, stderr = process.communicate(timeout=15)
+                    self.assertEqual(process.returncode, 0, stdout + stderr)
+                    self.assertEqual(stdout, b''); self.assertEqual(stderr, b'')
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                    process.communicate(timeout=3)
 
     def test_invalid_generator_contracts_report_exact_locations_and_preserve_output(self):
         for name, (source, marker, code) in NEGATIVE_CASES.items():
             source = PREFIX + source; path = self.work / (name + '.krt'); path.write_text(source, encoding='utf-8')
             offset = source.index(marker); line = source.count('\n', 0, offset) + 1; column = offset - source.rfind('\n', 0, offset)
-            for target in ('native', 'vm'):
-                for level in range(4):
-                    with self.subTest(fixture=name, target=target, optimization=level):
-                        output = self.work / f'{name}-{target}-o{level}'; sentinel = b'existing generator artifact\x00'; output.write_bytes(sentinel)
-                        flags = ['target', 'vm'] if target == 'vm' else []
-                        command = [str(COMPILER), str(path), f'-O{level}', *flags, '-o', str(output)]
-                        results = [subprocess.run(command, cwd=self.work, env=self.env, capture_output=True, text=True, timeout=60) for _ in range(2)]
-                        for result in results:
-                            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-                            self.assertEqual(re.findall(r':\d+:\d+: E_[A-Z_]+:', result.stderr), [f':{line}:{column}: {code}:'], result.stderr)
-                        self.assertEqual(results[0].stderr, results[1].stderr); self.assertEqual(output.read_bytes(), sentinel)
+            for level in range(4):
+                with self.subTest(fixture=name, optimization=level):
+                    output = self.work / f'{name}-native-o{level}'; sentinel = b'existing generator artifact\x00'; output.write_bytes(sentinel)
+                    command = [str(COMPILER), str(path), f'-O{level}', '-o', str(output)]
+                    results = [subprocess.run(command, cwd=self.work, env=self.env, capture_output=True, text=True, timeout=60) for _ in range(2)]
+                    for result in results:
+                        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                        self.assertEqual(re.findall(r':\d+:\d+: E_[A-Z_]+:', result.stderr), [f':{line}:{column}: {code}:'], result.stderr)
+                    self.assertEqual(results[0].stderr, results[1].stderr); self.assertEqual(output.read_bytes(), sentinel)

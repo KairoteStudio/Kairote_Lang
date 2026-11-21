@@ -81,16 +81,13 @@ Mark("DONE\\n",5);if(Gate()!=1){return 202;}return 0;}
 class NativeIteratorBoxingTests(NativeCompilerFixture):
     def check_case(self, name):
         path = self.work / (name + '.krt'); path.write_text(PREFIX + POSITIVE_CASES[name])
-        for target in ('native', 'vm'):
-            for level in range(4):
-                with self.subTest(fixture=name, target=target, optimization=level):
-                    output = self.work / f'{name}-{target}-o{level}'
-                    flags = ['target', 'vm'] if target == 'vm' else []
-                    self.command(path, f'-O{level}', *flags, '-o', output)
-                    argv = [str(COMPILER), 'run-vm', str(output)] if target == 'vm' else [str(output)]
-                    result = subprocess.run(argv, cwd=self.work, env=self.env, capture_output=True, timeout=15)
-                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                    self.assertEqual(result.stdout, b''); self.assertEqual(result.stderr, b'')
+        for level in range(4):
+            with self.subTest(fixture=name, optimization=level):
+                output = self.work / f'{name}-native-o{level}'
+                self.command(path, f'-O{level}', '-o', output)
+                result = subprocess.run([str(output)], cwd=self.work, env=self.env, capture_output=True, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(result.stdout, b''); self.assertEqual(result.stderr, b'')
 
     def test_boxed_struct_cursor_preserves_state_and_disposal_error_cleanup(self):
         self.check_case('mutable-boxed-struct-enumerator-and-disposal-errors')
@@ -124,25 +121,22 @@ class NativeIteratorBoxingTests(NativeCompilerFixture):
                 self.assertIsNotNone(found, status); result[key] = int(found.group(1)) * 1024
             return result
 
-        for target in ('native', 'vm'):
-            for level in (0, 2):
-                with self.subTest(target=target, optimization=level):
-                    output = self.work / f'boxed-cursor-lifetimes-{target}-o{level}'
-                    flags = ['target', 'vm'] if target == 'vm' else []
-                    self.command(path, f'-O{level}', *flags, '-o', output)
-                    argv = [str(COMPILER), 'run-vm', str(output)] if target == 'vm' else [str(output)]
-                    process = subprocess.Popen(argv, cwd=self.work, env=self.env, stdin=subprocess.PIPE,
-                                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    try:
-                        marker(process, b'READY\n'); before = memory(process)
-                        process.stdin.write(b'1'); process.stdin.flush(); marker(process, b'DONE\n'); after = memory(process)
-                        print(f'boxed cursor memory target={target} O{level} before={before} after={after}')
-                        self.assertLessEqual(after['VmRSS'] - before['VmRSS'], 16 * 1024 * 1024, (before, after))
-                        self.assertLessEqual(after['VmSize'] - before['VmSize'], 32 * 1024 * 1024, (before, after))
-                        process.stdin.write(b'2'); process.stdin.flush(); stdout, stderr = process.communicate(timeout=15)
-                        self.assertEqual(process.returncode, 0, stdout + stderr)
-                        self.assertEqual(stdout, b''); self.assertEqual(stderr, b'')
-                    finally:
-                        if process.poll() is None:
-                            process.kill()
-                        process.communicate(timeout=3)
+        for level in (0, 2):
+            with self.subTest(optimization=level):
+                output = self.work / f'boxed-cursor-lifetimes-native-o{level}'
+                self.command(path, f'-O{level}', '-o', output)
+                process = subprocess.Popen([str(output)], cwd=self.work, env=self.env, stdin=subprocess.PIPE,
+                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                try:
+                    marker(process, b'READY\n'); before = memory(process)
+                    process.stdin.write(b'1'); process.stdin.flush(); marker(process, b'DONE\n'); after = memory(process)
+                    print(f'boxed cursor memory O{level} before={before} after={after}')
+                    self.assertLessEqual(after['VmRSS'] - before['VmRSS'], 16 * 1024 * 1024, (before, after))
+                    self.assertLessEqual(after['VmSize'] - before['VmSize'], 32 * 1024 * 1024, (before, after))
+                    process.stdin.write(b'2'); process.stdin.flush(); stdout, stderr = process.communicate(timeout=15)
+                    self.assertEqual(process.returncode, 0, stdout + stderr)
+                    self.assertEqual(stdout, b''); self.assertEqual(stderr, b'')
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                    process.communicate(timeout=3)

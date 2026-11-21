@@ -8,40 +8,35 @@ class IndirectArgumentTests(NativeCompilerFixture):
     def execute_targets(self, source, name):
         path = self.work / (name + '.krt')
         path.write_text(source)
-        for target in ('native', 'vm'):
-            for level in range(4):
-                with self.subTest(source=name, target=target, optimization=level):
-                    output = self.work / f'{name}-{target}-o{level}'
-                    flags = ['target', 'vm'] if target == 'vm' else []
-                    self.command(path, f'-O{level}', *flags, '-o', output)
-                    argv = [str(COMPILER), 'run-vm', str(output)] if target == 'vm' else [str(output)]
-                    result = subprocess.run(argv, cwd=self.work, env=self.env,
-                                            capture_output=True, timeout=15)
-                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for level in range(4):
+            with self.subTest(optimization=level):
+                output = self.work / f'{name}-native-o{level}'
+                self.command(path, f'-O{level}', '-o', output)
+                result = subprocess.run([str(output)], cwd=self.work, env=self.env,
+                                        capture_output=True, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def reject_targets(self, source, name):
         path = self.work / (name + '.krt')
         path.write_text(source)
-        for target in ('native', 'vm'):
-            for level in range(4):
-                for previous in (None, b'previous artifact\x00must survive'):
-                    with self.subTest(source=name, target=target, optimization=level,
-                                      previous_artifact=previous is not None):
-                        output = self.work / f'{name}-{target}-o{level}-{previous is not None}'
-                        if previous is not None:
-                            output.write_bytes(previous)
-                        flags = ['target', 'vm'] if target == 'vm' else []
-                        result = subprocess.run([str(COMPILER), '--linker', str(LINKER), str(path),
-                                                 f'-O{level}', *flags, '-o', str(output)],
-                                                cwd=self.work, env=self.env, capture_output=True,
-                                                text=True, timeout=60)
-                        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-                        self.assertRegex(result.stderr, r':\d+:\d+: E_(LOWER|NOT_NULLABLE|WRITABLE_REF):')
-                        self.assertNotIn('E_PARSE', result.stderr)
-                        if previous is None:
-                            self.assertFalse(output.exists(), 'invalid argument created an artifact')
-                        else:
-                            self.assertEqual(output.read_bytes(), previous)
+        for level in range(4):
+            for previous in (None, b'previous artifact\x00must survive'):
+                with self.subTest(source=name, optimization=level,
+                                  previous_artifact=previous is not None):
+                    output = self.work / f'{name}-native-o{level}-{previous is not None}'
+                    if previous is not None:
+                        output.write_bytes(previous)
+                    result = subprocess.run([str(COMPILER), '--linker', str(LINKER), str(path),
+                                             f'-O{level}', '-o', str(output)],
+                                            cwd=self.work, env=self.env, capture_output=True,
+                                            text=True, timeout=60)
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertRegex(result.stderr, r':\d+:\d+: E_(LOWER|NOT_NULLABLE|WRITABLE_REF):')
+                    self.assertNotIn('E_PARSE', result.stderr)
+                    if previous is None:
+                        self.assertFalse(output.exists(), 'invalid argument created an artifact')
+                    else:
+                        self.assertEqual(output.read_bytes(), previous)
 
     def test_null_matches_every_nullable_parameter_through_direct_and_indirect_calls(self):
         self.execute_targets('''

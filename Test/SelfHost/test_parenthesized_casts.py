@@ -80,12 +80,6 @@ class ParenthesizedCastTests(native.NativeCompilerFixture):
                 result = subprocess.run([str(binary)], cwd=self.work, env=self.env,
                                         capture_output=True, timeout=15)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            with self.subTest(backend='vm', optimization=level):
-                path = self.work / f'parenthesized-o{level}.krt'
-                path.write_text(source)
-                artifact = path.with_suffix('.ebc')
-                self.command(path, f'-O{level}', '--target', 'vm', '-o', artifact)
-                self.command('run-vm', artifact)
 
     def test_grouped_callback_and_arithmetic_baseline_semantics(self):
         self.verify(CASES['grouped-callbacks-and-arithmetic'])

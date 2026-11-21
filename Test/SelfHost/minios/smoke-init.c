@@ -49,11 +49,6 @@ int main(void) {
     if (run("/bin/krtc", many) != 0) { puts("PORT-FAIL 512-arguments"); shutdown(8); }
     const char *bad[] = {"/bin/krtc", "-c", "/src/bad.krt", "-o", "/home/bad.kro", NULL};
     if (run("/bin/krtc", bad) == 0) { puts("PORT-FAIL accepted-invalid-source"); shutdown(5); }
-    const char *vm_compile[] = {"/bin/krtc", "--platform", "minios-x64", "target", "vm", "/src/vm.krt", "-o", "/home/program.vm", NULL};
-    if (run("/bin/krtc", vm_compile) != 0) { puts("PORT-FAIL vm-compile"); shutdown(10); }
-    const char *vm_run[] = {"/bin/krtc", "run-vm", "/home/program.vm", NULL};
-    if (run("/bin/krtc", vm_run) != 42) { puts("PORT-FAIL vm-service-abi"); shutdown(11); }
-    puts("VM-SERVICE-PASS");
     puts("PORT-SMOKE-PASS");
     shutdown(0);
 }

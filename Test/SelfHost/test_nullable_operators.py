@@ -296,18 +296,15 @@ class NullableOperatorTests(NativeCompilerFixture):
         source = POSITIVE_CASES[name]
         path = self.work / (name + '.krt')
         path.write_text(source, encoding='utf-8')
-        for target in ('native', 'vm'):
-            for level in (0, 2):
-                with self.subTest(program=name, target=target, optimization=level):
-                    output = self.work / f'{name}-{target}-o{level}'
-                    flags = ['target', 'vm'] if target == 'vm' else []
-                    self.command(path, f'-O{level}', *flags, '-o', output)
-                    argv = [str(COMPILER), 'run-vm', str(output)] if target == 'vm' else [str(output)]
-                    result = subprocess.run(argv, cwd=self.work, env=self.env,
-                                            capture_output=True, timeout=15)
-                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                    self.assertEqual(result.stdout, b'')
-                    self.assertEqual(result.stderr, b'')
+        for level in (0, 2):
+            with self.subTest(program=name, optimization=level):
+                output = self.work / f'{name}-native-o{level}'
+                self.command(path, f'-O{level}', '-o', output)
+                result = subprocess.run([str(output)], cwd=self.work, env=self.env,
+                                        capture_output=True, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(result.stdout, b'')
+                self.assertEqual(result.stderr, b'')
 
     def reject_targets(self, name, source, marker, code):
         path = self.work / (name + '.krt')
@@ -316,33 +313,30 @@ class NullableOperatorTests(NativeCompilerFixture):
         line = source[:position].count('\n') + 1
         column = len(source[:position].rsplit('\n', 1)[-1]) + 1
         expected = re.escape(f'{path}:{line}:{column}: {code}:')
-        for target in ('native', 'vm'):
-            for level in (0, 2):
-                for previous in (None, b'previous server artifact\x00must survive'):
-                    with self.subTest(program=name, target=target, optimization=level,
-                                      previous_output=previous is not None):
-                        output = self.work / f'{name}-{target}-o{level}-{previous is not None}'
-                        if previous is not None:
-                            output.write_bytes(previous)
-                        flags = ['target', 'vm'] if target == 'vm' else []
-                        argv = [str(COMPILER), '--linker', str(LINKER), str(path),
-                                f'-O{level}', *flags, '-o', str(output)]
-                        first = subprocess.run(argv, cwd=self.work, env=self.env,
-                                               capture_output=True, text=True, timeout=60)
-                        second = subprocess.run(argv, cwd=self.work, env=self.env,
-                                                capture_output=True, text=True, timeout=60)
-                        self.assertEqual(first.returncode, 1, first.stdout + first.stderr)
-                        self.assertEqual(second.returncode, 1, second.stdout + second.stderr)
-                        self.assertEqual(first.stderr, second.stderr, 'diagnostic changed between identical builds')
-                        self.assertEqual(re.findall(r':\d+:\d+: E_[A-Z_]+:', first.stderr),
-                                         [f':{line}:{column}: {code}:'], first.stderr)
-                        self.assertRegex(first.stderr, expected)
-                        self.assertNotIn('E_PARSE', first.stderr)
-                        if previous is None:
-                            self.assertFalse(output.exists(), 'a rejected source created an artifact')
-                        else:
-                            self.assertEqual(output.read_bytes(), previous)
-                        self.assertFalse(output.with_name(output.name + '.ebc').exists())
+        for level in (0, 2):
+            for previous in (None, b'previous server artifact\x00must survive'):
+                with self.subTest(program=name, optimization=level,
+                                  previous_output=previous is not None):
+                    output = self.work / f'{name}-native-o{level}-{previous is not None}'
+                    if previous is not None:
+                        output.write_bytes(previous)
+                    argv = [str(COMPILER), '--linker', str(LINKER), str(path),
+                            f'-O{level}', '-o', str(output)]
+                    first = subprocess.run(argv, cwd=self.work, env=self.env,
+                                           capture_output=True, text=True, timeout=60)
+                    second = subprocess.run(argv, cwd=self.work, env=self.env,
+                                            capture_output=True, text=True, timeout=60)
+                    self.assertEqual(first.returncode, 1, first.stdout + first.stderr)
+                    self.assertEqual(second.returncode, 1, second.stdout + second.stderr)
+                    self.assertEqual(first.stderr, second.stderr, 'diagnostic changed between identical builds')
+                    self.assertEqual(re.findall(r':\d+:\d+: E_[A-Z_]+:', first.stderr),
+                                     [f':{line}:{column}: {code}:'], first.stderr)
+                    self.assertRegex(first.stderr, expected)
+                    self.assertNotIn('E_PARSE', first.stderr)
+                    if previous is None:
+                        self.assertFalse(output.exists(), 'a rejected source created an artifact')
+                    else:
+                        self.assertEqual(output.read_bytes(), previous)
 
     def test_coalescing_short_circuits_references_and_preserves_precedence(self):
         self.execute_targets('coalesce-lazy-references')

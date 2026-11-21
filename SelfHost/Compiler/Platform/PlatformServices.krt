@@ -71,7 +71,7 @@ int64 KrtPlatformCall(int64 number, int64 a, int64 b, int64 c, int64 d, int64 e,
     if (number == 5) { return KrtMiniOSStat(a,b); }
     if (number == 8) { return syscall(27,a,b,c,0,0,0); }
     if (number == 9) {
-        // The VM also reaches this service boundary; preserve known Linux flags
+        // Native code also reaches this service boundary; preserve known Linux flags
         // rather than silently dropping MAP_FIXED or MAP_SHARED.
         if ((d & ~51) != 0) { return -38; }
         if ((d & 3) == 0 || (d & 3) == 3) { return -22; }

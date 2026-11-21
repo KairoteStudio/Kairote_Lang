@@ -1,4 +1,4 @@
-"""Re.KrtC-compatible parameter boundaries through native and VM calling paths."""
+"""Re.KrtC-compatible parameter boundaries through native calling paths."""
 import subprocess
 
 from Test.SelfHost.test_native_optimizer import COMPILER, NativeCompilerFixture
@@ -51,15 +51,6 @@ class NativeParameterTests(NativeCompilerFixture):
                      f'int32 main(){{uint128 marker=(uint128)1<<80;int64 live=37;'
                      f'int64 result=Calculate({arguments});'
                      f'return result==8256 && live==37 && (marker>>80)==1 ? 0 : 1;}}')
-
-    def test_vm_128_parameter_direct_method_and_indirect_ref_calls(self):
-        for source in (self.source(128),self.source(127,method=True),self.source(128,indirect=True)):
-            with self.subTest(source=source[:60]):
-                code = self.work / 'parameters.krt'
-                artifact = self.work / 'parameters.ebc'
-                code.write_text(source)
-                self.command(code,'target','vm','-o',artifact)
-                self.command('run-vm',artifact)
 
     def test_excess_arity_is_diagnosed_without_publishing(self):
         for source in (self.source(129),self.source(128,method=True),self.source(129,indirect=True)):

@@ -185,14 +185,6 @@ int32 main(){
 }
 """
         self.execute(source)
-        path = self.work / "initialization.krt"; path.write_text(source)
-        for level in (2, 3):
-            with self.subTest(vm_level=level):
-                output = self.work / f"initialization-o{level}.ebc"
-                self.command(path, f"-O{level}", "target", "vm", "-o", output)
-                result = subprocess.run([str(COMPILER), "run-vm", str(output)], cwd=self.work,
-                                        env=self.env, capture_output=True, timeout=15)
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

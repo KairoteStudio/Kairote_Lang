@@ -22,7 +22,7 @@ class NamedArgumentTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.directory.cleanup()
 
-    def execute(self, name, source, optimization=2, vm=False):
+    def execute(self, name, source, optimization=2):
         directory = self.work / name
         directory.mkdir()
         path = directory / "program.krt"
@@ -30,12 +30,9 @@ class NamedArgumentTests(unittest.TestCase):
         binary = directory / "program"
         arguments = [str(self.compiler), str(path), f"-O{optimization}", "-o", str(binary),
                      "--linker", str(self.linker)]
-        if vm:
-            arguments += ["target", "vm"]
         result = subprocess.run(arguments, cwd=directory, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr + source)
-        command = [str(self.compiler), "run-vm", str(binary)] if vm else [str(binary)]
-        result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+        result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, f"{name}: branch {result.returncode}\n" + result.stdout + result.stderr)
 
     def reject(self, name, source, label):
@@ -175,20 +172,3 @@ class Item{{public int32 Check({method_parameters}){{if(p0!=1 || p5!=6 || p63!=6
 int32 main(){{Item item=new Item();if(check({arguments})!=0 || item.Check({method_arguments})!=0){{return 1;}}delete item;return 0;}}
 """
         self.execute("named-128", source)
-        self.execute("named-128-vm", source, vm=True)
-
-    def test_named_calls_execute_as_real_vm_bytecode(self):
-        self.execute("named-vm", '''
-static int32 trace=0;
-int32 step(int32 value){trace=trace*10+value;return value;}
-T choose<T>(T first,T second){return first;}
-class Base{public virtual int32 Pack(int32 a,int32 b){return 1;}}
-class Child:Base{public override int32 Pack(int32 x,int32 y){return x*10+y;}}
-void assign(ref uint66 destination,uint66 value){destination=value;}
-int32 main(){Base item=new Child();
-if(item.Pack(b:step(2),a:step(4))!=42 || trace!=24){return 1;}
-if(choose(second:"bad",first:"ok")!="ok"){return 2;}
-uint66 number=0;assign(value:(uint66)-1,destination:ref number);
-if((uint128)number!=73786976294838206463){return 3;}
-delete item;return 0;}
-''', vm=True)

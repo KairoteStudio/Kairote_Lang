@@ -10,10 +10,8 @@ pub fn build(b: *std.Build) void {
         b.path("src"),
         b.path("src/Core"),
         b.path("src/Tools"),
-        b.path("src/Bytecode"),
         b.path("Shared"),
         b.path("StubInclude"),
-        b.path("vm"),
     };
 
     const c_flags = &.{
@@ -83,14 +81,12 @@ pub fn build(b: *std.Build) void {
             "src/Compiler/Middle/Ir/IrSsa.c",
             "src/Compiler/Middle/Ir/IrType.c",
             "src/Compiler/Backend/Kro/KroCodegen.c",
-            "src/Compiler/Backend/Vm/VmCodegen.c",
             "src/Compiler/Backend/X86/X86CodeOpt.c",
             "src/Compiler/Backend/X86/X86Codegen.c",
             "src/Compiler/Backend/X86/X86RegAlloc.c",
             "src/Compiler/Pipeline/CompilerPipeline.c",
             "src/Compiler/Build/BuildSystem.c",
             "src/Compiler/Platform/PlatformAbstraction.c",
-            "Shared/BytecodeGenerator.c",
             "src/Tools/KroWriter.c",
             "src/Accelerator.c",
             "src/Main.c",

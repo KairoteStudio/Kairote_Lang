@@ -8,28 +8,25 @@ class AggregateConditionTests(NativeCompilerFixture):
     def reject_condition(self, source, name):
         path = self.work / (name + '.krt')
         path.write_text(source)
-        for target in ('native', 'vm'):
-            for level in range(4):
-                for previous in (None, b'previous artifact\x00must survive'):
-                    with self.subTest(source=name, target=target, optimization=level,
-                                      previous_artifact=previous is not None):
-                        output = self.work / f'{name}-{target}-o{level}-{"new" if previous is None else "old"}.artifact'
-                        if previous is not None:
-                            output.write_bytes(previous)
-                        argv = [str(COMPILER), '--linker', str(LINKER), str(path),
-                                f'-O{level}', '-o', str(output)]
-                        if target == 'vm':
-                            argv += ['target', 'vm']
-                        result = subprocess.run(argv, cwd=self.work, env=self.env,
-                                                capture_output=True, text=True, timeout=60)
-                        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-                        self.assertIn('E_LOWER', result.stderr)
-                        self.assertNotIn('E_PARSE', result.stderr)
-                        self.assertRegex(result.stderr, r':\d+:\d+: E_LOWER:')
-                        if previous is None:
-                            self.assertFalse(output.exists(), 'rejection created an output artifact')
-                        else:
-                            self.assertEqual(output.read_bytes(), previous)
+        for level in range(4):
+            for previous in (None, b'previous artifact\x00must survive'):
+                with self.subTest(source=name, optimization=level,
+                                  previous_artifact=previous is not None):
+                    output = self.work / f'{name}-native-o{level}-{"new" if previous is None else "old"}.artifact'
+                    if previous is not None:
+                        output.write_bytes(previous)
+                    argv = [str(COMPILER), '--linker', str(LINKER), str(path),
+                            f'-O{level}', '-o', str(output)]
+                    result = subprocess.run(argv, cwd=self.work, env=self.env,
+                                            capture_output=True, text=True, timeout=60)
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertIn('E_LOWER', result.stderr)
+                    self.assertNotIn('E_PARSE', result.stderr)
+                    self.assertRegex(result.stderr, r':\d+:\d+: E_LOWER:')
+                    if previous is None:
+                        self.assertFalse(output.exists(), 'rejection created an output artifact')
+                    else:
+                        self.assertEqual(output.read_bytes(), previous)
 
     @staticmethod
     def aggregate_sources():
@@ -94,12 +91,3 @@ int32 main(){
 }
 '''
         self.execute(source)
-        path = self.work / 'valid-conditions.krt'
-        path.write_text(source)
-        for level in range(4):
-            with self.subTest(target='vm', optimization=level):
-                output = self.work / f'valid-conditions-o{level}.vm'
-                self.command(path, f'-O{level}', 'target', 'vm', '-o', output)
-                result = subprocess.run([str(COMPILER), 'run-vm', str(output)],
-                                        cwd=self.work, env=self.env, capture_output=True, timeout=15)
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

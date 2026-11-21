@@ -12,7 +12,7 @@ LINKER = Path(os.environ.get('ARKLINK', ROOT / 'build/ArkLink/ArkLink')).resolve
 
 @unittest.skipUnless(COMPILER.is_file(), 'build the self-hosted compiler first')
 class GlobalsAndFunctionPointers(unittest.TestCase):
-    def run_source(self, source, expected=0, rejected=False, optimization=2, vm=False):
+    def run_source(self, source, expected=0, rejected=False, optimization=2):
         with tempfile.TemporaryDirectory(prefix='kairote-globals-functions-') as directory:
             work = Path(directory)
             path = work / 'main.krt'
@@ -20,8 +20,6 @@ class GlobalsAndFunctionPointers(unittest.TestCase):
             binary = work / 'program'
             command=[str(ROOT / 'SelfHost/RunNativeCompiler'), str(path), '--compiler', str(COMPILER), '--linker', str(LINKER),
                      f'-O{optimization}', '-o', str(binary)]
-            if vm:
-                command+=['target','vm']
             compiled = subprocess.run(command,
                                       capture_output=True, text=True, timeout=60)
             if rejected:
@@ -29,8 +27,7 @@ class GlobalsAndFunctionPointers(unittest.TestCase):
                 self.assertFalse(binary.exists())
                 return
             self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr + source)
-            argv=[str(COMPILER),'run-vm',str(binary)] if vm else [str(binary)]
-            executed = subprocess.run(argv, capture_output=True, text=True, timeout=10)
+            executed = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10)
             self.assertEqual(executed.returncode, expected, executed.stderr + source)
 
     def test_globals_initialize_once_in_order_and_are_shared_by_calls(self):
@@ -156,7 +153,6 @@ class GlobalsAndFunctionPointers(unittest.TestCase):
         for level in range(4):
             with self.subTest(optimization=level):
                 self.run_source(source,optimization=level)
-        self.run_source(source,vm=True)
 
     def test_invalid_globals_and_function_pointer_signatures_are_rejected(self):
         for source in (

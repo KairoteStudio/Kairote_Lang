@@ -5,14 +5,8 @@ from Test.SelfHost.test_native_optimizer import COMPILER, NativeCompilerFixture
 
 
 class DeepInheritanceTests(NativeCompilerFixture):
-    def execute_native_and_vm(self, source):
+    def execute_native(self, source):
         self.execute(source, levels=(0, 2))
-        path=self.work/'deep-inheritance.krt';path.write_text(source)
-        output=self.work/'deep-inheritance.vm'
-        self.command(path,'target','vm','-O2','-o',output)
-        result=subprocess.run([str(COMPILER),'run-vm',str(output)],cwd=self.work,
-                              env=self.env,capture_output=True,timeout=15)
-        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
 
     def test_beyond_1024_inherited_methods_upcasts_indirect_arguments_and_nearest_overloads(self):
         depth=1026
@@ -33,7 +27,7 @@ int32 main(){{
     delete value;return 0;
 }}
 '''
-        self.execute_native_and_vm(source)
+        self.execute_native(source)
 
     def test_128_argument_overload_ranks_keep_precision_in_both_declaration_orders(self):
         base_parameters=','.join(f'Base p{index}' for index in range(128))
@@ -52,4 +46,4 @@ int32 main(){{
     delete value;return 0;
 }}
 '''
-        self.execute_native_and_vm(source)
+        self.execute_native(source)

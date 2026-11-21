@@ -4,7 +4,7 @@ function Configure(Project p) {
     p.CompileTogether(true);
     p.Sources(
         "Main.krt",
-        "Compiler/Backend/Kro/*.krt", "Compiler/Backend/Vm/*.krt",
+        "Compiler/Backend/Kro/*.krt",
         "Compiler/Build/*.krt", "Compiler/Driver/*.krt",
         "Compiler/Frontend/*.krt", "Compiler/Frontend/Lexer/*.krt",
         "Compiler/Frontend/Parser/*.krt", "Compiler/Frontend/Semantic/*.krt",

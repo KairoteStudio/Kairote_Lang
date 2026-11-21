@@ -121,18 +121,15 @@ class ClosureInferenceTests(NativeCompilerFixture):
         self.assertEqual(hashlib.sha256(source.encode()).hexdigest(), SOURCE_SHA256[name])
         path = self.work / (name + ".krt")
         path.write_bytes(source.encode())
-        for target in ("native", "vm"):
-            for level in (0, 2):
-                with self.subTest(program=name, target=target, optimization=level):
-                    output = self.work / f"{name}-{target}-o{level}"
-                    flags = ["target", "vm"] if target == "vm" else []
-                    self.command(path, f"-O{level}", *flags, "-o", output)
-                    argv = [str(COMPILER), "run-vm", str(output)] if target == "vm" else [str(output)]
-                    result = subprocess.run(argv, cwd=self.work, env=self.env,
-                                            capture_output=True, timeout=15)
-                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                    self.assertEqual(result.stdout, b"")
-                    self.assertEqual(result.stderr, b"")
+        for level in (0, 2):
+            with self.subTest(program=name, optimization=level):
+                output = self.work / f"{name}-native-o{level}"
+                self.command(path, f"-O{level}", "-o", output)
+                result = subprocess.run([str(output)], cwd=self.work, env=self.env,
+                                        capture_output=True, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(result.stdout, b"")
+                self.assertEqual(result.stderr, b"")
 
     def test_inference_scope_and_probe_regressions(self):
         for name, source in POSITIVE_CASES.items():
@@ -142,31 +139,28 @@ class ClosureInferenceTests(NativeCompilerFixture):
         path = self.work / (name + ".krt")
         path.write_bytes(source.encode())
         expected = f"{path}:1:{position + 1}: {code}: {message} (combined byte {position})\n"
-        for target in ("native", "vm"):
-            for level in (0, 2):
-                for previous in (None, b"previous artifact\x00must survive"):
-                    with self.subTest(program=name, target=target, optimization=level, previous=previous is not None):
-                        output = self.work / f"{name}-{target}-o{level}-{previous is not None}"
-                        if previous is not None:
-                            output.write_bytes(previous)
-                        flags = ["target", "vm"] if target == "vm" else []
-                        argv = [str(COMPILER), "--linker", str(LINKER), str(path),
-                                f"-O{level}", *flags, "-o", str(output)]
-                        first = subprocess.run(argv, cwd=self.work, env=self.env,
-                                               capture_output=True, timeout=30)
-                        second = subprocess.run(argv, cwd=self.work, env=self.env,
-                                                capture_output=True, timeout=30)
-                        self.assertEqual(first.returncode, 1, first.stdout + first.stderr)
-                        self.assertEqual(second.returncode, 1, second.stdout + second.stderr)
-                        self.assertEqual(first.stderr, second.stderr)
-                        self.assertEqual(first.stdout, b"")
-                        self.assertEqual(second.stdout, b"")
-                        self.assertEqual(first.stderr, expected.encode())
-                        if previous is None:
-                            self.assertFalse(output.exists())
-                        else:
-                            self.assertEqual(output.read_bytes(), previous)
-                        self.assertFalse(output.with_name(output.name + ".ebc").exists())
+        for level in (0, 2):
+            for previous in (None, b"previous artifact\x00must survive"):
+                with self.subTest(program=name, optimization=level, previous=previous is not None):
+                    output = self.work / f"{name}-native-o{level}-{previous is not None}"
+                    if previous is not None:
+                        output.write_bytes(previous)
+                    argv = [str(COMPILER), "--linker", str(LINKER), str(path),
+                            f"-O{level}", "-o", str(output)]
+                    first = subprocess.run(argv, cwd=self.work, env=self.env,
+                                           capture_output=True, timeout=30)
+                    second = subprocess.run(argv, cwd=self.work, env=self.env,
+                                            capture_output=True, timeout=30)
+                    self.assertEqual(first.returncode, 1, first.stdout + first.stderr)
+                    self.assertEqual(second.returncode, 1, second.stdout + second.stderr)
+                    self.assertEqual(first.stderr, second.stderr)
+                    self.assertEqual(first.stdout, b"")
+                    self.assertEqual(second.stdout, b"")
+                    self.assertEqual(first.stderr, expected.encode())
+                    if previous is None:
+                        self.assertFalse(output.exists())
+                    else:
+                        self.assertEqual(output.read_bytes(), previous)
 
     def test_callback_labels_must_be_shared_by_every_dynamic_choice(self):
         self.assertEqual(hashlib.sha256(BEFORE_TERNARY_LABEL_SOURCE.encode()).hexdigest(),

@@ -2,7 +2,6 @@
 #include "../Middle/Ir/IrSsa.h"
 #include "../Middle/Ir/IrOptimizer.h"
 #include "../Backend/X86/X86Codegen.h"
-#include "../Backend/Vm/VmCodegen.h"
 #include "../Backend/Kro/KroCodegen.h"
 
 KrtCompiler* KrtCompilerCreate(const char* output_filename, KrtTargetPlatform target) {
@@ -22,7 +21,7 @@ KrtCompiler* KrtCompilerCreate(const char* output_filename, KrtTargetPlatform ta
 
     KRT_STRNCPY_SAFE(compiler->output_filename, output_filename);
 
-    if (target == KRT_TARGET_VM_BYTECODE || target == KRT_TARGET_KRO_OBJ) {
+    if (target == KRT_TARGET_KRO_OBJ) {
         compiler->output_file = fopen(output_filename, "wb");
     } else {
         compiler->output_file = fopen(output_filename, "w");
@@ -36,7 +35,6 @@ KrtCompiler* KrtCompilerCreate(const char* output_filename, KrtTargetPlatform ta
     compiler->target = target;
     compiler->optimization_level = 2;
     compiler->has_object_code = false;
-    KrtBytecodeGeneratorInitChunk(&compiler->last_chunk);
 
     return compiler;
 }
@@ -50,7 +48,6 @@ void KrtCompilerDestroy(KrtCompiler* compiler) {
         fclose(compiler->output_file);
         compiler->output_file = NULL;
     }
-    KrtBytecodeGeneratorFreeChunk(&compiler->last_chunk);
     KRT_FREE(compiler);
 }
 
@@ -168,14 +165,12 @@ bool KrtCompilerCompile(KrtCompiler* compiler, ASTNode* ast, void* semantic_anal
     }
 
     KrtIrGenerateFromAst(ir_builder, ast, semantic_analyzer);
-    if ((compiler->target == KRT_TARGET_X86_ASM || compiler->target == KRT_TARGET_VM_BYTECODE) &&
-        module_has_native_pointers(ir_builder->module)) {
+    if (compiler->target == KRT_TARGET_X86_ASM && module_has_native_pointers(ir_builder->module)) {
         KrtError("unsafe pointers require the KRO/native executable backend");
         KrtIrBuilderDestroy(ir_builder);
         return false;
     }
-    if ((compiler->target == KRT_TARGET_X86_ASM || compiler->target == KRT_TARGET_VM_BYTECODE) &&
-        module_has_extended_integers(ir_builder->module)) {
+    if (compiler->target == KRT_TARGET_X86_ASM && module_has_extended_integers(ir_builder->module)) {
         KrtError("extended integer widths require the KRO/native executable backend");
         KrtIrBuilderDestroy(ir_builder);
         return false;
@@ -214,24 +209,6 @@ bool KrtCompilerCompile(KrtCompiler* compiler, ASTNode* ast, void* semantic_anal
         KrtError("WebAssembly backend is not implemented");
         KrtIrBuilderDestroy(ir_builder);
         return false;
-    case KRT_TARGET_VM_BYTECODE: {
-        KrtVmCodegenGenerate(ir_builder->module, &compiler->last_chunk);
-
-        fclose(compiler->output_file);
-        compiler->output_file = NULL;
-
-        char output_filename[256];
-        KRT_STRNCPY(output_filename, compiler->output_filename, sizeof(output_filename));
-        char* dot = strrchr(output_filename, '.');
-        if (dot) {
-            strcpy(dot, ".ebc");
-        } else {
-            strcat(output_filename, ".ebc");
-        }
-
-        KrtBytecodeGeneratorSerializeToFile(&compiler->last_chunk, output_filename);
-        break;
-    }
     case KRT_TARGET_KRO_OBJ: {
         KrtKrtGenerate(compiler->output_file, compiler->output_filename, ir_builder->module);
         break;

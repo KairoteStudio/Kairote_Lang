@@ -93,11 +93,3 @@ class RuntimeHttpTests(http.unittest.TestCase):
                     objects = (client, transport, library) if reverse else (library, transport, client)
                     self.command(*objects, '-o', binary)
                     self.exercise(binary)
-
-    def test_vm_private_route_generator_struct_boxes_and_real_http(self):
-        for level in range(4):
-            with self.subTest(optimization=level):
-                output = self.work / f'server-vm-o{level}'
-                self.command(http.SERVER, FIXTURES / 'Provider.krt', FIXTURES / 'Consumer.krt',
-                             f'-O{level}', 'target', 'vm', '-o', output)
-                self.exercise([http.COMPILER, 'run-vm', output])

@@ -23,7 +23,7 @@ class WidePrecisionTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.directory.cleanup()
 
-    def execute(self, name, source, optimization=2, vm=False, seed=False):
+    def execute(self, name, source, optimization=2, seed=False):
         directory = self.work / name
         directory.mkdir()
         path = directory / 'program.krt'
@@ -34,12 +34,9 @@ class WidePrecisionTests(unittest.TestCase):
         else:
             arguments = [str(self.compiler), str(path), f'-O{optimization}', '-o', str(binary),
                          '--linker', str(self.linker)]
-            if vm:
-                arguments += ['target', 'vm']
         result = subprocess.run(arguments, cwd=directory, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr + source)
-        command = [str(self.compiler), 'run-vm', str(binary)] if vm else [str(binary)]
-        result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+        result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, f'{name}: branch {result.returncode}\n' + result.stdout + result.stderr)
 
     @staticmethod
@@ -139,9 +136,6 @@ delete values;delete unsigned_values;return 0;}
         if self.seed.is_file():
             self.execute('seed-typed-load', source, seed=True)
 
-    def test_vm_uses_the_same_precision_normalization_operations(self):
-        self.execute('vm-precision', self.arithmetic(66), vm=True)
-
     @staticmethod
     def integer_float_bits(number, precision):
         """Round an integer directly to IEEE bits using integer arithmetic."""
@@ -193,7 +187,6 @@ unsafe(using krt.mem;){{return *(uint{precision}*)&result;}}}}''')
             self.execute(f'rounding-native-O{optimization}', source, optimization)
             if self.seed.is_file():
                 self.execute(f'rounding-seed-O{optimization}', source, optimization, seed=True)
-        self.execute('rounding-vm', source, vm=True)
 
 
 if __name__ == '__main__':

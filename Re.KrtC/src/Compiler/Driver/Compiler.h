@@ -12,12 +12,9 @@ typedef enum {
     KRT_TARGET_X86_ASM,
     KRT_TARGET_WASM,
     KRT_TARGET_IR_TEXT,
-    KRT_TARGET_VM_BYTECODE,
     KRT_TARGET_KRO_OBJ,
     KRT_TARGET_EXE_PLATFORM
 } KrtTargetPlatform;
-
-#include "Bytecode.h"
 
 typedef struct {
     FILE* output_file;
@@ -25,7 +22,6 @@ typedef struct {
     int optimization_level;
     /** True when the compiled IR contains functions or data that must participate in linking. */
     bool has_object_code;
-    KrtChunk last_chunk;
     char output_filename[256];
 } KrtCompiler;
 

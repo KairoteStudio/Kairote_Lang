@@ -221,8 +221,8 @@ bool KrtKroNativeClosureEnvironment(KrtKroObject output, ref int32 pc) {
 }
 
 // Global symbol emission.
-// Every mutable declaration has an exact stable data identity. IR retains VM
-// slots; native references use relocations and survive independent compilation.
+// Every mutable declaration has an exact stable data identity. IR retains
+// local slots; native references use relocations and survive independent compilation.
 bool KrtKroGlobalSymbols(KrtNativeModule module,KrtAstNode ast,int64 source,KrtKroObject output){
     if(module.global_count==0){return module.global_reloc_count==0;}
     KrtNativeGlobalEntry entry=ast.native_globals.first;int32 count=0;int64 names=0;

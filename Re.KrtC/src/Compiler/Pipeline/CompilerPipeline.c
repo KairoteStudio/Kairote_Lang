@@ -459,8 +459,6 @@ int KrtCompilePipelineCodegen(KrtCompilePipeline* pipeline) {
     KrtTargetPlatform target = KRT_TARGET_X86_ASM;
     if (pipeline->config->target_type == KRT_TARGET_IR) {
         target = KRT_TARGET_IR_TEXT;
-    } else if (pipeline->config->target_type == KRT_TARGET_VM) {
-        target = KRT_TARGET_VM_BYTECODE;
     } else if (pipeline->config->target_type == KRT_TARGET_KRO) {
         target = KRT_TARGET_KRO_OBJ;
     } else if (pipeline->config->target_type == KRT_TARGET_EXE) {

@@ -90,7 +90,6 @@ typedef enum {
     KRT_TARGET_CMD_ASM = 0,
     KRT_TARGET_CMD_IR = 3,
     KRT_TARGET_CMD_EXE = 4,
-    KRT_TARGET_CMD_VM = 5,
     KRT_TARGET_CMD_BUILD = 6,
     KRT_TARGET_CMD_CLEAN = 7,
     KRT_TARGET_CMD_CHECK = 8,
@@ -125,11 +124,11 @@ static void print_usage(const char* program_name) {
     KrtPrintf("%s||Kairote Lang 使用说明%s\n", blue, reset);
     KrtPrintf("%sbuild%s:%s构建%s  clean%s:%s清理\n", blue, gray, blue, blue, gray, blue);
     KrtPrintf("%scheck%s:%s检查%s  help%s:%s帮助信息\n", blue, gray, blue, blue, gray, blue);
-    KrtPrintf("%s--keep-temp%s:%s保留临时文件 (.kro, .eo)\n", blue, gray, blue);
+    KrtPrintf("%s--keep-temp%s:%s保留临时文件 (.kro)\n", blue, gray, blue);
     KrtPrintf("-O0 / -O1 / -O2 / -O3: 优化级别，默认 -O2\n");
     KrtPrintf("\n%s=========== %s其他 %s===========\n", gray, gray, gray);
-    KrtPrintf("%starget%s:%s输出类型 %s<%sir%s/%sasm%s/%sexe%s/%svm%s/%seo%s>\n", blue, gray, blue, gray, blue, gray,
-              blue, gray, blue, gray, blue, gray, blue, gray);
+    KrtPrintf("%starget%s:%s输出类型 %s<%sir%s/%sasm%s/%sexe%s/%skro%s>\n", blue, gray, blue, gray, blue, gray,
+              blue, gray, blue, gray, blue, gray);
     KrtPrintf("%snew%s:%s创建项目 %s<%s类型%s> <%s项目名%s>\n", blue, gray, blue, gray, blue, gray, blue, gray);
     KrtPrintf("%sversion%s:%s %s\n", blue, gray, blue, KRT_COMPILER_VERSION);
     KrtPrintf("%s", reset);
@@ -203,9 +202,7 @@ static KrtCommandLineOptions parse_command_line(int argc, char* argv[]) {
                 options.target_type = KRT_TARGET_CMD_EXE;
             } else if (strcmp(target_type, "ir") == 0) {
                 options.target_type = KRT_TARGET_CMD_IR;
-            } else if (strcmp(target_type, "vm") == 0) {
-                options.target_type = KRT_TARGET_CMD_VM;
-            } else if (strcmp(target_type, "eo") == 0) {
+            } else if (strcmp(target_type, "kro") == 0) {
                 options.target_type = KRT_TARGET_CMD_KRO;
             } else {
                 KrtError("未知的目标类型 '%s'", target_type);
@@ -389,9 +386,6 @@ static int compile_single_file(const char* input_file, const char* output_file, 
     case KRT_TARGET_CMD_EXE:
         config->target_type = KRT_TARGET_EXE;
         break;
-    case KRT_TARGET_CMD_VM:
-        config->target_type = KRT_TARGET_VM;
-        break;
     case KRT_TARGET_CMD_KRO:
         config->target_type = KRT_TARGET_KRO;
         break;
@@ -424,9 +418,6 @@ static int compile_single_file(const char* input_file, const char* output_file, 
     }
 
     const char* compile_output = output_file;
-#ifndef __linux__
-    char temp_eo[KRT_MAX_PATH];
-#endif
     char temp_kro[KRT_MAX_PATH];
     if (target_type == KRT_TARGET_CMD_EXE || target_type == KRT_TARGET_CMD_BUILD) {
         char file_base[KRT_MAX_PATH];
@@ -435,13 +426,8 @@ static int compile_single_file(const char* input_file, const char* output_file, 
         char file_base_truncated[1010];
         strncpy(file_base_truncated, file_base, sizeof(file_base_truncated) - 1);
         file_base_truncated[sizeof(file_base_truncated) - 1] = '\0';
-#ifndef __linux__
-        snprintf(temp_eo, sizeof(temp_eo), "%s.eo", file_base_truncated);
-        compile_output = temp_eo;
-#else
         snprintf(temp_kro, sizeof(temp_kro), "%s.kro", file_base_truncated);
         compile_output = temp_kro;
-#endif
     } else if (target_type == KRT_TARGET_CMD_KRO) {
 
         char file_base[KRT_MAX_PATH];
@@ -482,7 +468,7 @@ static int compile_single_file(const char* input_file, const char* output_file, 
 #else
             KrtBuildContext* build_ctx = KrtBuildContextCreate(config, platform);
             if (build_ctx) {
-                if (KrtBuildExecute(build_ctx, temp_eo, output_file)) {
+                if (KrtBuildExecute(build_ctx, temp_kro, output_file)) {
                     KrtTaskReport("build", input_file, KRT_TASK_RESULT_EXECUTED, total_duration,
                                   KrtGetGlobalTaskStats());
                 } else {
@@ -531,8 +517,6 @@ static int compile_single_file(const char* input_file, const char* output_file, 
             if (!link_kro_executable(config, platform, kro_file, exe_output)) {
                 result = 0;
             }
-        } else if (target_type == KRT_TARGET_CMD_VM) {
-            KrtTaskReport("compile", input_file, KRT_TASK_RESULT_EXECUTED, total_duration, KrtGetGlobalTaskStats());
         } else {
             KrtTaskReport("compile", input_file, KRT_TASK_RESULT_EXECUTED, total_duration, KrtGetGlobalTaskStats());
         }
@@ -582,7 +566,7 @@ static int compile_multiple_files(const char** input_files, int input_count, con
      * unsupported request such as `target ir` into an executable build. */
     if (target_type != KRT_TARGET_CMD_EXE && target_type != KRT_TARGET_CMD_BUILD &&
         target_type != KRT_TARGET_CMD_KRO) {
-        KrtError("Multiple source files support only executable or eo targets");
+        KrtError("Multiple source files support only executable or kro targets");
         return 1;
     }
 
@@ -1332,9 +1316,6 @@ static int run_compiler(const char** input_files, int input_count, const char* o
 #endif
             break;
         }
-        case KRT_TARGET_CMD_VM:
-            strncpy(default_output, "output.ebc", sizeof(default_output) - 1);
-            break;
         case KRT_TARGET_CMD_KRO:
             strncpy(default_output, "output.exe", sizeof(default_output) - 1);
             break;

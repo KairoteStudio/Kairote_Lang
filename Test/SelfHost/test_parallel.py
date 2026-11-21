@@ -19,7 +19,7 @@ class NativeParallelTests(unittest.TestCase):
         self.work = Path(directory.name)
         (self.work / 'src').mkdir()
         self.project = self.work / 'project.krt'
-        self.project.write_text('function Configure(Project p){p.Name("Parallel");p.Sources("src/*.krt");p.Target("vm");p.Output("program");}')
+        self.project.write_text('function Configure(Project p){p.Name("Parallel");p.Sources("src/*.krt");p.Target("linux-x86_64");p.Output("program");}')
         self.environment = dict(os.environ, PATH='', KAIROTE_ROOT=str(ROOT))
 
     def command(self, *arguments, expected=0):
@@ -103,7 +103,8 @@ class NativeParallelTests(unittest.TestCase):
         self.assertIn(b'up to 4 jobs', stdout)
         self.assertIn(b'object deferred:', stdout)
         output = self.work / 'bin/linux/program'; parallel = output.read_bytes()
-        self.command('run-vm', output, expected=17)
+        result = subprocess.run([str(output)], env=self.environment, capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 17, result.stderr)
         self.command('build', self.project, '--rebuild', '-O0', '-j1')
         self.assertEqual(output.read_bytes(), parallel)
 
@@ -124,7 +125,8 @@ class NativeParallelTests(unittest.TestCase):
         self.assertIn(b'signal 9', stderr)
         self.assertEqual(output.read_bytes(), previous)
         self.assertEqual(manifest.read_bytes(), previous_manifest)
-        self.command('run-vm', output, expected=17)
+        result = subprocess.run([str(output)], env=self.environment, capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 17, result.stderr)
 
     def test_worker_output_error_is_fatal_and_not_deferred(self):
         self.fixture()
@@ -137,7 +139,8 @@ class NativeParallelTests(unittest.TestCase):
         self.assertIn(b'E_WORKER', stderr)
         self.assertIn(b'E_OUTPUT', stderr)
         self.assertEqual(output.read_bytes(), previous)
-        self.command('run-vm', output, expected=17)
+        result = subprocess.run([str(output)], env=self.environment, capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 17, result.stderr)
 
 
 if __name__ == '__main__':

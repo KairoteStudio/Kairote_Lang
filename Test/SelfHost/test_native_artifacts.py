@@ -68,8 +68,8 @@ class NativeArtifactTests(unittest.TestCase):
         self.assertEqual(result.returncode, 42, result.stderr)
 
     @unittest.skipUnless(LINKER.is_file(), "ArkLink required")
-    def test_eo_and_keep_temp_preserve_real_objects(self):
-        self.command(self.source, "target", "eo", "--linker", LINKER)
+    def test_kro_and_keep_temp_preserve_real_objects(self):
+        self.command(self.source, "target", "kro", "--linker", LINKER)
         output = self.work / "output.exe"
         self.assertEqual(output.read_bytes()[:4], b"\x7fELF")
         object_path = self.work / "main.kro"
@@ -80,14 +80,6 @@ class NativeArtifactTests(unittest.TestCase):
         self.command(object_path, "--linker", LINKER, "-o", self.work / "linked object")
         result = subprocess.run([str(self.work / "linked object")], env=self.env, timeout=10)
         self.assertEqual(result.returncode, 42)
-
-    def test_vm_target_is_nonempty_runnable_bytecode(self):
-        output = self.work / "program.ebc"
-        self.command(self.source, "target", "vm", "--linker", self.work / "absent linker", "-o", output)
-        self.assertEqual(output.read_bytes()[:4], b"CBSE")
-        self.assertEqual(output.read_bytes(), (self.work / "program.ebc.ebc").read_bytes())
-        self.assertFalse(output.stat().st_mode & 0o111)
-        self.command("run-vm", output, expected=42)
 
     def test_target_failures_preserve_destination(self):
         output = self.work / "output.ir"

@@ -2990,7 +2990,7 @@ bool KrtNativeLowerRuntimeCatchValue(KrtAstNode expected,int32 slot,KrtNativeMod
 
 // ===== Runtime type descriptors =====
 // Runtime searches use ordinary validated IR, including exact byte comparison.
-// Native and VM execute the same lookup algorithm and receiver adjustment.
+// The native backend executes this lookup algorithm and receiver adjustment.
 bool KrtNativeRuntimeLoad(KrtNativeModule module,int32 slot,int32 offset) {
     return KrtNativeEmit(module,(int32)KrtNativeOp.LoadLocal,slot,0) >= 0 &&
         KrtNativeEmit(module,(int32)KrtNativeOp.Address,0,offset) >= 0 &&
@@ -3733,7 +3733,7 @@ bool KrtNativeLowerAggregateNew(KrtAstNode expression, KrtAstNode ast, KrtNative
 
 // ===== Wide integer lowering =====
 // Wide values occupy 128 physical bits but retain their declared precision.
-// Masking and sign extension use the same operations in KRO, assembly and VM.
+// Masking and sign extension use the same operations in KRO and assembly.
 bool KrtNativeNormalizeWide(KrtNativeModule module, KrtAstNode type) {
     if (!KrtNativeWideKind(type) || type.native_bits <= 64 || type.native_bits >= 128) { return true; }
     if (type.native_unsigned) {

@@ -122,7 +122,7 @@ class Comparison:
                 raise FileNotFoundError(path)
         self.report = {"schema": 1, "complete": False, "environment": {"platform": platform.platform(), "python": sys.version,
                        "cpu_count": os.cpu_count()}, "tools": {k: {"path": str(p), "sha256": sha(p)} for k, p in self.tools.items()},
-                       "method": "Independent expected exits/stdout; Re.KrtC is a comparator, not an oracle. Native public CLI timing includes linking and process startup. Runtime includes process startup. Re object measurement uses retained KRO because target eo also links. Length property and method forms are tested separately. Overflow probe expects fixed-width two's-complement wrapping.",
+                       "method": "Independent expected exits/stdout; Re.KrtC is a comparator, not an oracle. Native public CLI timing includes linking and process startup. Runtime includes process startup. Re object measurement uses retained KRO because target kro also links. Length property and method forms are tested separately. Overflow probe expects fixed-width two's-complement wrapping.",
                        "cases": [], "benchmarks": [], "commands": []}
         self.report["library_sources"] = {str(path.relative_to(ROOT)): sha(path) for path in sorted((ROOT / "libs").rglob("*.krt"))}
         self.report["compiler_sources"] = {str(path.relative_to(ROOT)): sha(path) for path in sorted((ROOT / "SelfHost").rglob("*.krt"))}
@@ -160,13 +160,13 @@ class Comparison:
         else:
             argv = [self.tools[label], "-O2", *paths, "output", output]
             if object_only:
-                argv.extend(["target", "eo", "--keep-temp"])
+                argv.extend(["target", "kro", "--keep-temp"])
         command, result = self.command(argv, folder, self.args.compile_timeout)
         # Re.KrtC's multifile driver names its executable <basename>.exe in cwd.
         if not output.exists() and len(paths) > 1 and (folder / "program.exe").exists():
             output = folder / "program.exe"
         if object_only and label == "rekrtc":
-            # The Re.KrtC `target eo` CLI also links; measure its retained KRO,
+            # The Re.KrtC `target kro` CLI also links; measure its retained KRO,
             # never compare an ELF named output.kro with a SelfHost KRO.
             output = folder / "source0.kro"
         return command, result, output

@@ -96,21 +96,17 @@ string text="b";switch(text){case "a":return 14;case "b":break;default:return 15
 char letter='B';switch(letter){case 'A':return 16;case 'B':break;default:return 17;}
 return calls==2 && labels==3 && matched==3 ? 0 : 18;}
 """
-        for target in ('native', 'vm'):
-            for level in range(4):
-                with self.subTest(target=target, level=level):
-                    work = Path(self.directory.name) / f"snapshot-{target}-O{level}"
-                    work.mkdir()
-                    path = work / 'program.krt'; path.write_text(source)
-                    output = work / 'program'
-                    command = [str(self.compiler), str(path), f'-O{level}', '--linker', str(ARKLINK), '-o', str(output)]
-                    if target == 'vm':
-                        command += ['target', 'vm']
-                    result = subprocess.run(command, cwd=work, capture_output=True, text=True, timeout=30)
-                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                    command = [str(self.compiler), 'run-vm', str(output)] if target == 'vm' else [str(output)]
-                    result = subprocess.run(command, cwd=work, capture_output=True, text=True, timeout=10)
-                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for level in range(4):
+            with self.subTest(level=level):
+                work = Path(self.directory.name) / f"snapshot-native-O{level}"
+                work.mkdir()
+                path = work / 'program.krt'; path.write_text(source)
+                output = work / 'program'
+                command = [str(self.compiler), str(path), f'-O{level}', '--linker', str(ARKLINK), '-o', str(output)]
+                result = subprocess.run(command, cwd=work, capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                result = subprocess.run([str(output)], cwd=work, capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_nested_switch_break_and_continue_enclosing_loops(self):
         self.check("loop-transfers", """

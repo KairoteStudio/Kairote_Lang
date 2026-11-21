@@ -7,13 +7,6 @@ from Test.SelfHost.test_native_optimizer import COMPILER, LINKER, NativeCompiler
 class ValueProgramTests(NativeCompilerFixture):
     def execute_program(self, source):
         self.execute(source, levels=(0, 2))
-        path = self.work / 'value-program.krt'
-        path.write_text(source)
-        output = self.work / 'value-program.vm'
-        self.command(path, 'target', 'vm', '-O2', '-o', output)
-        result = subprocess.run([str(COMPILER), 'run-vm', str(output)], cwd=self.work,
-                                env=self.env, capture_output=True, timeout=15)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_fixed_buffers_keep_generic_size_length_and_independent_copies(self):
         self.execute_program('''
@@ -89,20 +82,17 @@ byte[] Leak(){Packet local=default(Packet);return local.bytes;}
 int32 main(){var invalid=Leak();return 0;}
 '''))
         for index, (code, source) in enumerate(cases):
-            for target in ('native', 'vm'):
-                with self.subTest(index=index, target=target):
-                    path = self.work / f'bad-{index}-{target}.krt'
-                    path.write_text(source)
-                    output = path.with_suffix('.previous')
-                    previous = b'previous artifact\x00must survive'
-                    output.write_bytes(previous)
-                    argv = [str(COMPILER), '--linker', str(LINKER), str(path), '-O2', '-o', str(output)]
-                    if target == 'vm':
-                        argv += ['target', 'vm']
-                    result = subprocess.run(argv, cwd=self.work, env=self.env,
-                                            capture_output=True, text=True, timeout=60)
-                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-                    self.assertIn(code, result.stderr)
-                    self.assertNotIn('E_PARSE', result.stderr)
-                    self.assertRegex(result.stderr, r':\d+:\d+: ' + code + ':')
-                    self.assertEqual(output.read_bytes(), previous)
+            with self.subTest(index=index):
+                path = self.work / f'bad-{index}-native.krt'
+                path.write_text(source)
+                output = path.with_suffix('.previous')
+                previous = b'previous artifact\x00must survive'
+                output.write_bytes(previous)
+                argv = [str(COMPILER), '--linker', str(LINKER), str(path), '-O2', '-o', str(output)]
+                result = subprocess.run(argv, cwd=self.work, env=self.env,
+                                        capture_output=True, text=True, timeout=60)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn(code, result.stderr)
+                self.assertNotIn('E_PARSE', result.stderr)
+                self.assertRegex(result.stderr, r':\d+:\d+: ' + code + ':')
+                self.assertEqual(output.read_bytes(), previous)

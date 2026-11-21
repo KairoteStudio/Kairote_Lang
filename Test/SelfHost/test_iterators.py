@@ -177,18 +177,15 @@ class NativeIteratorTests(NativeCompilerFixture):
         source = POSITIVE_CASES[name]
         path = self.work / (name + '.krt')
         path.write_text(source, encoding='utf-8')
-        for target in ('native', 'vm'):
-            for level in range(4):
-                with self.subTest(fixture=name, target=target, optimization=level):
-                    output = self.work / f'{name}-{target}-o{level}'
-                    flags = ['target', 'vm'] if target == 'vm' else []
-                    self.command(path, f'-O{level}', *flags, '-o', output)
-                    command = [str(COMPILER), 'run-vm', str(output)] if target == 'vm' else [str(output)]
-                    result = subprocess.run(command, cwd=self.work, env=self.env,
-                                            capture_output=True, timeout=15)
-                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                    self.assertEqual(result.stdout, b'')
-                    self.assertEqual(result.stderr, b'')
+        for level in range(4):
+            with self.subTest(fixture=name, optimization=level):
+                output = self.work / f'{name}-native-o{level}'
+                self.command(path, f'-O{level}', '-o', output)
+                result = subprocess.run([str(output)], cwd=self.work, env=self.env,
+                                        capture_output=True, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(result.stdout, b'')
+                self.assertEqual(result.stderr, b'')
 
     def test_mutable_struct_enumerator_current_field_and_value_copy(self):
         self.check_case('struct-state-current-field')
@@ -241,18 +238,16 @@ class NativeIteratorTests(NativeCompilerFixture):
             offset = source.index(marker)
             line = source.count('\n', 0, offset) + 1
             column = offset - source.rfind('\n', 0, offset)
-            for target in ('native', 'vm'):
-                for level in range(4):
-                    with self.subTest(fixture=name, target=target, optimization=level):
-                        output = self.work / f'{name}-{target}-o{level}'
-                        sentinel = b'existing iterator output\x00'; output.write_bytes(sentinel)
-                        flags = ['target', 'vm'] if target == 'vm' else []
-                        command = [str(COMPILER), str(path), f'-O{level}', *flags, '-o', str(output)]
-                        results = [subprocess.run(command, cwd=self.work, env=self.env,
-                                                  capture_output=True, text=True, timeout=60) for _ in range(2)]
-                        for result in results:
-                            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-                            self.assertEqual(re.findall(r':\d+:\d+: E_[A-Z_]+:', result.stderr),
-                                             [f':{line}:{column}: {code}:'], result.stderr)
-                        self.assertEqual(results[0].stderr, results[1].stderr)
-                        self.assertEqual(output.read_bytes(), sentinel)
+            for level in range(4):
+                with self.subTest(fixture=name, optimization=level):
+                    output = self.work / f'{name}-native-o{level}'
+                    sentinel = b'existing iterator output\x00'; output.write_bytes(sentinel)
+                    command = [str(COMPILER), str(path), f'-O{level}', '-o', str(output)]
+                    results = [subprocess.run(command, cwd=self.work, env=self.env,
+                                              capture_output=True, text=True, timeout=60) for _ in range(2)]
+                    for result in results:
+                        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                        self.assertEqual(re.findall(r':\d+:\d+: E_[A-Z_]+:', result.stderr),
+                                         [f':{line}:{column}: {code}:'], result.stderr)
+                    self.assertEqual(results[0].stderr, results[1].stderr)
+                    self.assertEqual(output.read_bytes(), sentinel)

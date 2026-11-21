@@ -64,19 +64,6 @@ class MiniOSTargetTests(unittest.TestCase):
         self.assertNotRegex(assembly, r"\bsyscall\b")
         self.assertRegex(assembly, r"int\s+\$0x80")
 
-    def test_vm_keeps_virtual_linux_target_query(self):
-        with tempfile.TemporaryDirectory(prefix="krt-minios-vm-") as directory:
-            work = Path(directory)
-            (work / "input.krt").write_text("int32 main(){return __krt_target_minios()?1:42;}")
-            for platform in ("linux-x64", "minios-x64"):
-                with self.subTest(platform=platform):
-                    built = subprocess.run([str(self.compiler), "--platform", platform, "target", "vm",
-                        "input.krt", "-o", "program"], cwd=work, capture_output=True, text=True, timeout=90)
-                    self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
-                    result = subprocess.run([str(self.compiler), "run-vm", "program"], cwd=work,
-                        capture_output=True, text=True, timeout=30)
-                    self.assertEqual(result.returncode, 42, result.stdout + result.stderr)
-
     def test_unknown_or_missing_platform_is_diagnosed(self):
         for arguments in (["--platform"], ["--platform", "unknown-x64"]):
             with self.subTest(arguments=arguments):

@@ -35,7 +35,7 @@ int KrtBuildExecute(KrtBuildContext* ctx, const char* input_file, const char* ou
     }
 
     const char* ext = strrchr(input_file, '.');
-    if (!ext || (strcmp(ext, ".kro") != 0 && strcmp(ext, ".eo") != 0)) {
+    if (!ext || strcmp(ext, ".kro") != 0) {
         snprintf(ctx->error_message, sizeof(ctx->error_message), "Unsupported input format for native link: %s",
                  input_file);
         return 0;

@@ -7,13 +7,6 @@ from Test.SelfHost.test_native_optimizer import COMPILER, NativeCompilerFixture
 class StructValueTests(NativeCompilerFixture):
     def execute_value(self, source):
         self.execute(source)
-        path = self.work / 'aggregate-vm.krt'
-        path.write_text(source)
-        output = self.work / 'aggregate.vm'
-        self.command(path, 'target', 'vm', '-O2', '-o', output)
-        result = subprocess.run([str(COMPILER), 'run-vm', str(output)], cwd=self.work,
-                                env=self.env, capture_output=True, timeout=15)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_natural_alignment_nested_layout_and_inline_wide_fields(self):
         self.execute_value('''

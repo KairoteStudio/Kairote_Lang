@@ -20,7 +20,7 @@ class SymbolIndexTests(unittest.TestCase):
         self.env = dict(os.environ, PATH='')
         self.counter = 0
 
-    def check(self, sources, *, level, vm, code=None):
+    def check(self, sources, *, level, code=None):
         self.counter += 1
         paths = []
         for name, source in sources.items():
@@ -33,8 +33,6 @@ class SymbolIndexTests(unittest.TestCase):
             output.write_bytes(sentinel)
         command = [str(COMPILER), '--linker', str(LINKER), *map(str, paths),
                    f'-O{level}', '-o', str(output)]
-        if vm:
-            command += ['target', 'vm']
         result = subprocess.run(command, cwd=self.work, env=self.env,
                                 capture_output=True, text=True, timeout=60)
         detail = result.stdout + result.stderr + '\n' + '\n'.join(sources.values())
@@ -51,16 +49,14 @@ class SymbolIndexTests(unittest.TestCase):
             self.assertFalse(output.exists())
             return
         self.assertEqual(result.returncode, 0, detail)
-        argv = [str(COMPILER), 'run-vm', str(output)] if vm else [str(output)]
-        executed = subprocess.run(argv, cwd=self.work, env=self.env,
+        executed = subprocess.run([str(output)], cwd=self.work, env=self.env,
                                   capture_output=True, text=True, timeout=10)
         self.assertEqual(executed.returncode, 0, detail + executed.stdout + executed.stderr)
 
     def matrix(self, sources, *, code=None):
         for level in (0, 2):
-            for vm in (False, True):
-                with self.subTest(optimization=level, vm=vm, sources=tuple(sources), code=code):
-                    self.check(sources, level=level, vm=vm, code=code)
+            with self.subTest(optimization=level, sources=tuple(sources), code=code):
+                self.check(sources, level=level, code=code)
 
     @staticmethod
     def colliding_names():

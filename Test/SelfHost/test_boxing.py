@@ -349,17 +349,14 @@ class BoxingTests(NativeCompilerFixture):
     def execute_targets(self, name):
         path = self.work / (name + '.krt')
         path.write_text(POSITIVE_CASES[name], encoding='utf-8')
-        for target in ('native', 'vm'):
-            for level in range(4):
-                with self.subTest(program=name, target=target, optimization=level):
-                    output = self.work / f'{name}-{target}-o{level}'
-                    flags = ['target', 'vm'] if target == 'vm' else []
-                    self.command(path, f'-O{level}', *flags, '-o', output)
-                    argv = [str(COMPILER), 'run-vm', str(output)] if target == 'vm' else [str(output)]
-                    result = subprocess.run(argv, cwd=self.work, env=self.env, capture_output=True, timeout=15)
-                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                    self.assertEqual(result.stdout, b'')
-                    self.assertEqual(result.stderr, b'')
+        for level in range(4):
+            with self.subTest(program=name, optimization=level):
+                output = self.work / f'{name}-native-o{level}'
+                self.command(path, f'-O{level}', '-o', output)
+                result = subprocess.run([str(output)], cwd=self.work, env=self.env, capture_output=True, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(result.stdout, b'')
+                self.assertEqual(result.stderr, b'')
 
     def test_reject_invalid_implicit_boxing_borrow_and_reference_contracts(self):
         for name, (source, marker, code) in NEGATIVE_CASES.items():
@@ -368,26 +365,23 @@ class BoxingTests(NativeCompilerFixture):
             position = source.index(marker)
             line = source.count('\n', 0, position) + 1
             column = position - source.rfind('\n', 0, position)
-            for target in ('native', 'vm'):
-                for level in range(4):
-                    for previous in (None, b'previous box artifact\x00'):
-                        with self.subTest(program=name, target=target, optimization=level, existing=previous is not None):
-                            output = self.work / f'{name}-{target}-o{level}-{previous is not None}'
-                            if previous is not None:
-                                output.write_bytes(previous)
-                            flags = ['target', 'vm'] if target == 'vm' else []
-                            argv = [str(COMPILER), '--linker', str(LINKER), str(path), f'-O{level}', *flags, '-o', str(output)]
-                            first = subprocess.run(argv, cwd=self.work, env=self.env, capture_output=True, text=True, timeout=60)
-                            second = subprocess.run(argv, cwd=self.work, env=self.env, capture_output=True, text=True, timeout=60)
-                            self.assertEqual(first.returncode, 1, first.stdout + first.stderr)
-                            self.assertEqual(second.returncode, 1, second.stdout + second.stderr)
-                            self.assertEqual(first.stderr, second.stderr)
-                            self.assertEqual(re.findall(r':\d+:\d+: E_[A-Z_]+:', first.stderr), [f':{line}:{column}: {code}:'], first.stderr)
-                            if previous is None:
-                                self.assertFalse(output.exists())
-                            else:
-                                self.assertEqual(output.read_bytes(), previous)
-                            self.assertFalse(output.with_name(output.name + '.ebc').exists())
+            for level in range(4):
+                for previous in (None, b'previous box artifact\x00'):
+                    with self.subTest(program=name, optimization=level, existing=previous is not None):
+                        output = self.work / f'{name}-native-o{level}-{previous is not None}'
+                        if previous is not None:
+                            output.write_bytes(previous)
+                        argv = [str(COMPILER), '--linker', str(LINKER), str(path), f'-O{level}', '-o', str(output)]
+                        first = subprocess.run(argv, cwd=self.work, env=self.env, capture_output=True, text=True, timeout=60)
+                        second = subprocess.run(argv, cwd=self.work, env=self.env, capture_output=True, text=True, timeout=60)
+                        self.assertEqual(first.returncode, 1, first.stdout + first.stderr)
+                        self.assertEqual(second.returncode, 1, second.stdout + second.stderr)
+                        self.assertEqual(first.stderr, second.stderr)
+                        self.assertEqual(re.findall(r':\d+:\d+: E_[A-Z_]+:', first.stderr), [f':{line}:{column}: {code}:'], first.stderr)
+                        if previous is None:
+                            self.assertFalse(output.exists())
+                        else:
+                            self.assertEqual(output.read_bytes(), previous)
 
 
 def _case_test(name):

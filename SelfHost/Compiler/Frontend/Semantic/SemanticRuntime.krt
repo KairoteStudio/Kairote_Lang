@@ -790,7 +790,7 @@ KrtAbiSignature KrtModuleTypeSignature(KrtAstNode type, KrtAstNode module, int64
 
 // ===== Runtime type registration =====
 // Runtime records use exact semantic keys. Digests only shorten searches.
-// The same immutable bytes and relocations feed the native and VM backends.
+// The same immutable bytes and relocations feed the native backend.
 class KrtNativeRuntimeMethod {
     public KrtAbiBytes identity;
     public KrtAstNode target;

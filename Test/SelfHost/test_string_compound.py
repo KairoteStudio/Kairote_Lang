@@ -5,21 +5,11 @@ from Test.SelfHost.test_native_optimizer import COMPILER, NativeCompilerFixture
 
 
 class StringCompoundTests(NativeCompilerFixture):
-    def execute_vm_and_native(self, source):
+    def execute_native(self, source):
         self.execute(source)
-        path = self.work / 'string-update.krt'
-        path.write_text(source)
-        for level in range(4):
-            with self.subTest(vm_level=level):
-                output = self.work / f'string-update-o{level}.ebc'
-                self.command(path, 'target', 'vm', f'-O{level}', '-o', output)
-                result = subprocess.run([str(COMPILER), 'run-vm', str(output)],
-                                        cwd=self.work, env=self.env, capture_output=True,
-                                        timeout=15)
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_local_ref_null_alias_and_for_increment(self):
-        self.execute_vm_and_native('''
+        self.execute_native('''
 void Add(ref string text,string suffix){text+=suffix;}
 int32 main(){
     string text=null;text+="HTTP";string original=text;
@@ -32,7 +22,7 @@ int32 main(){
 ''')
 
     def test_struct_field_captures_old_value_before_rhs_mutation(self):
-        self.execute_vm_and_native('''
+        self.execute_native('''
 struct Response{public string text;}
 string Append(ref Response response){response.text="changed";return "!";}
 int32 main(){Response response=default(Response);response.text="ok";
@@ -42,7 +32,7 @@ int32 main(){Response response=default(Response);response.text="ok";
 ''')
 
     def test_receiver_index_rhs_each_evaluated_once_in_source_order(self):
-        self.execute_vm_and_native('''
+        self.execute_native('''
 class Headers{public string value="A";}
 Headers Target(Headers headers,ref int32 trace){trace=trace*10+1;return headers;}
 int32 Index(ref int32 trace){trace=trace*10+2;return 0;}
@@ -66,7 +56,7 @@ int32 main(){Headers headers=new Headers();int32 trace=0;
         for source in sources:
             path = self.work / 'invalid-string-update.krt'
             path.write_text(source)
-            for flags in (['-c'], ['target', 'vm']):
+            for flags in (['-c'],):
                 with self.subTest(source=source, flags=flags):
                     output = self.work / 'previous.artifact'
                     preserved = b'previous successful artifact\x00'

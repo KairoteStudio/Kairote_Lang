@@ -14,7 +14,7 @@ def main():
     args = parser.parse_args()
     project = ROOT / 'Re.KrtC'
     sources = re.findall(r'"([^"]+\.c)"', (project / 'build.zig').read_text())
-    includes = ['src', 'src/Core', 'src/Tools', 'src/Bytecode', 'Shared', 'StubInclude', 'vm']
+    includes = ['src', 'src/Core', 'src/Tools', 'Shared', 'StubInclude']
     command = [os.environ.get('CC', 'cc'), '-std=gnu11', '-O1', '-g', '-w',
                '-fsanitize=address,undefined', '-fno-omit-frame-pointer']
     command += ['-I' + str(project / path) for path in includes]

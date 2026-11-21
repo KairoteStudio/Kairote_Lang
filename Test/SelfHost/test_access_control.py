@@ -33,7 +33,7 @@ class AccessControlTests(unittest.TestCase):
         self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
         return result
 
-    def execute(self, source, *, files=None, extra=(), vm=False):
+    def execute(self, source, *, files=None, extra=()):
         self.counter += 1
         prefix = f'positive-{self.counter}'
         path = self.write(prefix + '.krt', source)
@@ -42,14 +42,11 @@ class AccessControlTests(unittest.TestCase):
             roots.append(self.write(name, text))
         output = self.work / prefix
         arguments = [*roots, '-O2', '-o', output, *extra]
-        if vm:
-            arguments += ['target', 'vm']
         self.command(*arguments)
-        argv = [str(COMPILER), 'run-vm', str(output)] if vm else [str(output)]
-        result = subprocess.run(argv, cwd=self.work, env=self.env, capture_output=True, text=True, timeout=10)
+        result = subprocess.run([str(output)], cwd=self.work, env=self.env, capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, source + '\n' + result.stdout + result.stderr)
 
-    def reject(self, source, *, code='E_ACCESS', label=None, files=None, extra=(), vm=False):
+    def reject(self, source, *, code='E_ACCESS', label=None, files=None, extra=()):
         self.counter += 1
         path = self.write(f'negative-{self.counter}.krt', source)
         roots = [path]
@@ -59,8 +56,6 @@ class AccessControlTests(unittest.TestCase):
         previous = b'previous valid artifact\x00must survive'
         output.write_bytes(previous)
         arguments = [*roots, '-O2', '-o', output, *extra]
-        if vm:
-            arguments += ['target', 'vm']
         result = self.command(*arguments, expected=1)
         self.assertIn(code, result.stderr)
         self.assertNotIn('E_PARSE', result.stderr, result.stderr)
@@ -346,16 +341,14 @@ int32 main(){return 0;}
             column=len(source[:offset].rsplit('\n',1)[-1])+1
             self.assertTrue(any(f'{path}:{line}:{column}:' in diagnostic for diagnostic in diagnostics),result.stderr)
 
-    def test_native_and_vm_apply_the_same_access_rules(self):
+    def test_native_applies_the_same_access_rules(self):
         source='''
 class Parent{protected int32 value=42;}class Child:Parent{private int32 Read(){return value;}public int32 Run(){return Read();}}
 int32 main(){Child item=new Child();if(item.Run()!=42){return 1;}delete item;return 0;}
 '''
-        for vm in (False,True):
-            with self.subTest(vm=vm):
-                self.execute(source,vm=vm)
-                self.reject('class Box{private int32 secret=42;}int32 main(){Box item=new Box();return item.secret;}',label='secret',vm=vm)
-                self.reject('class Box{public private int32 value;}int32 main(){return 0;}',code='E_MODIFIER',vm=vm)
+        self.execute(source)
+        self.reject('class Box{private int32 secret=42;}int32 main(){Box item=new Box();return item.secret;}',label='secret')
+        self.reject('class Box{public private int32 value;}int32 main(){return 0;}',code='E_MODIFIER')
 
     def test_existing_library_private_helpers_remain_callable_inside_owner(self):
         self.execute('''

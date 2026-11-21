@@ -8,16 +8,13 @@ class ContextualArgumentTests(NativeCompilerFixture):
     def execute_targets(self, source, name):
         path = self.work / (name + '.krt')
         path.write_text(source)
-        for target in ('native', 'vm'):
-            for level in range(4):
-                with self.subTest(target=target, level=level):
-                    output = self.work / f'{name}-{target}-{level}'
-                    flags = ['target', 'vm'] if target == 'vm' else []
-                    self.command(path, f'-O{level}', *flags, '-o', output)
-                    argv = [str(COMPILER), 'run-vm', str(output)] if target == 'vm' else [str(output)]
-                    result = subprocess.run(argv, cwd=self.work, env=self.env,
-                                            capture_output=True, timeout=15)
-                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for level in range(4):
+            with self.subTest(level=level):
+                output = self.work / f'{name}-native-{level}'
+                self.command(path, f'-O{level}', '-o', output)
+                result = subprocess.run([str(output)], cwd=self.work, env=self.env,
+                                        capture_output=True, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_numeric_literals_in_direct_indirect_and_constructor_parameters(self):
         self.execute_targets('''
@@ -124,22 +121,20 @@ int32 Select(float32[] values){return 0;}
         for name, statement in statements.items():
             path = self.work / (name + '.krt')
             path.write_text(prefix + 'int32 main(){unsafe(using krt.mem;){' + statement + 'return 0;}}')
-            for target in ('native', 'vm'):
-                for level in range(4):
-                    for previous in (None, b'original output must survive\x00'):
-                        with self.subTest(case=name, target=target, level=level,
-                                          previous=previous is not None):
-                            output = self.work / f'{name}-{target}-{level}-{previous is not None}'
-                            if previous is not None:
-                                output.write_bytes(previous)
-                            flags = ['target', 'vm'] if target == 'vm' else []
-                            result = subprocess.run([str(COMPILER), '--linker', str(LINKER), str(path),
-                                                     f'-O{level}', *flags, '-o', str(output)],
-                                                    cwd=self.work, env=self.env, capture_output=True,
-                                                    text=True, timeout=60)
-                            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-                            self.assertRegex(result.stderr, r':\d+:\d+: E_(LOWER|UNDEFINED_METHOD|WRITABLE_REF|NOT_NULLABLE):')
-                            if previous is None:
-                                self.assertFalse(output.exists())
-                            else:
-                                self.assertEqual(output.read_bytes(), previous)
+            for level in range(4):
+                for previous in (None, b'original output must survive\x00'):
+                    with self.subTest(case=name, level=level,
+                                      previous=previous is not None):
+                        output = self.work / f'{name}-native-{level}-{previous is not None}'
+                        if previous is not None:
+                            output.write_bytes(previous)
+                        result = subprocess.run([str(COMPILER), '--linker', str(LINKER), str(path),
+                                                 f'-O{level}', '-o', str(output)],
+                                                cwd=self.work, env=self.env, capture_output=True,
+                                                text=True, timeout=60)
+                        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                        self.assertRegex(result.stderr, r':\d+:\d+: E_(LOWER|UNDEFINED_METHOD|WRITABLE_REF|NOT_NULLABLE):')
+                        if previous is None:
+                            self.assertFalse(output.exists())
+                        else:
+                            self.assertEqual(output.read_bytes(), previous)

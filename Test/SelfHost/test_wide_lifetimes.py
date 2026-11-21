@@ -80,12 +80,6 @@ class WideLifetimeTests(native.NativeCompilerFixture):
                 result = subprocess.run([str(binary)], cwd=self.work, env=self.env,
                                         capture_output=True, timeout=15)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            with self.subTest(backend='vm', optimization=level):
-                path = self.work / f'wide-o{level}.krt'
-                path.write_text(source)
-                artifact = path.with_suffix('.ebc')
-                self.command(path, f'-O{level}', '--target', 'vm', '-o', artifact)
-                self.command('run-vm', artifact)
 
     def test_loop_wide_values_and_class_fields_hold_independent_values(self):
         self.verify(CASES['loop-values-and-class-fields'])
@@ -120,29 +114,20 @@ class WideLifetimeTests(native.NativeCompilerFixture):
             self.assertEqual(set(fields), {'VmRSS', 'VmSize'})
             return fields
 
-        for backend in ('native', 'vm'):
-            for level in (0, 2):
-                with self.subTest(backend=backend, optimization=level):
-                    if backend == 'native':
-                        binary, _ = self.compile(PRESSURE, level)
-                        argv = [str(binary)]
-                    else:
-                        path = self.work / f'wide-pressure-o{level}.krt'
-                        path.write_text(PRESSURE)
-                        artifact = path.with_suffix('.ebc')
-                        self.command(path, f'-O{level}', '--target', 'vm', '-o', artifact)
-                        argv = [str(native.COMPILER), '--linker', str(native.LINKER), 'run-vm', str(artifact)]
-                    process = subprocess.Popen(argv, cwd=self.work, env=self.env,
-                                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    try:
-                        marker(process, b'READY'); before = memory(process)
-                        process.stdin.write(b'x'); process.stdin.flush()
-                        marker(process, b'DONE'); after = memory(process)
-                        print(f'wide memory target={backend} O{level} before={before} after={after}')
-                        self.assertLessEqual(after['VmRSS']-before['VmRSS'], 16*1024*1024, (before, after))
-                        self.assertLessEqual(after['VmSize']-before['VmSize'], 16*1024*1024, (before, after))
-                        stdout, stderr = process.communicate(b'x', timeout=15)
-                        self.assertEqual(process.returncode, 0, stdout + stderr)
-                    finally:
-                        if process.poll() is None:
-                            process.kill(); process.communicate(timeout=15)
+        for level in (0, 2):
+            with self.subTest(optimization=level):
+                binary, _ = self.compile(PRESSURE, level)
+                process = subprocess.Popen([str(binary)], cwd=self.work, env=self.env,
+                                           stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                try:
+                    marker(process, b'READY'); before = memory(process)
+                    process.stdin.write(b'x'); process.stdin.flush()
+                    marker(process, b'DONE'); after = memory(process)
+                    print(f'wide memory O{level} before={before} after={after}')
+                    self.assertLessEqual(after['VmRSS']-before['VmRSS'], 16*1024*1024, (before, after))
+                    self.assertLessEqual(after['VmSize']-before['VmSize'], 16*1024*1024, (before, after))
+                    stdout, stderr = process.communicate(b'x', timeout=15)
+                    self.assertEqual(process.returncode, 0, stdout + stderr)
+                finally:
+                    if process.poll() is None:
+                        process.kill(); process.communicate(timeout=15)

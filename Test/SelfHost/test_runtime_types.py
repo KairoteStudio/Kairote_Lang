@@ -43,12 +43,6 @@ class RuntimeTypeTests(NativeCompilerFixture):
                 result = subprocess.run([str(binary)], cwd=self.work, env=self.env,
                                         capture_output=True, timeout=15)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            with self.subTest(backend='vm', optimization=level):
-                path = self.work / f'runtime-o{level}.krt'
-                path.write_text(source)
-                artifact = path.with_suffix('.ebc')
-                self.command(path, f'-O{level}', '--target', 'vm', '-o', artifact)
-                self.command('run-vm', artifact)
 
     def test_many_nullable_route_guards_preserve_reference_and_evaluation_rules(self):
         guards = '\n'.join(
@@ -94,35 +88,32 @@ int32 result=Validate(route,face,empty,zero);delete zero;delete route;return res
                 result[key] = int(found.group(1)) * 1024
             return result
 
-        for target in ('native', 'vm'):
-            for level in (0, 2):
-                with self.subTest(target=target, optimization=level):
-                    output = self.work / f'packet-lifetimes-{target}-o{level}'
-                    flags = ['--target', 'vm'] if target == 'vm' else []
-                    self.command(path, f'-O{level}', *flags, '-o', output)
-                    argv = [str(COMPILER), 'run-vm', str(output)] if target == 'vm' else [str(output)]
-                    process = subprocess.Popen(argv, cwd=self.work, env=self.env, stdin=subprocess.PIPE,
-                                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    try:
-                        marker(process, b'READY\n')
-                        before = memory(process)
-                        process.stdin.write(b'1')
-                        process.stdin.flush()
-                        marker(process, b'DONE\n')
-                        after = memory(process)
-                        print(f'exception packet memory target={target} O{level} before={before} after={after}')
-                        self.assertLessEqual(after['VmRSS'] - before['VmRSS'], 16 * 1024 * 1024, (before, after))
-                        self.assertLessEqual(after['VmSize'] - before['VmSize'], 32 * 1024 * 1024, (before, after))
-                        process.stdin.write(b'2')
-                        process.stdin.flush()
-                        stdout, stderr = process.communicate(timeout=15)
-                        self.assertEqual(process.returncode, 0, stdout + stderr)
-                        self.assertEqual(stdout, b'')
-                        self.assertEqual(stderr, b'')
-                    finally:
-                        if process.poll() is None:
-                            process.kill()
-                        process.communicate(timeout=3)
+        for level in (0, 2):
+            with self.subTest(optimization=level):
+                output = self.work / f'packet-lifetimes-native-o{level}'
+                self.command(path, f'-O{level}', '-o', output)
+                process = subprocess.Popen([str(output)], cwd=self.work, env=self.env, stdin=subprocess.PIPE,
+                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                try:
+                    marker(process, b'READY\n')
+                    before = memory(process)
+                    process.stdin.write(b'1')
+                    process.stdin.flush()
+                    marker(process, b'DONE\n')
+                    after = memory(process)
+                    print(f'exception packet memory O{level} before={before} after={after}')
+                    self.assertLessEqual(after['VmRSS'] - before['VmRSS'], 16 * 1024 * 1024, (before, after))
+                    self.assertLessEqual(after['VmSize'] - before['VmSize'], 32 * 1024 * 1024, (before, after))
+                    process.stdin.write(b'2')
+                    process.stdin.flush()
+                    stdout, stderr = process.communicate(timeout=15)
+                    self.assertEqual(process.returncode, 0, stdout + stderr)
+                    self.assertEqual(stdout, b'')
+                    self.assertEqual(stderr, b'')
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                    process.communicate(timeout=3)
 
     def test_checked_class_interface_and_null_references(self):
         self.verify('''

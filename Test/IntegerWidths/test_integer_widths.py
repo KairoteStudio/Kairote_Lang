@@ -230,7 +230,7 @@ int32 main() {
             path = Path(directory)
             source = path / "test.krt"
             source.write_text(f"int32 main() {{ uint128 n = {maximum}; return n == (uint128)-1 ? 0 : 1; }}")
-            for target in ("asm", "vm", "ir"):
+            for target in ("asm", "ir"):
                 with self.subTest(target=target):
                     output = path / ("test." + target)
                     result = subprocess.run(

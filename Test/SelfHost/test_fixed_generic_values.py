@@ -7,14 +7,6 @@ from Test.SelfHost.test_native_optimizer import COMPILER, NativeCompilerFixture
 class FixedGenericValueTests(NativeCompilerFixture):
     def execute_inline(self, source):
         self.execute(source)
-        path = self.work / 'fixed-generic.krt'
-        path.write_text(source)
-        output = self.work / 'fixed-generic.ebc'
-        self.command(path, 'target', 'vm', '-O2', '-o', output)
-        self.assertEqual(int.from_bytes(output.read_bytes()[4:6], 'little'), 6)
-        result = subprocess.run([str(COMPILER), 'run-vm', str(output)], cwd=self.work,
-                                env=self.env, capture_output=True, timeout=15)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_length_identity_value_parameters_refs_and_caller_owned_returns(self):
         self.execute_inline('''

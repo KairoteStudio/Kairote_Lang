@@ -2,7 +2,7 @@
 
 `--platform minios-x64` selects MiniOS; `linux-x64` retains Linux. A Linux-built compiler defaults to Linux; a
 MiniOS-built compiler defaults to MiniOS.
-The platform is independent of the artifact (`-c`, `target exe|ir|asm|vm|eo`).
+The platform is independent of the artifact (`-c`, `target exe|ir|asm|kro`).
 MiniOS native code uses `int 0x80`, argument four in RCX, EXIT=0, MMAP=49 and
 MUNMAP=50. Lowercase `syscall()` remains target-native: user numbers are not
 silently rewritten. `__krt_target_minios()` is a compile-time native-target

@@ -18,48 +18,43 @@ class SignatureCacheTests(NativeCompilerFixture):
 
     def execute_targets(self, name, files):
         directory, paths = self.write_sources(name, files)
-        for target in ('native', 'vm'):
-            for level in (0, 2):
-                with self.subTest(program=name, target=target, level=level):
-                    output = directory / f'program-{target}-o{level}'
-                    flags = ['target', 'vm'] if target == 'vm' else []
-                    self.command(*paths.values(), f'-O{level}', *flags, '-o', output)
-                    argv = [str(COMPILER), 'run-vm', str(output)] if target == 'vm' else [str(output)]
-                    result = subprocess.run(argv, cwd=self.work, env=self.env,
-                                            capture_output=True, timeout=15)
-                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                    self.assertEqual(result.stdout, b'')
+        for level in (0, 2):
+            with self.subTest(program=name, level=level):
+                output = directory / f'program-native-o{level}'
+                self.command(*paths.values(), f'-O{level}', '-o', output)
+                result = subprocess.run([str(output)], cwd=self.work, env=self.env,
+                                        capture_output=True, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(result.stdout, b'')
 
     def reject_targets(self, name, files, diagnostics):
         directory, paths = self.write_sources(name, files)
-        for target in ('native', 'vm'):
-            for level in (0, 2):
-                for previous in (None, b'published router\x00must survive a failed build'):
-                    with self.subTest(program=name, target=target, level=level,
-                                      previous_output=previous is not None):
-                        output = directory / f'program-{target}-o{level}-{previous is not None}'
-                        if previous is not None:
-                            output.write_bytes(previous)
-                        flags = ['target', 'vm'] if target == 'vm' else []
-                        result = subprocess.run([str(COMPILER), '--linker', str(LINKER),
-                                                 *map(str, paths.values()), f'-O{level}', *flags,
-                                                 '-o', str(output)], cwd=self.work, env=self.env,
-                                                capture_output=True, text=True, timeout=60)
-                        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-                        self.assertNotIn('E_PARSE', result.stderr)
-                        reported = re.findall(r':\d+:\d+: E_[A-Z_]+:', result.stderr)
-                        self.assertEqual(len(reported), len(diagnostics), result.stderr)
-                        for filename, marker, codes in diagnostics:
-                            source = files[filename]
-                            position = source.rindex(marker)
-                            line = source[:position].count('\n') + 1
-                            column = len(source[:position].rsplit('\n', 1)[-1]) + 1
-                            prefix = re.escape(f'{paths[filename]}:{line}:{column}: ')
-                            self.assertRegex(result.stderr, prefix + '(?:' + '|'.join(codes) + '):')
-                        if previous is None:
-                            self.assertFalse(output.exists(), 'a rejected source created an artifact')
-                        else:
-                            self.assertEqual(output.read_bytes(), previous)
+        for level in (0, 2):
+            for previous in (None, b'published router\x00must survive a failed build'):
+                with self.subTest(program=name, level=level,
+                                  previous_output=previous is not None):
+                    output = directory / f'program-native-o{level}-{previous is not None}'
+                    if previous is not None:
+                        output.write_bytes(previous)
+                    result = subprocess.run([str(COMPILER), '--linker', str(LINKER),
+                                             *map(str, paths.values()), f'-O{level}',
+                                             '-o', str(output)], cwd=self.work, env=self.env,
+                                            capture_output=True, text=True, timeout=60)
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertNotIn('E_PARSE', result.stderr)
+                    reported = re.findall(r':\d+:\d+: E_[A-Z_]+:', result.stderr)
+                    self.assertEqual(len(reported), len(diagnostics), result.stderr)
+                    for filename, marker, codes in diagnostics:
+                        source = files[filename]
+                        position = source.rindex(marker)
+                        line = source[:position].count('\n') + 1
+                        column = len(source[:position].rsplit('\n', 1)[-1]) + 1
+                        prefix = re.escape(f'{paths[filename]}:{line}:{column}: ')
+                        self.assertRegex(result.stderr, prefix + '(?:' + '|'.join(codes) + '):')
+                    if previous is None:
+                        self.assertFalse(output.exists(), 'a rejected source created an artifact')
+                    else:
+                        self.assertEqual(output.read_bytes(), previous)
 
     def test_file_private_router_records_keep_their_original_layouts_and_names(self):
         self.execute_targets('file-private-records', {

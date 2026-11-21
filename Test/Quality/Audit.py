@@ -34,7 +34,7 @@ def main():
         def check(item):
             index, compiler, source = item
             includes = [ROOT / "ArkLink/include"] if "ArkLink" in source.parts else [
-                ROOT / "Re.KrtC" / name for name in ("src", "src/Core", "src/Tools", "src/Bytecode", "Shared", "StubInclude", "vm")]
+                ROOT / "Re.KrtC" / name for name in ("src", "src/Core", "src/Tools", "Shared", "StubInclude")]
             alignment = "-Wcast-align" if "clang" in compiler else "-Wcast-align=strict"
             flags = ["-std=gnu11", "-O2", "-Wall", "-Wextra", "-Wformat=2", "-Wshadow", "-Wundef", alignment]
             command = [compiler, *flags, *["-I" + str(path) for path in includes], "-c", str(source), "-o", f"{directory}/{index}.o"]

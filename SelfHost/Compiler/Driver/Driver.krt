@@ -203,7 +203,6 @@ bool KrtDriverAbiValidate(KrtDriverPath objects){return KrtDriverAbiCheckContrac
 static int32 KrtDriverArtifactTarget = 0;
 // Output ABI is independent of the platform running this compiler.
 static int32 KrtDriverPlatformTarget = 0;
-static KrtDriverBuffer KrtDriverLastVm = null;
 
 bool KrtArtifactText(int64 descriptor, string text) {
     return KrtDriverWriteAll(descriptor,(int64)text,KrtDriverStringLength((int64)text));
@@ -374,7 +373,7 @@ class KrtDriverOptions {
     public bool optimization_set;
     public int32 target;
     public bool target_set;
-    public bool eo_executable;
+    public bool kro_executable;
     public bool keep_temp;
     public bool show_ir;
 }
@@ -383,7 +382,7 @@ bool KrtDriverWord(int64 word, string expected) { return KrtDriverStringEqual(wo
 
 bool KrtDriverProjectCommand(int64 word) {
     return KrtDriverWord(word,"new") || KrtDriverWord(word,"build") || KrtDriverWord(word,"check") ||
-        KrtDriverWord(word,"clean") || KrtDriverWord(word,"project-info") || KrtDriverWord(word,"run-vm");
+        KrtDriverWord(word,"clean") || KrtDriverWord(word,"project-info");
 }
 
 bool KrtDriverParseArguments(KrtDriverPath arguments, KrtDriverOptions options) {
@@ -405,7 +404,7 @@ bool KrtDriverParseArguments(KrtDriverPath arguments, KrtDriverOptions options) 
         if (!literal && (KrtDriverWord(word,"version") || KrtDriverWord(word,"--version"))) { options.version = true; arguments = arguments.next; continue; }
         if (!literal && (KrtDriverWord(word,"--show-ir") || KrtDriverWord(word,"--ir"))) { options.show_ir = true; arguments = arguments.next; continue; }
         if (!literal && KrtDriverWord(word,"--keep-temp")) { options.keep_temp = true; arguments = arguments.next; continue; }
-        if (!literal && (KrtDriverWord(word,"-c") || KrtDriverWord(word,"--object") || KrtDriverWord(word,"--emit-kro"))) { options.object_mode = true; options.target = 1; options.target_set = true; options.eo_executable = false; arguments = arguments.next; continue; }
+        if (!literal && (KrtDriverWord(word,"-c") || KrtDriverWord(word,"--object") || KrtDriverWord(word,"--emit-kro"))) { options.object_mode = true; options.target = 1; options.target_set = true; options.kro_executable = false; arguments = arguments.next; continue; }
         if (!literal && KrtDriverWord(word,"--check")) { options.check = true; arguments = arguments.next; continue; }
         if (!literal && KrtDriverWord(word,"--rebuild")) { options.rebuild = true; arguments = arguments.next; continue; }
         if (!literal && KrtDriverWord(word,"--list-sources")) { options.list_sources = true; arguments = arguments.next; continue; }
@@ -456,12 +455,11 @@ bool KrtDriverParseArguments(KrtDriverPath arguments, KrtDriverOptions options) 
                 }
             }
             if (target) {
-                options.target_set = true; options.object_mode = false; options.eo_executable = false;
+                options.target_set = true; options.object_mode = false; options.kro_executable = false;
                 if (KrtDriverWord(value,"exe")) { options.target = 0; }
-                else if (KrtDriverWord(value,"eo")) { options.target = 1; options.eo_executable = true; options.keep_temp = true; }
+                else if (KrtDriverWord(value,"kro")) { options.target = 1; options.kro_executable = true; options.keep_temp = true; }
                 else if (KrtDriverWord(value,"ir")) { options.target = 2; }
                 else if (KrtDriverWord(value,"asm")) { options.target = 3; }
-                else if (KrtDriverWord(value,"vm")) { options.target = 4; }
                 else { KrtDriverError("E_OPTION",(string)KrtDriverConcat((int64)"unknown target type: ",value)); return false; }
             }
             arguments = arguments.next; continue;
@@ -491,7 +489,7 @@ int32 KrtDriverJobs(int64 value) {
 }
 
 void KrtDriverUsage() {
-    KrtDriverPrint("Usage: KrtProject [options] source.krt ...\n       KrtProject new TYPE DIRECTORY [--name NAME]\n       KrtProject build|check|clean [PROJECT] [--config NAME]\n       KrtProject run-vm BYTECODE\n\nhelp / --help    version / --version\n-O0 / -O1 / -O2 / -O3  Optimization level, default -O2\ntarget exe|ir|asm|vm|eo   -o / output PATH   -c Emit KRO object\n-j N / --jobs N  Parallel project compilation, default 8\n--keep-temp  Preserve intermediate files    --show-ir / --ir\n--check  Validate only    -I PATH  Module directory\n--linker PATH    --compiler PATH    --rebuild\n--platform linux-x64|minios-x64  Native output syscall ABI\n");
+    KrtDriverPrint("Usage: KrtProject [options] source.krt ...\n       KrtProject new TYPE DIRECTORY [--name NAME]\n       KrtProject build|check|clean [PROJECT] [--config NAME]\n\nhelp / --help    version / --version\n-O0 / -O1 / -O2 / -O3  Optimization level, default -O2\ntarget exe|ir|asm|kro   -o / output PATH   -c Emit KRO object\n-j N / --jobs N  Parallel project compilation, default 8\n--keep-temp  Preserve intermediate files    --show-ir / --ir\n--check  Validate only    -I PATH  Module directory\n--linker PATH    --compiler PATH    --rebuild\n--platform linux-x64|minios-x64  Native output syscall ABI\n");
 }
 bool KrtDriverIsProjectPath(int64 path) {
     if (KrtDriverIsDirectory(path)) { return true; }
@@ -516,10 +514,6 @@ int32 KrtDriverMain() {
     }
     if (options.version) { KrtDriverPrint("Kairote Lang Compiler Version: 0.00.0006cc (SelfHost native)\n"); return 0; }
     if (options.command != 0) {
-        if (KrtDriverWord(options.command,"run-vm")) {
-            if (options.sources == null || options.sources.next != null) { KrtDriverError("E_OPTION","run-vm expects one bytecode path"); return 1; }
-            return KrtVmRun(KrtDriverAbsolutePath(options.sources.value));
-        }
         if ((KrtDriverWord(options.command,"build") || KrtDriverWord(options.command,"check")) && options.sources != null && !KrtDriverIsProjectPath(options.sources.value)) {
             options.check = KrtDriverWord(options.command,"check"); return KrtDriverCompile(options);
         }

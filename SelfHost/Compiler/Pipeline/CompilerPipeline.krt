@@ -511,7 +511,7 @@ bool KrtCompileNativeSourceModeCoreRun(string source, int32 source_length, KrtKr
         else { KrtDiagnostic("E_LOWER", 7, native_module.error_start); }
         return false;
     }
-    if (library_mode && KrtDriverArtifactTarget != 2 && KrtDriverArtifactTarget != 4 &&
+    if (library_mode && KrtDriverArtifactTarget != 2 &&
         (KrtKroLibraryStaticData(native_module,unit)||native_module.function_count==0)) {
         if(!KrtKroEmitLibrarySections(native_module,unit,lexer.source,output)){KrtDiagnostic("E_LIBRARY_DATA",14,unit.start);return false;}
         return KrtKroModuleMetadata(unit,lexer.source,output);
@@ -522,11 +522,6 @@ bool KrtCompileNativeSourceModeCoreRun(string source, int32 source_length, KrtKr
     if (native_module.ssa == null || !KrtSsaOptimize(native_module.ssa,KrtDriverOptimization)) { KrtDiagnostic("E_SSA",5,0); return false; }
     KrtDriverLastModule = native_module;
     if (KrtDriverArtifactTarget == 2) { return true; }
-    if (KrtDriverArtifactTarget == 4) {
-        KrtDriverLastVm = new KrtDriverBuffer();
-        if (!KrtVmEmit(native_module,KrtDriverLastVm)) { KrtDiagnostic("E_VM", 4, 0); return false; }
-        return true;
-    }
     KrtCurrentDiagnostics.stage = KrtDiagnosticStage.Backend;
     if (!KrtKroEmitNativeModule(native_module, output)) { KrtDiagnostic("E_EMIT", 6, 0); return false; }
     if (!KrtKroLibraryFunctions(native_module, unit, lexer.source, output)) { KrtDiagnostic("E_LIBRARY_SYMBOL", 16, 0); return false; }
