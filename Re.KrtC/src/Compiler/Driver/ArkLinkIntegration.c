@@ -214,8 +214,9 @@ int KrtArkLinkLoadProjectLibraries(KrtArkLinkContext* ctx, KrtConfig* config) {
     }
 
     char base_dir[KRT_MAX_PATH] = "";
-    if (config && config->input_file && config->input_file[0] != '\0') {
-        char* dir = KrtGetDirectory(config->input_file);
+    KrtConfig* effective_config = config ? config : ctx->config;
+    if (effective_config && effective_config->input_file && effective_config->input_file[0] != '\0') {
+        char* dir = KrtGetDirectory(effective_config->input_file);
         if (dir) {
             if (strlen(dir) > 0 && strcmp(dir, ".") != 0) {
                 KRT_STRNCPY(base_dir, dir, sizeof(base_dir));
