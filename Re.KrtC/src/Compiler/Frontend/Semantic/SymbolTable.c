@@ -417,87 +417,10 @@ bool symbol_table_query_var_type(SymbolTable* table, const char* name, KrtTokenT
     return true;
 }
 
-void symbol_table_mark_defined(SymbolTable* table, const char* name, int line) {
-    if (!table || !name) {
-        return;
-    }
 
-    SymbolEntry* sym = symbol_table_lookup(table, name);
-    if (sym) {
-        sym->state = SYMBOL_DEFINED;
-        sym->definition_line = line;
-    }
-}
 
-void symbol_table_check_undefined(SymbolTable* table) {
-    if (!table) {
-        return;
-    }
 
-    for (int i = 0; i < table->hash_size; i++) {
-        SymbolEntry* sym = table->hash_table[i];
-        while (sym) {
-            if (sym->state == SYMBOL_DECLARED) {
-                symbol_table_add_error(table, "符号 '%s' 已声明但未定义", sym->name);
-            }
-            sym = sym->next;
-        }
-    }
-}
 
-bool symbol_table_check_entry_point_conflict(SymbolTable* table) {
-    if (!table) {
-        return false;
-    }
-
-    int entry_count = 0;
-
-    for (int i = 0; i < table->hash_size; i++) {
-        SymbolEntry* sym = table->hash_table[i];
-        while (sym) {
-            if (sym->is_entry_point) {
-                entry_count++;
-            }
-            sym = sym->next;
-        }
-    }
-
-    if (entry_count > 1) {
-        symbol_table_add_error(table, "发现多个入口点（main函数）");
-        return true;
-    }
-
-    return false;
-}
-
-SymbolEntry* symbol_table_get_entry_point(SymbolTable* table) {
-    if (!table) {
-        return NULL;
-    }
-
-    for (int i = 0; i < table->hash_size; i++) {
-        SymbolEntry* sym = table->hash_table[i];
-        while (sym) {
-            if (sym->is_entry_point && strcmp(sym->name, "main") == 0) {
-                return sym;
-            }
-            sym = sym->next;
-        }
-    }
-
-    return NULL;
-}
-
-void symbol_table_set_entry_point(SymbolTable* table, const char* name) {
-    if (!table || !name) {
-        return;
-    }
-
-    SymbolEntry* sym = symbol_table_lookup(table, name);
-    if (sym && sym->type == SYMBOL_FUNCTION) {
-        sym->is_entry_point = true;
-    }
-}
 
 const char* symbol_type_to_string(SymbolType type) {
     switch (type) {
@@ -535,42 +458,6 @@ const char* symbol_state_to_string(SymbolState state) {
     }
 }
 
-void symbol_table_print_stats(SymbolTable* table) {
-    if (!table) {
-        return;
-    }
-
-    printf("符号表统计信息:\n");
-    printf("  总符号数: %d\n", table->symbol_count);
-    printf("  错误数: %d\n", table->error_count);
-    printf("  当前作用域层级: %d\n", table->current_scope->scope_level);
-
-    int var_count = 0, func_count = 0, type_count = 0, label_count = 0;
-    for (int i = 0; i < table->hash_size; i++) {
-        SymbolEntry* sym = table->hash_table[i];
-        while (sym) {
-            switch (sym->type) {
-            case SYMBOL_VARIABLE:
-                var_count++;
-                break;
-            case SYMBOL_FUNCTION:
-                func_count++;
-                break;
-            case SYMBOL_TYPE:
-                type_count++;
-                break;
-            case SYMBOL_LABEL:
-                label_count++;
-                break;
-            default:
-                break;
-            }
-            sym = sym->next;
-        }
-    }
-
-    printf("  变量: %d, 函数: %d, 类型: %d, 标签: %d\n", var_count, func_count, type_count, label_count);
-}
 
 void symbol_table_add_error(SymbolTable* table, const char* format, ...) {
     if (!table || !format) {
@@ -581,61 +468,19 @@ void symbol_table_add_error(SymbolTable* table, const char* format, ...) {
     va_start(args, format);
 
     char buffer[1024];
-    vsnprintf(buffer, sizeof(buffer), format, args);
+    int written = vsnprintf(buffer, sizeof(buffer), format, args);
 
     va_end(args);
+    if (written < 0) {
+        buffer[0] = '\0';
+    }
 
     KrtError("符号表错误: %s", buffer);
     table->error_count++;
 }
 
-int symbol_table_get_error_count(SymbolTable* table) {
-    return table ? table->error_count : 0;
-}
 
-void symbol_table_define_namespace(SymbolTable* table, const char* namespace_name) {
-    if (!table || !namespace_name) {
-        return;
-    }
 
-    SymbolEntry* existing = symbol_table_lookup(table, namespace_name);
-    if (existing) {
-        symbol_table_add_error(table, "Namespace '%s' already defined", namespace_name);
-        return;
-    }
-
-    SymbolEntry* ns_entry = symbol_table_define(table, namespace_name, SYMBOL_NAMESPACE, 0, NULL);
-    if (ns_entry) {
-        ns_entry->nested_table = symbol_table_create();
-    }
-}
-
-SymbolEntry* symbol_table_lookup_in_namespace(SymbolTable* table, const char* namespace_name, const char* symbol_name) {
-    if (!table || !namespace_name || !symbol_name) {
-        return NULL;
-    }
-
-    SymbolEntry* namespace_entry = symbol_table_lookup(table, namespace_name);
-    if (!namespace_entry) {
-        symbol_table_add_error(table, "Namespace or class '%s' not found", namespace_name);
-        return NULL;
-    }
-
-    if (namespace_entry->type != SYMBOL_NAMESPACE && namespace_entry->type != SYMBOL_CLASS) {
-        symbol_table_add_error(table, "'%s' is not a namespace or class", namespace_name);
-        return NULL;
-    }
-
-    if (namespace_entry->nested_table) {
-        SymbolEntry* found = symbol_table_lookup(namespace_entry->nested_table, symbol_name);
-        if (found) {
-            return found;
-        }
-    }
-
-    SymbolEntry* global_found = symbol_table_lookup(table, symbol_name);
-    return global_found;
-}
 
 struct SymbolScope* symbol_table_enter_nested_scope(SymbolTable* table, SymbolEntry* entry) {
     if (!table || !entry) {
@@ -644,10 +489,15 @@ struct SymbolScope* symbol_table_enter_nested_scope(SymbolTable* table, SymbolEn
 
     if (!entry->nested_table) {
         entry->nested_table = symbol_table_create();
+        if (!entry->nested_table) {
+            return NULL;
+        }
     }
-
     if (!entry->nested_table->current_scope) {
         symbol_table_push_scope(entry->nested_table);
+    }
+    if (!entry->nested_table->current_scope) {
+        return NULL;
     }
 
     SymbolScope* previous = table->current_scope;
@@ -662,4 +512,43 @@ void symbol_table_exit_nested_scope(SymbolTable* table, SymbolScope* previous_sc
     if (previous_scope) {
         table->current_scope = previous_scope;
     }
+}
+
+void symbol_table_check_undefined(SymbolTable* table) {
+    if (!table) {
+        return;
+    }
+    for (int i = 0; i < table->hash_size; i++) {
+        SymbolEntry* sym = table->hash_table[i];
+        while (sym) {
+            if (sym->state == SYMBOL_DECLARED) {
+                symbol_table_add_error(table, "符号 '%s' 已声明但未定义", sym->name);
+            }
+            sym = sym->next;
+        }
+    }
+}
+
+SymbolEntry* symbol_table_lookup_in_namespace(SymbolTable* table, const char* namespace_name, const char* symbol_name) {
+    if (!table || !namespace_name || !symbol_name) {
+        return NULL;
+    }
+
+    SymbolEntry* namespace_entry = symbol_table_lookup(table, namespace_name);
+    if (!namespace_entry) {
+        symbol_table_add_error(table, "Namespace or class '%s' not found", namespace_name);
+        return NULL;
+    }
+    if (namespace_entry->type != SYMBOL_NAMESPACE && namespace_entry->type != SYMBOL_CLASS) {
+        symbol_table_add_error(table, "'%s' is not a namespace or class", namespace_name);
+        return NULL;
+    }
+
+    if (namespace_entry->nested_table) {
+        SymbolEntry* found = symbol_table_lookup(namespace_entry->nested_table, symbol_name);
+        if (found) {
+            return found;
+        }
+    }
+    return symbol_table_lookup(table, symbol_name);
 }

@@ -74,18 +74,11 @@ SymbolEntry* symbol_table_lookup_current_scope(SymbolTable* table, const char* n
 SymbolEntry* symbol_table_lookup_scope_chain(SymbolTable* table, const char* name);
 bool symbol_table_query_var_type(SymbolTable* table, const char* name, KrtTokenType* out_value_type,
                                  bool* out_is_array);
-void symbol_table_mark_defined(SymbolTable* table, const char* name, int line);
 void symbol_table_check_undefined(SymbolTable* table);
-bool symbol_table_check_entry_point_conflict(SymbolTable* table);
-SymbolEntry* symbol_table_get_entry_point(SymbolTable* table);
-void symbol_table_set_entry_point(SymbolTable* table, const char* name);
+SymbolEntry* symbol_table_lookup_in_namespace(SymbolTable* table, const char* namespace_name, const char* symbol_name);
 const char* symbol_type_to_string(SymbolType type);
 const char* symbol_state_to_string(SymbolState state);
-void symbol_table_print_stats(SymbolTable* table);
 void symbol_table_add_error(SymbolTable* table, const char* format, ...) KRT_PRINTF_FORMAT(2, 3);
-int symbol_table_get_error_count(SymbolTable* table);
-void symbol_table_define_namespace(SymbolTable* table, const char* namespace_name);
-SymbolEntry* symbol_table_lookup_in_namespace(SymbolTable* table, const char* namespace_name, const char* symbol_name);
 struct SymbolScope* symbol_table_enter_nested_scope(struct SymbolTable* table, struct SymbolEntry* entry);
 void symbol_table_exit_nested_scope(struct SymbolTable* table, struct SymbolScope* previous_scope);
 
