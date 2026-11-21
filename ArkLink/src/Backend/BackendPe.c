@@ -1281,10 +1281,9 @@ ArkLinkResult ark_backend_pe_link(ArkLinkContext* ctx, ArkBackendInput* input, A
         opt->DataDirectory[PE_DD_IMPORT].VirtualAddress = idata_rva;
         opt->DataDirectory[PE_DD_IMPORT].Size = (uint32_t)import_data_size;
 
-        /* 疑似遗留（BackendPe-42/-43）：减 1 的 IAT Size 口径、多 module 时取第一个
-         * IAT RVA 是否符合 Windows 加载器预期，尚未在本机验证。 */
-        uint64_t iat_entries = import_iat_total_entries > 0 ? import_iat_total_entries - 1 : 0;
-        uint64_t iat_size = iat_entries * sizeof(PE_IMPORT_LOOKUP_ENTRY);
+        /* The import builder reserves one IAT slot per import plus one
+         * terminator per module; the data directory describes that array. */
+        uint64_t iat_size = import_iat_total_entries * sizeof(PE_IMPORT_LOOKUP_ENTRY);
         if (iat_size > UINT32_MAX) {
             fprintf(stderr, "ArkLink: IAT directory size exceeds 32 bits\n");
             goto pe_link_fail_output;

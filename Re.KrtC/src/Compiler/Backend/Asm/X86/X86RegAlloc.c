@@ -216,9 +216,11 @@ void liveness_analysis_run(LivenessAnalysis* analysis, KrtIRFunction* func) {
         }
 
         int* def_pos = (int*)backend_allocate(temp_capacity * sizeof(int));
+        int* first_use_pos = (int*)backend_allocate(temp_capacity * sizeof(int));
         int* last_use_pos = (int*)backend_allocate(temp_capacity * sizeof(int));
 
         memset(def_pos, -1, temp_capacity * sizeof(int));
+        memset(first_use_pos, -1, temp_capacity * sizeof(int));
         memset(last_use_pos, -1, temp_capacity * sizeof(int));
 
         KrtIRBasicBlock* scan_block = func->entry_block;
@@ -242,6 +244,9 @@ void liveness_analysis_run(LivenessAnalysis* analysis, KrtIRFunction* func) {
                     if (inst->operands[i].type == KRT_IR_VALUE_TEMP || inst->operands[i].type == KRT_IR_VALUE_ARG) {
                         int temp_idx = inst->operands[i].data.index;
                         if (temp_idx >= 0 && temp_idx < temp_capacity) {
+                            if (first_use_pos[temp_idx] < 0) {
+                                first_use_pos[temp_idx] = global_inst_idx;
+                            }
                             last_use_pos[temp_idx] = global_inst_idx;
                         }
                     }
@@ -263,13 +268,23 @@ void liveness_analysis_run(LivenessAnalysis* analysis, KrtIRFunction* func) {
                     continue;
                 }
 
-                if (dpos <= i && i <= lupos) {
+                /* A loop can use a temp before its definition in linear order
+                 * (loop-carried value). Cover the whole span, including uses
+                 * before the definition, so interference is never lost. */
+                int start = dpos;
+                int end = lupos > dpos ? lupos : dpos;
+                if (first_use_pos[temp_idx] >= 0 && first_use_pos[temp_idx] < start) {
+                    start = first_use_pos[temp_idx];
+                }
+
+                if (start <= i && i <= end) {
                     liveness_add(&analysis->inst_live[i], temp_idx);
                 }
             }
         }
 
         KRT_FREE(def_pos);
+        KRT_FREE(first_use_pos);
         KRT_FREE(last_use_pos);
     }
 }

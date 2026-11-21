@@ -1885,7 +1885,11 @@ static ArkLinkResult elf_write_contents(ElfLinkState* state) {
             }
             size_t hash_nchain = 1 + state->input->import_count + hash_export_func_count;
             uint8_t* hash_data = state->out_buf + elf_meta_offset(state, state->hash_shidx);
-            uint32_t hash_header[3] = {(uint32_t)hash_nbuckets, (uint32_t)hash_nchain, 0};
+            /* Layout: nbucket, nchain, bucket[nbucket], chain[nchain]. With one
+             * bucket the chain must start at the first real dynsym (index 1);
+             * a zero head would make every lookup miss. */
+            uint32_t hash_head = hash_nchain > 1 ? 1 : 0;
+            uint32_t hash_header[3] = {(uint32_t)hash_nbuckets, (uint32_t)hash_nchain, hash_head};
             memcpy(hash_data, hash_header, sizeof(hash_header));
             for (size_t i = 0; i < hash_nchain; i++) {
                 uint32_t chain = (uint32_t)((i + 1) % hash_nchain);
