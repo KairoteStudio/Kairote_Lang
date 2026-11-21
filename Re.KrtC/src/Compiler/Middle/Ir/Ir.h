@@ -380,6 +380,7 @@ struct KrtIRBuilder {
         const char* ir_name;
         int token;
         int is_array;
+        int unmanaged; /* array view over a caller-supplied buffer: no length header */
     }* var_types;
     int var_type_count;
     int var_type_capacity;
@@ -492,6 +493,8 @@ KrtIRGlobal* KrtIrModuleFindGlobal(KrtIRModule* module, const char* name);
 void KrtIrModuleSetGlobalNumberInitializer(KrtIRGlobal* global, double value);
 void KrtIrVarTypePush(KrtIRBuilder* builder, const char* name, int token, int is_array);
 int KrtIrVarTypeFind(KrtIRBuilder* builder, const char* name, int* out_token, int* out_is_array);
+void KrtIrVarTypeMarkUnmanaged(KrtIRBuilder* builder, const char* name);
+int KrtIrVarTypeIsUnmanaged(KrtIRBuilder* builder, const char* name);
 const char* KrtIrVarTypeResolveIRName(KrtIRBuilder* builder, const char* name);
 void KrtIrVarTypeTruncate(KrtIRBuilder* builder, int count);
 

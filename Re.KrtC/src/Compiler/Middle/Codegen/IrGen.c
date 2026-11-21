@@ -121,8 +121,31 @@ static int irgen_array_element_size(KrtIRBuilder* builder, ASTNode* array_expr) 
     return irgen_size_from_token(irgen_array_element_type(builder, array_expr));
 }
 
+/* Only compiler-allocated arrays carry a length header before the data.  A
+ * view over a caller-supplied buffer (`(T[])ptr`) does not, so reading that
+ * header would fault. */
+static int irgen_array_is_managed(KrtIRBuilder* builder, ASTNode* expr) {
+    if (!expr) {
+        return 1;
+    }
+    if (expr->type == AST_CAST_EXPRESSION) {
+        return 0;
+    }
+    if (expr->type == AST_IDENTIFIER) {
+        return !KrtIrVarTypeIsUnmanaged(builder, expr->data.identifier_name);
+    }
+    if (expr->type == AST_TERNARY_OPERATION) {
+        return irgen_array_is_managed(builder, expr->data.ternary_op.true_value) &&
+               irgen_array_is_managed(builder, expr->data.ternary_op.false_value);
+    }
+    return 1;
+}
+
 static KrtIRValue irgen_checked_array_index(KrtIRBuilder* builder, KrtIRValue base, KrtIRValue index,
                                             ASTNode* array_expr, ASTNode* index_expr) {
+    if (!irgen_array_is_managed(builder, array_expr)) {
+        return KrtIrCast(builder, index, TOKEN_UINT64);
+    }
     if (irgen_array_expression_element_type(builder, array_expr) == TOKEN_EOF) {
         return KrtIrCast(builder, index, TOKEN_UINT64);
     }
@@ -2926,6 +2949,12 @@ static void irgen_stmt_try_statement(KrtIRBuilder* builder, ASTNode* stmt) {
 static void irgen_stmt_variable_declaration(KrtIRBuilder* builder, ASTNode* stmt) {
     KrtIrVarTypePush(builder, stmt->data.variable_decl.name, (int)stmt->data.variable_decl.type,
                      (stmt->data.variable_decl.is_array || stmt->data.variable_decl.array_size) ? 1 : 0);
+    if ((stmt->data.variable_decl.is_array || stmt->data.variable_decl.array_size) &&
+        stmt->data.variable_decl.value && !irgen_array_is_managed(builder, stmt->data.variable_decl.value)) {
+        /* The initializer is a view over caller memory, not a compiler-built
+         * array, so there is no length header to bounds-check against. */
+        KrtIrVarTypeMarkUnmanaged(builder, stmt->data.variable_decl.name);
+    }
 
     const char* ir_slot = KrtIrVarTypeResolveIRName(builder, stmt->data.variable_decl.name);
     bool is_c_style_array = (stmt->data.variable_decl.array_size != NULL);

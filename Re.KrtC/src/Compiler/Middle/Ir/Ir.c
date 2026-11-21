@@ -1270,6 +1270,7 @@ void KrtIrVarTypePush(KrtIRBuilder* builder, const char* name, int token, int is
     v->name = KrtIrArenaStrdup(builder->arena, name);
     v->token = token;
     v->is_array = is_array;
+    v->unmanaged = 0;
     int collisions = 0;
     if (builder->current_function && builder->extensions) {
         /* Scope exit removes visible bindings, but their IR storage remains in
@@ -1356,6 +1357,30 @@ int KrtIrVarTypeFind(KrtIRBuilder* builder, const char* name, int* out_token, in
                 *out_is_array = builder->var_types[i].is_array;
             }
             return 1;
+        }
+    }
+    return 0;
+}
+
+void KrtIrVarTypeMarkUnmanaged(KrtIRBuilder* builder, const char* name) {
+    if (!builder || !name) {
+        return;
+    }
+    for (int i = builder->var_type_count - 1; i >= 0; i--) {
+        if (strcmp(builder->var_types[i].name, name) == 0) {
+            builder->var_types[i].unmanaged = 1;
+            return;
+        }
+    }
+}
+
+int KrtIrVarTypeIsUnmanaged(KrtIRBuilder* builder, const char* name) {
+    if (!builder || !name) {
+        return 0;
+    }
+    for (int i = builder->var_type_count - 1; i >= 0; i--) {
+        if (strcmp(builder->var_types[i].name, name) == 0) {
+            return builder->var_types[i].unmanaged;
         }
     }
     return 0;
