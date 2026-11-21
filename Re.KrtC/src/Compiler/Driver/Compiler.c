@@ -105,6 +105,13 @@ static bool module_has_native_pointers(KrtIRModule* module) {
 }
 
 static bool module_fits_kro_limits(KrtIRModule* module) {
+    /* The open-addressing table below lives on the stack; keep its size bounded. */
+    _Static_assert(KRT_KRO_MAX_LOCAL_VARS > 0 && KRT_KRO_MAX_LOCAL_VARS <= 4096,
+                   "KRO local limit must be positive and small enough for the stack table");
+    if (KRT_KRO_MAX_LOCAL_VARS <= 0 || KRT_KRO_MAX_TEMP_STORAGE <= 0) {
+        return false;
+    }
+
     for (KrtIRFunction* fn = module->functions; fn; fn = fn->next) {
         if (fn->param_count > KRT_KRO_MAX_ARGS) {
             KrtError("KRO function %s exceeds the %d parameter limit", fn->name, KRT_KRO_MAX_ARGS);

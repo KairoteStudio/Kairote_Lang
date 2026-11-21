@@ -976,7 +976,31 @@ static void emit_instruction(Emitter* em, KrtIRInst* inst) {
 
     case KRT_IR_CAST:
         if (inst->operand_count >= 1) {
-            emit_load_value(em, &inst->operands[0], "rax");
+            KrtIRValue* source = &inst->operands[0];
+            KrtTokenType dest_type = inst->result.value_type;
+            int source_bits = KrtTokenIntegerBits(source->value_type);
+            int dest_bits = KrtTokenIntegerBits(dest_type);
+            int source_float = source->value_type == TOKEN_FLOAT32 || source->value_type == TOKEN_FLOAT64;
+            int dest_float = dest_type == TOKEN_FLOAT32 || dest_type == TOKEN_FLOAT64;
+
+            emit_load_value(em, source, "rax");
+            if (source_float || dest_float) {
+                KrtError("X86 backend: floating-point casts are not supported");
+            } else if (dest_bits == 8) {
+                fprintf(em->output, KrtTokenIsUnsigned(dest_type) ? "    movzbl %%al, %%rax\n" : "    movsbl %%al, %%rax\n");
+            } else if (dest_bits == 16) {
+                fprintf(em->output, KrtTokenIsUnsigned(dest_type) ? "    movzwl %%ax, %%rax\n" : "    movswl %%ax, %%rax\n");
+            } else if (dest_bits == 32) {
+                fprintf(em->output, KrtTokenIsUnsigned(dest_type) ? "    movl %%eax, %%eax\n" : "    movslq %%eax, %%rax\n");
+            } else if (dest_bits == 64 && source_bits > 0 && source_bits < 64) {
+                if (source_bits == 8) {
+                    fprintf(em->output, KrtTokenIsUnsigned(source->value_type) ? "    movzbl %%al, %%rax\n"                                                                                                     : "    movsbl %%al, %%rax\n");
+                } else if (source_bits == 16) {
+                    fprintf(em->output, KrtTokenIsUnsigned(source->value_type) ? "    movzwl %%ax, %%rax\n"                                                                                                     : "    movswl %%ax, %%rax\n");
+                } else if (source_bits == 32) {
+                    fprintf(em->output, KrtTokenIsUnsigned(source->value_type) ? "    movl %%eax, %%eax\n"                                                                                                     : "    movslq %%eax, %%rax\n");
+                }
+            }
             emit_store_result(em, &inst->result, "rax");
         }
         break;
