@@ -4400,6 +4400,8 @@ static bool import_krt_file(SemanticAnalyzer* analyzer, const char* file_path) {
                                 ret_type = member->data.static_function_decl.return_type;
                             } else if (member->type == AST_FUNCTION_DECLARATION) {
                                 ret_type = member->data.function_decl.return_type;
+                            } else if (member->type == AST_CONSTRUCTOR_DECLARATION) {
+                                ret_type = TOKEN_VOID;
                             }
 
                             const char* ns_path[2] = {class_name, NULL};
@@ -4419,11 +4421,12 @@ static bool import_krt_file(SemanticAnalyzer* analyzer, const char* file_path) {
                                 }
                                 KRT_FREE(key);
                             }
-                            char full_name[256];
-                            snprintf(full_name, sizeof(full_name), "%s__%s", class_name, mname);
-                            SymbolEntry* alias_sym =
-                                symbol_table_lookup_current_scope(analyzer->global_symbol_table, full_name);
-                            if (!alias_sym) {
+                            char* full_name = name_mangle_simple(class_name, mname);
+                            SymbolEntry* alias_sym = full_name
+                                                          ? symbol_table_lookup_current_scope(
+                                                                analyzer->global_symbol_table, full_name)
+                                                          : NULL;
+                            if (full_name && !alias_sym) {
                                 alias_sym = symbol_table_define(analyzer->global_symbol_table, full_name,
                                                                 SYMBOL_FUNCTION, 0, NULL);
                             }
@@ -4433,6 +4436,7 @@ static bool import_krt_file(SemanticAnalyzer* analyzer, const char* file_path) {
                                     analyzer->type_arena,
                                     (KrtSourceType){.token = TOKEN_FN, .function = member->function_type});
                             }
+                            KRT_FREE(full_name);
                             SymbolEntry* bare_sym =
                                 symbol_table_lookup_current_scope(analyzer->global_symbol_table, mname);
                             if (!bare_sym) {
@@ -4458,6 +4462,8 @@ static bool import_krt_file(SemanticAnalyzer* analyzer, const char* file_path) {
     imported_index = semantic_analyzer_find_imported_file(analyzer, file_path);
     if (imported_index >= 0) {
         analyzer->imported_source_failed[imported_index] = !success;
+    } else if (!success) {
+        semantic_analyzer_add_error(analyzer, "Using: imported source '%s' is not registered", file_path);
     }
     return success;
 }
