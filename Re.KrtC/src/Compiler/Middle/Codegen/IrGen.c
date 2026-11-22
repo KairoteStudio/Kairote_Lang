@@ -328,6 +328,7 @@ static KrtIRValue irgen_call_builtin_4args(KrtIRBuilder* builder, IrGenBuiltinFu
 }
 
 static KrtIRValue irgen_allocate_memory(KrtIRBuilder* builder, KrtIRValue size_val);
+static void irgen_ensure_exception_runtime(KrtIRBuilder* builder);
 static KrtIRValue irgen_mark_array_length(KrtIRBuilder* builder, KrtIRValue array, KrtIRValue length);
 
 static KrtIRValue irgen_expr_new_array_expression(KrtIRBuilder* builder, ASTNode* expr) {
@@ -2765,10 +2766,49 @@ static void irgen_stmt_fixed_statement(KrtIRBuilder* builder, ASTNode* stmt) {
     irgen_unpin_object(builder, fixed_expr);
     return;
 }
+/* Layout shared with the backend setjmp/longjmp stubs. */
+#define KRT_JMP_BUF_SIZE 240
+
+/* `using` is try/finally: the resource is released on the normal path and
+ * again when the body throws, then the exception propagates. */
 static void irgen_stmt_using_statement(KrtIRBuilder* builder, ASTNode* stmt) {
     KrtIRValue resource = krt_ir_generate_expression(builder, stmt->data.using_stmt.resource);
+    irgen_ensure_exception_runtime(builder);
+
+    char labels[3][32];
+    int id = builder->label_counter++;
+    for (int i = 0; i < 3; i++) {
+        snprintf(labels[i], sizeof(labels[i]), "using_%d_%d", id, i);
+    }
+    KrtIRBasicBlock* body_block = KrtIrBlockCreate(builder, labels[0]);
+    KrtIRBasicBlock* handler_block = KrtIrBlockCreate(builder, labels[1]);
+    KrtIRBasicBlock* after_block = KrtIrBlockCreate(builder, labels[2]);
+
+    KrtIRValue buf = irgen_allocate_memory(builder, KrtIrImm(builder, KRT_JMP_BUF_SIZE));
+    KrtIRValue enter_args[1] = {buf};
+    KrtIrCall(builder, "__krt_try_enter", enter_args, 1);
+    KrtIRValue setjmp_args[1] = {buf};
+    KrtIRValue resumed = KrtIrCall(builder, "__krt_setjmp", setjmp_args, 1);
+    KrtIrBranch(builder, resumed, handler_block, body_block);
+
+    int vt_saved = builder->var_type_count;
+
+    KrtIrBlockSetCurrent(builder, body_block);
     krt_ir_generate_statement(builder, stmt->data.using_stmt.body);
     irgen_dispose(builder, resource);
+    KrtIrCall(builder, "__krt_try_leave", NULL, 0);
+    KrtIrJump(builder, after_block);
+
+    KrtIrVarTypeTruncate(builder, vt_saved);
+    KrtIrBlockSetCurrent(builder, handler_block);
+    KrtIrCall(builder, "__krt_try_leave", NULL, 0);
+    irgen_dispose(builder, resource);
+    KrtIRValue escaping = KrtIrLoad(builder, "__krt_exception");
+    KrtIRValue throw_args[1] = {escaping};
+    KrtIrCall(builder, "__krt_throw", throw_args, 1);
+
+    KrtIrVarTypeTruncate(builder, vt_saved);
+    KrtIrBlockSetCurrent(builder, after_block);
     return;
 }
 /* ---- exception runtime (try/catch/throw) ---------------------------------- */
