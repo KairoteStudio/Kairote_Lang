@@ -2365,7 +2365,7 @@ bool semantic_analyzer_analyze_function_call(SemanticAnalyzer* analyzer, ASTNode
                                                                        call_expr->data.call.arguments);
             }
             if (!method_symbol || method_symbol->type != SYMBOL_FUNCTION) {
-                semantic_analyzer_add_error_at(analyzer, call_expr, "Undefined method: %s.%s", inst_class, method_name);
+                                semantic_analyzer_add_error_at(analyzer, call_expr, "Undefined method: %s.%s", inst_class, method_name);
                 KRT_FREE(mangled_name);
                 return false;
             }
@@ -3257,7 +3257,7 @@ static bool semantic_analyze_stmt_class_declaration(SemanticAnalyzer* analyzer, 
         }
     }
 
-    SymbolEntry* class_sym = symbol_table_define(analyzer->symbol_table, class_name, SYMBOL_CLASS, 0, NULL);
+        SymbolEntry* class_sym = symbol_table_define(analyzer->symbol_table, class_name, SYMBOL_CLASS, 0, NULL);
     if (!class_sym) {
         semantic_analyzer_add_error_at(analyzer, stmt, "Failed to define class %s", class_name);
         return false;
@@ -3361,7 +3361,7 @@ static bool semantic_analyze_stmt_class_declaration(SemanticAnalyzer* analyzer, 
             if (!member) {
                 continue;
             }
-
+            
             if (member->type == AST_ACCESS_MODIFIER) {
                 member = member->data.access_modifier.member;
                 if (!member) {

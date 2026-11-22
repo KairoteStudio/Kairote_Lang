@@ -170,11 +170,14 @@ static ASTNode* parser_parse_function_declaration(Parser* parser) {
     ASTNode* body = NULL;
     if (parser->current_token.type == TOKEN_LEFT_BRACE) {
         body = parser_parse_block(parser);
+        if (!body) {
+            return NULL;
+        }
+    } else if (parser->current_token.type == TOKEN_SEMICOLON) {
+        /* Bodyless declaration: an interface member or a forward
+         * declaration.  It still has a signature worth registering. */
+        parser_advance(parser);
     } else {
-        return NULL;
-    }
-
-    if (!body) {
         return NULL;
     }
 
