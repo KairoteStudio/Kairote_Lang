@@ -17,6 +17,7 @@ typedef struct {
     unsigned long long used;
     bool expand_macros;
     unsigned cache_version;
+    bool busy;   /* being (re)parsed outside the cache lock */
 } KrtStdlibCacheEntry;
 
 static KrtStdlibCacheEntry g_stdlib_cache[KRT_STDLIB_CACHE_FILES];
@@ -165,6 +166,9 @@ ASTNode* KrtStdlibCacheClone(const char* path, KrtArena* arena, bool expand_macr
     int slot = -1;
     for (int i = 0; i < KRT_STDLIB_CACHE_FILES; i++) {
         KrtStdlibCacheEntry* entry = &g_stdlib_cache[i];
+        if (entry->busy) {
+            continue;
+        }
         if (entry->path && entry->expand_macros == expand_macros &&
             entry->cache_version == KRT_STDLIB_CACHE_VERSION && strcmp(entry->path, path) == 0) {
             slot = i;
@@ -183,7 +187,7 @@ ASTNode* KrtStdlibCacheClone(const char* path, KrtArena* arena, bool expand_macr
     if (slot < 0) {
         slot = 0;
         for (int i = 1; i < KRT_STDLIB_CACHE_FILES; i++) {
-            if (g_stdlib_cache[i].used < g_stdlib_cache[slot].used) {
+            if (!g_stdlib_cache[i].busy && g_stdlib_cache[i].used < g_stdlib_cache[slot].used) {
                 slot = i;
             }
         }
@@ -191,7 +195,15 @@ ASTNode* KrtStdlibCacheClone(const char* path, KrtArena* arena, bool expand_macr
     KrtStdlibCacheEntry* entry = &g_stdlib_cache[slot];
     g_stdlib_cache_bytes -= entry->bytes;
     free_stdlib_entry(entry);
-    if (!parse_stdlib_entry(entry, path, &version, expand_macros)) {
+    entry->busy = true;
+    pthread_mutex_unlock(&g_stdlib_cache_mutex);
+
+    /* File I/O, lexing and parsing happen outside the cache lock. */
+    bool parsed = parse_stdlib_entry(entry, path, &version, expand_macros);
+
+    pthread_mutex_lock(&g_stdlib_cache_mutex);
+    entry->busy = false;
+    if (!parsed) {
         free_stdlib_entry(entry);
         pthread_mutex_unlock(&g_stdlib_cache_mutex);
         return NULL;
