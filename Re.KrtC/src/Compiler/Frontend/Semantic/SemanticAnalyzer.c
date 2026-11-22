@@ -1995,6 +1995,17 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
         return ok;
     }
 
+    case AST_NULL_COALESCING: {
+        bool left_ok = semantic_analyzer_analyze_expression(analyzer, expr->data.null_coalescing.left);
+        bool right_ok = semantic_analyzer_analyze_expression(analyzer, expr->data.null_coalescing.right);
+        if (left_ok && right_ok) {
+            KrtTokenType left = semantic_analyzer_infer_expression_type(analyzer, expr->data.null_coalescing.left);
+            KrtTokenType right = semantic_analyzer_infer_expression_type(analyzer, expr->data.null_coalescing.right);
+            expr->resolved_type.token = left != TOKEN_NULL ? left : right;
+        }
+        return left_ok && right_ok;
+    }
+
     case AST_CAST_EXPRESSION: {
         if (!expr->data.cast_expr.expression) {
             semantic_analyzer_add_error_at(analyzer, expr, "Cast expression has no operand");

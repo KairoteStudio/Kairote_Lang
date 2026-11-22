@@ -492,7 +492,32 @@ static KrtIRValue irgen_await_task(KrtIRBuilder* builder, KrtIRValue task) {
 }
 
 static KrtIRValue irgen_null_coalesce(KrtIRBuilder* builder, KrtIRValue left, KrtIRValue right) {
-    return irgen_call_builtin_2args(builder, IRGEN_FUNC_NULL_COALESCE, left, right);
+    /* `left ?? right`: keep left unless it is a null reference.  The ARM64
+     * backend has no SSA phi nodes, so the two arms merge through a slot. */
+    char slot_name[64];
+    snprintf(slot_name, sizeof(slot_name), "__krt_coalesce_%d", builder->label_counter++);
+    KrtIrAlloc(builder, slot_name);
+
+    char labels[2][32];
+    int id = builder->label_counter++;
+    snprintf(labels[0], sizeof(labels[0]), "coalesce_has_%d", id);
+    snprintf(labels[1], sizeof(labels[1]), "coalesce_null_%d", id);
+    KrtIRBasicBlock* has_block = KrtIrBlockCreate(builder, labels[0]);
+    KrtIRBasicBlock* null_block = KrtIrBlockCreate(builder, labels[1]);
+    KrtIRBasicBlock* end_block = KrtIrBlockCreate(builder, "coalesce_end");
+
+    KrtIrBranch(builder, KrtIrCompare(builder, KRT_IR_NE, left, KRT_IMM_ZERO(builder)), has_block, null_block);
+
+    KrtIrBlockSetCurrent(builder, has_block);
+    KrtIrStore(builder, slot_name, left);
+    KrtIrJump(builder, end_block);
+
+    KrtIrBlockSetCurrent(builder, null_block);
+    KrtIrStore(builder, slot_name, right);
+    KrtIrJump(builder, end_block);
+
+    KrtIrBlockSetCurrent(builder, end_block);
+    return KrtIrLoad(builder, slot_name);
 }
 
 static KrtIRValue irgen_null_conditional(KrtIRBuilder* builder, KrtIRValue obj, const char* member) {

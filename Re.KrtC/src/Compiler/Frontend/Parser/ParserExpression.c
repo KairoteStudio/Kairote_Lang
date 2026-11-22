@@ -873,6 +873,27 @@ ASTNode* parser_parse_ternary_operation(Parser* parser) {
         return NULL;
     }
 
+    /* `??` binds looser than any binary operator but tighter than `?:`. */
+    while (parser->current_token.type == TOKEN_NULL_COALESCING) {
+        int op_line = parser->current_token.line;
+        int op_col = parser->current_token.column;
+        parser_advance(parser);
+        ASTNode* right = parser_parse_binary_operation(parser, 1);
+        if (!right) {
+            ast_destroy_node(condition);
+            return NULL;
+        }
+        ASTNode* node = KrtParserCreateNode(parser, AST_NULL_COALESCING, op_line, op_col);
+        if (!node) {
+            ast_destroy_node(condition);
+            ast_destroy_node(right);
+            return NULL;
+        }
+        node->data.null_coalescing.left = condition;
+        node->data.null_coalescing.right = right;
+        condition = node;
+    }
+
     if (parser->current_token.type != TOKEN_QUESTION) {
         return condition;
     }
