@@ -218,14 +218,14 @@ GenericParameter* generics_create_parameter(const char* name) {
     return param;
 }
 
-void generics_add_parameter(GenericParameter** list, const char* name) {
+bool generics_add_parameter(GenericParameter** list, const char* name) {
     if (!list || !name) {
-        return;
+        return false;
     }
 
     GenericParameter* new_param = generics_create_parameter(name);
     if (!new_param) {
-        return;
+        return false;
     }
 
     if (!*list) {
@@ -237,6 +237,7 @@ void generics_add_parameter(GenericParameter** list, const char* name) {
         }
         current->next = new_param;
     }
+    return true;
 }
 
 void generics_free_parameters(GenericParameter* params) {

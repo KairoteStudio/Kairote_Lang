@@ -2790,7 +2790,12 @@ static bool semantic_analyze_stmt_class_declaration(SemanticAnalyzer* analyzer, 
 
         GenericParameter* params_list = NULL;
         for (int i = 0; i < stmt->data.class_decl.template_param_count; i++) {
-            generics_add_parameter(&params_list, stmt->data.class_decl.template_params[i]);
+            const char* tparam = stmt->data.class_decl.template_params[i];
+            if (!tparam || !generics_add_parameter(&params_list, tparam)) {
+                semantic_analyzer_add_error_at(analyzer, stmt, "Failed to add template parameter");
+                generics_free_parameters(params_list);
+                return false;
+            }
         }
 
         if (params_list) {
@@ -3613,13 +3618,18 @@ bool semantic_analyzer_analyze_generic_decl(SemanticAnalyzer* analyzer, ASTNode*
 
         for (int i = 0; i < generic_decl->data.template_decl.parameter_count; i++) {
             ASTNode* param_node = generic_decl->data.template_decl.parameters[i];
-            if (param_node && param_node->type == AST_TEMPLATE_PARAMETER) {
-                const char* param_name = param_node->data.template_param.param_name;
-                if (param_name) {
-                    generics_add_parameter(&params, param_name);
-                    param_count++;
-                }
+            if (!param_node || param_node->type != AST_TEMPLATE_PARAMETER) {
+                semantic_analyzer_add_error(analyzer, "Invalid template parameter #%d for %s", i, type_name);
+                generics_free_parameters(params);
+                return false;
             }
+            const char* param_name = param_node->data.template_param.param_name;
+            if (!param_name || !generics_add_parameter(&params, param_name)) {
+                semantic_analyzer_add_error(analyzer, "Failed to add template parameter #%d", i);
+                generics_free_parameters(params);
+                return false;
+            }
+            param_count++;
         }
     }
 
@@ -3647,24 +3657,17 @@ bool semantic_analyzer_analyze_generic_instantiation(SemanticAnalyzer* analyzer,
 
     GenericTypeInfo* type_info = generics_get_type_info(analyzer->generic_registry, base_type);
 
-    ASTNode* declaration = NULL;
-    if (type_info && type_info->declaration) {
-        declaration = type_info->declaration;
-    } else {
-
-        if (type_info) {
-            KRT_FREE(type_info);
-            return true;
-        } else {
-            semantic_analyzer_add_error(analyzer, "Unknown generic type: %s", base_type);
-            if (type_info) {
-                KRT_FREE(type_info);
-            }
-            return false;
-        }
+    if (!type_info) {
+        semantic_analyzer_add_error(analyzer, "Unknown generic type: %s", base_type);
+        return false;
     }
-
-    if (!declaration || declaration->type != AST_CLASS_DECLARATION) {
+    if (!type_info->declaration) {
+        semantic_analyzer_add_error(analyzer, "Generic type '%s' has no declaration", base_type);
+        KRT_FREE(type_info);
+        return false;
+    }
+    ASTNode* declaration = type_info->declaration;
+    if (declaration->type != AST_CLASS_DECLARATION) {
         semantic_analyzer_add_error(analyzer, "Invalid template declaration for: %s", base_type);
         if (type_info) {
             KRT_FREE(type_info);
@@ -3726,8 +3729,14 @@ bool semantic_analyzer_validate_constraints(SemanticAnalyzer* analyzer, ASTNode*
                 continue;
             }
 
-            if (strcmp(constraint->data.generic_constraint.param_name, param_name) == 0) {
-                const char* constraint_type = constraint->data.generic_constraint.constraint_type;
+            const char* c_param = constraint->data.generic_constraint.param_name;
+            const char* c_type = constraint->data.generic_constraint.constraint_type;
+            if (!c_param || !c_type) {
+                semantic_analyzer_add_error(analyzer, "Invalid constraint: missing parameter or type");
+                return false;
+            }
+            if (strcmp(c_param, param_name) == 0) {
+                const char* constraint_type = c_type;
                 if (strcmp(constraint_type, "class") == 0) {
                     has_class_constraint = true;
                 } else if (strcmp(constraint_type, "struct") == 0) {
@@ -3759,7 +3768,7 @@ bool semantic_analyzer_validate_constraints(SemanticAnalyzer* analyzer, ASTNode*
 
         int param_index = -1;
         for (int j = 0; j < template_param_count; j++) {
-            if (strcmp(template_params[j], param_name) == 0) {
+            if (template_params[j] && strcmp(template_params[j], param_name) == 0) {
                 param_index = j;
                 break;
             }
@@ -3772,11 +3781,15 @@ bool semantic_analyzer_validate_constraints(SemanticAnalyzer* analyzer, ASTNode*
         }
 
         const char* type_arg = type_args[param_index];
+        if (!type_arg) {
+            semantic_analyzer_add_error(analyzer, "Missing type argument for parameter '%s'", param_name);
+            return false;
+        }
 
         if (strcmp(constraint_type, "class") == 0) {
 
             if (strcmp(type_arg, "int") == 0 || strcmp(type_arg, "float") == 0 || strcmp(type_arg, "string") == 0 ||
-                strcmp(type_arg, "bool") == 0) {
+                strcmp(type_arg, "bool") == 0 || strcmp(type_arg, "char") == 0) {
                 semantic_analyzer_add_error(
                     analyzer,
                     "Type argument '%s' for parameter '%s' violates class constraint (must be reference type)",
@@ -3794,16 +3807,16 @@ bool semantic_analyzer_validate_constraints(SemanticAnalyzer* analyzer, ASTNode*
             }
         } else if (strcmp(constraint_type, "new()") == 0) {
             continue;
-        } else {
-
-            if (strcmp(constraint_type, "IDisposable") == 0 && strcmp(type_arg, "string") == 0) {
+        } else if (strcmp(constraint_type, "IDisposable") == 0) {
+            if (strcmp(type_arg, "string") == 0) {
                 semantic_analyzer_add_error(analyzer,
                                             "Type argument '%s' for parameter '%s' does not implement interface '%s'",
                                             type_arg, param_name, constraint_type);
                 return false;
             }
-
-            continue;
+        } else {
+            semantic_analyzer_add_error(analyzer, "Unknown constraint type '%s'", constraint_type);
+            return false;
         }
     }
 

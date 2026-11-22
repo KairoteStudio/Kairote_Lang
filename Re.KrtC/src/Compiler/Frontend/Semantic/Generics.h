@@ -45,7 +45,7 @@ bool generics_instantiate_type(GenericRegistry* registry, const char* type_name,
                                SymbolTable* target_table);
 
 GenericParameter* generics_create_parameter(const char* name);
-void generics_add_parameter(GenericParameter** list, const char* name);
+bool generics_add_parameter(GenericParameter** list, const char* name);
 void generics_free_parameters(GenericParameter* params);
 
 bool generics_is_generic_type(GenericRegistry* registry, const char* type_name);
