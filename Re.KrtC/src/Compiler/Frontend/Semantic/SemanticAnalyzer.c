@@ -3487,177 +3487,12 @@ static bool semantic_analyze_stmt_access_modifier(SemanticAnalyzer* analyzer, AS
     return false;
 }
 static bool semantic_analyze_stmt_function_declaration(SemanticAnalyzer* analyzer, ASTNode* stmt) {
-    const char* func_name = stmt->data.function_decl.name;
-    const char* current_class = semantic_analyzer_get_current_class_context(analyzer);
-    char* mangled_name = NULL;
-    const char* symbol_name = func_name;
-
-    if (current_class) {
-        const char* ns_path[2] = {current_class, NULL};
-        mangled_name = name_mangle_function(ns_path, func_name, stmt->data.function_decl.parameter_types,
-                                            stmt->data.function_decl.parameter_count);
-        if (!mangled_name) {
-            semantic_analyzer_add_error_at(analyzer, stmt, "Failed to mangle method %s", func_name);
-            return false;
-        }
-        symbol_name = mangled_name;
-    }
-
-    SymbolEntry* existing = symbol_table_lookup_current_scope(analyzer->symbol_table, symbol_name);
-    if (existing && existing->state == SYMBOL_DEFINED) {
-        semantic_analyzer_add_error_at(analyzer, stmt, "Function %s already defined", func_name);
-        KRT_FREE(mangled_name);
-        return false;
-    }
-
-    SymbolEntry* func_sym = symbol_table_define(analyzer->symbol_table, symbol_name, SYMBOL_FUNCTION, 0, NULL);
-    if (func_sym) {
-        func_sym->value_type = stmt->data.function_decl.return_type;
-        func_sym->source_type = KrtSourceTypeClone(analyzer->type_arena,
-                                                   (KrtSourceType){.token = TOKEN_FN, .function = stmt->function_type});
-    }
-    if (!func_sym) {
-        semantic_analyzer_add_error_at(analyzer, stmt, "Failed to define function %s", func_name);
-        KRT_FREE(mangled_name);
-        return false;
-    }
-    func_sym->state = SYMBOL_DEFINED;
-
-    if (!current_class && analyzer->symbol_table == analyzer->global_symbol_table &&
-        strcmp(func_name, "main") == 0) {
-        if (analyzer->entry_point_name) {
-            semantic_analyzer_add_error_at(analyzer, stmt, "Multiple entry points named 'main'");
-            KRT_FREE(mangled_name);
-            return false;
-        }
-        analyzer->has_entry_point = true;
-        analyzer->entry_point_name = KRT_STRDUP(func_name);
-        func_sym->is_entry_point = true;
-    }
-
-    if (stmt->data.function_decl.body) {
-        symbol_table_push_scope(analyzer->symbol_table);
-        for (int i = 0; i < stmt->data.function_decl.parameter_count; i++) {
-            SymbolEntry* param = symbol_table_define(analyzer->symbol_table, stmt->data.function_decl.parameters[i],
-                                                     SYMBOL_VARIABLE, 0, NULL);
-            if (param) {
-                param->value_type = stmt->data.function_decl.parameter_types[i];
-                if (stmt->function_type && i < stmt->function_type->parameter_count) {
-                    param->source_type = stmt->function_type->parameters[i];
-                }
-                if (param->source_type.token == TOKEN_IDENTIFIER && param->source_type.type_name) {
-                    param->class_type_name = KRT_STRDUP(param->source_type.type_name);
-                }
-                param->is_array =
-                    stmt->data.function_decl.parameter_is_array && stmt->data.function_decl.parameter_is_array[i];
-            }
-        }
-        KrtSourceType saved_return = analyzer->current_return_type;
-        analyzer->current_return_type = stmt->function_type
-                                            ? stmt->function_type->result
-                                            : (KrtSourceType){.token = stmt->data.function_decl.return_type};
-        bool body_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.function_decl.body);
-        if (body_ok && !(analyzer->current_return_type.token == TOKEN_VOID &&
-                         analyzer->current_return_type.pointer_depth == 0) &&
-            !semantic_statement_guarantees_return(stmt->data.function_decl.body)) {
-            semantic_analyzer_add_error_at(analyzer, stmt, "Not all control paths return a value");
-            body_ok = false;
-        }
-        analyzer->current_return_type = saved_return;
-        symbol_table_pop_scope(analyzer->symbol_table);
-        KRT_FREE(mangled_name);
-        return body_ok;
-    }
-    KRT_FREE(mangled_name);
-    return true;
+    /* Single implementation: see semantic_analyzer_analyze_function. */
+    return semantic_analyzer_analyze_function(analyzer, stmt).success;
 }
 static bool semantic_analyze_stmt_static_function_declaration(SemanticAnalyzer* analyzer, ASTNode* stmt) {
-    const char* method_name = stmt->data.static_function_decl.name;
-
-    const char* current_class = semantic_analyzer_get_current_class_context(analyzer);
-
-    char* mangled_name = NULL;
-    const char* function_name = method_name;
-    if (current_class) {
-        const char* ns_path[2] = {current_class, NULL};
-        mangled_name = name_mangle_function(ns_path, method_name, stmt->data.static_function_decl.parameter_types,
-                                            stmt->data.static_function_decl.parameter_count);
-        if (!mangled_name) {
-            semantic_analyzer_add_error_at(analyzer, stmt, "Failed to mangle static method %s", method_name);
-            return false;
-        }
-        function_name = mangled_name;
-    }
-
-    SymbolEntry* existing = symbol_table_lookup_current_scope(analyzer->symbol_table, function_name);
-    if (existing && existing->state == SYMBOL_DEFINED) {
-        semantic_analyzer_add_error_at(analyzer, stmt, "Static method %s already defined", method_name);
-        if (mangled_name) {
-            KRT_FREE(mangled_name);
-        }
-        return false;
-    }
-
-    SymbolEntry* func_sym =
-        symbol_table_define(analyzer->symbol_table, function_name, SYMBOL_FUNCTION, 0, NULL);
-    if (!func_sym) {
-        semantic_analyzer_add_error_at(analyzer, stmt, "Failed to define static method %s", method_name);
-        if (mangled_name) {
-            KRT_FREE(mangled_name);
-        }
-        return false;
-    }
-    func_sym->state = SYMBOL_DEFINED;
-    func_sym->value_type = stmt->data.static_function_decl.return_type;
-    func_sym->source_type =
-        KrtSourceTypeClone(analyzer->type_arena, (KrtSourceType){.token = TOKEN_FN, .function = stmt->function_type});
-
-    /* A static method without a body is a legitimate forward declaration. */
-    if (!stmt->data.static_function_decl.body) {
-        if (mangled_name) {
-            KRT_FREE(mangled_name);
-        }
-        return true;
-    }
-
-    symbol_table_push_scope(analyzer->symbol_table);
-
-    for (int i = 0; i < stmt->data.static_function_decl.parameter_count; i++) {
-        const char* param_name = stmt->data.static_function_decl.parameters[i];
-
-        SymbolEntry* param = symbol_table_define(analyzer->symbol_table, param_name, SYMBOL_VARIABLE, 0, NULL);
-        if (param) {
-            param->value_type = stmt->data.static_function_decl.parameter_types[i];
-            if (stmt->function_type && i < stmt->function_type->parameter_count) {
-                param->source_type = stmt->function_type->parameters[i];
-            }
-            if (param->source_type.token == TOKEN_IDENTIFIER && param->source_type.type_name) {
-                param->class_type_name = KRT_STRDUP(param->source_type.type_name);
-            }
-            param->is_array = stmt->data.static_function_decl.parameter_is_array &&
-                              stmt->data.static_function_decl.parameter_is_array[i];
-        }
-    }
-
-    KrtSourceType saved_return = analyzer->current_return_type;
-    analyzer->current_return_type = stmt->function_type
-                                        ? stmt->function_type->result
-                                        : (KrtSourceType){.token = stmt->data.static_function_decl.return_type};
-    bool body_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.static_function_decl.body);
-    if (body_ok && !(analyzer->current_return_type.token == TOKEN_VOID &&
-                     analyzer->current_return_type.pointer_depth == 0) &&
-        !semantic_statement_guarantees_return(stmt->data.static_function_decl.body)) {
-        semantic_analyzer_add_error_at(analyzer, stmt, "Not all control paths return a value");
-        body_ok = false;
-    }
-    analyzer->current_return_type = saved_return;
-
-    symbol_table_pop_scope(analyzer->symbol_table);
-
-    if (mangled_name) {
-        KRT_FREE(mangled_name);
-    }
-    return body_ok;
+    /* Single implementation: see semantic_analyzer_analyze_function. */
+    return semantic_analyzer_analyze_function(analyzer, stmt).success;
 }
 static bool semantic_analyze_stmt_constructor_declaration(SemanticAnalyzer* analyzer, ASTNode* stmt) {
     const char* current_class = semantic_analyzer_get_current_class_context(analyzer);
@@ -3982,9 +3817,34 @@ FunctionAnalysisResult semantic_analyzer_analyze_function(SemanticAnalyzer* anal
                                 ? function_node->data.function_decl.name
                                 : function_node->data.static_function_decl.name;
 
-    SymbolEntry* existing = symbol_table_lookup(analyzer->symbol_table, func_name);
+    /* Class members are mangled; a method and a global function may share a
+     * bare name.  This is the single place that decides the symbol name. */
+    const char* current_class = semantic_analyzer_get_current_class_context(analyzer);
+    char* mangled_name = NULL;
+    const char* symbol_name = func_name;
+    if (current_class) {
+        const char* ns_path[2] = {current_class, NULL};
+        int decl_param_count = (function_node->type == AST_FUNCTION_DECLARATION)
+                                   ? function_node->data.function_decl.parameter_count
+                                   : function_node->data.static_function_decl.parameter_count;
+        const KrtTokenType* decl_param_types = (function_node->type == AST_FUNCTION_DECLARATION)
+                                                   ? function_node->data.function_decl.parameter_types
+                                                   : function_node->data.static_function_decl.parameter_types;
+        mangled_name = name_mangle_function(ns_path, func_name, decl_param_types, decl_param_count);
+        if (!mangled_name) {
+            semantic_analyzer_add_error_at(analyzer, function_node, "Failed to mangle method %s", func_name);
+            return result;
+        }
+        symbol_name = mangled_name;
+    }
+
+    SymbolEntry* existing = symbol_table_lookup_current_scope(analyzer->symbol_table, symbol_name);
+    if (!existing) {
+        existing = symbol_table_lookup(analyzer->symbol_table, symbol_name);
+    }
     if (existing && existing->state == SYMBOL_DEFINED) {
         semantic_analyzer_add_error_at(analyzer, function_node, "Function %s already defined", func_name);
+        KRT_FREE(mangled_name);
         return result;
     }
 
@@ -3994,9 +3854,10 @@ FunctionAnalysisResult semantic_analyzer_analyze_function(SemanticAnalyzer* anal
     if (existing && existing->type == SYMBOL_FUNCTION && existing->state != SYMBOL_DEFINED) {
         func_symbol = existing;
     } else {
-        func_symbol = symbol_table_define(analyzer->symbol_table, func_name, SYMBOL_FUNCTION, 0, NULL);
+        func_symbol = symbol_table_define(analyzer->symbol_table, symbol_name, SYMBOL_FUNCTION, 0, NULL);
         if (!func_symbol) {
             semantic_analyzer_add_error_at(analyzer, function_node, "Failed to define function %s", func_name);
+            KRT_FREE(mangled_name);
             return result;
         }
     }
@@ -4008,10 +3869,10 @@ FunctionAnalysisResult semantic_analyzer_analyze_function(SemanticAnalyzer* anal
         analyzer->type_arena, (KrtSourceType){.token = TOKEN_FN, .function = function_node->function_type});
     func_symbol->value_type = function_node->data.function_decl.return_type;
 
-    if (analyzer->symbol_table == analyzer->global_symbol_table &&
-        !semantic_analyzer_get_current_class_context(analyzer) && strcmp(func_name, "main") == 0) {
+    if (analyzer->symbol_table == analyzer->global_symbol_table && !current_class && strcmp(func_name, "main") == 0) {
         if (analyzer->entry_point_name) {
             semantic_analyzer_add_error_at(analyzer, function_node, "Multiple entry points named 'main'");
+            KRT_FREE(mangled_name);
             return result;
         }
         analyzer->has_entry_point = true;
@@ -4069,6 +3930,7 @@ FunctionAnalysisResult semantic_analyzer_analyze_function(SemanticAnalyzer* anal
         /* Pure declaration: nothing to analyse, no control-flow requirement. */
         analyzer->current_return_type = saved_return;
         symbol_table_pop_scope(analyzer->symbol_table);
+        KRT_FREE(mangled_name);
         result.success = true;
         result.param_count = param_count;
         result.function_symbol = func_symbol;
@@ -4099,6 +3961,7 @@ FunctionAnalysisResult semantic_analyzer_analyze_function(SemanticAnalyzer* anal
     analyzer->current_return_type = saved_return;
 
     symbol_table_pop_scope(analyzer->symbol_table);
+    KRT_FREE(mangled_name);
 
     result.success = body_ok;
     result.param_count = param_count;
