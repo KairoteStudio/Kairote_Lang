@@ -1681,6 +1681,7 @@ ASTNode* parser_parse_statement(Parser* parser) {
     case TOKEN_FLOAT64:
     case TOKEN_BOOL:
     case TOKEN_TYPE_STRING:
+    case TOKEN_OBJECT:
     case TOKEN_CHAR:
     case TOKEN_IDENTIFIER: {
         Token next_token = lexer_peek_token(parser->lexer);

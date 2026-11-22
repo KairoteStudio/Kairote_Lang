@@ -628,6 +628,28 @@ static bool irgen_emit_virtual_dispatch(KrtIRBuilder* builder, const char* class
     return true;
 }
 
+/* Boxed scalars carry a builtin type tag in the heap header's upper half;
+ * class ids come from the AST registry, so a large offset keeps them apart. */
+#define KRT_IRGEN_BUILTIN_TAG_BASE 1000000
+
+static int irgen_builtin_tag(KrtTokenType token) {
+    return KRT_IRGEN_BUILTIN_TAG_BASE + (int)token;
+}
+
+static KrtIRValue irgen_box_value(KrtIRBuilder* builder, KrtIRValue value) {
+    KrtIRValue box = irgen_allocate_memory(builder, KrtIrImm(builder, (double)KRT_IRGEN_POINTER_SIZE));
+    KrtIrStorePtrSized(builder, box, 0, value, KRT_IRGEN_POINTER_SIZE);
+    return box;
+}
+
+/* Tags the box with the value's builtin type. */
+static KrtIRValue irgen_box_typed(KrtIRBuilder* builder, KrtIRValue value, KrtTokenType token) {
+        KrtIRValue box = irgen_box_value(builder, value);
+    KrtIrStorePtrSized(builder, box, -KRT_IRGEN_HEAP_HEADER_SIZE / 2,
+                       KrtIrInteger((KrtUInt128)irgen_builtin_tag(token), TOKEN_INT64), 8);
+    return box;
+}
+
 static KrtIRValue irgen_as_instance(KrtIRBuilder* builder, KrtIRValue obj, const char* type_name) {
     if (!type_name || irgen_class_id(type_name) < 0) {
         return obj;
@@ -2437,8 +2459,37 @@ static KrtIRValue irgen_expr_tuple_expression(KrtIRBuilder* builder, ASTNode* ex
     }
     return tuple_ptr;
 }
+/* Unboxing: a cast from object to a scalar checks the box tag and loads the
+ * payload; a mismatched box yields zero. */
+static KrtIRValue irgen_unbox_value(KrtIRBuilder* builder, KrtIRValue box, KrtTokenType target) {
+        KrtIRValue tag = KrtIrLoadPtrSized(builder, box, -KRT_IRGEN_HEAP_HEADER_SIZE / 2, 8);
+    KrtIRValue payload = KrtIrLoadPtrSized(builder, box, 0, KRT_IRGEN_POINTER_SIZE);
+
+    char slot_name[64];
+    snprintf(slot_name, sizeof(slot_name), "__krt_unbox_%d", builder->label_counter++);
+    KrtIrAlloc(builder, slot_name);
+    KrtIrStore(builder, slot_name, KRT_IMM_ZERO(builder));
+
+    KrtIRBasicBlock* ok_block = KrtIrBlockCreate(builder, "unbox_ok");
+    KrtIRBasicBlock* end_block = KrtIrBlockCreate(builder, "unbox_end");
+    KrtIrBranch(builder,
+                KrtIrCompare(builder, KRT_IR_EQ, tag, KrtIrInteger((KrtUInt128)irgen_builtin_tag(target), TOKEN_INT64)),
+                ok_block, end_block);
+
+    KrtIrBlockSetCurrent(builder, ok_block);
+    KrtIrStore(builder, slot_name, payload);
+    KrtIrJump(builder, end_block);
+
+    KrtIrBlockSetCurrent(builder, end_block);
+    return KrtIrCast(builder, KrtIrLoad(builder, slot_name), target);
+}
+
 static KrtIRValue irgen_expr_cast_expression(KrtIRBuilder* builder, ASTNode* expr) {
     KrtIRValue val = krt_ir_generate_expression(builder, expr->data.cast_expr.expression);
+    if (!expr->data.cast_expr.target_is_pointer &&
+        expr->data.cast_expr.expression->resolved_type.token == TOKEN_OBJECT) {
+        return irgen_unbox_value(builder, val, expr->data.cast_expr.target_type);
+    }
     if (expr->data.cast_expr.target_is_pointer) {
         return KrtIrCast(builder, val, expr->declared_type.pointer_depth ? TOKEN_UINT64 : TOKEN_EOF);
     }
@@ -3478,6 +3529,20 @@ static void irgen_stmt_variable_declaration(KrtIRBuilder* builder, ASTNode* stmt
                 KrtIrStore(builder, ir_slot, KrtIrImmF(builder, stmt->data.variable_decl.value->data.number_value));
             } else {
                 KrtIRValue init_val = krt_ir_generate_expression(builder, stmt->data.variable_decl.value);
+                if (irgen_var_declared_type(stmt) == TOKEN_OBJECT) {
+                    KrtSourceType value_type = stmt->data.variable_decl.value->resolved_type;
+                    bool value_is_reference = KrtSourceIsPointer(value_type) ||
+                                              value_type.token == TOKEN_IDENTIFIER ||
+                                              value_type.token == TOKEN_OBJECT ||
+                                              value_type.token == TOKEN_STRING ||
+                                              value_type.token == TOKEN_TYPE_STRING;
+                    KrtTokenType value_token = value_type.token ? value_type.token
+                                                                : krt_ir_infer_mangle_type(
+                                                                      builder, stmt->data.variable_decl.value);
+                    if (!value_is_reference && value_token != 0 && value_token != TOKEN_EOF) {
+                        init_val = irgen_box_typed(builder, init_val, value_token);
+                    }
+                }
                 KrtIrStore(builder, ir_slot, init_val);
             }
         }

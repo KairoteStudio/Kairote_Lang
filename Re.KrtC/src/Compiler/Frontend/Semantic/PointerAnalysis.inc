@@ -42,6 +42,10 @@ static bool semantic_class_derives_from(SemanticAnalyzer* analyzer, const char* 
     if (!analyzer || !derived || !base) {
         return false;
     }
+    /* object is the root: every class instance can be used through it. */
+    if (strcmp(base, "object") == 0) {
+        return strcmp(derived, "object") != 0;
+    }
     const char* current = derived;
     for (int depth = 0; current && depth < 64; depth++) {
         if (strcmp(current, base) == 0) {
@@ -81,6 +85,11 @@ static bool pointer_assignable(SemanticAnalyzer* analyzer, ASTNode* node, KrtSou
              (target.type_name && value.type_name && strcmp(target.type_name, value.type_name)))) {
             /* Upcast: a derived instance may be used through its base class or
              * an interface it implements. */
+            if (target.token == TOKEN_OBJECT) {
+                /* Any value is an object: references are used as they are and
+                 * scalars are boxed. */
+                return true;
+            }
             if (target.type_name && value.type_name &&
                 semantic_class_derives_from(analyzer, value.type_name, target.type_name)) {
                 return true;

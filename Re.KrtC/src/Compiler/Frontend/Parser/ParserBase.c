@@ -132,6 +132,7 @@ int parser_is_type_keyword(KrtTokenType type) {
     case TOKEN_FLOAT64:
     case TOKEN_BOOL:
     case TOKEN_TYPE_STRING:
+    case TOKEN_OBJECT:
     case TOKEN_CHAR:
     case TOKEN_VOID:
         return 1;
