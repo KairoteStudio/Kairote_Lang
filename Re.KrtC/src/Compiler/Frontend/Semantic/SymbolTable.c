@@ -390,17 +390,21 @@ SymbolEntry* symbol_table_lookup_scope_chain(SymbolTable* table, const char* nam
         return NULL;
     }
 
-    SymbolScope* current_scope = table->current_scope;
-    while (current_scope) {
-        SymbolEntry* sym = lookup_in_scope(current_scope, name);
-        if (sym) {
-            return sym;
+    int depth = 0;
+    for (SymbolTable* t = table; t && depth < 64; t = t->parent_table, depth++) {
+        SymbolScope* current_scope = t->current_scope;
+        while (current_scope) {
+            SymbolEntry* sym = lookup_in_scope(current_scope, name);
+            if (sym) {
+                return sym;
+            }
+            current_scope = current_scope->parent;
         }
-        current_scope = current_scope->parent;
     }
 
-    /* No whole-table fallback: a name must be found on the lexical scope
-     * chain, otherwise sibling scopes would shadow each other. */
+    /* No whole-table hash fallback: a name must be found on the lexical scope
+     * chain, otherwise sibling scopes would shadow each other.  The lexical
+     * parent table is walked, so a class body sees the globals around it. */
     return NULL;
 }
 
