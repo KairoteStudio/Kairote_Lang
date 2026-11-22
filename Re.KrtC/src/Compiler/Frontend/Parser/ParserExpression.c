@@ -304,18 +304,130 @@ ASTNode* parser_parse_primary(Parser* parser) {
             return KrtParserFail(parser, token.line, token.column, "expected '(' after 'sizeof'");
         }
         parser_advance(parser);
-        if (!parser_is_type_keyword(parser->current_token.type)) {
-            return KrtParserFail(parser, token.line, token.column, "expected a type name in 'sizeof'");
+
+        /* sizeof((T1, T2, ...)) -- a tuple type. */
+        if (parser->current_token.type == TOKEN_LEFT_PAREN) {
+            int capacity = 4;
+            int count = 0;
+            KrtTokenType* types = (KrtTokenType*)KrtParserAlloc(parser, (size_t)capacity * sizeof(KrtTokenType));
+            if (!types) {
+                return NULL;
+            }
+            parser_advance(parser); /* the tuple's opening '(' */
+            while (parser->current_token.type != TOKEN_RIGHT_PAREN) {
+                KrtSourceType source = {0};
+                if (!KrtParseSourceType(parser, &source)) {
+                    return NULL;
+                }
+                if (count >= capacity) {
+                    int grown = capacity * 2;
+                    KrtTokenType* grown_types =
+                        (KrtTokenType*)KrtParserAlloc(parser, (size_t)grown * sizeof(KrtTokenType));
+                    if (!grown_types) {
+                        return NULL;
+                    }
+                    memcpy(grown_types, types, (size_t)count * sizeof(KrtTokenType));
+                    types = grown_types;
+                    capacity = grown;
+                }
+                types[count++] = source.token ? source.token : TOKEN_IDENTIFIER;
+                if (parser->current_token.type == TOKEN_COMMA) {
+                    parser_advance(parser);
+                    continue;
+                }
+                break;
+            }
+            if (parser->current_token.type != TOKEN_RIGHT_PAREN) {
+                return KrtParserFail(parser, token.line, token.column, "expected ')' after tuple type");
+            }
+            parser_advance(parser);
+            if (parser->current_token.type != TOKEN_RIGHT_PAREN) {
+                return KrtParserFail(parser, token.line, token.column, "expected ')' after 'sizeof'");
+            }
+            parser_advance(parser);
+            ASTNode* tuple = KrtParserCreateNode(parser, AST_TUPLE_TYPE, token.line, token.column);
+            if (tuple) {
+                tuple->data.tuple_type.element_types = types;
+                tuple->data.tuple_type.element_count = count;
+            }
+            return tuple;
         }
-        KrtTokenType type = parser->current_token.type;
-        parser_advance(parser);
+
+        /* sizeof(delegate R(P, ...)) -- a delegate type. */
+        if (parser->current_token.type == TOKEN_DELEGATE) {
+            parser_advance(parser);
+            KrtTokenType return_type = parser->current_token.type;
+            parser_advance(parser);
+            if (parser->current_token.type != TOKEN_LEFT_PAREN) {
+                return KrtParserFail(parser, token.line, token.column, "expected '(' after delegate return type");
+            }
+            parser_advance(parser);
+            int capacity = 4;
+            int count = 0;
+            KrtTokenType* types = (KrtTokenType*)KrtParserAlloc(parser, (size_t)capacity * sizeof(KrtTokenType));
+            if (!types) {
+                return NULL;
+            }
+            while (parser->current_token.type != TOKEN_RIGHT_PAREN) {
+                KrtSourceType source = {0};
+                if (!KrtParseSourceType(parser, &source)) {
+                    return NULL;
+                }
+                if (count >= capacity) {
+                    int grown = capacity * 2;
+                    KrtTokenType* grown_types =
+                        (KrtTokenType*)KrtParserAlloc(parser, (size_t)grown * sizeof(KrtTokenType));
+                    if (!grown_types) {
+                        return NULL;
+                    }
+                    memcpy(grown_types, types, (size_t)count * sizeof(KrtTokenType));
+                    types = grown_types;
+                    capacity = grown;
+                }
+                types[count++] = source.token ? source.token : TOKEN_IDENTIFIER;
+                if (parser->current_token.type == TOKEN_COMMA) {
+                    parser_advance(parser);
+                    continue;
+                }
+                break;
+            }
+            if (parser->current_token.type != TOKEN_RIGHT_PAREN) {
+                return KrtParserFail(parser, token.line, token.column, "expected ')' after delegate parameters");
+            }
+            parser_advance(parser);
+            if (parser->current_token.type != TOKEN_RIGHT_PAREN) {
+                return KrtParserFail(parser, token.line, token.column, "expected ')' after 'sizeof'");
+            }
+            parser_advance(parser);
+            ASTNode* delegate = KrtParserCreateNode(parser, AST_DELEGATE_TYPE, token.line, token.column);
+            if (delegate) {
+                delegate->data.delegate_decl.return_type = return_type;
+                delegate->data.delegate_decl.parameter_types = types;
+                delegate->data.delegate_decl.parameter_count = count;
+            }
+            return delegate;
+        }
+
+        /* sizeof(T), sizeof(T*), sizeof(T?) ... */
+        KrtSourceType source = {0};
+        if (!KrtParseSourceType(parser, &source)) {
+            return NULL;
+        }
         if (parser->current_token.type != TOKEN_RIGHT_PAREN) {
             return KrtParserFail(parser, token.line, token.column, "expected ')' after 'sizeof'");
         }
         parser_advance(parser);
+        if (source.pointer_depth > 0) {
+            ASTNode* pointer = KrtParserCreateNode(parser, AST_POINTER_TYPE, token.line, token.column);
+            if (pointer) {
+                pointer->data.pointer_type.base_type = source.token;
+                pointer->data.pointer_type.pointer_level = source.pointer_depth;
+            }
+            return pointer;
+        }
         ASTNode* node = KrtParserCreateNode(parser, AST_SIZEOF_EXPRESSION, token.line, token.column);
         if (node) {
-            node->data.sizeof_expr.type_token = type;
+            node->data.sizeof_expr.type_token = source.token;
         }
         return node;
     }

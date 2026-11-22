@@ -2131,6 +2131,13 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
     case AST_NULL:
         return true;
 
+    case AST_POINTER_TYPE:
+    case AST_TUPLE_TYPE:
+    case AST_DELEGATE_TYPE:
+        /* sizeof yields a machine word, not an int32; IR emits a 64-bit one. */
+        expr->resolved_type.token = KrtTokenIntegerType(64, true);
+        return true;
+
     case AST_SIZEOF_EXPRESSION:
         /* sizeof yields a machine word, not an int32; IR emits a 64-bit one. */
         expr->resolved_type.token = KrtTokenIntegerType(64, true);

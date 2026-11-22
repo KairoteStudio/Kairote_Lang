@@ -300,9 +300,6 @@ static const char* irgen_get_builtin_func(IrGenBuiltinFunction func_id) {
     return NULL;
 }
 
-static KrtIRValue irgen_call_builtin_0args(KrtIRBuilder* builder, IrGenBuiltinFunction func_id) {
-    return KrtIrCall(builder, irgen_get_builtin_func(func_id), NULL, 0);
-}
 
 static KrtIRValue irgen_call_builtin_1arg(KrtIRBuilder* builder, IrGenBuiltinFunction func_id, KrtIRValue arg0) {
     KrtIRValue args[1] = {arg0};
@@ -581,7 +578,8 @@ static void irgen_dispose(KrtIRBuilder* builder, KrtIRValue resource) {
 }
 
 static KrtIRValue irgen_size_of_pointer(KrtIRBuilder* builder) {
-    return irgen_call_builtin_0args(builder, IRGEN_FUNC_SIZE_OF_POINTER);
+    /* A pointer is a machine word; no runtime helper is needed. */
+    return KrtIrImm(builder, KRT_IRGEN_POINTER_SIZE);
 }
 
 /* ---- C24 浮点类型推断 ---- */
@@ -2355,10 +2353,16 @@ static KrtIRValue krt_ir_generate_expression(KrtIRBuilder* builder, ASTNode* exp
         break;
     case AST_DELEGATE_DECLARATION:
     case AST_DELEGATE_TYPE:
-        return KRT_IMM_ZERO(builder);
+        /* A delegate value is a machine word. */
+        return KrtIrImm(builder, KRT_IRGEN_POINTER_SIZE);
 
     case AST_POINTER_TYPE:
         return irgen_size_of_pointer(builder);
+
+    case AST_TUPLE_TYPE: {
+        int count = expr->data.tuple_type.element_count;
+        return KrtIrImm(builder, (double)(count * KRT_IRGEN_POINTER_SIZE));
+    }
 
     case AST_POINTER_ASSIGNMENT: {
         KrtIRValue pointer = KrtIrCast(
