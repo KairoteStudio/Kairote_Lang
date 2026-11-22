@@ -193,7 +193,7 @@ static void emit_branch_at(Arm64Context* ctx, uint32_t insn_offset, uint32_t ins
     uint32_t word = insn;
     if ((insn & 0xFC000000u) == 0x14000000u) { /* b */
         word = 0x14000000u | ((uint32_t)((delta >> 2) & 0x03FFFFFFu));
-    } else if ((insn & 0x9F000000u) == 0x34000000u || (insn & 0x9F000000u) == 0x94000000u) {
+    } else if ((insn & 0x7F000000u) == 0x34000000u || (insn & 0xFF000000u) == 0x94000000u) {
         /* cbz / cbnz: keep the register field, replace imm19 */
         word = (insn & 0x9F00001Fu) | ((uint32_t)((delta >> 2) & 0x7FFFFu) << 5);
     }
@@ -541,6 +541,11 @@ static void emit_load_value(Arm64Context* ctx, KrtIRValue* value, int reg) {
         break;
     }
     case KRT_IR_VALUE_VAR: {
+        if (value->data.name && find_func_offset(ctx, value->data.name) != 0xFFFFFFFFu) {
+            /* A function name used as a value is its address (delegates). */
+                        emit_symbol_address(ctx, value->data.name, reg);
+            break;
+        }
         if (value->data.name && kro_find_symbol(ctx->writer, value->data.name) >= 0) {
             emit_symbol_address(ctx, value->data.name, reg);
             emit_word(ctx, 0xF9400000u | ((uint32_t)(reg & 0x1F) << 5) | (uint32_t)(reg & 0x1F));
@@ -582,6 +587,33 @@ static void emit_load_value(Arm64Context* ctx, KrtIRValue* value, int reg) {
         emit_load_imm(ctx, reg, 0, is_64);
         break;
     }
+}
+
+static void emit_store_result(Arm64Context* ctx, KrtIRInst* inst, int reg);
+
+/* Indirect call: x16 holds the callee, x0-x7 the arguments, then blr x16. */
+static void emit_indirect_call(Arm64Context* ctx, KrtIRInst* inst) {
+    if (!inst || inst->operand_count < 1) {
+        return;
+    }
+    int args = inst->operand_count - 1;
+    if (args > ARM64_NUM_ARG_REGS) {
+        KrtError("ARM64 backend: indirect call takes %d arguments; only %d register arguments are supported", args,
+                 ARM64_NUM_ARG_REGS);
+        return;
+    }
+    emit_load_value(ctx, &inst->operands[0], 16);
+    for (int i = 0; i < args; i++) {
+        KrtIRValue* arg = &inst->operands[i + 1];
+        bool arg_float = arg->value_type == TOKEN_FLOAT32 || arg->value_type == TOKEN_FLOAT64;
+        if (arg_float) {
+            emit_load_float(ctx, arg, i); /* AAPCS64: v0-v7 */
+        } else {
+            emit_load_value(ctx, arg, i);
+        }
+    }
+    emit_word(ctx, 0xD63F0200u); /* blr x16 */
+    emit_store_result(ctx, inst, 0);
 }
 
 static void emit_store_result(Arm64Context* ctx, KrtIRInst* inst, int reg) {
@@ -934,8 +966,10 @@ static void emit_function_body(Arm64Context* ctx, KrtIRFunction* func) {
                 break;
             }
             case KRT_IR_CALL:
-            case KRT_IR_CALL_INDIRECT:
                 emit_call(ctx, inst);
+                break;
+            case KRT_IR_CALL_INDIRECT:
+                emit_indirect_call(ctx, inst);
                 break;
             case KRT_IR_STACKALLOC: {
                 int base = -1;

@@ -1279,6 +1279,32 @@ static KrtIRValue irgen_expr_identifier(KrtIRBuilder* builder, ASTNode* expr) {
         }
     }
 
+    /* A bare function name is a function reference: hand back its address so
+     * it can be stored in a delegate variable. */
+    if (builder->module && expr->resolved_type.function) {
+        /* Functions are emitted under their mangled name. */
+        KrtFunctionType* fn = expr->resolved_type.function;
+        KrtTokenType param_types[KRT_IRGEN_MAX_MANGLE_PARAMS];
+        int param_count = fn->parameter_count;
+        if (param_count > KRT_IRGEN_MAX_MANGLE_PARAMS) {
+            param_count = KRT_IRGEN_MAX_MANGLE_PARAMS;
+        }
+        for (int i = 0; i < param_count; i++) {
+            param_types[i] = fn->parameters[i].token;
+        }
+        char* mangled = name_mangle_function(NULL, var_name, param_types, param_count);
+                if (mangled) {
+            for (KrtIRFunction* f = builder->module->functions; f; f = f->next) {
+                if (f->name && strcmp(f->name, mangled) == 0) {
+                    KrtIRValue address = KrtIrLoad(builder, mangled);
+                    KRT_IRGEN_FREE(mangled);
+                    return address;
+                }
+            }
+            KRT_IRGEN_FREE(mangled);
+        }
+    }
+
     return KrtIrLoad(builder, KrtIrVarTypeResolveIRName(builder, var_name));
 }
 static KrtIRValue irgen_expr_number(KrtIRBuilder* builder, ASTNode* expr) {
@@ -1730,7 +1756,7 @@ static KrtIRValue irgen_expr_member_access(KrtIRBuilder* builder, ASTNode* expr)
 }
 static KrtIRValue irgen_expr_call(KrtIRBuilder* builder, ASTNode* expr) {
     if (expr->is_indirect_call) {
-        KrtIRValue callee = expr->data.call.object
+                KrtIRValue callee = expr->data.call.object
                                 ? krt_ir_generate_expression(builder, expr->data.call.object)
                                 : KrtIrLoad(builder, KrtIrVarTypeResolveIRName(builder, expr->data.call.name));
         if (!expr->data.call.object && builder->current_function &&

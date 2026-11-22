@@ -281,7 +281,14 @@ bool semantic_analyzer_analyze_expression(SemanticAnalyzer* analyzer, ASTNode* e
                             semantic_analyzer_get_current_class_context(analyzer);
         if (callee.function && !callee.pointer_depth && !class_method) {
             expr->is_indirect_call = !symbol || symbol->type != SYMBOL_FUNCTION;
-            if (expr->is_indirect_call && (!require_memory_permission(analyzer, expr) || callee.nullable)) {
+            /* A delegate variable is a function value, not raw memory, so it
+             * does not need the memory permission; raw function pointers do. */
+            bool delegate_variable = symbol && symbol->type == SYMBOL_VARIABLE && callee.function;
+            if (expr->is_indirect_call && callee.nullable) {
+                return pointer_error(analyzer, expr,
+                                     "Function pointer call requires a non-null pointer in unsafe code");
+            }
+            if (expr->is_indirect_call && !delegate_variable && !require_memory_permission(analyzer, expr)) {
                 return pointer_error(analyzer, expr,
                                      "Function pointer call requires a non-null pointer in unsafe code");
             }

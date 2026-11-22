@@ -1371,6 +1371,12 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
         }
         symbol->was_read = 1;
 
+        if (symbol->type == SYMBOL_FUNCTION && symbol->source_type.token == TOKEN_FN) {
+            /* A bare function name is a function reference, assignable to a
+             * delegate variable. */
+            expr->resolved_type = symbol->source_type;
+            expr->is_function_reference = 1;
+        }
         return true;
     }
 
@@ -2690,6 +2696,37 @@ bool semantic_analyzer_analyze_variable_decl(SemanticAnalyzer* analyzer, ASTNode
         semantic_analyzer_add_error_at(analyzer, var_decl, "Cannot declare a variable of type void");
         return false;
     }
+    if (type.token == TOKEN_IDENTIFIER && type.type_name && !KrtSourceIsPointer(type)) {
+        /* `NoSuchType x;` used to compile silently. */
+                SymbolEntry* type_symbol = semantic_analyzer_lookup_class(analyzer, type.type_name);
+        if (!type_symbol) {
+            SymbolEntry* named = symbol_table_lookup_scope_chain(analyzer->symbol_table, type.type_name);
+            if (!named && analyzer->global_symbol_table) {
+                named = symbol_table_lookup(analyzer->global_symbol_table, type.type_name);
+            }
+            if (named && named->type == SYMBOL_CLASS && named->source_type.function) {
+                type_symbol = named;
+            }
+        }
+        if (!type_symbol) {
+            semantic_analyzer_add_error_at(analyzer, var_decl, "Undefined type: %s", type.type_name);
+            return false;
+        }
+        if (type_symbol->source_type.function) {
+            /* A delegate name is a function type; calling the variable is an
+             * indirect call. */
+            type.function = type_symbol->source_type.function;
+            type.token = TOKEN_FN;
+        }
+        if (!symbol->class_type_name) {
+            symbol->class_type_name = KRT_STRDUP(type.type_name);
+            if (!symbol->class_type_name) {
+                semantic_analyzer_add_error(analyzer, "Out of memory while naming class type");
+                return false;
+            }
+        }
+        var_decl->data.variable_decl.type = TOKEN_IDENTIFIER;
+    }
     if (var_decl->data.variable_decl.value) {
         ASTNode* value = var_decl->data.variable_decl.value;
         if (!semantic_analyzer_analyze_expression(analyzer, value)) {
@@ -2717,23 +2754,9 @@ bool semantic_analyzer_analyze_variable_decl(SemanticAnalyzer* analyzer, ASTNode
     } else if (KrtSourceIsPointer(type) && !type.nullable) {
         return pointer_error(analyzer, var_decl, "Non-nullable pointer requires an initializer");
     }
-    if (KrtSourceIsPointer(type) && !require_memory_permission(analyzer, var_decl)) {
+    /* Function types (delegates) are values, not memory pointers. */
+    if (KrtSourceIsPointer(type) && !type.function && !require_memory_permission(analyzer, var_decl)) {
         return false;
-    }
-    if (type.token == TOKEN_IDENTIFIER && type.type_name && !KrtSourceIsPointer(type)) {
-        /* `NoSuchType x;` used to compile silently. */
-        if (!semantic_analyzer_lookup_class(analyzer, type.type_name)) {
-            semantic_analyzer_add_error_at(analyzer, var_decl, "Undefined type: %s", type.type_name);
-            return false;
-        }
-        if (!symbol->class_type_name) {
-            symbol->class_type_name = KRT_STRDUP(type.type_name);
-            if (!symbol->class_type_name) {
-                semantic_analyzer_add_error(analyzer, "Out of memory while naming class type");
-                return false;
-            }
-        }
-        var_decl->data.variable_decl.type = TOKEN_IDENTIFIER;
     }
     var_decl->resolved_type = symbol->source_type = type;
     /* The AST's declared type is left untouched; IrGen reads resolved_type
@@ -3717,6 +3740,48 @@ static bool semantic_analyze_stmt_point_block(SemanticAnalyzer* analyzer, ASTNod
     return result;
 }
 
+/* Registers a delegate name as a function type.  Shared by the pre-pass that
+ * makes signatures visible and by the statement itself. */
+static bool semantic_declare_delegate(SemanticAnalyzer* analyzer, ASTNode* stmt) {
+    const char* name = stmt->data.delegate_decl.name;
+    if (!name) {
+        semantic_analyzer_add_error_at(analyzer, stmt, "Delegate declaration is missing its name");
+        return false;
+    }
+    SymbolEntry* entry = symbol_table_lookup(analyzer->symbol_table, name);
+    if (entry && entry->source_type.function) {
+        return true;
+    }
+    KrtFunctionType* fn = (KrtFunctionType*)KRT_MALLOC(sizeof(KrtFunctionType));
+    if (!fn) {
+        semantic_analyzer_add_error(analyzer, "Out of memory while declaring a delegate");
+        return false;
+    }
+    fn->result = (KrtSourceType){.token = stmt->data.delegate_decl.return_type};
+    fn->parameter_count = stmt->data.delegate_decl.parameter_count;
+    fn->parameters = NULL;
+    if (fn->parameter_count > 0) {
+        fn->parameters = (KrtSourceType*)KRT_MALLOC(sizeof(KrtSourceType) * (size_t)fn->parameter_count);
+        if (!fn->parameters) {
+            KRT_FREE(fn);
+            semantic_analyzer_add_error(analyzer, "Out of memory while declaring a delegate");
+            return false;
+        }
+        for (int i = 0; i < fn->parameter_count; i++) {
+            fn->parameters[i] = (KrtSourceType){.token = stmt->data.delegate_decl.parameter_types[i]};
+        }
+    }
+    if (!entry) {
+        entry = symbol_table_define(analyzer->symbol_table, name, SYMBOL_CLASS, 0, NULL);
+        if (!entry) {
+            semantic_analyzer_add_error(analyzer, "Failed to declare delegate %s", name);
+            return false;
+        }
+    }
+    entry->source_type = (KrtSourceType){.token = TOKEN_FN, .function = fn};
+    return true;
+}
+
 bool semantic_analyzer_analyze_statement(SemanticAnalyzer* analyzer, ASTNode* stmt) {
     if (!analyzer || !stmt) {
         return false;
@@ -3750,6 +3815,9 @@ bool semantic_analyzer_analyze_statement(SemanticAnalyzer* analyzer, ASTNode* st
         bool condition_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.do_while_stmt.condition);
         return body_ok && condition_ok;
     }
+    case AST_DELEGATE_DECLARATION:
+        return semantic_declare_delegate(analyzer, stmt);
+
     case AST_FIXED_STATEMENT: {
         if (!semantic_analyzer_analyze_expression(analyzer, stmt->data.fixed_statement.expression)) {
             return false;
@@ -4331,6 +4399,16 @@ SemanticAnalysisResult* semantic_analyzer_analyze(SemanticAnalyzer* analyzer, AS
                     }
                 } else if (existing->state == SYMBOL_FORWARD_REF) {
                     semantic_analyzer_add_error(analyzer, "Class %s already declared", class_name);
+                    result->success = false;
+                }
+            }
+        }
+
+        /* Delegate names are function types and must be visible to bodies. */
+        for (int i = 0; i < ast->data.block.statement_count; i++) {
+            ASTNode* decl = ast->data.block.statements[i];
+            if (decl && decl->type == AST_DELEGATE_DECLARATION) {
+                if (!semantic_declare_delegate(analyzer, decl)) {
                     result->success = false;
                 }
             }

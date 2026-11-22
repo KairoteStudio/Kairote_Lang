@@ -1790,6 +1790,98 @@ ASTNode* parser_parse_statement(Parser* parser) {
         }
     }
 
+    case TOKEN_DELEGATE: {
+        int line = parser->current_token.line;
+        int col = parser->current_token.column;
+        parser_advance(parser);
+        KrtTokenType return_type = parser->current_token.type;
+        if (return_type == TOKEN_UNKNOWN) {
+            return KrtParserFail(parser, parser->current_token.line, parser->current_token.column,
+                                 "expected return type after 'delegate'");
+        }
+        parser_advance(parser);
+        if (parser->current_token.type != TOKEN_IDENTIFIER) {
+            return KrtParserFail(parser, parser->current_token.line, parser->current_token.column,
+                                 "expected delegate name");
+        }
+        char* name = KrtParserStrdup(parser, parser->current_token.value);
+        if (!name) {
+            return NULL;
+        }
+        parser_advance(parser);
+        if (parser->current_token.type != TOKEN_LEFT_PAREN) {
+            KRT_FREE(name);
+            return KrtParserFail(parser, parser->current_token.line, parser->current_token.column,
+                                 "expected '(' after delegate name");
+        }
+        parser_advance(parser);
+
+        int capacity = 4;
+        int count = 0;
+        char** params = (char**)KrtParserAlloc(parser, (size_t)capacity * sizeof(char*));
+        KrtTokenType* param_types =
+            (KrtTokenType*)KrtParserAlloc(parser, (size_t)capacity * sizeof(KrtTokenType));
+        if (!params || !param_types) {
+            KRT_FREE(name);
+            return NULL;
+        }
+        while (parser->current_token.type != TOKEN_RIGHT_PAREN) {
+            KrtTokenType param_type = parser->current_token.type;
+            parser_advance(parser);
+            char* param_name = NULL;
+            if (parser->current_token.type == TOKEN_IDENTIFIER) {
+                param_name = KrtParserStrdup(parser, parser->current_token.value);
+                if (!param_name) {
+                    KRT_FREE(name);
+                    return NULL;
+                }
+                parser_advance(parser);
+            }
+            if (count >= capacity) {
+                int grown_capacity = capacity * 2;
+                char** grown_params = (char**)KrtParserAlloc(parser, (size_t)grown_capacity * sizeof(char*));
+                KrtTokenType* grown_types =
+                    (KrtTokenType*)KrtParserAlloc(parser, (size_t)grown_capacity * sizeof(KrtTokenType));
+                if (!grown_params || !grown_types) {
+                    KRT_FREE(name);
+                    return NULL;
+                }
+                memcpy(grown_params, params, (size_t)count * sizeof(char*));
+                memcpy(grown_types, param_types, (size_t)count * sizeof(KrtTokenType));
+                params = grown_params;
+                param_types = grown_types;
+                capacity = grown_capacity;
+            }
+            params[count] = param_name;
+            param_types[count] = param_type;
+            count++;
+            if (parser->current_token.type == TOKEN_COMMA) {
+                parser_advance(parser);
+                continue;
+            }
+            break;
+        }
+        if (parser->current_token.type != TOKEN_RIGHT_PAREN) {
+            KRT_FREE(name);
+            return KrtParserFail(parser, parser->current_token.line, parser->current_token.column,
+                                 "expected ')' after delegate parameters");
+        }
+        parser_advance(parser);
+        if (parser->current_token.type == TOKEN_SEMICOLON) {
+            parser_advance(parser);
+        }
+        ASTNode* node = KrtParserCreateNode(parser, AST_DELEGATE_DECLARATION, line, col);
+        if (!node) {
+            KRT_FREE(name);
+            return NULL;
+        }
+        node->data.delegate_decl.name = name;
+        node->data.delegate_decl.return_type = return_type;
+        node->data.delegate_decl.parameters = params;
+        node->data.delegate_decl.parameter_types = param_types;
+        node->data.delegate_decl.parameter_count = count;
+        return node;
+    }
     case TOKEN_FUNCTION: {
         Token f_next = lexer_peek_token(parser->lexer);
         Token f_n2 = (f_next.type == TOKEN_IDENTIFIER) ? lexer_peek_nth_token(parser->lexer, 2) : (Token){0};
