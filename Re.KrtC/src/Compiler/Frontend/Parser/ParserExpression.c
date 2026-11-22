@@ -818,6 +818,23 @@ ASTNode* parser_parse_postfix_expression(Parser* parser) {
             member->data.member_access.member_name = KRT_PARSER_STRDUP(parser->current_token.value);
             primary = member;
             parser_advance(parser);
+        } else if (parser->current_token.type == TOKEN_QUESTION_DOT) {
+            parser_advance(parser);
+            if (parser->current_token.type != TOKEN_IDENTIFIER) {
+                ast_destroy_node(primary);
+                return KrtParserFail(parser, parser->current_token.line, parser->current_token.column,
+                                     "expected member name after '?.'");
+            }
+            ASTNode* member = KrtParserCreateNode(parser, AST_NULL_CONDITIONAL, primary->line, primary->col);
+            if (!member) {
+                ast_destroy_node(primary);
+                return NULL;
+            }
+            member->data.null_conditional.expression = primary;
+            member->data.null_conditional.member_name = KRT_PARSER_STRDUP(parser->current_token.value);
+            member->data.null_conditional.is_method_call = 0;
+            primary = member;
+            parser_advance(parser);
         } else if (parser->current_token.type == TOKEN_LEFT_BRACKET) {
             parser_advance(parser);
             ASTNode* index = parser_parse_expression(parser);

@@ -314,7 +314,8 @@ bool semantic_analyzer_analyze_expression(SemanticAnalyzer* analyzer, ASTNode* e
     if (!semantic_expression_impl(analyzer, expr)) {
         return false;
     }
-    if (expr->type != AST_MEMBER_ACCESS || !expr->resolved_type.token) {
+    if ((expr->type != AST_MEMBER_ACCESS && expr->type != AST_NULL_CONDITIONAL) ||
+        !expr->resolved_type.token) {
         KrtTokenType inferred = semantic_analyzer_infer_expression_type(analyzer, expr);
         if (inferred != TOKEN_UNKNOWN) {
             expr->resolved_type = (KrtSourceType){.token = inferred};

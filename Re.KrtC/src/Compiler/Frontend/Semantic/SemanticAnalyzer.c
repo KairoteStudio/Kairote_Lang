@@ -2006,6 +2006,45 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
         return left_ok && right_ok;
     }
 
+    case AST_NULL_CONDITIONAL: {
+        ASTNode* object = expr->data.null_conditional.expression;
+        if (!semantic_analyzer_analyze_expression(analyzer, object)) {
+            return false;
+        }
+        const char* member_name = expr->data.null_conditional.member_name;
+        if (!member_name) {
+            semantic_analyzer_add_error_at(analyzer, expr, "Null-conditional access is missing its member");
+            return false;
+        }
+        /* The owning class is carried in resolved_type.type_name so IrGen can
+         * reuse the ordinary member-access path. */
+        const char* class_name = NULL;
+        if (object->type == AST_IDENTIFIER) {
+            SymbolEntry* variable = symbol_table_lookup_scope_chain(analyzer->symbol_table, object->data.identifier_name);
+            if (variable && variable->class_type_name) {
+                class_name = variable->class_type_name;
+            }
+        }
+        if (!class_name) {
+            class_name = object->resolved_type.type_name;
+        }
+        if (!class_name) {
+            semantic_analyzer_add_error_at(analyzer, expr, "Cannot tell which class '?.' applies to");
+            return false;
+        }
+        SymbolEntry* cls = semantic_analyzer_lookup_class(analyzer, class_name);
+        SymbolEntry* member =
+            cls && cls->nested_table ? symbol_table_lookup_scope_chain(cls->nested_table, member_name) : NULL;
+        if (!member) {
+            semantic_analyzer_add_error_at(analyzer, expr, "Undefined member '%s' in class '%s'", member_name,
+                                           class_name);
+            return false;
+        }
+        expr->resolved_type.type_name = (char*)class_name;
+        expr->resolved_type.token = member->source_type.token ? member->source_type.token : member->value_type;
+        return true;
+    }
+
     case AST_CAST_EXPRESSION: {
         if (!expr->data.cast_expr.expression) {
             semantic_analyzer_add_error_at(analyzer, expr, "Cast expression has no operand");

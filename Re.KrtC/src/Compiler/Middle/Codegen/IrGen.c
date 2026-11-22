@@ -329,6 +329,7 @@ static KrtIRValue irgen_call_builtin_4args(KrtIRBuilder* builder, IrGenBuiltinFu
 
 static KrtIRValue irgen_allocate_memory(KrtIRBuilder* builder, KrtIRValue size_val);
 static void irgen_ensure_exception_runtime(KrtIRBuilder* builder);
+static KrtIRValue irgen_expr_member_access(KrtIRBuilder* builder, ASTNode* expr);
 static KrtIRValue irgen_mark_array_length(KrtIRBuilder* builder, KrtIRValue array, KrtIRValue length);
 
 static KrtIRValue irgen_expr_new_array_expression(KrtIRBuilder* builder, ASTNode* expr) {
@@ -520,13 +521,49 @@ static KrtIRValue irgen_null_coalesce(KrtIRBuilder* builder, KrtIRValue left, Kr
     return KrtIrLoad(builder, slot_name);
 }
 
-static KrtIRValue irgen_null_conditional(KrtIRBuilder* builder, KrtIRValue obj, const char* member) {
-    KrtIRValue member_str = member ? KrtIrStringConst(builder, member) : KRT_IMM_ZERO(builder);
-    if (!member) {
-        member_str.type = KRT_IR_VALUE_STRING_CONST;
-        member_str.data.string_const_id = -1;
+/* `obj?.Member`: null when obj is null, otherwise the ordinary member load.
+ * The owning class comes from the semantic pass via resolved_type.type_name. */
+static KrtIRValue irgen_null_conditional(KrtIRBuilder* builder, ASTNode* expr) {
+    ASTNode* object = expr->data.null_conditional.expression;
+    const char* class_name = expr->resolved_type.type_name;
+    if (!class_name || !object || object->type != AST_IDENTIFIER) {
+        return KRT_IMM_ZERO(builder);
     }
-    return irgen_call_builtin_2args(builder, IRGEN_FUNC_NULL_CONDITIONAL, obj, member_str);
+
+    ASTNode member_expr = *expr;
+    member_expr.type = AST_MEMBER_ACCESS;
+    member_expr.data.member_access.object = object;
+    member_expr.data.member_access.member_name = (char*)expr->data.null_conditional.member_name;
+    member_expr.data.member_access.resolved_class_name = (char*)class_name;
+    member_expr.data.member_access.resolved_builtin_member = KRT_BUILTIN_MEMBER_NONE;
+
+    KrtIRValue obj = krt_ir_generate_expression(builder, object);
+
+    char slot_name[64];
+    snprintf(slot_name, sizeof(slot_name), "__krt_nullcond_%d", builder->label_counter++);
+    KrtIrAlloc(builder, slot_name);
+
+    char labels[2][32];
+    int id = builder->label_counter++;
+    snprintf(labels[0], sizeof(labels[0]), "nullcond_value_%d", id);
+    snprintf(labels[1], sizeof(labels[1]), "nullcond_null_%d", id);
+    KrtIRBasicBlock* value_block = KrtIrBlockCreate(builder, labels[0]);
+    KrtIRBasicBlock* null_block = KrtIrBlockCreate(builder, labels[1]);
+    KrtIRBasicBlock* end_block = KrtIrBlockCreate(builder, "nullcond_end");
+
+    KrtIrBranch(builder, KrtIrCompare(builder, KRT_IR_NE, obj, KRT_IMM_ZERO(builder)), value_block, null_block);
+
+    KrtIrBlockSetCurrent(builder, value_block);
+    KrtIRValue member = irgen_expr_member_access(builder, &member_expr);
+    KrtIrStore(builder, slot_name, member);
+    KrtIrJump(builder, end_block);
+
+    KrtIrBlockSetCurrent(builder, null_block);
+    KrtIrStore(builder, slot_name, KRT_IMM_ZERO(builder));
+    KrtIrJump(builder, end_block);
+
+    KrtIrBlockSetCurrent(builder, end_block);
+    return KrtIrLoad(builder, slot_name);
 }
 
 static void irgen_monitor_enter(KrtIRBuilder* builder, KrtIRValue lock_obj) {
@@ -2343,9 +2380,7 @@ static KrtIRValue krt_ir_generate_expression(KrtIRBuilder* builder, ASTNode* exp
                                    krt_ir_generate_expression(builder, expr->data.null_coalescing.right));
 
     case AST_NULL_CONDITIONAL:
-        return irgen_null_conditional(builder,
-                                      krt_ir_generate_expression(builder, expr->data.null_conditional.expression),
-                                      expr->data.null_conditional.member_name);
+        return irgen_null_conditional(builder, expr);
 
     default:
         return void_val_return();
