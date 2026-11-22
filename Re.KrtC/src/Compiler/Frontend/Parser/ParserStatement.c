@@ -1575,6 +1575,40 @@ ASTNode* parser_parse_statement(Parser* parser) {
     case TOKEN_EXTERN:
         return parser_parse_declaration_with_modifiers(parser);
 
+    case TOKEN_FIXED: {
+        int line = parser->current_token.line;
+        int col = parser->current_token.column;
+        parser_advance(parser);
+        if (parser->current_token.type != TOKEN_LEFT_PAREN) {
+            return KrtParserFail(parser, parser->current_token.line, parser->current_token.column,
+                                 "expected '(' after 'fixed'");
+        }
+        parser_advance(parser);
+        ASTNode* value = parser_parse_expression(parser);
+        if (!value) {
+            return NULL;
+        }
+        if (parser->current_token.type != TOKEN_RIGHT_PAREN) {
+            ast_destroy_node(value);
+            return KrtParserFail(parser, parser->current_token.line, parser->current_token.column,
+                                 "expected ')' after fixed expression");
+        }
+        parser_advance(parser);
+        ASTNode* body = parser_parse_block_or_statement(parser);
+        if (!body) {
+            ast_destroy_node(value);
+            return NULL;
+        }
+        ASTNode* node = KrtParserCreateNode(parser, AST_FIXED_STATEMENT, line, col);
+        if (!node) {
+            ast_destroy_node(value);
+            ast_destroy_node(body);
+            return NULL;
+        }
+        node->data.fixed_statement.expression = value;
+        node->data.fixed_statement.body = body;
+        return node;
+    }
     case TOKEN_USING: {
         int line = parser->current_token.line;
         int col = parser->current_token.column;

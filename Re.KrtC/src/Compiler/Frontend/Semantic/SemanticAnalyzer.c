@@ -3750,6 +3750,13 @@ bool semantic_analyzer_analyze_statement(SemanticAnalyzer* analyzer, ASTNode* st
         bool condition_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.do_while_stmt.condition);
         return body_ok && condition_ok;
     }
+    case AST_FIXED_STATEMENT: {
+        if (!semantic_analyzer_analyze_expression(analyzer, stmt->data.fixed_statement.expression)) {
+            return false;
+        }
+        return semantic_analyzer_analyze_statement(analyzer, stmt->data.fixed_statement.body);
+    }
+
     case AST_WHILE_STATEMENT:
         return semantic_analyze_stmt_while_statement(analyzer, stmt);
     case AST_FOR_STATEMENT:

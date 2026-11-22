@@ -566,11 +566,15 @@ static void irgen_monitor_exit(KrtIRBuilder* builder, KrtIRValue lock_obj) {
 }
 
 static void irgen_pin_object(KrtIRBuilder* builder, KrtIRValue obj) {
-    irgen_call_builtin_1arg(builder, IRGEN_FUNC_PIN_OBJECT, obj);
+    /* The runtime has no moving collector, so pinning is a no-op; keep the
+     * hook so `fixed` reads the same as in C#. */
+    (void)builder;
+    (void)obj;
 }
 
 static void irgen_unpin_object(KrtIRBuilder* builder, KrtIRValue obj) {
-    irgen_call_builtin_1arg(builder, IRGEN_FUNC_UNPIN_OBJECT, obj);
+    (void)builder;
+    (void)obj;
 }
 
 static void irgen_dispose(KrtIRBuilder* builder, KrtIRValue resource) {
