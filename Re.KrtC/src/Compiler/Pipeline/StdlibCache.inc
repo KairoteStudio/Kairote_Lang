@@ -19,7 +19,7 @@ static KrtStdlibCacheEntry g_stdlib_cache[KRT_STDLIB_CACHE_FILES];
 static pthread_mutex_t g_stdlib_cache_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_once_t g_stdlib_cache_once = PTHREAD_ONCE_INIT;
 static size_t g_stdlib_cache_bytes;
-static unsigned long long g_stdlib_cache_clock, g_stdlib_cache_hits, g_stdlib_cache_misses;
+static unsigned long long g_stdlib_cache_clock;
 
 static void free_stdlib_entry(KrtStdlibCacheEntry* entry) {
     if (entry->parser) {
@@ -39,20 +39,10 @@ void KrtStdlibCacheClear(void) {
         free_stdlib_entry(&g_stdlib_cache[i]);
     }
     g_stdlib_cache_bytes = 0;
-    g_stdlib_cache_hits = g_stdlib_cache_misses = g_stdlib_cache_clock = 0;
+    g_stdlib_cache_clock = 0;
     pthread_mutex_unlock(&g_stdlib_cache_mutex);
 }
 
-void KrtStdlibCacheGetStats(unsigned long long* hits, unsigned long long* misses) {
-    pthread_mutex_lock(&g_stdlib_cache_mutex);
-    if (hits) {
-        *hits = g_stdlib_cache_hits;
-    }
-    if (misses) {
-        *misses = g_stdlib_cache_misses;
-    }
-    pthread_mutex_unlock(&g_stdlib_cache_mutex);
-}
 
 static void initialize_stdlib_cache(void) {
     atexit(KrtStdlibCacheClear);
@@ -125,7 +115,8 @@ static bool parse_stdlib_entry(KrtStdlibCacheEntry* entry, const char* path, con
     }
     entry->parser->source_name = entry->path;
     entry->ast = parser_parse(entry->parser);
-    if (!entry->ast || entry->parser->error_count || entry->lexer->error_count) {
+    if (!entry->ast || entry->parser->error_count || entry->lexer->error_count ||
+        (entry->ast->type != AST_PROGRAM && entry->ast->type != AST_BLOCK)) {
         return false;
     }
     entry->version = *version;
@@ -152,7 +143,6 @@ ASTNode* KrtStdlibCacheClone(const char* path, KrtArena* arena, bool expand_macr
             slot = i;
             if (same_stdlib_version(&entry->version, &version)) {
                 entry->used = ++g_stdlib_cache_clock;
-                g_stdlib_cache_hits++;
                 ASTNode* copy = KrtAstClone(arena, entry->ast);
                 pthread_mutex_unlock(&g_stdlib_cache_mutex);
                 return copy;
@@ -174,7 +164,6 @@ ASTNode* KrtStdlibCacheClone(const char* path, KrtArena* arena, bool expand_macr
     KrtStdlibCacheEntry* entry = &g_stdlib_cache[slot];
     g_stdlib_cache_bytes -= entry->bytes;
     free_stdlib_entry(entry);
-    g_stdlib_cache_misses++;
     if (!parse_stdlib_entry(entry, path, &version, expand_macros)) {
         free_stdlib_entry(entry);
         pthread_mutex_unlock(&g_stdlib_cache_mutex);

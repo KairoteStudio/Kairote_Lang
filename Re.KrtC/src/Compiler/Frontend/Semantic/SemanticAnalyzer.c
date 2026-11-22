@@ -4487,8 +4487,9 @@ static bool import_namespace_folder(SemanticAnalyzer* analyzer, const char* fold
         int path_length = snprintf(path, sizeof(path), "%s/%s", folder_path, name);
         struct stat st;
         if (path_length < 0 || (size_t)path_length >= sizeof(path) || stat(path, &st) != 0) {
+            /* Skip the bad entry and keep importing the rest of the folder. */
             success = false;
-            break;
+            continue;
         }
         if (!S_ISREG(st.st_mode)) {
             continue;
@@ -4528,7 +4529,6 @@ static bool import_namespace_folder(SemanticAnalyzer* analyzer, const char* fold
         for (int i = 0; i < count; i++) {
             if (!import_krt_file(analyzer, paths[i])) {
                 success = false;
-                break;
             }
         }
     }
@@ -4552,6 +4552,8 @@ bool semantic_analyzer_analyze_dependencies(SemanticAnalyzer* analyzer) {
     for (int i = 0; i < analyzer->using_count; i++) {
         UsingDirective* directive = analyzer->using_directives[i];
         if (!directive || !directive->namespace_path || directive->path_length == 0) {
+            semantic_analyzer_add_error(analyzer, "Using: malformed using directive");
+            success = false;
             continue;
         }
         if (semantic_analyzer_using_is_project_namespace(analyzer, directive)) {

@@ -70,7 +70,6 @@ int KrtCompilePipelineLoadStandardLibrary(KrtCompilePipeline* pipeline, const ch
 /** Clear the process-wide parsed-library cache and counters under its mutex. */
 void KrtStdlibCacheClear(void);
 /** Read cache counters atomically; either output pointer may be NULL. */
-void KrtStdlibCacheGetStats(unsigned long long* hits, unsigned long long* misses);
 /** Clone the cached AST into arena, reparsing changed files; return NULL on read/parse/allocation failure. */
 ASTNode* KrtStdlibCacheClone(const char* path, KrtArena* arena, bool expand_macros);
 int KrtCompilePipelineExecute(KrtCompilePipeline* pipeline, const char* input_file, const char* output_file);
