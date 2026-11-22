@@ -2097,6 +2097,11 @@ bool semantic_analyzer_analyze_function_call(SemanticAnalyzer* analyzer, ASTNode
             semantic_try_lazy_import_class(analyzer, class_name);
             class_symbol = semantic_analyzer_lookup_class(analyzer, class_name);
         }
+        if (!class_symbol && !var_sym) {
+            /* Neither an object nor a class: report the real problem. */
+            semantic_analyzer_add_error_at(analyzer, call_expr, "Undefined variable: %s", obj_name);
+            return false;
+        }
         if (class_symbol) {
             for (int i = 0; i < call_expr->data.call.argument_count; i++) {
                 if (!semantic_analyzer_analyze_expression(analyzer, call_expr->data.call.arguments[i])) {
