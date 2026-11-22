@@ -410,7 +410,10 @@ bool semantic_analyzer_analyze_expression(SemanticAnalyzer* analyzer, ASTNode* e
                 function = symbol_table_lookup_scope_chain(analyzer->global_symbol_table, expr->data.call.name);
             }
             if (function && function->type == SYMBOL_FUNCTION) {
-                /* A class body may call a global function after trying its own overloads. */
+                /* A class body may call a global function after trying its own
+                 * overloads; say so instead of resolving silently. */
+                semantic_analyzer_add_warning(analyzer, "Call to '%s' resolved to a global function",
+                                              expr->data.call.name);
                 method = function;
             }
         }
