@@ -512,6 +512,50 @@ ASTNode* parser_parse_primary(Parser* parser) {
         if (!expr) {
             return NULL;
         }
+        if (parser->current_token.type == TOKEN_COMMA) {
+            int capacity = 4;
+            int count = 0;
+            ASTNode** elements = (ASTNode**)KRT_PARSER_ALLOC_FROM_ARENA(parser, (size_t)capacity * sizeof(ASTNode*));
+            if (!elements) {
+                ast_destroy_node(expr);
+                return NULL;
+            }
+            elements[count++] = expr;
+            while (parser->current_token.type == TOKEN_COMMA) {
+                parser_advance(parser);
+                if (parser->current_token.type == TOKEN_RIGHT_PAREN) {
+                    break;
+                }
+                ASTNode* element = parser_parse_expression(parser);
+                if (!element) {
+                    return NULL;
+                }
+                if (count >= capacity) {
+                    int grown_capacity = capacity * 2;
+                    ASTNode** grown =
+                        (ASTNode**)KRT_PARSER_ALLOC_FROM_ARENA(parser, (size_t)grown_capacity * sizeof(ASTNode*));
+                    if (!grown) {
+                        return NULL;
+                    }
+                    memcpy(grown, elements, (size_t)count * sizeof(ASTNode*));
+                    elements = grown;
+                    capacity = grown_capacity;
+                }
+                elements[count++] = element;
+            }
+            if (parser->current_token.type != TOKEN_RIGHT_PAREN) {
+                return KrtParserFail(parser, parser->current_token.line, parser->current_token.column,
+                                     "expected ')' after tuple");
+            }
+            parser_advance(parser);
+            ASTNode* node = KrtParserCreateNode(parser, AST_TUPLE_EXPRESSION, token.line, token.column);
+            if (!node) {
+                return NULL;
+            }
+            node->data.tuple_expr.elements = elements;
+            node->data.tuple_expr.element_count = count;
+            return node;
+        }
         if (parser->current_token.type != TOKEN_RIGHT_PAREN) {
             ast_destroy_node(expr);
             return KrtParserFail(parser, parser->current_token.line, parser->current_token.column,
@@ -927,21 +971,35 @@ ASTNode* parser_parse_postfix_expression(Parser* parser) {
             return NULL;
         } else if (parser->current_token.type == TOKEN_DOT) {
             parser_advance(parser);
-            if (parser->current_token.type != TOKEN_IDENTIFIER) {
-                ast_destroy_node(primary);
-                return KrtParserFail(parser, parser->current_token.line, parser->current_token.column,
-                                     "expected member name after '.'");
-            }
+            if (parser->current_token.type == TOKEN_NUMBER && !strchr(parser->current_token.value, '.')) {
+                ASTNode* element =
+                    KrtParserCreateNode(parser, AST_TUPLE_ELEMENT_ACCESS, primary->line, primary->col);
+                if (!element) {
+                    ast_destroy_node(primary);
+                    return NULL;
+                }
+                element->data.tuple_element_access.tuple = primary;
+                element->data.tuple_element_access.index =
+                    (int)strtoull(parser->current_token.value, NULL, 10);
+                primary = element;
+                parser_advance(parser);
+            } else {
+                if (parser->current_token.type != TOKEN_IDENTIFIER) {
+                    ast_destroy_node(primary);
+                    return KrtParserFail(parser, parser->current_token.line, parser->current_token.column,
+                                         "expected member name after '.'");
+                }
 
-            ASTNode* member = KrtParserCreateNode(parser, AST_MEMBER_ACCESS, primary->line, primary->col);
-            if (!member) {
-                ast_destroy_node(primary);
-                return NULL;
+                ASTNode* member = KrtParserCreateNode(parser, AST_MEMBER_ACCESS, primary->line, primary->col);
+                if (!member) {
+                    ast_destroy_node(primary);
+                    return NULL;
+                }
+                member->data.member_access.object = primary;
+                member->data.member_access.member_name = KRT_PARSER_STRDUP(parser->current_token.value);
+                primary = member;
+                parser_advance(parser);
             }
-            member->data.member_access.object = primary;
-            member->data.member_access.member_name = KRT_PARSER_STRDUP(parser->current_token.value);
-            primary = member;
-            parser_advance(parser);
         } else if (parser->current_token.type == TOKEN_QUESTION_DOT) {
             parser_advance(parser);
             if (parser->current_token.type != TOKEN_IDENTIFIER) {

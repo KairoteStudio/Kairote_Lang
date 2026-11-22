@@ -1503,6 +1503,7 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
                 return false;
             }
         }
+        expr->resolved_type.token = TOKEN_IDENTIFIER;
         return true;
 
     case AST_CALL:
@@ -1993,6 +1994,21 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
         }
 
         return ok;
+    }
+
+    case AST_TUPLE_ELEMENT_ACCESS: {
+        ASTNode* tuple = expr->data.tuple_element_access.tuple;
+        if (!semantic_analyzer_analyze_expression(analyzer, tuple)) {
+            return false;
+        }
+        if (expr->data.tuple_element_access.index < 0) {
+            semantic_analyzer_add_error_at(analyzer, expr, "Tuple element index must not be negative");
+            return false;
+        }
+        /* Element types are not tracked individually; the value is a pointer. */
+        expr->resolved_type = tuple->resolved_type;
+        expr->resolved_type.pointer_depth = 1;
+        return true;
     }
 
     case AST_AWAIT_EXPRESSION: {

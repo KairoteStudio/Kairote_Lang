@@ -427,13 +427,7 @@ static void irgen_free_memory(KrtIRBuilder* builder, KrtIRValue ptr_val) {
     KrtIrBlockSetCurrent(builder, end_block);
 }
 
-static KrtIRValue irgen_store_pointer(KrtIRBuilder* builder, KrtIRValue ptr, KrtIRValue offset, KrtIRValue value) {
-    return irgen_call_builtin_3args(builder, IRGEN_FUNC_STORE_PTR, ptr, offset, value);
-}
 
-static KrtIRValue irgen_load_pointer(KrtIRBuilder* builder, KrtIRValue ptr, KrtIRValue offset) {
-    return irgen_call_builtin_2args(builder, IRGEN_FUNC_LOAD_PTR, ptr, offset);
-}
 
 static KrtIRValue irgen_load_field(KrtIRBuilder* builder, KrtIRValue base, const char* class_name, const char* member) {
     KrtTokenType type = KrtIrLayoutGetType(builder, class_name, member);
@@ -2126,8 +2120,8 @@ static KrtIRValue irgen_expr_tuple_expression(KrtIRBuilder* builder, ASTNode* ex
     int count = expr->data.tuple_expr.element_count;
     KrtIRValue tuple_ptr = irgen_allocate_memory(builder, KrtIrImm(builder, count * KRT_IRGEN_POINTER_SIZE));
     for (int i = 0; i < count; i++) {
-        irgen_store_pointer(builder, tuple_ptr, KrtIrImm(builder, i * KRT_IRGEN_POINTER_SIZE),
-                            krt_ir_generate_expression(builder, expr->data.tuple_expr.elements[i]));
+        KrtIrStorePtrSized(builder, tuple_ptr, i * KRT_IRGEN_POINTER_SIZE,
+                           krt_ir_generate_expression(builder, expr->data.tuple_expr.elements[i]), 8);
     }
     return tuple_ptr;
 }
@@ -2320,8 +2314,12 @@ static KrtIRValue krt_ir_generate_expression(KrtIRBuilder* builder, ASTNode* exp
         return irgen_expr_tuple_expression(builder, expr);
         break;
     case AST_TUPLE_ELEMENT_ACCESS:
-        return irgen_load_pointer(builder, krt_ir_generate_expression(builder, expr->data.tuple_element_access.tuple),
-                                  KrtIrImm(builder, expr->data.tuple_element_access.index * KRT_IRGEN_POINTER_SIZE));
+        return KrtIrTyped(
+            builder,
+            KrtIrLoadPtrSized(builder,
+                              krt_ir_generate_expression(builder, expr->data.tuple_element_access.tuple),
+                              expr->data.tuple_element_access.index * KRT_IRGEN_POINTER_SIZE, 8),
+            TOKEN_UINT64);
 
     case AST_CAST_EXPRESSION:
         return irgen_expr_cast_expression(builder, expr);
