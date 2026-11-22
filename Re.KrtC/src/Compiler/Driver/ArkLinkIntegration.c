@@ -287,20 +287,30 @@ int KrtArkLinkLinkObjects(const char** obj_files, int obj_count, const char* out
 
     char exe_dir[KRT_MAX_PATH] = {0};
     if (KrtGetExecutableDirectory(exe_dir, sizeof(exe_dir)) == 0) {
+        /* Look next to the executable first, then one level up for a bin/
+         * layout.  Taking the parent unconditionally broke installs under
+         * /usr/bin and the like. */
         char runtime_dir[KRT_MAX_PATH] = {0};
         KRT_STRNCPY(runtime_dir, exe_dir, sizeof(runtime_dir) - 1);
         runtime_dir[sizeof(runtime_dir) - 1] = '\0';
-        char* last_sep = strrchr(runtime_dir, KRT_PATH_SEPARATOR);
-        if (!last_sep) {
-            last_sep = strrchr(runtime_dir, '/');
-        }
-        if (last_sep) {
-            *last_sep = '\0';
-            if (KrtPathExists(runtime_dir)) {
-                if (KrtArkLinkAddRuntimeObjects(ctx, runtime_dir) != 0) {
-                    KrtError("无法添加运行时对象: %s", runtime_dir);
+        int added = 0;
+        for (int attempt = 0; attempt < 2 && !added; attempt++) {
+            if (attempt == 1) {
+                char* last_sep = strrchr(runtime_dir, KRT_PATH_SEPARATOR);
+                if (!last_sep) {
+                    last_sep = strrchr(runtime_dir, '/');
                 }
+                if (!last_sep) {
+                    break;
+                }
+                *last_sep = '\0';
             }
+            if (KrtPathExists(runtime_dir) && KrtArkLinkAddRuntimeObjects(ctx, runtime_dir) == 0) {
+                added = 1;
+            }
+        }
+        if (!added) {
+            KrtError("无法添加运行时对象: 在 %s 及其上级目录均未找到", exe_dir);
         }
     }
 

@@ -197,6 +197,22 @@ static void collect_exports_from_node(SemanticAnalyzer* analyzer, ASTNode* node)
                         analyzer->type_arena, (KrtSourceType){.token = TOKEN_FN, .function = node->function_type});
                     sym->value_type = node->data.function_decl.return_type;
                 }
+            } else if (existing->type == SYMBOL_FUNCTION && existing->source_type.function &&
+                       node->function_type) {
+                KrtFunctionType* a = existing->source_type.function;
+                KrtFunctionType* b = node->function_type;
+                bool same = a->parameter_count == b->parameter_count;
+                if (same) {
+                    for (int k = 0; k < a->parameter_count; k++) {
+                        if (KrtSourceStorage(a->parameters[k]) != KrtSourceStorage(b->parameters[k])) {
+                            same = false;
+                            break;
+                        }
+                    }
+                }
+                if (!same) {
+                    semantic_analyzer_add_error(analyzer, "Conflicting cross-file definition of '%s'", name);
+                }
             }
         }
         break;
@@ -304,35 +320,35 @@ void semantic_analyzer_collect_exports(SemanticAnalyzer* analyzer, ASTNode* ast)
     }
 }
 
-static void semantic_analyzer_set_project_libs_path(SemanticAnalyzer* analyzer) {
-    if (!analyzer || !analyzer->input_file_path) {
-        return;
+/* Single source of truth for the project root that owns a source file: walk
+ * up to the nearest project.krt, otherwise fall back to the library root that
+ * contains the file. */
+static bool semantic_analyzer_project_root(const char* source_path, char* root, size_t root_size) {
+    if (!source_path || !root || root_size == 0) {
+        return false;
     }
-
-    char project_root[PATH_MAX];
-    if (snprintf(project_root, sizeof(project_root), "%s", analyzer->input_file_path) >= (int)sizeof(project_root)) {
-        KrtError("源文件路径过长: %s", analyzer->input_file_path);
-        return;
+    if (snprintf(root, root_size, "%s", source_path) >= (int)root_size) {
+        return false;
     }
-    char* file_name = strrchr(project_root, '/');
+    char* file_name = strrchr(root, '/');
     if (!file_name) {
-        snprintf(project_root, sizeof(project_root), ".");
-    } else if (file_name == project_root) {
-        project_root[1] = '\0';
+        snprintf(root, root_size, ".");
+    } else if (file_name == root) {
+        root[1] = '\0';
     } else {
         *file_name = '\0';
     }
 
     char search[PATH_MAX];
-    snprintf(search, sizeof(search), "%s", project_root);
+    snprintf(search, sizeof(search), "%s", root);
     bool found_project_manifest = false;
     for (;;) {
         char manifest[PATH_MAX];
         int manifest_length = snprintf(manifest, sizeof(manifest), "%s/project.krt", search);
         struct stat st;
-        if (manifest_length >= 0 && (size_t)manifest_length < sizeof(manifest) &&
-            stat(manifest, &st) == 0 && S_ISREG(st.st_mode)) {
-            snprintf(project_root, sizeof(project_root), "%s", search);
+        if (manifest_length >= 0 && (size_t)manifest_length < sizeof(manifest) && stat(manifest, &st) == 0 &&
+            S_ISREG(st.st_mode)) {
+            snprintf(root, root_size, "%s", search);
             found_project_manifest = true;
             break;
         }
@@ -356,22 +372,35 @@ static void semantic_analyzer_set_project_libs_path(SemanticAnalyzer* analyzer) 
      * than treating (for example) libs/System as a new project root. */
     if (!found_project_manifest) {
         char* library_component = NULL;
-        for (char* component = strstr(project_root, "/libs/"); component != NULL;
+        for (char* component = strstr(root, "/libs/"); component != NULL;
              component = strstr(component + 1, "/libs/")) {
             library_component = component;
         }
         if (library_component) {
             *library_component = '\0';
         } else {
-            size_t root_length = strlen(project_root);
-            if (root_length >= 5 && strcmp(project_root + root_length - 5, "/libs") == 0) {
+            size_t root_length = strlen(root);
+            if (root_length >= 5 && strcmp(root + root_length - 5, "/libs") == 0) {
                 if (root_length == 5) {
-                    project_root[1] = '\0';
+                    root[1] = '\0';
                 } else {
-                    project_root[root_length - 5] = '\0';
+                    root[root_length - 5] = '\0';
                 }
             }
         }
+    }
+    return true;
+}
+
+static void semantic_analyzer_set_project_libs_path(SemanticAnalyzer* analyzer) {
+    if (!analyzer || !analyzer->input_file_path) {
+        return;
+    }
+
+    char project_root[PATH_MAX];
+    if (!semantic_analyzer_project_root(analyzer->input_file_path, project_root, sizeof(project_root))) {
+        KrtError("源文件路径过长: %s", analyzer->input_file_path);
+        return;
     }
 
     char libs_path[PATH_MAX];
