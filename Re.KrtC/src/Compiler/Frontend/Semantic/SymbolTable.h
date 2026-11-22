@@ -42,6 +42,10 @@ typedef struct SymbolEntry {
     KrtTokenType value_type;
     KrtSourceType source_type;
     char* class_type_name;
+    /* Inheritance: base class name (NULL for none) and the declaration kind
+     * (0 = class, 1 = struct, 2 = interface). */
+    char* base_class_name;
+    int declaration_kind;
 } SymbolEntry;
 
 typedef /** Scope level of a symbol table's global scope. */

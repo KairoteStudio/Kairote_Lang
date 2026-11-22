@@ -37,6 +37,28 @@ static bool require_memory_permission(SemanticAnalyzer* analyzer, ASTNode* node)
            pointer_error(analyzer, node, "Pointer operation requires unsafe(using krt.mem;) { ... }");
 }
 
+/* Walks the extends/implements chain: does `derived` inherit from `base`? */
+static bool semantic_class_derives_from(SemanticAnalyzer* analyzer, const char* derived, const char* base) {
+    if (!analyzer || !derived || !base) {
+        return false;
+    }
+    const char* current = derived;
+    for (int depth = 0; current && depth < 64; depth++) {
+        if (strcmp(current, base) == 0) {
+            return true;
+        }
+        SymbolEntry* symbol = semantic_analyzer_lookup_class(analyzer, current);
+        if (!symbol) {
+            symbol = symbol_table_lookup(analyzer->symbol_table, current);
+        }
+        if (!symbol || !symbol->base_class_name) {
+            return false;
+        }
+        current = symbol->base_class_name;
+    }
+    return false;
+}
+
 static bool pointer_assignable(SemanticAnalyzer* analyzer, ASTNode* node, KrtSourceType target, KrtSourceType value) {
     target.is_ref = value.is_ref = false;
     if (!KrtSourceIsPointer(target) && !KrtSourceIsPointer(value)) {
@@ -54,10 +76,15 @@ static bool pointer_assignable(SemanticAnalyzer* analyzer, ASTNode* node, KrtSou
         if (target_string != value_string && !null_to_string) {
             return pointer_error(analyzer, node, "Cannot convert between string and non-string values implicitly");
         }
-        if ((target.token == TOKEN_IDENTIFIER || value.token == TOKEN_IDENTIFIER) &&
-            !null_to_class &&
-            (target.token != value.token || (target.type_name && value.type_name &&
-                                              strcmp(target.type_name, value.type_name)))) {
+        if ((target.token == TOKEN_IDENTIFIER || value.token == TOKEN_IDENTIFIER) && !null_to_class &&
+            (target.token != value.token ||
+             (target.type_name && value.type_name && strcmp(target.type_name, value.type_name)))) {
+            /* Upcast: a derived instance may be used through its base class or
+             * an interface it implements. */
+            if (target.type_name && value.type_name &&
+                semantic_class_derives_from(analyzer, value.type_name, target.type_name)) {
+                return true;
+            }
             return pointer_error(analyzer, node, "Incompatible value types");
         }
         if (target.token == TOKEN_VOID || value.token == TOKEN_VOID) {

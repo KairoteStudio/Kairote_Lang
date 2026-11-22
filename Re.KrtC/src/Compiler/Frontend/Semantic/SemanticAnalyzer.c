@@ -3262,6 +3262,12 @@ static bool semantic_analyze_stmt_class_declaration(SemanticAnalyzer* analyzer, 
         semantic_analyzer_add_error_at(analyzer, stmt, "Failed to define class %s", class_name);
         return false;
     }
+    class_sym->declaration_kind = stmt->data.class_decl.declaration_kind;
+    if (stmt->data.class_decl.base_class &&
+        stmt->data.class_decl.base_class->type == AST_IDENTIFIER) {
+        class_sym->base_class_name = KRT_STRDUP(stmt->data.class_decl.base_class->data.identifier_name);
+    }
+
     SymbolTable* prev_table = analyzer->symbol_table;
     if (!class_sym->nested_table) {
         class_sym->nested_table = symbol_table_create();

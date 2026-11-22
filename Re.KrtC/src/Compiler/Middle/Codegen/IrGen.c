@@ -326,6 +326,8 @@ static KrtIRValue irgen_call_builtin_4args(KrtIRBuilder* builder, IrGenBuiltinFu
 
 static KrtIRValue irgen_allocate_memory(KrtIRBuilder* builder, KrtIRValue size_val);
 static void irgen_ensure_exception_runtime(KrtIRBuilder* builder);
+static void irgen_collect_classes(ASTNode* node);
+static int irgen_class_id(const char* name);
 static KrtIRValue irgen_expr_member_access(KrtIRBuilder* builder, ASTNode* expr);
 static KrtIRValue irgen_mark_array_length(KrtIRBuilder* builder, KrtIRValue array, KrtIRValue length);
 
@@ -1327,6 +1329,13 @@ static KrtIRValue irgen_expr_new_expression(KrtIRBuilder* builder, ASTNode* expr
     double alloc_size = (double)layout_size;
 
     KrtIRValue obj = irgen_allocate_memory(builder, KrtIrImm(builder, alloc_size));
+    /* The heap header holds the length at obj-16; obj-8 carries the class id,
+     * which is what virtual dispatch reads. */
+    int class_id = irgen_class_id(class_name);
+        if (class_id >= 0) {
+        KrtIrStorePtrSized(builder, obj, -KRT_IRGEN_HEAP_HEADER_SIZE / 2,
+                           KrtIrInteger((KrtUInt128)class_id, TOKEN_INT64), 8);
+    }
 
     int ac = expr->data.new_expr.argument_count;
     char* ctor_name = name_mangle_constructor(class_name, ac);
@@ -1751,6 +1760,183 @@ static KrtIRValue irgen_expr_member_access(KrtIRBuilder* builder, ASTNode* expr)
 
     return void_val_return();
 }
+/* ---- class hierarchy registry (built from the AST) ------------------------
+ * The object header keeps the class id in the upper half of the heap header
+ * (the length lives at obj-16, the id at obj-8), so no field offset changes.
+ * A virtual call compares the id with every class that can be behind the
+ * static type and calls the matching implementation. */
+
+typedef struct {
+    const char* name;
+    const char* base;
+    int kind;
+    int id;
+} IrgenClassInfo;
+
+static IrgenClassInfo g_irgen_classes[512];
+static int g_irgen_class_count;
+
+static void irgen_collect_classes(ASTNode* node) {
+    if (!node) {
+        return;
+    }
+    if (node->type == AST_PROGRAM || node->type == AST_BLOCK) {
+        for (int i = 0; i < node->data.block.statement_count; i++) {
+            irgen_collect_classes(node->data.block.statements[i]);
+        }
+        return;
+    }
+    if (node->type == AST_NAMESPACE_DECLARATION) {
+        irgen_collect_classes(node->data.namespace_decl.body);
+        return;
+    }
+    if (node->type == AST_CLASS_DECLARATION && g_irgen_class_count < 512) {
+        IrgenClassInfo* info = &g_irgen_classes[g_irgen_class_count];
+        info->name = node->data.class_decl.name;
+        info->kind = node->data.class_decl.declaration_kind;
+        info->base = NULL;
+        if (node->data.class_decl.base_class &&
+            node->data.class_decl.base_class->type == AST_IDENTIFIER) {
+            info->base = node->data.class_decl.base_class->data.identifier_name;
+        }
+        info->id = g_irgen_class_count;
+                g_irgen_class_count++;
+    }
+}
+
+static int irgen_class_id(const char* name) {
+    if (!name) {
+        return -1;
+    }
+    for (int i = 0; i < g_irgen_class_count; i++) {
+        if (g_irgen_classes[i].name && strcmp(g_irgen_classes[i].name, name) == 0) {
+            return g_irgen_classes[i].id;
+        }
+    }
+    return -1;
+}
+
+static bool irgen_class_derives_from(const char* derived, const char* base) {
+    const char* current = derived;
+    for (int depth = 0; current && depth < 64; depth++) {
+        if (strcmp(current, base) == 0) {
+            return true;
+        }
+        const char* next = NULL;
+        for (int i = 0; i < g_irgen_class_count; i++) {
+            if (g_irgen_classes[i].name && strcmp(g_irgen_classes[i].name, current) == 0) {
+                next = g_irgen_classes[i].base;
+                break;
+            }
+        }
+        current = next;
+    }
+    return false;
+}
+
+/* True when `name` is `root` or inherits from it, and the hierarchy is worth a
+ * dispatch chain. */
+static bool irgen_class_is_in_hierarchy(const char* name, const char* root) {
+    return name && root && irgen_class_derives_from(name, root);
+}
+
+/* Emits a class-id dispatch chain for an instance call.  The candidates are
+ * the static class and every class that inherits from it; the most derived
+ * wins.  Returns false when the hierarchy is flat and a direct call is enough. */
+static bool irgen_emit_virtual_dispatch(KrtIRBuilder* builder, const char* class_name, const char* method_name,
+                                        const char* resolved_mangled, KrtIRValue* iargs, int ac,
+                                        KrtIRValue* out_result) {
+    int candidates[512];
+    int depths[512];
+    int count = 0;
+    for (int i = 0; i < g_irgen_class_count && count < 512; i++) {
+        const char* name = g_irgen_classes[i].name;
+        if (!irgen_class_is_in_hierarchy(name, class_name)) {
+            continue;
+        }
+        int depth = 0;
+        for (const char* cur = name; cur && depth < 64; depth++) {
+            if (strcmp(cur, class_name) == 0) {
+                break;
+            }
+            const char* next = NULL;
+            for (int j = 0; j < g_irgen_class_count; j++) {
+                if (g_irgen_classes[j].name && strcmp(g_irgen_classes[j].name, cur) == 0) {
+                    next = g_irgen_classes[j].base;
+                    break;
+                }
+            }
+            cur = next;
+        }
+        candidates[count] = i;
+        depths[count] = depth;
+        count++;
+    }
+    if (count <= 1) {
+        return false;
+    }
+    /* Most derived first. */
+    for (int i = 1; i < count; i++) {
+        int key = candidates[i];
+        int key_depth = depths[i];
+        int j = i - 1;
+        while (j >= 0 && depths[j] < key_depth) {
+            candidates[j + 1] = candidates[j];
+            depths[j + 1] = depths[j];
+            j--;
+        }
+        candidates[j + 1] = key;
+        depths[j + 1] = key_depth;
+    }
+
+    KrtIRValue tag = KrtIrLoadPtrSized(builder, iargs[0], -KRT_IRGEN_HEAP_HEADER_SIZE / 2, 8);
+        char slot_name[64];
+    snprintf(slot_name, sizeof(slot_name), "__krt_virt_%d", builder->label_counter++);
+    KrtIrAlloc(builder, slot_name);
+
+    KrtIRBasicBlock* end_block = KrtIrBlockCreate(builder, "virt_end");
+    KrtIRBasicBlock* next_block = KrtIrBlockCreate(builder, "virt_next");
+
+    for (int i = 0; i < count; i++) {
+        IrgenClassInfo* info = &g_irgen_classes[candidates[i]];
+        char* mangled = NULL;
+        const char* fn = NULL;
+        if (info->name && strcmp(info->name, class_name) == 0) {
+            fn = resolved_mangled;
+        } else {
+            const char* ns_path[2] = {info->name, NULL};
+            mangled = krt_ir_mangle_call_function_name(builder, ns_path, method_name, NULL, 0);
+            if (mangled) {
+                fn = mangled;
+            }
+        }
+        if (!fn) {
+            KRT_IRGEN_FREE(mangled);
+            continue;
+        }
+        KrtIRValue cond = KrtIrCompare(builder, KRT_IR_EQ, tag, KrtIrInteger((KrtUInt128)info->id, TOKEN_INT64));
+        KrtIRBasicBlock* call_block = KrtIrBlockCreate(builder, "virt_call");
+        KrtIrBranch(builder, cond, call_block, next_block);
+
+        KrtIrBlockSetCurrent(builder, call_block);
+        KrtIRValue call_result = KrtIrCall(builder, fn, iargs, ac + 1);
+        KrtIrStore(builder, slot_name, call_result);
+        KrtIrJump(builder, end_block);
+        KRT_IRGEN_FREE(mangled);
+
+        KrtIrBlockSetCurrent(builder, next_block);
+        next_block = KrtIrBlockCreate(builder, "virt_next");
+    }
+
+    KrtIRValue fallback = KrtIrCall(builder, resolved_mangled, iargs, ac + 1);
+    KrtIrStore(builder, slot_name, fallback);
+    KrtIrJump(builder, end_block);
+
+    KrtIrBlockSetCurrent(builder, end_block);
+    *out_result = KrtIrLoad(builder, slot_name);
+    return true;
+}
+
 static KrtIRValue irgen_expr_call(KrtIRBuilder* builder, ASTNode* expr) {
     if (expr->is_indirect_call) {
                 KrtIRValue callee = expr->data.call.object
@@ -1808,6 +1994,18 @@ static KrtIRValue irgen_expr_call(KrtIRBuilder* builder, ASTNode* expr) {
                 KRT_IRGEN_SET_ARG(iargs, 0, this_val);
                 for (int i = 0; i < ac; i++) {
                     KRT_IRGEN_SET_ARG(iargs, i + 1, irgen_typed_call_argument(builder, expr, i));
+                }
+                KrtIRValue dispatched = {0};
+                const char* owner_class =
+                    expr->data.call.resolved_class_name ? expr->data.call.resolved_class_name : class_name;
+                if (irgen_emit_virtual_dispatch(builder, owner_class, func_name, call_func_name, iargs, ac,
+                                               &dispatched)) {
+                    if (expr->function_type) {
+                        dispatched = KrtIrTyped(builder, dispatched, KrtSourceStorage(expr->function_type->result));
+                    }
+                    KRT_IRGEN_SAFE_FREE(iargs);
+                    KRT_IRGEN_SAFE_FREE(fallback_mangled);
+                    return dispatched;
                 }
                 KrtIRValue iresult = KrtIrCall(builder, call_func_name, iargs, ac + 1);
                 if (expr->function_type) {
@@ -3936,6 +4134,7 @@ bool KrtIrGenerateFromAst(KrtIRBuilder* builder, ASTNode* ast, void* semantic_an
     }
 
     builder->semantic_analyzer = semantic_analyzer;
+    irgen_collect_classes(ast);
 
     if (ast->type == AST_BLOCK || ast->type == AST_PROGRAM) {
         for (int i = 0; i < ast->data.block.statement_count; i++) {
