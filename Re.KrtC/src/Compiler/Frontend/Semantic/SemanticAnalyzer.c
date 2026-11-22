@@ -4404,7 +4404,7 @@ static char* resolve_using_path(char** path_parts, int path_length, bool* is_wil
         }
 
         if (i > 0) {
-            resolved[len++] = '/';
+            resolved[len++] = '.';
             resolved[len] = '\0';
         }
 
@@ -4412,6 +4412,12 @@ static char* resolve_using_path(char** path_parts, int path_length, bool* is_wil
         len += part_len;
     }
 
+    /* Namespaces are dotted internally; only the filesystem path uses '/'. */
+    for (int i = 0; i < len; i++) {
+        if (resolved[i] == '.') {
+            resolved[i] = '/';
+        }
+    }
     return resolved;
 }
 
