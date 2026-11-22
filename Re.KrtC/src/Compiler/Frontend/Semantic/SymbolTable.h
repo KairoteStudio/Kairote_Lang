@@ -44,7 +44,10 @@ typedef struct SymbolEntry {
     char* class_type_name;
 } SymbolEntry;
 
-typedef struct SymbolScope {
+typedef /** Scope level of a symbol table's global scope. */
+#define KRT_GLOBAL_SCOPE_LEVEL 0
+
+struct SymbolScope {
     struct SymbolScope* parent;
     SymbolEntry* symbols;
     int scope_level;

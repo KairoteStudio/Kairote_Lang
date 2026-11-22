@@ -1991,6 +1991,44 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
     }
 }
 
+/* Checks a call against a known function signature: arity always, argument
+ * types only when both sides are known scalars. */
+static bool semantic_check_call_signature(SemanticAnalyzer* analyzer, ASTNode* call_expr, SymbolEntry* function) {
+    if (!analyzer || !call_expr || !function) {
+        return true;
+    }
+    KrtFunctionType* fn = function->source_type.function;
+    if (!fn) {
+        return true;
+    }
+    if (fn->parameter_count != call_expr->data.call.argument_count) {
+        semantic_analyzer_add_error_at(analyzer, call_expr, "Function '%s' expects %d argument(s), got %d",
+                                       call_expr->data.call.name, fn->parameter_count,
+                                       call_expr->data.call.argument_count);
+        return false;
+    }
+    for (int i = 0; i < fn->parameter_count; i++) {
+        KrtSourceType parameter = fn->parameters[i];
+        if (parameter.token == TOKEN_EOF) {
+            continue;
+        }
+        KrtTokenType arg_type =
+            semantic_analyzer_infer_expression_type(analyzer, call_expr->data.call.arguments[i]);
+        if (arg_type == TOKEN_UNKNOWN || arg_type == TOKEN_EOF || arg_type == TOKEN_NULL) {
+            continue;
+        }
+        bool parameter_string = parameter.token == TOKEN_STRING || parameter.token == TOKEN_TYPE_STRING;
+        bool arg_string = arg_type == TOKEN_STRING || arg_type == TOKEN_TYPE_STRING;
+        if (parameter_string != arg_string) {
+            semantic_analyzer_add_error_at(analyzer, call_expr,
+                                           "Argument %d of '%s' cannot be passed to a %s parameter", i + 1,
+                                           call_expr->data.call.name, parameter_string ? "string" : "non-string");
+            return false;
+        }
+    }
+    return true;
+}
+
 bool semantic_analyzer_analyze_function_call(SemanticAnalyzer* analyzer, ASTNode* call_expr) {
     if (!analyzer || !call_expr || call_expr->type != AST_CALL) {
         return false;
@@ -2348,7 +2386,9 @@ bool semantic_analyzer_analyze_function_call(SemanticAnalyzer* analyzer, ASTNode
         }
     }
 
-    return true;
+    bool signature_ok = semantic_check_call_signature(analyzer, call_expr, symbol);
+    KRT_FREE(func_name);
+    return signature_ok;
 }
 
 bool semantic_analyzer_analyze_variable_decl(SemanticAnalyzer* analyzer, ASTNode* var_decl) {
@@ -2359,6 +2399,11 @@ bool semantic_analyzer_analyze_variable_decl(SemanticAnalyzer* analyzer, ASTNode
     const char* var_name = var_decl->data.variable_decl.name;
     int is_let = var_decl->data.variable_decl.is_let;
 
+    if (!var_name) {
+        semantic_analyzer_add_error_at(analyzer, var_decl, "Variable declaration is missing its name");
+        return false;
+    }
+
     if (var_decl->data.variable_decl.pointer_depth > 0 && !analyzer->unsafe_mem && analyzer->point_depth == 0) {
         semantic_analyzer_add_error_at(
             analyzer, var_decl, "Pointer variable '%s' requires unsafe(using krt.mem;) or a Point block", var_name);
@@ -2367,7 +2412,11 @@ bool semantic_analyzer_analyze_variable_decl(SemanticAnalyzer* analyzer, ASTNode
 
     if (is_let) {
 
-        if (analyzer->symbol_table->current_scope->scope_level == 1) {
+        if (!analyzer->symbol_table->current_scope) {
+            semantic_analyzer_add_error_at(analyzer, var_decl, "let is used outside any scope");
+            return false;
+        }
+        if (analyzer->symbol_table->current_scope->scope_level == KRT_GLOBAL_SCOPE_LEVEL + 1) {
             semantic_analyzer_add_error_at(analyzer, var_decl, "let cannot be used at global scope, use var instead");
             return false;
         }
@@ -2443,8 +2492,11 @@ bool semantic_analyzer_analyze_variable_decl(SemanticAnalyzer* analyzer, ASTNode
     }
 
     const char* current_class = semantic_analyzer_get_current_class_context(analyzer);
+    /* Only a declaration directly in the class body is a field; a local
+     * inside a method must stay a variable. */
     SymbolType symbol_type = SYMBOL_VARIABLE;
-    if (current_class) {
+    if (current_class && analyzer->symbol_table->current_scope &&
+        analyzer->symbol_table->current_scope->scope_level == KRT_GLOBAL_SCOPE_LEVEL) {
         symbol_type = SYMBOL_FIELD;
     }
 
