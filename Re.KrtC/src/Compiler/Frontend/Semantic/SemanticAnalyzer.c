@@ -1760,8 +1760,10 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
         }
 
         /* Resolve built-in Length properties here, leaving code generation an
-         * explicit semantic tag instead of inferring behavior from the name. */
-        if (member_name && strcmp(member_name, "Length") == 0) {
+         * explicit semantic tag instead of inferring behavior from the name.
+         * A user-declared member of that name always wins. */
+        if (member_name && strcmp(member_name, "Length") == 0 &&
+            !symbol_table_lookup_scope_chain(analyzer->symbol_table, "Length")) {
             KrtTokenType element_type = semantic_array_element_type(analyzer, object);
             if (element_type != TOKEN_EOF) {
                 expr->data.member_access.resolved_builtin_member = KRT_BUILTIN_MEMBER_ARRAY_LENGTH;
@@ -1866,6 +1868,7 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
         for (int i = 0; i < expr->data.linq_query.clause_count; i++) {
             ASTNode* clause = expr->data.linq_query.clauses[i];
             if (!clause) {
+                semantic_analyzer_add_error_at(analyzer, expr, "LINQ query has a null clause");
                 ok = false;
                 continue;
             }
@@ -1875,6 +1878,9 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
             } else if (clause->type == AST_LINQ_ORDERBY) {
                 bool sub = semantic_analyzer_analyze_expression(analyzer, clause->data.linq_orderby.expression);
                 ok = sub && ok;
+            } else {
+                semantic_analyzer_add_error_at(analyzer, clause, "Unsupported LINQ clause");
+                ok = false;
             }
         }
 
@@ -1882,6 +1888,9 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
             bool sub = semantic_analyzer_analyze_expression(
                 analyzer, expr->data.linq_query.select_clause->data.linq_select.expression);
             ok = sub && ok;
+            if (sub && expr->data.linq_query.select_clause->data.linq_select.expression->resolved_type.token) {
+                expr->resolved_type = expr->data.linq_query.select_clause->data.linq_select.expression->resolved_type;
+            }
         }
 
         return ok;
