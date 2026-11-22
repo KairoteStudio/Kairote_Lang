@@ -306,6 +306,11 @@ bool semantic_analyzer_analyze_expression(SemanticAnalyzer* analyzer, ASTNode* e
         }
         KrtSourceType source = value->resolved_type, target = expr->declared_type;
         source.nullable = false;
+        if (source.token == TOKEN_OBJECT) {
+            /* The runtime tag decides; any target type is meaningful. */
+            expr->resolved_type = (KrtSourceType){.token = TOKEN_BOOL};
+            return true;
+        }
         if (!KrtSourceIsPointer(target) || target.nullable || !source_type_equal(source, target)) {
             return pointer_error(analyzer, expr, "Pointer pattern must name the same non-nullable pointer type");
         }

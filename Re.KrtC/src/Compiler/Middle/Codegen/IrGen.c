@@ -449,8 +449,6 @@ static void irgen_store_field(KrtIRBuilder* builder, KrtIRValue base, const char
 
 
 
-/* `x as T`: the value when x's runtime class is T or derives from T, null
- * otherwise.  The class id lives in the object header at obj-8. */
 /* ---- class hierarchy registry (built from the AST) ------------------------
  * The object header keeps the class id in the upper half of the heap header
  * (the length lives at obj-16, the id at obj-8), so no field offset changes.
@@ -650,6 +648,59 @@ static KrtIRValue irgen_box_typed(KrtIRBuilder* builder, KrtIRValue value, KrtTo
     return box;
 }
 
+/* True when `obj` is non-null and its runtime type is `class_name` (or a
+ * derivative) or, when class_name is NULL, a box tagged with `builtin_token`.
+ * Class instances carry their class id in the header; boxes carry a builtin
+ * tag there, so one check covers both. */
+static KrtIRValue irgen_type_matches(KrtIRBuilder* builder, KrtIRValue obj, const char* class_name,
+                                     KrtTokenType builtin_token) {
+    char slot_name[64];
+    snprintf(slot_name, sizeof(slot_name), "__krt_match_%d", builder->label_counter++);
+    KrtIrAlloc(builder, slot_name);
+    KrtIrStore(builder, slot_name, KRT_IMM_ZERO(builder));
+
+    KrtIRBasicBlock* end_block = KrtIrBlockCreate(builder, "match_end");
+    KrtIRBasicBlock* next_block = KrtIrBlockCreate(builder, "match_next");
+    KrtIRBasicBlock* non_null_block = KrtIrBlockCreate(builder, "match_nonnull");
+    KrtIrBranch(builder, KrtIrCompare(builder, KRT_IR_NE, obj, KRT_IMM_ZERO(builder)), non_null_block, end_block);
+    KrtIrBlockSetCurrent(builder, non_null_block);
+
+    KrtIRValue tag = KrtIrLoadPtrSized(builder, obj, -KRT_IRGEN_HEAP_HEADER_SIZE / 2, 8);
+
+    if (class_name) {
+        for (int i = 0; i < g_irgen_class_count; i++) {
+            if (!irgen_class_is_in_hierarchy(g_irgen_classes[i].name, class_name)) {
+                continue;
+            }
+            KrtIRBasicBlock* hit_block = KrtIrBlockCreate(builder, "match_hit");
+            KrtIrBranch(builder,
+                        KrtIrCompare(builder, KRT_IR_EQ, tag,
+                                     KrtIrInteger((KrtUInt128)g_irgen_classes[i].id, TOKEN_INT64)),
+                        hit_block, next_block);
+            KrtIrBlockSetCurrent(builder, hit_block);
+            KrtIrStore(builder, slot_name, KrtIrImm(builder, 1));
+            KrtIrJump(builder, end_block);
+            KrtIrBlockSetCurrent(builder, next_block);
+            next_block = KrtIrBlockCreate(builder, "match_next");
+        }
+        KrtIrJump(builder, end_block);
+    } else {
+        KrtIRBasicBlock* hit_block = KrtIrBlockCreate(builder, "match_hit");
+        KrtIrBranch(builder,
+                    KrtIrCompare(builder, KRT_IR_EQ, tag,
+                                 KrtIrInteger((KrtUInt128)irgen_builtin_tag(builtin_token), TOKEN_INT64)),
+                    hit_block, end_block);
+        KrtIrBlockSetCurrent(builder, hit_block);
+        KrtIrStore(builder, slot_name, KrtIrImm(builder, 1));
+        KrtIrJump(builder, end_block);
+    }
+
+    KrtIrBlockSetCurrent(builder, end_block);
+    return KrtIrLoad(builder, slot_name);
+}
+
+/* `x as T`: the value when x's runtime class is T or derives from T, null
+ * otherwise.  The class id lives in the object header at obj-8. */
 static KrtIRValue irgen_as_instance(KrtIRBuilder* builder, KrtIRValue obj, const char* type_name) {
     if (!type_name || irgen_class_id(type_name) < 0) {
         return obj;
@@ -2656,11 +2707,17 @@ static KrtIRValue krt_ir_generate_expression(KrtIRBuilder* builder, ASTNode* exp
 
     case AST_IS_EXPRESSION: {
         KrtIRValue value = krt_ir_generate_expression(builder, expr->data.is_expr.expression);
+        KrtIRValue matches = value;
+        if (expr->data.is_expr.expression->resolved_type.token == TOKEN_OBJECT) {
+            KrtSourceType target = expr->declared_type;
+            matches = irgen_type_matches(builder, value, target.type_name,
+                                         target.type_name ? (KrtTokenType)0 : target.token);
+        }
         if (expr->data.is_expr.binding_name) {
             KrtIrVarTypePush(builder, expr->data.is_expr.binding_name, TOKEN_UINT64, 0);
             KrtIrStore(builder, KrtIrVarTypeResolveIRName(builder, expr->data.is_expr.binding_name), value);
         }
-        return KrtIrCompare(builder, KRT_IR_NE, value, KrtIrInteger(0, TOKEN_UINT64));
+        return KrtIrCompare(builder, KRT_IR_NE, matches, KrtIrInteger(0, TOKEN_UINT64));
     }
 
     case AST_AS_EXPRESSION:
