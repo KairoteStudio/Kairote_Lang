@@ -63,6 +63,9 @@ static bool same_stdlib_version(const struct stat* a, const struct stat* b) {
 
 static bool parse_stdlib_entry(KrtStdlibCacheEntry* entry, const char* path, const struct stat* version,
                                bool expand_macros) {
+    /* Start from a clean entry so a failure can always be released by
+     * free_stdlib_entry, whatever the caller does next. */
+    memset(entry, 0, sizeof(*entry));
     if (version->st_size < 0) {
         return false;
     }
@@ -125,6 +128,8 @@ static bool parse_stdlib_entry(KrtStdlibCacheEntry* entry, const char* path, con
     return true;
 }
 
+/* Returns a deep copy of the parsed module, or NULL when the path is empty,
+ * the arena is missing, or the source could not be read/parsed. */
 ASTNode* KrtStdlibCacheClone(const char* path, KrtArena* arena, bool expand_macros) {
     if (!path || !arena) {
         return NULL;
