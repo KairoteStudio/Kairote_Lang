@@ -917,6 +917,21 @@ static KrtTokenType semantic_analyzer_infer_expression_type(SemanticAnalyzer* an
     }
 }
 
+/* Replace *slot with a copy of text, releasing the previous value.
+ * Returns false when the copy could not be allocated. */
+static bool semantic_set_resolved_name(char** slot, const char* text) {
+    if (!text) {
+        return true;
+    }
+    char* copy = KRT_STRDUP(text);
+    if (!copy) {
+        return false;
+    }
+    KRT_FREE(*slot);
+    *slot = copy;
+    return true;
+}
+
 void semantic_analyzer_add_error(SemanticAnalyzer* analyzer, const char* format, ...) {
     char message[1024];
     va_list args;
@@ -1680,8 +1695,10 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
             SymbolEntry* field =
                 owner && owner->nested_table ? symbol_table_lookup(owner->nested_table, member_name) : NULL;
             if (field && field->type == SYMBOL_FIELD) {
-                KRT_FREE(expr->data.member_access.resolved_class_name);
-                expr->data.member_access.resolved_class_name = KRT_STRDUP(instance_name);
+                if (!semantic_set_resolved_name(&expr->data.member_access.resolved_class_name, instance_name)) {
+                    semantic_analyzer_add_error(analyzer, "Out of memory while resolving a member name");
+                    return false;
+                }
                 expr->data.member_access.resolved_is_array = field->is_array;
                 expr->resolved_type = field->source_type;
                 if (!expr->resolved_type.token) {
@@ -1698,10 +1715,10 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
                 SymbolEntry* member = symbol_table_lookup_scope_chain(analyzer->symbol_table, member_name);
                 if (member && (member->type == SYMBOL_FIELD || member->type == SYMBOL_FUNCTION ||
                                member->type == SYMBOL_STATIC_FIELD || member->type == SYMBOL_VARIABLE)) {
-                    if (expr->data.member_access.resolved_class_name) {
-                        KRT_FREE(expr->data.member_access.resolved_class_name);
+                    if (!semantic_set_resolved_name(&expr->data.member_access.resolved_class_name, current_class)) {
+                        semantic_analyzer_add_error(analyzer, "Out of memory while resolving a member name");
+                        return false;
                     }
-                    expr->data.member_access.resolved_class_name = KRT_STRDUP(current_class);
                     expr->data.member_access.resolved_is_array = member->is_array;
                     expr->resolved_type = member->source_type;
                     if (!expr->resolved_type.token) {
@@ -2740,6 +2757,10 @@ static bool semantic_analyze_stmt_for_statement(SemanticAnalyzer* analyzer, ASTN
     return init_ok && cond_ok && increment_ok && body_ok;
 }
 static bool semantic_analyze_stmt_foreach_statement(SemanticAnalyzer* analyzer, ASTNode* stmt) {
+    if (!stmt->data.foreach_stmt.var_name) {
+        semantic_analyzer_add_error(analyzer, "Foreach loop variable is missing its name");
+        return false;
+    }
     symbol_table_push_scope(analyzer->symbol_table);
 
     SymbolEntry* loop_var =
