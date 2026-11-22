@@ -399,7 +399,9 @@ SymbolEntry* symbol_table_lookup_scope_chain(SymbolTable* table, const char* nam
         current_scope = current_scope->parent;
     }
 
-    return symbol_table_lookup(table, name);
+    /* No whole-table fallback: a name must be found on the lexical scope
+     * chain, otherwise sibling scopes would shadow each other. */
+    return NULL;
 }
 
 bool symbol_table_query_var_type(SymbolTable* table, const char* name, KrtTokenType* out_value_type,
