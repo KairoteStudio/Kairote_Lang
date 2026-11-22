@@ -2705,6 +2705,13 @@ static void irgen_stmt_continue_statement(KrtIRBuilder* builder, ASTNode* stmt) 
     return;
 }
 static void irgen_stmt_delete_statement(KrtIRBuilder* builder, ASTNode* stmt) {
+    /* A stackalloc buffer has no mmap header, so freeing it would munmap an
+     * invalid address. */
+    if (stmt->data.delete_stmt.value &&
+        stmt->data.delete_stmt.value->type == AST_STACKALLOC_EXPRESSION) {
+        KrtError("delete cannot be applied to a stackalloc buffer; it is not heap allocated");
+        return;
+    }
     KrtIRValue obj = krt_ir_generate_expression(builder, stmt->data.delete_stmt.value);
     const char* class_name = stmt->data.delete_stmt.resolved_class_name;
     if (class_name) {
