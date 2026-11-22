@@ -2648,7 +2648,15 @@ bool semantic_analyzer_analyze_static_variable_decl(SemanticAnalyzer* analyzer, 
         var_decl->declared_type.token ? var_decl->declared_type : (KrtSourceType){.token = symbol->value_type};
 
     if (var_decl->data.static_variable_decl.value) {
-        return semantic_analyzer_analyze_expression(analyzer, var_decl->data.static_variable_decl.value);
+        if (!semantic_analyzer_analyze_expression(analyzer, var_decl->data.static_variable_decl.value)) {
+            return false;
+        }
+        if (!pointer_assignable(analyzer, var_decl, symbol->source_type,
+                                var_decl->data.static_variable_decl.value->resolved_type)) {
+            return false;
+        }
+        var_decl->resolved_type = symbol->source_type;
+        return true;
     }
 
     return true;
@@ -2807,6 +2815,38 @@ static bool semantic_statement_guarantees_return(ASTNode* stmt) {
     if (stmt->type == AST_IF_STATEMENT && stmt->data.if_stmt.else_branch) {
         return semantic_statement_guarantees_return(stmt->data.if_stmt.then_branch) &&
                semantic_statement_guarantees_return(stmt->data.if_stmt.else_branch);
+    }
+    if (stmt->type == AST_SWITCH_STATEMENT) {
+        /* Every case, plus a default, must return. */
+        if (!stmt->data.switch_stmt.default_case) {
+            return false;
+        }
+        for (int i = 0; i < stmt->data.switch_stmt.case_count; i++) {
+            ASTNode* clause = stmt->data.switch_stmt.cases[i];
+            if (!clause) {
+                return false;
+            }
+            bool clause_returns = false;
+            for (int k = 0; k < clause->data.case_clause.statement_count; k++) {
+                if (semantic_statement_guarantees_return(clause->data.case_clause.statements[k])) {
+                    clause_returns = true;
+                    break;
+                }
+            }
+            if (!clause_returns) {
+                return false;
+            }
+        }
+        ASTNode* default_block = stmt->data.switch_stmt.default_case;
+        for (int k = 0; k < default_block->data.block.statement_count; k++) {
+            if (semantic_statement_guarantees_return(default_block->data.block.statements[k])) {
+                return true;
+            }
+        }
+        return false;
+    }
+    if (stmt->type == AST_TRY_STATEMENT) {
+        return semantic_statement_guarantees_return(stmt->data.try_stmt.try_block);
     }
     return false;
 }
@@ -3024,7 +3064,9 @@ static bool semantic_analyze_stmt_class_declaration(SemanticAnalyzer* analyzer, 
     const char* class_name = stmt->data.class_decl.name;
 
     SymbolEntry* existing = symbol_table_lookup_current_scope(analyzer->symbol_table, class_name);
-    if (existing && existing->state == SYMBOL_DEFINED) {
+    /* The predeclare pass legitimately leaves a SYMBOL_FORWARD_REF behind;
+     * anything more than that is a real duplicate. */
+    if (existing && existing->state != SYMBOL_FORWARD_REF) {
         semantic_analyzer_add_error_at(analyzer, stmt, "Class %s already declared", class_name);
         return false;
     }
@@ -3039,6 +3081,11 @@ static bool semantic_analyze_stmt_class_declaration(SemanticAnalyzer* analyzer, 
                 generics_free_parameters(params_list);
                 return false;
             }
+        }
+
+        if (!params_list) {
+            semantic_analyzer_add_error_at(analyzer, stmt, "Failed to add any template parameter for %s", class_name);
+            return false;
         }
 
         if (params_list) {
