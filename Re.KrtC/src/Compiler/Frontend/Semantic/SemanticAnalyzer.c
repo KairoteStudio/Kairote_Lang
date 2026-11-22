@@ -2016,6 +2016,10 @@ bool semantic_analyzer_analyze_function_call(SemanticAnalyzer* analyzer, ASTNode
 
     if (call_expr->data.call.object && call_expr->data.call.object->type == AST_IDENTIFIER) {
         const char* method_name = call_expr->data.call.name;
+        if (!method_name) {
+            semantic_analyzer_add_error_at(analyzer, call_expr, "Method call is missing its name");
+            return false;
+        }
 
         const char* obj_name = call_expr->data.call.object->data.identifier_name;
         SymbolEntry* var_sym = symbol_table_lookup_scope_chain(analyzer->symbol_table, obj_name);
@@ -2081,6 +2085,10 @@ bool semantic_analyzer_analyze_function_call(SemanticAnalyzer* analyzer, ASTNode
         }
 
         const char* class_name = call_expr->data.call.object->data.identifier_name;
+        if (!class_name) {
+            semantic_analyzer_add_error_at(analyzer, call_expr, "Class name is missing");
+            return false;
+        }
         if (strncmp(class_name, "global::", 8) == 0) {
             class_name += 8;
         }
