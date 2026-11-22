@@ -1995,6 +1995,28 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
         return ok;
     }
 
+    case AST_INTERPOLATED_STRING: {
+        bool ok = true;
+        for (int i = 0; i < expr->data.interpolated_string.expression_count; i++) {
+            ASTNode* value_expr = expr->data.interpolated_string.expressions[i];
+            if (!semantic_analyzer_analyze_expression(analyzer, value_expr)) {
+                ok = false;
+                continue;
+            }
+            /* The lowering concatenates strings; anything else would be
+             * reinterpreted as a pointer. */
+            KrtTokenType value_type = semantic_analyzer_infer_expression_type(analyzer, value_expr);
+            if (value_type != TOKEN_STRING && value_type != TOKEN_TYPE_STRING && value_type != TOKEN_NULL) {
+                semantic_analyzer_add_error_at(analyzer, expr,
+                                               "Interpolation requires a string value (got token %d)",
+                                               (int)value_type);
+                ok = false;
+            }
+        }
+        expr->resolved_type.token = TOKEN_STRING;
+        return ok;
+    }
+
     case AST_NULL_COALESCING: {
         bool left_ok = semantic_analyzer_analyze_expression(analyzer, expr->data.null_coalescing.left);
         bool right_ok = semantic_analyzer_analyze_expression(analyzer, expr->data.null_coalescing.right);

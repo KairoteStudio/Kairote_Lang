@@ -148,6 +148,109 @@ cleanup_error:
     return NULL;
 }
 
+/* Parses the text of a $"..." literal into literal parts plus hole
+ * expressions.  The lexer has already decoded escapes, so a '}' inside a hole
+ * would end it; that matches the simple form of the feature. */
+static ASTNode* parser_parse_interpolated_string(Parser* parser, int line, int col, const char* text) {
+    ASTNode* node = KrtParserCreateNode(parser, AST_INTERPOLATED_STRING, line, col);
+    if (!node) {
+        return NULL;
+    }
+    int capacity = 8;
+    node->data.interpolated_string.string_parts =
+        (char**)KRT_PARSER_ALLOC_FROM_ARENA(parser, (size_t)capacity * sizeof(char*));
+    node->data.interpolated_string.expressions =
+        (ASTNode**)KRT_PARSER_ALLOC_FROM_ARENA(parser, (size_t)capacity * sizeof(ASTNode*));
+    if (!node->data.interpolated_string.string_parts || !node->data.interpolated_string.expressions) {
+        return NULL;
+    }
+
+    char part[2048];
+    int part_len = 0;
+    int count = 0;
+    const char* cursor = text;
+
+    while (*cursor) {
+        if (*cursor == '{') {
+            const char* close = strchr(cursor + 1, '}');
+            if (!close) {
+                KrtParserFail(parser, line, col, "unterminated interpolation in string");
+                return NULL;
+            }
+            part[part_len] = '\0';
+            if (count >= capacity) {
+                int new_capacity = capacity * 2;
+                char** new_parts =
+                    (char**)KRT_PARSER_ALLOC_FROM_ARENA(parser, (size_t)new_capacity * sizeof(char*));
+                ASTNode** new_exprs =
+                    (ASTNode**)KRT_PARSER_ALLOC_FROM_ARENA(parser, (size_t)new_capacity * sizeof(ASTNode*));
+                if (!new_parts || !new_exprs) {
+                    return NULL;
+                }
+                memcpy(new_parts, node->data.interpolated_string.string_parts, (size_t)count * sizeof(char*));
+                memcpy(new_exprs, node->data.interpolated_string.expressions, (size_t)count * sizeof(ASTNode*));
+                node->data.interpolated_string.string_parts = new_parts;
+                node->data.interpolated_string.expressions = new_exprs;
+                capacity = new_capacity;
+            }
+            node->data.interpolated_string.string_parts[count] = KRT_PARSER_STRDUP(part);
+
+            size_t hole_len = (size_t)(close - cursor - 1);
+            char* hole = (char*)KRT_PARSER_ALLOC_FROM_ARENA(parser, hole_len + 1);
+            if (!hole) {
+                return NULL;
+            }
+            memcpy(hole, cursor + 1, hole_len);
+            hole[hole_len] = '\0';
+
+            Lexer* sub_lexer = lexer_create(hole);
+            Parser* sub_parser = sub_lexer ? parser_create(sub_lexer) : NULL;
+            ASTNode* hole_expr = sub_parser ? parser_parse_expression(sub_parser) : NULL;
+            /* The sub-parser owns its arena, so move the tree into the main
+             * parser's arena before tearing it down. */
+            ASTNode* owned = hole_expr ? KrtAstClone(parser->arena, hole_expr) : NULL;
+            if (sub_parser) {
+                parser_destroy(sub_parser);
+            }
+            if (sub_lexer) {
+                lexer_destroy(sub_lexer);
+            }
+            if (!owned) {
+                KrtParserFail(parser, line, col, "invalid interpolation expression");
+                return NULL;
+            }
+            node->data.interpolated_string.expressions[count] = owned;
+            count++;
+            part_len = 0;
+            cursor = close + 1;
+            continue;
+        }
+        if (part_len < (int)sizeof(part) - 1) {
+            part[part_len++] = *cursor;
+        }
+        cursor++;
+    }
+
+    part[part_len] = '\0';
+    if (count >= capacity) {
+        int new_capacity = capacity * 2;
+        char** new_parts = (char**)KRT_PARSER_ALLOC_FROM_ARENA(parser, (size_t)new_capacity * sizeof(char*));
+        ASTNode** new_exprs =
+            (ASTNode**)KRT_PARSER_ALLOC_FROM_ARENA(parser, (size_t)new_capacity * sizeof(ASTNode*));
+        if (!new_parts || !new_exprs) {
+            return NULL;
+        }
+        memcpy(new_parts, node->data.interpolated_string.string_parts, (size_t)count * sizeof(char*));
+        memcpy(new_exprs, node->data.interpolated_string.expressions, (size_t)count * sizeof(ASTNode*));
+        node->data.interpolated_string.string_parts = new_parts;
+        node->data.interpolated_string.expressions = new_exprs;
+    }
+    node->data.interpolated_string.string_parts[count] = KRT_PARSER_STRDUP(part);
+    node->data.interpolated_string.part_count = count + 1;
+    node->data.interpolated_string.expression_count = count;
+    return node;
+}
+
 ASTNode* parser_parse_primary(Parser* parser) {
     Token token = parser->current_token;
 
@@ -270,6 +373,18 @@ ASTNode* parser_parse_primary(Parser* parser) {
             return NULL;
         }
         return node;
+    }
+    case TOKEN_DOLLAR: {
+        Token next = lexer_peek_token(parser->lexer);
+        if (next.type != TOKEN_STRING) {
+            token_free(&next);
+            return KrtParserFail(parser, token.line, token.column, "'$' must be followed by a string literal");
+        }
+        token_free(&next);
+        parser_advance(parser);
+        Token text_token = parser->current_token;
+        parser_advance(parser);
+        return parser_parse_interpolated_string(parser, token.line, token.column, text_token.value);
     }
     case TOKEN_STRING: {
         parser_advance(parser);

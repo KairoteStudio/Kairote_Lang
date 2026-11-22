@@ -452,13 +452,7 @@ static void irgen_store_field(KrtIRBuilder* builder, KrtIRValue base, const char
     KrtIrStorePtrSized(builder, base, offset < 0 ? 0 : offset, value, KrtTokenIntegerBits(type) > 64 ? 16 : 8);
 }
 
-static KrtIRValue irgen_concat_strings(KrtIRBuilder* builder, KrtIRValue left, KrtIRValue right) {
-    return irgen_call_builtin_2args(builder, IRGEN_FUNC_STRING_CONCAT, left, right);
-}
 
-static KrtIRValue irgen_int32_to_string(KrtIRBuilder* builder, KrtIRValue value) {
-    return irgen_call_builtin_1arg(builder, IRGEN_FUNC_INT32_TO_STRING, value);
-}
 
 static KrtIRValue irgen_as_instance(KrtIRBuilder* builder, KrtIRValue obj, const char* type_name) {
     KrtIRValue type_str = type_name ? KrtIrStringConst(builder, type_name) : KRT_IMM_ZERO(builder);
@@ -2109,16 +2103,17 @@ static KrtIRValue irgen_expr_interpolated_string(KrtIRBuilder* builder, ASTNode*
                             : KrtIrStringConst(builder, "");
 
     int part_idx = (part_count > 0) ? 1 : 0, expr_idx = 0;
-
     while (expr_idx < expr_count || part_idx < part_count) {
         if (expr_idx < expr_count && expr->data.interpolated_string.expressions[expr_idx]) {
-            KrtIRValue val = krt_ir_generate_expression(builder, expr->data.interpolated_string.expressions[expr_idx]);
-            result = irgen_concat_strings(builder, result, irgen_int32_to_string(builder, val));
+            ASTNode* value_expr = expr->data.interpolated_string.expressions[expr_idx];
+            KrtIRValue value = krt_ir_generate_expression(builder, value_expr);
+            value = convert_to_string_if_needed(builder, value_expr, value);
+            result = irgen_synth_strcat(builder, result, value);
             expr_idx++;
         }
         if (part_idx < part_count && expr->data.interpolated_string.string_parts[part_idx]) {
-            result = irgen_concat_strings(
-                builder, result, KrtIrStringConst(builder, expr->data.interpolated_string.string_parts[part_idx]));
+            result = irgen_synth_strcat(builder, result,
+                                         KrtIrStringConst(builder, expr->data.interpolated_string.string_parts[part_idx]));
             part_idx++;
         }
     }
