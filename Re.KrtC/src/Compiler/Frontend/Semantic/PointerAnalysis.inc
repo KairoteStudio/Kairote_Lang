@@ -328,6 +328,28 @@ bool semantic_analyzer_analyze_expression(SemanticAnalyzer* analyzer, ASTNode* e
         }
         break;
     }
+    case AST_BOOLEAN:
+        expr->resolved_type = (KrtSourceType){.token = TOKEN_BOOL};
+        break;
+    case AST_STRING:
+        expr->resolved_type = (KrtSourceType){.token = TOKEN_STRING};
+        break;
+    case AST_CHAR_LITERAL:
+        expr->resolved_type = (KrtSourceType){.token = TOKEN_CHAR};
+        break;
+    case AST_ASSIGNMENT:
+        expr->resolved_type = expr->data.assignment.value ? expr->data.assignment.value->resolved_type
+                                                           : (KrtSourceType){0};
+        break;
+    case AST_COMPOUND_ASSIGNMENT:
+        expr->resolved_type = expr->data.compound_assignment.value ? expr->data.compound_assignment.value->resolved_type
+                                                                   : (KrtSourceType){0};
+        break;
+    case AST_UNSAFE_CALL:
+        if (expr->data.unsafe_call.expression) {
+            expr->resolved_type = expr->data.unsafe_call.expression->resolved_type;
+        }
+        break;
     case AST_NEW_EXPRESSION:
         expr->resolved_type = (KrtSourceType){.token = TOKEN_IDENTIFIER, .type_name = expr->data.new_expr.class_name};
         break;
