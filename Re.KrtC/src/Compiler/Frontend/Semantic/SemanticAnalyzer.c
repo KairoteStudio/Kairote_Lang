@@ -554,6 +554,9 @@ static SymbolEntry* semantic_analyzer_lookup_namespace(SemanticAnalyzer* analyze
     SymbolTable* current_table = analyzer->global_symbol_table ? analyzer->global_symbol_table : analyzer->symbol_table;
 
     for (int i = 0; i < path_length; i++) {
+        if (!namespace_path[i]) {
+            return NULL;
+        }
         current = symbol_table_lookup(current_table, namespace_path[i]);
 
         if (!current) {
@@ -590,6 +593,9 @@ SymbolEntry* semantic_analyzer_lookup_qualified_name(SemanticAnalyzer* analyzer,
     }
 
     if (part_count >= 2) {
+        if (!parts[part_count - 1]) {
+            return NULL;
+        }
         SymbolEntry* ns = semantic_analyzer_lookup_namespace(analyzer, parts, part_count - 1);
         if (ns && ns->nested_table) {
             result = symbol_table_lookup(ns->nested_table, parts[part_count - 1]);
@@ -708,8 +714,11 @@ static SymbolEntry* semantic_analyzer_lookup_class(SemanticAnalyzer* analyzer, c
     return fallback;
 }
 
-static KrtTokenType semantic_array_element_type(SemanticAnalyzer* analyzer, ASTNode* expr) {
+static KrtTokenType semantic_array_element_type_depth(SemanticAnalyzer* analyzer, ASTNode* expr, int depth) {
     if (!expr) {
+        return TOKEN_EOF;
+    }
+    if (depth > 64) {
         return TOKEN_EOF;
     }
     if (expr->type == AST_IDENTIFIER) {
@@ -723,8 +732,8 @@ static KrtTokenType semantic_array_element_type(SemanticAnalyzer* analyzer, ASTN
         return expr->resolved_type.token;
     }
     if (expr->type == AST_TERNARY_OPERATION) {
-        KrtTokenType left = semantic_array_element_type(analyzer, expr->data.ternary_op.true_value);
-        KrtTokenType right = semantic_array_element_type(analyzer, expr->data.ternary_op.false_value);
+        KrtTokenType left = semantic_array_element_type_depth(analyzer, expr->data.ternary_op.true_value, depth + 1);
+        KrtTokenType right = semantic_array_element_type_depth(analyzer, expr->data.ternary_op.false_value, depth + 1);
         if (left == right || expr->data.ternary_op.false_value->type == AST_NULL) {
             return left;
         }
@@ -733,6 +742,10 @@ static KrtTokenType semantic_array_element_type(SemanticAnalyzer* analyzer, ASTN
         }
     }
     return TOKEN_EOF;
+}
+
+static KrtTokenType semantic_array_element_type(SemanticAnalyzer* analyzer, ASTNode* expr) {
+    return semantic_array_element_type_depth(analyzer, expr, 0);
 }
 
 /* Value of a compile-time integer constant, or -1 when it is not one. */
