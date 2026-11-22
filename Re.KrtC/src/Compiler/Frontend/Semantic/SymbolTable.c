@@ -514,19 +514,22 @@ void symbol_table_exit_nested_scope(SymbolTable* table, SymbolScope* previous_sc
     }
 }
 
-void symbol_table_check_undefined(SymbolTable* table) {
+bool symbol_table_check_undefined(SymbolTable* table) {
     if (!table) {
-        return;
+        return false;
     }
+    bool all_defined = true;
     for (int i = 0; i < table->hash_size; i++) {
         SymbolEntry* sym = table->hash_table[i];
         while (sym) {
             if (sym->state == SYMBOL_DECLARED) {
                 symbol_table_add_error(table, "符号 '%s' 已声明但未定义", sym->name);
+                all_defined = false;
             }
             sym = sym->next;
         }
     }
+    return all_defined;
 }
 
 SymbolEntry* symbol_table_lookup_in_namespace(SymbolTable* table, const char* namespace_name, const char* symbol_name) {

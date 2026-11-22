@@ -74,7 +74,7 @@ SymbolEntry* symbol_table_lookup_current_scope(SymbolTable* table, const char* n
 SymbolEntry* symbol_table_lookup_scope_chain(SymbolTable* table, const char* name);
 bool symbol_table_query_var_type(SymbolTable* table, const char* name, KrtTokenType* out_value_type,
                                  bool* out_is_array);
-void symbol_table_check_undefined(SymbolTable* table);
+bool symbol_table_check_undefined(SymbolTable* table);
 SymbolEntry* symbol_table_lookup_in_namespace(SymbolTable* table, const char* namespace_name, const char* symbol_name);
 const char* symbol_type_to_string(SymbolType type);
 const char* symbol_state_to_string(SymbolState state);

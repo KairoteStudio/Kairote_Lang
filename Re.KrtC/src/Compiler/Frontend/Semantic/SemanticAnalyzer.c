@@ -3854,6 +3854,7 @@ SemanticAnalysisResult* semantic_analyzer_analyze(SemanticAnalyzer* analyzer, AS
     }
     if (!semantic_expand_types(analyzer, ast)) {
         result->success = false;
+        return result;
     }
 
     if (ast->type == AST_PROGRAM || ast->type == AST_BLOCK) {
@@ -3894,6 +3895,7 @@ SemanticAnalysisResult* semantic_analyzer_analyze(SemanticAnalyzer* analyzer, AS
                     }
                 } else if (existing->state == SYMBOL_FORWARD_REF) {
                     semantic_analyzer_add_error(analyzer, "Class %s already declared", class_name);
+                    result->success = false;
                 }
             }
         }
@@ -3910,7 +3912,9 @@ SemanticAnalysisResult* semantic_analyzer_analyze(SemanticAnalyzer* analyzer, AS
                         pre->state = SYMBOL_FORWARD_REF;
                         pre->source_type = KrtSourceTypeClone(
                             analyzer->type_arena, (KrtSourceType){.token = TOKEN_FN, .function = decl->function_type});
-                        pre->value_type = decl->data.function_decl.return_type;
+                        pre->value_type = (decl->type == AST_FUNCTION_DECLARATION)
+                                              ? decl->data.function_decl.return_type
+                                              : decl->data.static_function_decl.return_type;
                     }
                 }
             }
@@ -3961,7 +3965,7 @@ SemanticAnalysisResult* semantic_analyzer_analyze(SemanticAnalyzer* analyzer, AS
                 continue;
             }
             if (stmt->type == AST_VARIABLE_DECLARATION) {
-                semantic_analyzer_analyze_statement(analyzer, stmt);
+                /* Top-level non-static variables were already reported above. */
                 continue;
             }
             if (stmt->type != AST_FUNCTION_DECLARATION && stmt->type != AST_STATIC_FUNCTION_DECLARATION &&
@@ -3998,10 +4002,12 @@ SemanticAnalysisResult* semantic_analyzer_analyze(SemanticAnalyzer* analyzer, AS
         }
     }
 
-    symbol_table_check_undefined(analyzer->symbol_table);
+    if (!symbol_table_check_undefined(analyzer->symbol_table)) {
+        result->success = false;
+    }
 
     if (!analyzer->has_entry_point) {
-        SymbolEntry* main_sym = symbol_table_lookup(analyzer->symbol_table, "main");
+        SymbolEntry* main_sym = symbol_table_lookup_current_scope(analyzer->symbol_table, "main");
         if (main_sym && main_sym->type == SYMBOL_FUNCTION) {
             analyzer->has_entry_point = true;
         }
