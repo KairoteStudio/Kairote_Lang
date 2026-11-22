@@ -182,7 +182,8 @@ static void collect_exports_from_node(SemanticAnalyzer* analyzer, ASTNode* node)
     switch (node->type) {
     case AST_FUNCTION_DECLARATION:
     case AST_STATIC_FUNCTION_DECLARATION: {
-        const char* name = node->data.function_decl.name;
+        const char* name = (node->type == AST_FUNCTION_DECLARATION) ? node->data.function_decl.name
+                                                                   : node->data.static_function_decl.name;
         if (name) {
             SymbolEntry* existing = symbol_table_lookup(analyzer->global_symbol_table, name);
             if (!existing) {
@@ -4023,12 +4024,6 @@ SemanticAnalysisResult* semantic_analyzer_analyze(SemanticAnalyzer* analyzer, AS
     result->warning_count = analyzer->warning_count;
     result->error_report = analyzer->error_report;
 
-    if (result->error_count > 0) {
-        result->success = false;
-    } else {
-        result->success = true;
-    }
-
     return result;
 }
 
@@ -4048,12 +4043,21 @@ static char* resolve_using_path(char** path_parts, int path_length, bool* is_wil
     resolved[0] = '\0';
 
     for (int i = 0; i < path_length; i++) {
+        if (!path_parts[i]) {
+            KRT_FREE(resolved);
+            return NULL;
+        }
         if (strcmp(path_parts[i], "*") == 0) {
             *is_wildcard = true;
             break;
         }
 
-        int part_len = (int)strlen(path_parts[i]);
+        size_t part_length = strlen(path_parts[i]);
+        if (part_length > INT_MAX - len - 2) {
+            KRT_FREE(resolved);
+            return NULL;
+        }
+        int part_len = (int)part_length;
         if (len + part_len + 2 > capacity) {
             if (len + part_len + 2 > INT_MAX / 2) {
                 KRT_FREE(resolved);

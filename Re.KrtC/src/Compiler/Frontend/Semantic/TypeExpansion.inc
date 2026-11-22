@@ -442,8 +442,12 @@ static bool semantic_expand_types(SemanticAnalyzer* analyzer, ASTNode* ast) {
     for (int i = 0; i < ast->data.block.statement_count; i++) {
         expansion_collect(&context, ast->data.block.statements[i], "");
     }
-    for (int i = 0; i < context.count && !analyzer->error_count; i++) {
+    bool expansion_ok = true;
+    for (int i = 0; i < context.count; i++) {
         KrtAstVisit(context.nodes[i], expansion_resolve_node, &context);
+        if (analyzer->error_count > 0) {
+            expansion_ok = false;
+        }
     }
     ast->data.block.statement_count = context.count;
     ast->data.block.statements = expansion_alloc(&context, context.count * sizeof(*context.nodes));
@@ -451,5 +455,5 @@ static bool semantic_expand_types(SemanticAnalyzer* analyzer, ASTNode* ast) {
         memcpy(ast->data.block.statements, context.nodes, context.count * sizeof(*context.nodes));
     }
     KRT_FREE(context.nodes);
-    return !analyzer->error_count;
+    return expansion_ok;
 }
