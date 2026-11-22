@@ -4393,7 +4393,13 @@ static bool import_krt_file(SemanticAnalyzer* analyzer, const char* file_path) {
 
             if (stmt->type == AST_FUNCTION_DECLARATION) {
                 const char* func_name = stmt->data.function_decl.name;
-                if (func_name && strcmp(func_name, "main") != 0) {
+                if (!func_name) {
+                    semantic_analyzer_add_error(analyzer, "Imported function declaration has no name");
+                    continue;
+                }
+                /* The entry point is registered by the file that defines it,
+                 * not by the importing translation unit. */
+                if (strcmp(func_name, "main") != 0) {
                     SymbolEntry* existing = symbol_table_lookup(analyzer->global_symbol_table, func_name);
                     if (!existing) {
                         existing =
@@ -4481,11 +4487,15 @@ static bool import_krt_file(SemanticAnalyzer* analyzer, const char* file_path) {
                                                           ? symbol_table_lookup_current_scope(
                                                                 analyzer->global_symbol_table, full_name)
                                                           : NULL;
+                            bool alias_is_new = false;
                             if (full_name && !alias_sym) {
                                 alias_sym = symbol_table_define(analyzer->global_symbol_table, full_name,
                                                                 SYMBOL_FUNCTION, 0, NULL);
+                                alias_is_new = alias_sym != NULL;
                             }
-                            if (alias_sym) {
+                            /* Keep the first definition: a later overload must not
+                             * overwrite the name's type (13-2). */
+                            if (alias_sym && alias_is_new) {
                                 alias_sym->value_type = ret_type;
                                 alias_sym->source_type = KrtSourceTypeClone(
                                     analyzer->type_arena,
@@ -4494,11 +4504,13 @@ static bool import_krt_file(SemanticAnalyzer* analyzer, const char* file_path) {
                             KRT_FREE(full_name);
                             SymbolEntry* bare_sym =
                                 symbol_table_lookup_current_scope(analyzer->global_symbol_table, mname);
+                            bool bare_is_new = false;
                             if (!bare_sym) {
                                 bare_sym =
                                     symbol_table_define(analyzer->global_symbol_table, mname, SYMBOL_FUNCTION, 0, NULL);
+                                bare_is_new = bare_sym != NULL;
                             }
-                            if (bare_sym) {
+                            if (bare_sym && bare_is_new) {
                                 bare_sym->value_type = ret_type;
                                 bare_sym->source_type = KrtSourceTypeClone(
                                     analyzer->type_arena,
