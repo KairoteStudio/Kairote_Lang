@@ -661,7 +661,8 @@ static int x86_symbol_is_known(CodegenContext* ctx, const char* name) {
     return 0;
 }
 
-static void emit_call(Emitter* em, const char* func_name, KrtIRValue* args, int arg_count, KrtIRValue* result) {
+static void emit_call(Emitter* em, const char* func_name, KrtIRValue* callee, KrtIRValue* args, int arg_count,
+                      KrtIRValue* result) {
     if (!em || !func_name || (arg_count > 0 && !args)) {
         return;
     }
@@ -773,6 +774,12 @@ static void emit_call(Emitter* em, const char* func_name, KrtIRValue* args, int 
         fprintf(em->output, "    mov %s, [rsp + %d]\n", g_arg_regs[i], source_offset);
     }
 
+    if (callee) {
+        /* Indirect call: r11 holds the target, which the argument staging
+         * above does not touch. */
+        emit_load_value(em, callee, "r11");
+        fprintf(em->output, "    call r11\n");
+    } else {
     const char* actual_func_name = func_name;
     if (strcmp(func_name, "print_string") == 0) {
         actual_func_name = "_print_string";
@@ -783,6 +790,7 @@ static void emit_call(Emitter* em, const char* func_name, KrtIRValue* args, int 
         KRT_WARNING("X86 backend: call to unknown symbol '%s'", actual_func_name);
     }
     fprintf(em->output, "    call %s\n", actual_func_name);
+    }
 
     /* Restore all snapshotted registers except rax, which holds the result. */
     for (int i = 1; i < register_snapshot_count; i++) {
@@ -909,10 +917,19 @@ static void emit_instruction(Emitter* em, KrtIRInst* inst) {
                 KrtError("X86 CALL is missing its function name");
                 break;
             }
-            emit_call(em, func_name, inst->operand_count > 1 ? &inst->operands[1] : NULL,
+            emit_call(em, func_name, NULL, inst->operand_count > 1 ? &inst->operands[1] : NULL,
                       inst->operand_count > 1 ? inst->operand_count - 1 : 0, &inst->result);
         } else {
             KrtError("X86 CALL expects at least a function-name operand");
+        }
+        break;
+
+    case KRT_IR_CALL_INDIRECT:
+        if (inst->operand_count >= 1) {
+            emit_call(em, NULL, &inst->operands[0], inst->operand_count > 1 ? &inst->operands[1] : NULL,
+                      inst->operand_count > 1 ? inst->operand_count - 1 : 0, &inst->result);
+        } else {
+            KrtError("X86 CALL_INDIRECT expects a callee operand");
         }
         break;
 

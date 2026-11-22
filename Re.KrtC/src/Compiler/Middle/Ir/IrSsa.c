@@ -1347,8 +1347,9 @@ static void ssa_eliminate_dead_code(KrtIRFunction* func) {
             }
 
             if (is_used || inst->opcode == KRT_IR_RETURN || inst->opcode == KRT_IR_CALL ||
-                inst->opcode == KRT_IR_SYSCALL || inst->opcode == KRT_IR_BRANCH || inst->opcode == KRT_IR_JUMP ||
-                inst->opcode == KRT_IR_STORE || inst->opcode == KRT_IR_ALLOC || inst->opcode == KRT_IR_LOAD) {
+                inst->opcode == KRT_IR_CALL_INDIRECT || inst->opcode == KRT_IR_SYSCALL ||
+                inst->opcode == KRT_IR_BRANCH || inst->opcode == KRT_IR_JUMP || inst->opcode == KRT_IR_STORE ||
+                inst->opcode == KRT_IR_STOREPTR || inst->opcode == KRT_IR_ALLOC || inst->opcode == KRT_IR_LOAD) {
                 block->insts[new_count++] = inst;
             }
         }
