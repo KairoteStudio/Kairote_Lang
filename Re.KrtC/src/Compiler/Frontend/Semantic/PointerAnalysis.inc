@@ -119,6 +119,16 @@ static bool pointer_assignable(SemanticAnalyzer* analyzer, ASTNode* node, KrtSou
         return pointer_error(analyzer, node, "Incompatible pointee nullability");
     }
     target.nullable = value.nullable = false;
+        if (getenv("KRT_DEBUG_FN")) {
+        fprintf(stderr, "[fn] target tok=%d pc=%d | value tok=%d pc=%d\n", (int)target.token,
+                target.function ? target.function->parameter_count : -1, (int)value.token,
+                value.function ? value.function->parameter_count : -1);
+        if (target.function && value.function) {
+            fprintf(stderr, "[fn]  tgt ret=%d val ret=%d; tgt p0=%d val p0=%d\n",
+                    (int)target.function->result.token, (int)value.function->result.token,
+                    (int)target.function->parameters[0].token, (int)value.function->parameters[0].token);
+        }
+    }
     if (source_type_equal(target, value)) {
         return true;
     }
@@ -348,7 +358,8 @@ bool semantic_analyzer_analyze_expression(SemanticAnalyzer* analyzer, ASTNode* e
     if (!semantic_expression_impl(analyzer, expr)) {
         return false;
     }
-    if ((expr->type != AST_MEMBER_ACCESS && expr->type != AST_NULL_CONDITIONAL) ||
+    if ((expr->type != AST_MEMBER_ACCESS && expr->type != AST_NULL_CONDITIONAL &&
+         expr->type != AST_LAMBDA_EXPRESSION) ||
         !expr->resolved_type.token) {
         KrtTokenType inferred = semantic_analyzer_infer_expression_type(analyzer, expr);
         if (inferred != TOKEN_UNKNOWN) {

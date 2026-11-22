@@ -439,25 +439,51 @@ ASTNode* parser_parse_primary(Parser* parser) {
         parser_advance(parser);
 
         char** params = NULL;
+        KrtSourceType* ptypes = NULL;
         int param_count = 0;
         int cap = 0;
         while (parser->current_token.type != TOKEN_RIGHT_PAREN && parser->current_token.type != TOKEN_EOF) {
-            if (parser->current_token.type == TOKEN_IDENTIFIER) {
-                if (param_count == cap) {
-                    int ncap = cap ? cap * 2 : 4;
-                    char** np = (char**)KrtParserAlloc(parser, sizeof(char*) * ncap);
-                    if (!np) {
-                        params = NULL;
-                        break;
-                    }
-                    for (int k = 0; k < param_count; k++) {
-                        np[k] = params[k];
-                    }
-                    params = np;
-                    cap = ncap;
+            KrtSourceType ptype = {0};
+            if (parser_is_type_keyword(parser->current_token.type)) {
+                if (!KrtParseSourceType(parser, &ptype)) {
+                    return NULL;
                 }
-                params[param_count++] = parser->current_token.value;
+            } else if (parser->current_token.type == TOKEN_IDENTIFIER) {
+                /* `a` is a bare name; `A a` is a typed parameter. */
+                Token peek = lexer_peek_token(parser->lexer);
+                bool typed = peek.type == TOKEN_IDENTIFIER || peek.type == TOKEN_MULTIPLY || peek.type == TOKEN_POWER;
+                token_free(&peek);
+                if (typed && !KrtParseSourceType(parser, &ptype)) {
+                    return NULL;
+                }
             }
+            if (ptype.token == 0) {
+                ptype.token = TOKEN_INT32; /* an untyped lambda parameter defaults to int32 */
+            }
+            if (parser->current_token.type != TOKEN_IDENTIFIER) {
+                return KrtParserFail(parser, parser->current_token.line, parser->current_token.column,
+                                     "expected lambda parameter name");
+            }
+            if (param_count == cap) {
+                int ncap = cap ? cap * 2 : 4;
+                char** np = (char**)KrtParserAlloc(parser, sizeof(char*) * ncap);
+                KrtSourceType* npt = (KrtSourceType*)KrtParserAlloc(parser, sizeof(KrtSourceType) * ncap);
+                if (!np || !npt) {
+                    params = NULL;
+                    break;
+                }
+                for (int k = 0; k < param_count; k++) {
+                    np[k] = params[k];
+                    npt[k] = ptypes[k];
+                }
+                params = np;
+                ptypes = npt;
+                cap = ncap;
+            }
+            /* Copy the name: the lexer's text does not outlive the parse. */
+            params[param_count] = KrtParserStrdup(parser, parser->current_token.value);
+            ptypes[param_count] = ptype;
+            param_count++;
             parser_advance(parser);
             if (parser->current_token.type == TOKEN_COMMA) {
                 parser_advance(parser);
@@ -478,6 +504,7 @@ ASTNode* parser_parse_primary(Parser* parser) {
             return NULL;
         }
         node->data.lambda_expr.parameters = params;
+        node->data.lambda_expr.parameter_types = ptypes;
         node->data.lambda_expr.parameter_count = param_count;
         node->data.lambda_expr.expression = parser_parse_expression(parser);
         node->data.lambda_expr.body = NULL;

@@ -172,6 +172,7 @@ typedef struct ASTNode {
     bool is_indirect_call;
     bool is_function_reference;
     char* lexical_namespace;
+    char* ir_name; /* codegen-assigned function name (lambdas) */
     bool is_ref_argument;
     bool is_ref_binding;
     bool is_enum;
@@ -489,6 +490,7 @@ typedef struct ASTNode {
         } property_setter;
         struct {
             char** parameters;
+            KrtSourceType* parameter_types;
             int parameter_count;
             struct ASTNode* body;
             struct ASTNode* expression;

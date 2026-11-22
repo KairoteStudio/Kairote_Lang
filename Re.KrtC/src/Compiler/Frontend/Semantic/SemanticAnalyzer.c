@@ -1371,6 +1371,11 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
         }
         symbol->was_read = 1;
 
+        if (symbol->type == SYMBOL_VARIABLE) {
+            /* A variable reference carries its type, which the call-argument
+             * and assignment checks rely on. */
+            expr->resolved_type = symbol->source_type;
+        }
         if (symbol->type == SYMBOL_FUNCTION && symbol->source_type.token == TOKEN_FN) {
             /* A bare function name is a function reference, assignable to a
              * delegate variable. */
@@ -1958,6 +1963,43 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
         }
 
         symbol_table_pop_scope(analyzer->symbol_table);
+
+        if (body_ok) {
+            /* A lambda is a function value: give it a function type so it can
+             * be passed to (and called through) a function parameter. */
+            KrtFunctionType* fn = (KrtFunctionType*)KRT_MALLOC(sizeof(KrtFunctionType));
+            if (fn) {
+                fn->parameter_count = expr->data.lambda_expr.parameter_count;
+                fn->parameters = NULL;
+                if (fn->parameter_count > 0) {
+                    fn->parameters =
+                        (KrtSourceType*)KRT_MALLOC(sizeof(KrtSourceType) * (size_t)fn->parameter_count);
+                }
+                if (!fn->parameters && fn->parameter_count > 0) {
+                    KRT_FREE(fn);
+                    fn = NULL;
+                }
+                if (fn) {
+                    for (int i = 0; i < fn->parameter_count; i++) {
+                        fn->parameters[i] =
+                            expr->data.lambda_expr.parameter_types
+                                ? expr->data.lambda_expr.parameter_types[i]
+                                : (KrtSourceType){.token = TOKEN_INT32};
+                    }
+                    KrtTokenType result_token = TOKEN_INT32;
+                    if (expr->data.lambda_expr.expression) {
+                        KrtTokenType inferred =
+                            semantic_analyzer_infer_expression_type(analyzer, expr->data.lambda_expr.expression);
+                        if (inferred != TOKEN_UNKNOWN && inferred != TOKEN_EOF) {
+                            result_token = inferred;
+                        }
+                    }
+                    fn->result = (KrtSourceType){.token = result_token};
+                    expr->function_type = fn;
+                    expr->resolved_type = (KrtSourceType){.token = TOKEN_FN, .function = fn};
+                }
+            }
+        }
 
         return body_ok;
     }

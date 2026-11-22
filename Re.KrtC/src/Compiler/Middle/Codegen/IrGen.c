@@ -2249,9 +2249,12 @@ static KrtIRValue irgen_expr_array_access(KrtIRBuilder* builder, ASTNode* expr) 
     return KrtIrTyped(builder, KrtIrLoadPtrSized(builder, address, 0, element_size), element_type);
 }
 static KrtIRValue irgen_expr_lambda_expression(KrtIRBuilder* builder, ASTNode* expr) {
-    static _Thread_local int lambda_counter = 0;
     char lambda_name[256];
-    snprintf(lambda_name, sizeof(lambda_name), "__lambda_%d", lambda_counter++);
+    if (expr->ir_name) {
+        snprintf(lambda_name, sizeof(lambda_name), "%s", expr->ir_name);
+    } else {
+        snprintf(lambda_name, sizeof(lambda_name), "__lambda_%d", builder->label_counter++);
+    }
 
     int param_count = expr->data.lambda_expr.parameter_count;
     KrtIRParam* params = NULL;
@@ -2292,7 +2295,9 @@ static KrtIRValue irgen_expr_lambda_expression(KrtIRBuilder* builder, ASTNode* e
 
     builder->current_function = saved_func;
     builder->current_block = saved_block;
-    return KRT_IMM_ZERO(builder);
+    /* The value of a lambda expression is the address of the generated
+     * function, so it can be stored and called indirectly. */
+    return KrtIrLoad(builder, lambda_name);
 }
 static KrtIRValue irgen_expr_linq_query(KrtIRBuilder* builder, ASTNode* expr) {
     ASTNode* from_clause = expr->data.linq_query.from_clause;
@@ -4135,6 +4140,37 @@ static void krt_ir_generate_block(KrtIRBuilder* builder, ASTNode* block) {
     KrtIrVarTypeTruncate(builder, vt_saved);
 }
 
+/* Lambdas are functions too; creating them up front lets the backend emit a
+ * symbol (and therefore an address) for them. */
+static bool irgen_lambda_declare_visitor(ASTNode* node, void* context) {
+    KrtIRBuilder* builder = (KrtIRBuilder*)context;
+    if (!node || node->type != AST_LAMBDA_EXPRESSION) {
+        return true;
+    }
+    char name[64];
+    snprintf(name, sizeof(name), "__lambda_%d", builder->label_counter++);
+    int count = node->data.lambda_expr.parameter_count;
+    KrtIRParam* params = count > 0 ? (KrtIRParam*)KRT_CALLOC(count, sizeof(KrtIRParam)) : NULL;
+    if (count > 0 && params) {
+        for (int i = 0; i < count; i++) {
+            params[i].name = node->data.lambda_expr.parameters[i];
+            KrtSourceType pt = node->data.lambda_expr.parameter_types
+                                   ? node->data.lambda_expr.parameter_types[i]
+                                   : (KrtSourceType){.token = TOKEN_INT32};
+            params[i].type = KrtSourceAbiStorage(pt);
+        }
+    }
+    KrtTokenType result = TOKEN_INT32;
+    if (node->resolved_type.function && node->resolved_type.function->result.token) {
+        result = node->resolved_type.function->result.token;
+    }
+    KrtIrFunctionCreate(builder, name, params, count, result);
+    KRT_FREE(params);
+    KRT_FREE(node->ir_name);
+    node->ir_name = KRT_STRDUP(name);
+    return true;
+}
+
 static void irgen_declare_functions(KrtIRBuilder* builder, ASTNode* ast) {
     for (int i = 0; i < ast->data.block.statement_count; i++) {
         ASTNode* stmt = ast->data.block.statements[i];
@@ -4172,6 +4208,7 @@ bool KrtIrGenerateFromAst(KrtIRBuilder* builder, ASTNode* ast, void* semantic_an
 
     builder->semantic_analyzer = semantic_analyzer;
     irgen_collect_classes(ast);
+    KrtAstVisit(ast, irgen_lambda_declare_visitor, builder);
 
     if (ast->type == AST_BLOCK || ast->type == AST_PROGRAM) {
         for (int i = 0; i < ast->data.block.statement_count; i++) {

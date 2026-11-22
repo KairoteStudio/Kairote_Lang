@@ -384,6 +384,7 @@ ASTNode* KrtAstClone(KrtArena* arena, const ASTNode* node) {
         break;
     case AST_LAMBDA_EXPRESSION:
         KRT_CLONE_STRINGS(lambda_expr.parameters, lambda_expr.parameter_count);
+        KRT_CLONE_DATA(lambda_expr.parameter_types, lambda_expr.parameter_count);
         KRT_CLONE_NODE(lambda_expr.body);
         KRT_CLONE_NODE(lambda_expr.expression);
         break;
