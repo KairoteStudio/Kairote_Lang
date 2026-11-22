@@ -289,6 +289,9 @@ bool semantic_analyzer_analyze_expression(SemanticAnalyzer* analyzer, ASTNode* e
             if (expr->data.call.argument_count != fn->parameter_count) {
                 return pointer_error(analyzer, expr, "Function pointer signature argument count mismatch");
             }
+            if (fn->parameter_count > 0 && !fn->parameters) {
+                return pointer_error(analyzer, expr, "Function pointer signature has no parameter types");
+            }
             for (int i = 0; i < fn->parameter_count; i++) {
                 ASTNode* arg = expr->data.call.arguments[i];
                 if (!semantic_analyzer_analyze_expression(analyzer, arg) ||
