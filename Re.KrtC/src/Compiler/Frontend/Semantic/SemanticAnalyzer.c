@@ -4125,6 +4125,18 @@ bool semantic_analyzer_validate_constraints(SemanticAnalyzer* analyzer, ASTNode*
                 return false;
             }
         } else if (strcmp(constraint_type, "new()") == 0) {
+            SymbolEntry* arg_class = semantic_analyzer_lookup_class(analyzer, type_arg);
+            char* default_ctor =
+                (arg_class && arg_class->nested_table) ? name_mangle_constructor(type_arg, 0) : NULL;
+            bool has_default_ctor = default_ctor && arg_class && arg_class->nested_table &&
+                                   symbol_table_lookup(arg_class->nested_table, default_ctor);
+            KRT_FREE(default_ctor);
+            if (!has_default_ctor) {
+                semantic_analyzer_add_error(analyzer,
+                                            "Type argument '%s' has no default constructor for the new() constraint",
+                                            type_arg);
+                return false;
+            }
             continue;
         } else if (strcmp(constraint_type, "IDisposable") == 0) {
             if (strcmp(type_arg, "string") == 0) {
@@ -4649,6 +4661,12 @@ static bool import_krt_file(SemanticAnalyzer* analyzer, const char* file_path) {
                 }
                 /* The entry point is registered by the file that defines it,
                  * not by the importing translation unit. */
+                if (strcmp(func_name, "main") == 0) {
+                    semantic_analyzer_add_warning(
+                        analyzer, "Imported source '%s' declares main; the entry point comes from the main source",
+                        file_path);
+                    continue;
+                }
                 if (strcmp(func_name, "main") != 0) {
                     SymbolEntry* existing = symbol_table_lookup(analyzer->global_symbol_table, func_name);
                     if (!existing) {
