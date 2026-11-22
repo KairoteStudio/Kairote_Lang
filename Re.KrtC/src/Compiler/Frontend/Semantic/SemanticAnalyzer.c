@@ -1277,8 +1277,16 @@ static SymbolEntry* semantic_lookup_method_by_arity(SemanticAnalyzer* analyzer, 
 
 static bool semantic_check_assignable(SemanticAnalyzer* analyzer, ASTNode* node, const char* name,
                                       SymbolEntry* symbol) {
-    if (symbol && symbol->is_const) {
+    if (!symbol) {
+        return true;
+    }
+    if (symbol->is_const) {
         semantic_analyzer_add_error_at(analyzer, node, "Cannot assign to constant: %s", name);
+        return false;
+    }
+    if (symbol->type != SYMBOL_VARIABLE && symbol->type != SYMBOL_FIELD &&
+        symbol->type != SYMBOL_STATIC_FIELD) {
+        semantic_analyzer_add_error_at(analyzer, node, "'%s' is not an assignable variable", name);
         return false;
     }
     return true;
@@ -2535,6 +2543,9 @@ bool semantic_analyzer_analyze_variable_decl(SemanticAnalyzer* analyzer, ASTNode
             long size = semantic_constant_int(analyzer, var_decl->data.variable_decl.array_size);
             if (size >= 0) {
                 symbol->const_array_size = size;
+            } else {
+                semantic_analyzer_add_warning(analyzer,
+                                              "Array size is not a constant expression; length tracking disabled");
             }
         }
     } else if (var_decl->data.variable_decl.value && var_decl->data.variable_decl.value->type == AST_ARRAY_LITERAL) {
