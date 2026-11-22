@@ -299,7 +299,10 @@ bool semantic_analyzer_analyze_expression(SemanticAnalyzer* analyzer, ASTNode* e
         return false;
     }
     if (expr->type != AST_MEMBER_ACCESS || !expr->resolved_type.token) {
-        expr->resolved_type = (KrtSourceType){.token = semantic_analyzer_infer_expression_type(analyzer, expr)};
+        KrtTokenType inferred = semantic_analyzer_infer_expression_type(analyzer, expr);
+        if (inferred != TOKEN_UNKNOWN) {
+            expr->resolved_type = (KrtSourceType){.token = inferred};
+        }
     }
     switch (expr->type) {
     case AST_THIS: {

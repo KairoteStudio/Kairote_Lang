@@ -714,6 +714,26 @@ static SymbolEntry* semantic_analyzer_lookup_class(SemanticAnalyzer* analyzer, c
     return fallback;
 }
 
+/* Single source of truth for the type of `c ? a : b`. */
+static KrtTokenType semantic_ternary_result_type(KrtTokenType left, KrtTokenType right) {
+    if (left == TOKEN_UNKNOWN || right == TOKEN_UNKNOWN) {
+        return TOKEN_UNKNOWN;
+    }
+    if (left == right) {
+        return left;
+    }
+    if ((left == TOKEN_STRING && right == TOKEN_NULL) || (right == TOKEN_STRING && left == TOKEN_NULL)) {
+        return TOKEN_STRING;
+    }
+    if (left == TOKEN_FLOAT64 || right == TOKEN_FLOAT64) {
+        return TOKEN_FLOAT64;
+    }
+    if (left == TOKEN_FLOAT32 || right == TOKEN_FLOAT32) {
+        return TOKEN_FLOAT32;
+    }
+    return KrtTokenIntegerCommon(left, right);
+}
+
 static KrtTokenType semantic_array_element_type_depth(SemanticAnalyzer* analyzer, ASTNode* expr, int depth) {
     if (!expr) {
         return TOKEN_EOF;
@@ -732,14 +752,19 @@ static KrtTokenType semantic_array_element_type_depth(SemanticAnalyzer* analyzer
         return expr->resolved_type.token;
     }
     if (expr->type == AST_TERNARY_OPERATION) {
+        if (expr->data.ternary_op.true_value->type == AST_NULL) {
+            return semantic_array_element_type_depth(analyzer, expr->data.ternary_op.false_value, depth + 1);
+        }
+        if (expr->data.ternary_op.false_value->type == AST_NULL) {
+            return semantic_array_element_type_depth(analyzer, expr->data.ternary_op.true_value, depth + 1);
+        }
         KrtTokenType left = semantic_array_element_type_depth(analyzer, expr->data.ternary_op.true_value, depth + 1);
         KrtTokenType right = semantic_array_element_type_depth(analyzer, expr->data.ternary_op.false_value, depth + 1);
-        if (left == right || expr->data.ternary_op.false_value->type == AST_NULL) {
-            return left;
+        if (left == TOKEN_EOF || right == TOKEN_EOF) {
+            return TOKEN_EOF;
         }
-        if (expr->data.ternary_op.true_value->type == AST_NULL) {
-            return right;
-        }
+        KrtTokenType merged = semantic_ternary_result_type(left, right);
+        return merged == TOKEN_UNKNOWN ? TOKEN_EOF : merged;
     }
     return TOKEN_EOF;
 }
@@ -782,7 +807,7 @@ static long semantic_constant_int(SemanticAnalyzer* analyzer, ASTNode* expr) {
 
 static KrtTokenType semantic_analyzer_infer_expression_type(SemanticAnalyzer* analyzer, ASTNode* expr) {
     if (!expr) {
-        return TOKEN_INT32;
+        return TOKEN_UNKNOWN;
     }
     /* Array overloads are named by their element token, while the ABI passes an address. */
     KrtTokenType element_type = semantic_array_element_type(analyzer, expr);
@@ -820,7 +845,7 @@ static KrtTokenType semantic_analyzer_infer_expression_type(SemanticAnalyzer* an
         if (sym && sym->value_type != TOKEN_EOF) {
             return sym->value_type;
         }
-        return TOKEN_INT32;
+        return TOKEN_UNKNOWN;
     }
     case AST_CAST_EXPRESSION:
         return expr->data.cast_expr.target_type;
@@ -842,29 +867,19 @@ static KrtTokenType semantic_analyzer_infer_expression_type(SemanticAnalyzer* an
         if (callee && callee->value_type != TOKEN_EOF) {
             return callee->value_type;
         }
-        return TOKEN_INT32;
+        return TOKEN_UNKNOWN;
     }
-    case AST_UNARY_OPERATION:
+    case AST_UNARY_OPERATION: {
         if (expr->data.unary_op.operator == TOKEN_NOT) {
             return TOKEN_BOOL;
         }
-        return semantic_analyzer_infer_expression_type(analyzer, expr->data.unary_op.operand);
+        KrtTokenType operand = semantic_analyzer_infer_expression_type(analyzer, expr->data.unary_op.operand);
+        return operand == TOKEN_UNKNOWN ? TOKEN_UNKNOWN : operand;
+    }
     case AST_TERNARY_OPERATION: {
         KrtTokenType left = semantic_analyzer_infer_expression_type(analyzer, expr->data.ternary_op.true_value);
         KrtTokenType right = semantic_analyzer_infer_expression_type(analyzer, expr->data.ternary_op.false_value);
-        if (left == right) {
-            return left;
-        }
-        if ((left == TOKEN_STRING && right == TOKEN_NULL) || (right == TOKEN_STRING && left == TOKEN_NULL)) {
-            return TOKEN_STRING;
-        }
-        if (left == TOKEN_FLOAT64 || right == TOKEN_FLOAT64) {
-            return TOKEN_FLOAT64;
-        }
-        if (left == TOKEN_FLOAT32 || right == TOKEN_FLOAT32) {
-            return TOKEN_FLOAT32;
-        }
-        return KrtTokenIntegerCommon(left, right);
+        return semantic_ternary_result_type(left, right);
     }
     case AST_BINARY_OPERATION: {
         KrtTokenType op = expr->data.binary_op.operator;
@@ -874,6 +889,9 @@ static KrtTokenType semantic_analyzer_infer_expression_type(SemanticAnalyzer* an
         }
         KrtTokenType left = semantic_analyzer_infer_expression_type(analyzer, expr->data.binary_op.left);
         KrtTokenType right = semantic_analyzer_infer_expression_type(analyzer, expr->data.binary_op.right);
+        if (left == TOKEN_UNKNOWN || right == TOKEN_UNKNOWN) {
+            return TOKEN_UNKNOWN;
+        }
         if (op == TOKEN_ASSIGN) {
             return left;
         }
@@ -884,7 +902,10 @@ static KrtTokenType semantic_analyzer_infer_expression_type(SemanticAnalyzer* an
             return TOKEN_FLOAT32;
         }
         if (left == TOKEN_STRING || right == TOKEN_STRING) {
-            return TOKEN_STRING;
+            /* Only string + string is a valid operation; anything else is
+             * diagnosed by the expression analyser. */
+            return (op == TOKEN_PLUS && left == TOKEN_STRING && right == TOKEN_STRING) ? TOKEN_STRING
+                                                                                        : TOKEN_UNKNOWN;
         }
         if (op == TOKEN_LSHIFT || op == TOKEN_RSHIFT) {
             return left;
@@ -892,7 +913,7 @@ static KrtTokenType semantic_analyzer_infer_expression_type(SemanticAnalyzer* an
         return KrtTokenIntegerCommon(left, right);
     }
     default:
-        return TOKEN_INT32;
+        return TOKEN_UNKNOWN;
     }
 }
 
