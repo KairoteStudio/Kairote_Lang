@@ -613,7 +613,7 @@ static SymbolEntry* semantic_analyzer_lookup_with_usings(SemanticAnalyzer* analy
         return NULL;
     }
 
-    SymbolEntry* result = symbol_table_lookup(analyzer->symbol_table, name);
+    SymbolEntry* result = symbol_table_lookup_scope_chain(analyzer->symbol_table, name);
     if (result) {
         return result;
     }
@@ -627,14 +627,19 @@ static SymbolEntry* semantic_analyzer_lookup_with_usings(SemanticAnalyzer* analy
         SymbolEntry* ns =
             semantic_analyzer_lookup_namespace(analyzer, directive->namespace_path, directive->path_length);
         if (ns && ns->nested_table) {
-            result = symbol_table_lookup(ns->nested_table, name);
-            if (result) {
-                return result;
+            SymbolEntry* found = symbol_table_lookup(ns->nested_table, name);
+            if (found) {
+                if (result && found != result) {
+                    semantic_analyzer_add_error(
+                        analyzer, "Ambiguous name '%s' imported by multiple using directives", name);
+                    return NULL;
+                }
+                result = found;
             }
         }
     }
 
-    return NULL;
+    return result;
 }
 
 const char* semantic_analyzer_get_current_class_context(SemanticAnalyzer* analyzer) {
@@ -684,6 +689,8 @@ static SymbolEntry* semantic_analyzer_lookup_class(SemanticAnalyzer* analyzer, c
         return NULL;
     }
 
+    /* A class is only usable once it owns a scope; a bare declaration is not
+     * a definition and must not be handed to callers as one. */
     SymbolEntry* fallback = NULL;
     SymbolTable* table = analyzer->symbol_table;
     while (table) {
@@ -692,7 +699,7 @@ static SymbolEntry* semantic_analyzer_lookup_class(SemanticAnalyzer* analyzer, c
             if (semantic_class_has_members(result)) {
                 return result;
             }
-            if (!fallback) {
+            if (!fallback && result->nested_table) {
                 fallback = result;
             }
         }
@@ -705,7 +712,7 @@ static SymbolEntry* semantic_analyzer_lookup_class(SemanticAnalyzer* analyzer, c
             if (semantic_class_has_members(result)) {
                 return result;
             }
-            if (!fallback) {
+            if (!fallback && result->nested_table) {
                 fallback = result;
             }
         }
@@ -734,6 +741,9 @@ static KrtTokenType semantic_ternary_result_type(KrtTokenType left, KrtTokenType
     return KrtTokenIntegerCommon(left, right);
 }
 
+/* Element type of an array expression.  TOKEN_EOF is the "not an array, or
+ * element type unknown" sentinel; callers must treat it as "no stride"
+ * rather than as a byte count. */
 static KrtTokenType semantic_array_element_type_depth(SemanticAnalyzer* analyzer, ASTNode* expr, int depth) {
     if (!expr) {
         return TOKEN_EOF;
