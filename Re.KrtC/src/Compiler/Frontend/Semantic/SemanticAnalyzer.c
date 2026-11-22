@@ -1804,6 +1804,11 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
 
         for (int i = 0; i < expr->data.lambda_expr.parameter_count; i++) {
             const char* param_name = expr->data.lambda_expr.parameters[i];
+            if (!param_name) {
+                semantic_analyzer_add_error(analyzer, "Lambda parameter %d has no name", i);
+                symbol_table_pop_scope(analyzer->symbol_table);
+                return false;
+            }
             SymbolEntry* param = symbol_table_define(analyzer->symbol_table, param_name, SYMBOL_VARIABLE, 0, NULL);
             if (!param) {
                 semantic_analyzer_add_error(analyzer, "Failed to define lambda parameter: %s", param_name);
@@ -1817,6 +1822,10 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
             body_ok = semantic_analyzer_analyze_expression(analyzer, expr->data.lambda_expr.expression);
         } else if (expr->data.lambda_expr.body) {
             body_ok = semantic_analyzer_analyze_statement(analyzer, expr->data.lambda_expr.body);
+        } else {
+            semantic_analyzer_add_error_at(analyzer, expr, "Lambda has no body");
+            symbol_table_pop_scope(analyzer->symbol_table);
+            return false;
         }
 
         symbol_table_pop_scope(analyzer->symbol_table);
@@ -1828,29 +1837,42 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
         bool ok = true;
 
         if (expr->data.linq_query.from_clause) {
-            ok = ok && semantic_analyzer_analyze_expression(analyzer,
-                                                            expr->data.linq_query.from_clause->data.linq_from.source);
+            bool sub = semantic_analyzer_analyze_expression(
+                analyzer, expr->data.linq_query.from_clause->data.linq_from.source);
+            ok = sub && ok;
         }
 
         for (int i = 0; i < expr->data.linq_query.clause_count; i++) {
             ASTNode* clause = expr->data.linq_query.clauses[i];
+            if (!clause) {
+                ok = false;
+                continue;
+            }
             if (clause->type == AST_LINQ_WHERE) {
-                ok = ok && semantic_analyzer_analyze_expression(analyzer, clause->data.linq_where.condition);
+                bool sub = semantic_analyzer_analyze_expression(analyzer, clause->data.linq_where.condition);
+                ok = sub && ok;
             } else if (clause->type == AST_LINQ_ORDERBY) {
-                ok = ok && semantic_analyzer_analyze_expression(analyzer, clause->data.linq_orderby.expression);
+                bool sub = semantic_analyzer_analyze_expression(analyzer, clause->data.linq_orderby.expression);
+                ok = sub && ok;
             }
         }
 
         if (expr->data.linq_query.select_clause) {
-            ok = ok && semantic_analyzer_analyze_expression(
-                           analyzer, expr->data.linq_query.select_clause->data.linq_select.expression);
+            bool sub = semantic_analyzer_analyze_expression(
+                analyzer, expr->data.linq_query.select_clause->data.linq_select.expression);
+            ok = sub && ok;
         }
 
         return ok;
     }
 
-    case AST_CAST_EXPRESSION:
+    case AST_CAST_EXPRESSION: {
+        if (!expr->data.cast_expr.expression) {
+            semantic_analyzer_add_error_at(analyzer, expr, "Cast expression has no operand");
+            return false;
+        }
         return semantic_analyzer_analyze_expression(analyzer, expr->data.cast_expr.expression);
+    }
 
     case AST_THIS:
     case AST_NULL:
@@ -3470,6 +3492,9 @@ FunctionAnalysisResult semantic_analyzer_analyze_function(SemanticAnalyzer* anal
 
     if (!analyzer || !function_node ||
         (function_node->type != AST_FUNCTION_DECLARATION && function_node->type != AST_STATIC_FUNCTION_DECLARATION)) {
+        if (analyzer) {
+            semantic_analyzer_add_error(analyzer, "Invalid function node for analysis");
+        }
         return result;
     }
 
