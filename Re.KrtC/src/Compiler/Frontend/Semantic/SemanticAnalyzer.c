@@ -2710,6 +2710,18 @@ static bool semantic_analyze_stmt_foreach_statement(SemanticAnalyzer* analyzer, 
         return false;
     }
     bool iterable_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.foreach_stmt.iterable);
+    if (iterable_ok && stmt->data.foreach_stmt.iterable) {
+        /* The loop variable takes the iterable's element type; without this
+         * every use inside the body fell back to a zero/INT32 type. */
+        KrtTokenType element = semantic_array_element_type(analyzer, stmt->data.foreach_stmt.iterable);
+        if (element == TOKEN_EOF) {
+            element = stmt->data.foreach_stmt.iterable->resolved_type.token;
+        }
+        if (element != TOKEN_EOF) {
+            loop_var->value_type = element;
+            loop_var->source_type.token = element;
+        }
+    }
     analyzer->breakable_depth++;
     analyzer->loop_depth++;
     bool body_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.foreach_stmt.body);
@@ -4099,7 +4111,7 @@ static char* resolve_using_path(char** path_parts, int path_length, bool* is_wil
         }
 
         size_t part_length = strlen(path_parts[i]);
-        if (part_length > INT_MAX - len - 2) {
+        if (part_length + (size_t)len + 2 > (size_t)INT_MAX) {
             KRT_FREE(resolved);
             return NULL;
         }
