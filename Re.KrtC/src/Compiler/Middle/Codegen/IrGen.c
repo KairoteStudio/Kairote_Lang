@@ -63,7 +63,9 @@ static int irgen_size_from_token(KrtTokenType t) {
     }
 }
 
-/* Arrays carry an element token for overloads but use an address for values. */
+/* Element token for an array expression.  TOKEN_EOF means "not an array, or
+ * the element type could not be resolved"; callers must treat that as
+ * "unknown stride" and not as a byte count. */
 static KrtTokenType irgen_array_expression_element_type(KrtIRBuilder* builder, ASTNode* expr) {
     if (!expr || KrtSourceIsPointer(expr->resolved_type)) {
         return TOKEN_EOF;
@@ -278,6 +280,8 @@ static const char* g_builtin_function_names[IRGEN_FUNC_COUNT] = {
     "KrtRethrowException", "KrtThrowException", "KrtGetVariableAddress",
     "KrtSizeOfPointer",    "array_get",         "array_size"};
 
+/* Callers pass IrGenBuiltinFunction constants, which are always in range;
+ * the bounds check only guards against a corrupted/out-of-range id. */
 static const char* irgen_get_builtin_func(IrGenBuiltinFunction func_id) {
     if (func_id >= 0 && func_id < IRGEN_FUNC_COUNT) {
         return g_builtin_function_names[func_id];
