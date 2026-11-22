@@ -71,6 +71,7 @@ int KrtCompilePipelineLoadStandardLibrary(KrtCompilePipeline* pipeline, const ch
 void KrtStdlibCacheClear(void);
 /** Read cache counters atomically; either output pointer may be NULL. */
 /** Clone the cached AST into arena, reparsing changed files; return NULL on read/parse/allocation failure. */
+const char* KrtStdlibCacheLastError(void);
 ASTNode* KrtStdlibCacheClone(const char* path, KrtArena* arena, bool expand_macros);
 int KrtCompilePipelineExecute(KrtCompilePipeline* pipeline, const char* input_file, const char* output_file);
 void KrtCompilePipelineSetMergedAst(KrtCompilePipeline* pipeline, ASTNode* merged_ast);

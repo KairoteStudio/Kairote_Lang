@@ -22,6 +22,8 @@ typedef struct {
 static KrtStdlibCacheEntry g_stdlib_cache[KRT_STDLIB_CACHE_FILES];
 static pthread_mutex_t g_stdlib_cache_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_once_t g_stdlib_cache_once = PTHREAD_ONCE_INIT;
+/* Reason for the most recent parse_stdlib_entry failure. */
+static const char* g_last_stdlib_error;
 static size_t g_stdlib_cache_bytes;
 static unsigned long long g_stdlib_cache_clock;
 
@@ -70,17 +72,20 @@ static bool parse_stdlib_entry(KrtStdlibCacheEntry* entry, const char* path, con
     /* Start from a clean entry so a failure can always be released by
      * free_stdlib_entry, whatever the caller does next. */
     memset(entry, 0, sizeof(*entry));
+    g_last_stdlib_error = "file disappeared before it could be read";
     if (version->st_size < 0) {
         return false;
     }
     FILE* file = fopen(path, "rb");
     if (!file) {
+        g_last_stdlib_error = "could not open the source file";
         return false;
     }
     size_t length = (size_t)version->st_size;
     char* source = KRT_MALLOC(length + 1);
     if (!source) {
         fclose(file);
+        g_last_stdlib_error = "out of memory while reading the source";
         return false;
     }
     size_t read = fread(source, 1, length, file);
@@ -89,12 +94,14 @@ static bool parse_stdlib_entry(KrtStdlibCacheEntry* entry, const char* path, con
     source[read] = '\0';
     if (!ok) {
         KRT_FREE(source);
+        g_last_stdlib_error = "short read or read error on the source file";
         return false;
     }
     if (expand_macros) {
         Preprocessor* preprocessor = PreprocessorCreate();
         if (!preprocessor) {
             KRT_FREE(source);
+            g_last_stdlib_error = "could not create the preprocessor";
             return false;
         }
         load_standard_macros(preprocessor);
@@ -106,30 +113,40 @@ static bool parse_stdlib_entry(KrtStdlibCacheEntry* entry, const char* path, con
     }
     entry->expand_macros = expand_macros;
     if (!entry->source) {
+        g_last_stdlib_error = "preprocessor produced no output";
         return false;
     }
     entry->path = KRT_STRDUP(path);
     if (!entry->path) {
+        g_last_stdlib_error = "out of memory while recording the path";
         return false;
     }
     entry->lexer = lexer_create(entry->source);
     if (!entry->lexer || entry->lexer->error_count) {
+        g_last_stdlib_error = "lexical analysis failed";
         return false;
     }
     entry->parser = parser_create(entry->lexer);
     if (!entry->parser) {
+        g_last_stdlib_error = "could not create the parser";
         return false;
     }
     entry->parser->source_name = entry->path;
     entry->ast = parser_parse(entry->parser);
     if (!entry->ast || entry->parser->error_count || entry->lexer->error_count ||
         (entry->ast->type != AST_PROGRAM && entry->ast->type != AST_BLOCK)) {
+        g_last_stdlib_error = entry->ast ? "syntax analysis failed" : "parser produced no tree";
         return false;
     }
     entry->version = *version;
     entry->bytes = strlen(entry->source) + 1 + entry->parser->arena->total_allocated +
                    (entry->lexer->arena ? entry->lexer->arena->total_allocated : 0);
     return true;
+}
+
+/* Reason the last KrtStdlibCacheClone failure, for diagnostics. */
+const char* KrtStdlibCacheLastError(void) {
+    return g_last_stdlib_error;
 }
 
 /* Returns a deep copy of the parsed module, or NULL when the path is empty,

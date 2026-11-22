@@ -4626,7 +4626,8 @@ static bool import_krt_file(SemanticAnalyzer* analyzer, const char* file_path) {
     ASTNode* imported_ast = KrtStdlibCacheClone(file_path, import_arena, false);
     if (!imported_ast) {
         KrtArenaDestroy(import_arena);
-        semantic_analyzer_add_error(analyzer, "Using: unable to read or parse imported source '%s'", file_path);
+        semantic_analyzer_add_error(analyzer, "Using: unable to read or parse imported source '%s' (%s)", file_path,
+                                    KrtStdlibCacheLastError() ? KrtStdlibCacheLastError() : "unknown reason");
         return false;
     }
     if (!semantic_analyzer_register_imported_file(analyzer, file_path)) {
