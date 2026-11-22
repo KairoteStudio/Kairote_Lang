@@ -1,4 +1,1 @@
-// ============================================
-// Runtime - 运行时使用示例
 // 编译方式: krtc build main.krt Sys.krt Memory.krt String.krt Math.krt Console.krt target exe
-// ============================================

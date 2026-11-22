@@ -1,4 +1,3 @@
-// ===== Generic constraints =====
 bool KrtNativeConstraintValueType(KrtAstNode type) {
     if (type.native_fixed_length > 0) { return true; }
     if (type.native_array || type.native_string || type.native_stride > 0 || type.native_function_pointer != null) { return false; }
@@ -102,7 +101,6 @@ bool KrtNativeEvaluateConstraints(KrtAstNode declaration, KrtAstNode arguments, 
     return true;
 }
 
-// ===== Virtual dispatch =====
 // Dispatch slots are declarations, not names: ordinary hiding starts a distinct
 // method and cannot silently replace a virtual slot inherited from a base.
 bool KrtNativeMethodSignatureEqual(KrtAstNode first, KrtAstNode second, KrtAstNode module, int64 source, bool include_return) {
@@ -223,7 +221,6 @@ bool KrtNativeBindDispatchCall(KrtAstNode node, KrtNativeBinding binding) {
     return true;
 }
 
-// ===== Function values and indirect calls =====
 bool KrtNativeAnnotateFunctionType(KrtAstNode node, KrtAstNode module, int64 source, int64 start, int64 length) {
     KrtAstNode syntax = KrtNativeTypeSyntax(source,start,length);
     if (syntax == null || syntax.op != 1) { return false; }
@@ -400,7 +397,6 @@ void KrtNativeNormalizeQualifiedSyscall(KrtAstNode node, KrtNativeBinding bindin
     node.left = KrtAstMake(KrtAstKind.Identifier, callee.name_start, callee.name_length);
 }
 
-// ===== Generic type binding and inference =====
 int32 KrtNativeTypeBaseWidth(KrtAstNode type) {
     if (type.native_element_type == null && type.native_type != null && type.native_type.value == 2 && type.native_type.native_layout_state == 2) { return type.native_type.native_storage_size; }
     if (type.native_base_width > 0) { return type.native_base_width; }
@@ -1234,7 +1230,6 @@ void KrtNativeClosureProbeEnd(KrtAstNode module,KrtNativeClosureProbeState state
     module.native_closure_probe_state = state.previous; delete state;
 }
 
-// Generic instance registry and type identity.
 uint64 KrtGenericTypeHash(KrtAstNode type, uint64 hash, int32 depth) {
     if (type == null || depth > 64) { return (hash ^ 0) * 1099511628211; }
     // Layout-derived widths and strides can settle after registration. Keep
@@ -1342,7 +1337,6 @@ bool KrtGenericRegistryAdd(KrtAstNode module, KrtAstNode declaration, KrtAstNode
     return true;
 }
 
-// ===== Class inheritance =====
 // Reference classes share one pointer and a base-prefix layout. Offset zero is
 // the runtime class identity; allocation metadata at -16/-8 remains untouched.
 bool KrtNativeDerivesFrom(KrtAstNode actual_class, KrtAstNode expected_class) {
@@ -1424,7 +1418,6 @@ bool KrtNativeBindBaseConstructor(KrtAstNode call, KrtNativeBinding binding) {
     return true;
 }
 
-// Cycle-aware inheritance traversal and diagnostics.
 KrtInheritanceStack KrtInheritanceStackFor(KrtAstNode module) {
     if (module.native_inheritance_stack == null) {
         KrtInheritanceStack stack = new KrtInheritanceStack();
@@ -1490,7 +1483,6 @@ void KrtInheritanceDiagnostic(KrtAstNode module, int64 position) {
     }
 }
 
-// ===== Interfaces =====
 // Reference implementations preserve their object. Struct implementations
 // acquire an independent value box when converted to an interface reference.
 void KrtNativeAddInterface(KrtAstNode type, KrtAstNode interface_type, int32 distance) {
@@ -1719,7 +1711,6 @@ bool KrtNativeCompatibleInterfaceContracts(KrtAstNode type, KrtAstNode module, i
     return true;
 }
 
-// ===== Nullable operators =====
 // Reference null tests inspect the address, never a pointee or array header.
 bool KrtNativeReferenceValue(KrtAstNode type) {
     if (type == null || KrtNativeInlineValue(type)) { return false; }
@@ -1843,7 +1834,6 @@ bool KrtNativeBindNullConditional(KrtAstNode node, KrtNativeBinding binding) {
     return KrtNativeCheckValueAccess(node,binding) && KrtNativeBindAggregateFrame(node,binding);
 }
 
-// ===== Function signature types =====
 // Cache only successful concrete type descriptions, independently of mutable
 // activation declarations and the source position of each use.
 KrtNativeSignatureCache KrtNativeSignatureState(KrtAstNode function_node, KrtAstNode module, int64 source) {
@@ -1938,7 +1928,6 @@ bool KrtNativeSignatureType(KrtAstNode target, KrtAstNode function_node, int32 i
     return true;
 }
 
-// ===== Value type layout =====
 // Layout discovery walks an explicit work stack. Only fields stored by value
 // create layout dependencies; pointers and reference values break cycles.
 static bool KrtNativeLayoutProbe = false;
@@ -2085,7 +2074,6 @@ bool KrtNativeBindAggregateFrame(KrtAstNode node, KrtNativeBinding binding) {
     return node.native_frame_offset >= 0 || KrtNativeBindingError(binding,node);
 }
 
-// ===== Switch binding and flow =====
 bool KrtNativeSwitchError(KrtAstNode node, KrtNativeBinding binding) {
     binding.module.native_error = 7;
     return KrtNativeBindingError(binding, node);

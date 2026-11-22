@@ -1,4 +1,3 @@
-// Native compilation, linking and output publication.
 bool KrtDriverOutputPathSafe(KrtDriverOptions options, KrtSourceBundle bundle, int64 path) {
     if (KrtDriverStringEqual(path,options.compiler) || KrtDriverStringEqual(path,options.linker)) { KrtDriverError("E_OUTPUT","output would overwrite a tool"); return false; }
     if (bundle != null) {

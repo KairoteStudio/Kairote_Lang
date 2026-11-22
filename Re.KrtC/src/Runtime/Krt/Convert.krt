@@ -1,9 +1,5 @@
 namespace System.Runtime;
 
-// ============================================
-// Convert — 类型转换
-// 纯 .krt 实现
-// ============================================
 
 public static class Convert
 {

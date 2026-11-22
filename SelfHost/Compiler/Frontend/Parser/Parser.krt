@@ -1,4 +1,3 @@
-// ===== Syntax tree representation =====
 enum KrtAstKind { Invalid = 0, Program = 1, Function = 2, Block = 3, Return = 4, Integer = 5, Identifier = 6, String = 7, Binary = 8, Unary = 9, Type = 10, Variable = 11, Call = 12, If = 13, While = 14, Member = 15, Assign = 16, Expression = 17, New = 18, StackAlloc = 19, Index = 20, Boolean = 21, Cast = 22, Unsafe = 23, Delete = 24, Ternary = 25, Null = 26, Break = 27, Continue = 28, DoWhile = 29, For = 30, CompoundAssign = 31, ArrayLiteral = 32, Switch = 33, Case = 34, Default = 35, Foreach = 36, Try = 37, Catch = 38, Finally = 39, Throw = 40, Lambda = 41, YieldReturn = 42, YieldBreak = 43, Lock = 44, Await = 45, Fixed = 46, Sizeof = 47, DefaultValue = 48, TypeDeclaration = 49, Floating = 50, Print = 51, Point = 52, UsingDirective = 53, TypeTest = 54, NamespaceDeclaration = 55, NullConditional = 56, GuardReceiver = 57 }
 
 // AST nodes own child arrays; token spans continue to borrow source storage.
@@ -195,7 +194,6 @@ bool KrtAstIsLeaf(KrtAstNode node) {
     return node.kind == KrtAstKind.Integer || node.kind == KrtAstKind.Boolean || node.kind == KrtAstKind.Identifier || node.kind == KrtAstKind.String;
 }
 
-// ===== Declaration lookahead =====
 // A probe owns its lexer and token. Failed probes never change the input parser.
 KrtParser KrtParserFork(KrtParser parser) {
     KrtParser probe = new KrtParser(); probe.lexer = new KrtLexer(); probe.token = new KrtToken();
@@ -426,7 +424,6 @@ bool KrtParserFunctionKeyword(KrtParser parser){
     return probe.token.kind==KrtTokenKind.Identifier;
 }
 
-// ===== Names and namespace parsing =====
 // Namespace scopes retain source spans and imports; no source text is rewritten.
 void KrtParserMarkScope(KrtAstNode node, KrtAstNode scope) {
     if (node == null) { return; }
@@ -671,8 +668,6 @@ KrtAstNode KrtParserAppendSyntax(KrtParser parser,KrtAstNode declaration){
     return reference;
 }
 
-// ===== Parsing =====
-// Namespace and file-level using scopes.
 // Imports remain in the frame that declares them. Child namespaces inherit
 // through parent links, while siblings and file boundaries keep distinct frames.
 class KrtUsingScope {
@@ -718,7 +713,6 @@ KrtAstNode KrtParserParseUsingStatement(KrtParser parser) {
     directive.native_using_scope=parser.current_using_scope;directive.length=parser.token.start-start;return directive;
 }
 
-// Parser state and diagnostic recording.
 class KrtParserDiagnostic {
     public int64 position;
     public KrtTokenKind actual;
@@ -773,7 +767,6 @@ bool KrtParserExpect(KrtParser parser, KrtTokenKind kind) {
     KrtParserRecordExpected(parser, kind, "expected token"); return false;
 }
 
-// Named arguments and for-loop increment parsing.
 bool KrtParserIsCompoundOperation(int32 operation) {
     return (operation >= 108 && operation <= 112) || (operation >= 117 && operation <= 121);
 }
@@ -791,7 +784,6 @@ KrtAstNode KrtParserParseForIncrement(KrtParser parser) {
     return result;
 }
 
-// Constraint and declaration type parsing.
 // Constraints retain their parameter and type spans, including unused templates.
 KrtAstNode KrtParserConstraints(KrtParser parser, KrtAstNode parameters) {
     KrtAstNode first = null; KrtAstNode tail = null;
@@ -845,7 +837,6 @@ KrtAstNode KrtParserConstraints(KrtParser parser, KrtAstNode parameters) {
     return first;
 }
 
-// Statement and declaration error recovery.
 // Synchronize on grammar boundaries and retain malformed syntax as Invalid AST.
 bool KrtParserStatementBoundary(KrtParser parser) {
     return KrtParserIsWord(parser, "return") || KrtParserIsWord(parser, "if") || KrtParserIsWord(parser, "while") ||
@@ -895,7 +886,6 @@ KrtAstNode KrtParserMalformed(KrtAstNode partial, int64 start, int64 end) {
     invalid.left = partial; invalid.child_count = partial == null ? 0 : 1; return invalid;
 }
 
-// Function-type and global-variable declarations.
 // Consume one complete type without consuming a following declaration name.
 bool KrtParserSkipNativeType(KrtParser parser) {
     return KrtParserParseType(parser) != null;
@@ -970,7 +960,6 @@ KrtAstNode KrtParserParseGlobalVariable(KrtParser parser) {
     return declaration;
 }
 
-// Base-type and constructor declarations.
 // Keep the complete base type spelling, including namespaces and type arguments.
 KrtAstNode KrtParserBaseTypes(KrtParser parser) {
     if (!KrtParserTokenText(parser, 58)) { return null; }
@@ -1011,7 +1000,6 @@ bool KrtParserBaseConstructor(KrtParser parser, KrtAstNode method) {
     KrtLexerNext(parser.lexer, parser.token); method.native_base_call = call; return true;
 }
 
-// Declaration modifiers.
 // Preserve declaration modifiers independently of semantic visibility checks.
 int32 KrtParserModifierFlag(KrtParser parser){
     if(KrtParserIsWord(parser,"public")){return 1;}
@@ -2393,7 +2381,6 @@ void KrtParserInitializeConstructors(KrtAstNode declaration) {
     }
 }
 
-// Single-statement bodies and switch-case bodies.
 // A branch body may be a braced block or one statement, including an empty ;.
 KrtAstNode KrtParserParseBody(KrtParser parser) {
     if(KrtParserTokenText(parser,123)){return KrtParserParseBlock(parser);}

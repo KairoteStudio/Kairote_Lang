@@ -1,4 +1,3 @@
-// ===== Native ABI signatures =====
 // ABI2 contracts are canonical bytes, independent of source positions and AST
 // identities. Digests name symbols; exact manifests decide compatibility.
 class KrtAbiBytes {
@@ -190,7 +189,6 @@ bool KrtNativeAbiSignatureSupported(KrtAstNode declaration,KrtAstNode module,int
     KrtAbiSignature signature=KrtAbiFunction(declaration,module,source,true);return signature.supported&&signature.contract.ok;
 }
 
-// ===== Symbol linkage =====
 // Scalar ABI1 names and exact struct ABI2 contracts use semantic type identity.
 class KrtLinkName {
     public byte[] bytes;
@@ -427,7 +425,6 @@ KrtAstNode KrtNativeTypeMemberNext(KrtAstNode method){
     return method.native_owner!=null&&method.native_owner.native_members_saved?method.native_member_next:method.next;
 }
 
-// ===== Module type identity =====
 // Runtime lookup keys and object contracts contain the complete nominal bytes.
 // A digest is an index hint only; independently compiled modules compare the
 // bytes before accepting a type or a dispatch slot.
@@ -788,7 +785,6 @@ KrtAbiSignature KrtModuleTypeSignature(KrtAstNode type, KrtAstNode module, int64
     signature.nominal = nominal; signature.contract = contract; return signature;
 }
 
-// ===== Runtime type registration =====
 // Runtime records use exact semantic keys. Digests only shorten searches.
 // The same immutable bytes and relocations feed the native backend.
 class KrtNativeRuntimeMethod {

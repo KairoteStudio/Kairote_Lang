@@ -1,4 +1,3 @@
-// ===== Access checking =====
 // Omitted access modifiers preserve Kairote's existing public default.
 int32 KrtNativeAccessMode(KrtAstNode declaration) {
     if (declaration == null) { return 1; }
@@ -197,7 +196,6 @@ bool KrtNativeValidateAccess(KrtAstNode module, int64 source, KrtNativeModule ou
     return valid;
 }
 
-// ===== Boxing and conversions =====
 // Object values are references. A value conversion owns a separate typed heap
 // allocation; reference class/interface conversions retain their original
 // object. Canonical type descriptions never depend on a use's source spelling.
@@ -371,7 +369,6 @@ int64 KrtNativeBoxContextArgumentScore(KrtAstNode node,KrtAstNode expected,KrtNa
     return score;
 }
 
-// ===== Closures and captures =====
 // Lexical captures own shared cells. Callable values retain those cells through
 // their environment; source scopes retain one owner until every exit path.
 bool KrtNativeHasInstanceContext(KrtNativeBinding binding) {
@@ -797,7 +794,6 @@ KrtAstNode KrtNativeClosureInferShape(KrtAstNode lambda, KrtNativeBinding bindin
     return KrtNativeClosureReifyType(inferred,binding,0);
 }
 
-// ===== Generators =====
 // A generator owns a persistent activation and a finite set of resume edges.
 // Its source body is bound once, using the same locals, captures and types as
 // an ordinary function. Generated methods expose the ordinary iterator ABI.
@@ -1034,7 +1030,6 @@ bool KrtNativeFinishGenerator(KrtAstNode unit, KrtNativeBinding binding) {
     return true;
 }
 
-// ===== Global values =====
 bool KrtNativeBindGlobal(KrtAstNode node, KrtAstNode declaration, KrtNativeBinding binding) {
     if (!KrtNativeAccessAllowed(declaration,binding,null,false)) { return KrtNativeAccessError(binding,node); }
     if (declaration.native_readonly) {
@@ -1248,7 +1243,6 @@ bool KrtNativeFinishGlobals(KrtAstNode module) {
     return true;
 }
 
-// ===== Iterator binding =====
 // Foreach uses the ordinary call, access, generic and dispatch binder. The
 // prepared tree contains anonymous typed locals and a real try/finally loop;
 // no protocol-specific calling convention or item materialization is needed.

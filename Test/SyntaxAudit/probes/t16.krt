@@ -1,5 +1,3 @@
-// Sys.krt - 系统调用和内建函数
-// 纯 .krt 实现, 是整个运行时的基础层
 
 public static class Sys
 {

@@ -291,7 +291,6 @@ bool KrtNativeOptimize(KrtNativeModule module, int32 level) {
     return true;
 }
 
-// SSA constant folding and dead-value removal.
 // SSA optimization uses explicit operands and keeps value ids stable.
 bool KrtSsaFoldConstants(KrtSsaModule ssa) {
     bool changed = true; int32 rounds = 0;

@@ -1,4 +1,3 @@
-// ===== Object ABI validation =====
 // Native pre-link ABI2/ABI3 validation. KRO payloads remain normal linker inputs;
 // their exact contracts are checked before any executable is published.
 class KrtDriverAbiRecord {
@@ -198,7 +197,6 @@ bool KrtDriverAbiCheckContracts(KrtDriverPath objects,bool require_definitions){
 }
 bool KrtDriverAbiValidate(KrtDriverPath objects){return KrtDriverAbiCheckContracts(objects,true);}
 
-// ===== Artifact output =====
 // Text artifacts are emitted directly by the native compiler.
 static int32 KrtDriverArtifactTarget = 0;
 // Output ABI is independent of the platform running this compiler.
@@ -346,7 +344,6 @@ bool KrtArtifactAssembly(KrtKroObject object, KrtNativeModule module, int64 path
     return ok;
 }
 
-// ===== Command line =====
 // Application entry, options and compilation orchestration are self-hosted.
 class KrtDriverOptions {
     public KrtDriverPath sources;
@@ -523,7 +520,6 @@ int32 KrtDriverMain() {
     return KrtDriverCompile(options);
 }
 
-// ===== Imported modules =====
 // Public declaration interfaces and binary generic template bodies are read
 // from KRO itself. Source paths in the interface are provenance keys; loading
 // a module never opens those provider source files.
@@ -748,7 +744,6 @@ bool KrtModulesMarkImportedAst(KrtAstNode unit){
     delete seen;delete stack;return true;
 }
 
-// ===== Parallel compilation =====
 // Fork workers execute native compilation directly. Their address spaces keep
 // compiler globals independent, while the parent publishes deterministic results.
 static int64 KrtDriverLastErrorCode = 0;
@@ -839,7 +834,6 @@ bool KrtDriverParallelCompile(KrtDriverCompileTask tasks, int32 jobs) {
     return ok;
 }
 
-// ===== Source loading and project source collection =====
 // Native source loading uses the compiler lexer. Source spans always refer to
 // the original bytes; imports are blanked in place and file boundaries reset
 // namespace scope without changing offsets inside an individual source file.

@@ -1,9 +1,5 @@
 namespace System.Runtime;
 
-// ============================================
-// Memory — 内存分配封装
-// 纯 .krt 实现, 通过 syscall 直接操作 mmap/munmap
-// ============================================
 
 public static class Memory
 {

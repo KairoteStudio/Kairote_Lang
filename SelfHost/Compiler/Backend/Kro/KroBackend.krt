@@ -1,4 +1,3 @@
-// ===== Floating point encoding =====
 // Encode a short instruction sequence from its little-endian bytes.
 bool KrtKroNativeCode(KrtKroObject output, ref int32 pc, int64 bytes, int32 count) {
     int32 i = 0;
@@ -116,7 +115,6 @@ bool KrtKroNativeFloatUnary(KrtKroObject output, ref int32 pc, int32 operation, 
     return KrtKroNativeCode(output, ref pc, 80, 1);
 }
 
-// ===== Global data and symbols =====
 bool KrtKroNativeGlobalAddress(KrtNativeModule module,KrtKroObject output,ref int32 pc,int32 slot) {
     if(slot<0||slot>=module.global_count||module.global_entries==null||module.global_entries[slot]==null||module.global_reloc_count>=module.count*2){return false;}
     if(module.global_reloc_offsets==null){module.global_reloc_offsets=new int32[module.count*2];module.global_reloc_slots=new int32[module.count*2];}
@@ -220,7 +218,6 @@ bool KrtKroNativeClosureEnvironment(KrtKroObject output, ref int32 pc) {
     return KrtKroNativeCode(output, ref pc, 0x5241, 2);
 }
 
-// Global symbol emission.
 // Every mutable declaration has an exact stable data identity. IR retains
 // local slots; native references use relocations and survive independent compilation.
 bool KrtKroGlobalSymbols(KrtNativeModule module,KrtAstNode ast,int64 source,KrtKroObject output){
@@ -293,8 +290,6 @@ bool KrtKroGlobalSymbols(KrtNativeModule module,KrtAstNode ast,int64 source,KrtK
     delete slot_symbols;delete initializer_symbols;return true;
 }
 
-// ===== KRO backend =====
-// Native object ABI record emission.
 // ABI2 metadata is a normal local read-only KRO object symbol.
 bool KrtKroAbiRecord(KrtAbiBytes manifest,int32 symbol,bool defined,KrtAbiSignature signature){
     if(!signature.supported||!signature.contract.ok||!signature.nominal.ok){return false;}
@@ -351,7 +346,6 @@ bool KrtKroAbiFinish(KrtKroObject output,KrtAbiBytes manifest,int32 count,ref in
     return KrtKroAbiFinishNamed(output,manifest,count,ref name,manifest.data[4]==3?"_KRT_ABI3_MANIFEST":"_KRT_ABI2_MANIFEST");
 }
 
-// Exception frame and throw emission.
 // Exception records occupy six frame slots. r15 links active records across calls.
 // Layout at the lowest address: previous, saved rsp, saved rbp, value, type, handler.
 bool KrtKroNativeTryEnter(KrtKroObject output, ref int32 pc, int32 slot) {
@@ -378,7 +372,6 @@ bool KrtKroNativeThrow(KrtKroObject output, ref int32 pc) {
         KrtKroNativeCode(output, ref pc, 57599, 2);
 }
 
-// Integer storage normalization.
 // Nonstandard even integer widths use rounded byte storage plus exact normalization.
 bool KrtKroNativeIntegerNormalize(KrtKroObject output, ref int32 pc, int32 code) {
     int32 bits = (code < 0 ? -code : code) - 1000;
@@ -415,7 +408,6 @@ class KrtKroObject {
     public int32 text_word5;
     public int32 text_word6;
     public int32 text_word7;
-    // Variable-length text storage for the real multi-function backend.
     // The legacy text_word fields remain as a compact compatibility path.
     public int32[] text_words;
     public int32 text_word_count;
@@ -936,9 +928,6 @@ bool KrtKroEmitIrFunction(KrtIrFunction ir_function, KrtKroObject output) {
     return KrtKroObjectIsValid(output);
 }
 
-// ---------------------------------------------------------------------------
-// Native stack-IR backend
-// ---------------------------------------------------------------------------
 // NativeIr deliberately has no register-allocation dependency.  Values are
 // kept on the machine stack between instructions while locals live in fixed
 // rbp-relative slots.  This makes the emitter deterministic and keeps calls,
@@ -1582,7 +1571,6 @@ bool KrtKroWriteBytes(byte[] bytes, int32 count, int64 descriptor) {
     return true;
 }
 
-// String runtime helper emission.
 // Null-terminated UTF-8 strings retain their raw byte-pointer representation.
 // Length counts bytes. Null compares equal only to null, while concatenation
 // and Length treat null as empty. Concatenation creates a zero-terminated heap
@@ -1638,7 +1626,6 @@ bool KrtKroNativeStringConcat(KrtKroObject output, ref int32 pc) {
         KrtKroNativeStringCode(output, ref pc, 5265408, 3);
 }
 
-// Aggregate frame and parameter layout.
 // Aggregate storage occupies an aligned arena below scalar slots and call
 // scratch storage. Field offsets grow forward from this address.
 bool KrtKroNativeAggregateAddress(KrtKroObject output, ref int32 pc, int32 frame, int64 offset, int64 size, int32 arena_bytes) {
@@ -1686,7 +1673,6 @@ bool KrtKroNativeIncomingParameter(KrtKroObject output, ref int32 pc, int32 phys
     return KrtKroNativeCode(output,ref pc,0x858b48,3) && KrtKroNativeU32(output,ref pc,16+(physical-6)*8);
 }
 
-// Wide-float bit conversion helpers.
 // Integer magnitude -> IEEE bits: retain p bits and separate guard/sticky,
 // round nearest/even once, including fraction carry and binary32 overflow.
 bool KrtKroNativeWideFloat4Bits(KrtKroObject output, ref int32 pc) {
@@ -1757,7 +1743,6 @@ bool KrtKroNativeWideFloatToBits(KrtKroObject output, ref int32 pc, int32 mode, 
     return KrtKroNativeByte(output,ref pc,80);
 }
 
-// ===== Library metadata =====
 // Relocatable object sections are generated by the native compiler itself.
 
 void KrtKroLibraryWord(byte[] bytes, int32 offset, int32 value) {
@@ -2059,7 +2044,6 @@ bool KrtKroLibraryFunctions(KrtNativeModule module, KrtAstNode ast, int64 source
     return KrtKroGlobalSymbols(module,ast,source,output)&&KrtKroRuntimeDescriptors(module,ast,source,output);
 }
 
-// ===== Module metadata =====
 // A relocatable module carries its compiler-generated declaration interface.
 // Consumers read these bytes through the native lexer and parser. Ordinary
 // exported bodies become extern declarations; binary generic templates retain
@@ -2196,7 +2180,6 @@ bool KrtKroModuleMetadata(KrtAstNode ast, int64 source, KrtKroObject output) {
     names[name] = 0; output.strtab_size = name + 1; output.symbol_count = symbol + 1; return true;
 }
 
-// ===== Register allocation =====
 // Allocate local values after IR optimization. r14/r15 belong to globals and
 // exception records; r12/r13 are preserved by every native function.
 class KrtNativeRegisterAllocation { public int32[] registers; public int32 locals; public int32 used; }
@@ -2445,7 +2428,6 @@ bool KrtKroNativeTemporaryInstruction(KrtNativeModule module, KrtKroObject outpu
     return false;
 }
 
-// ===== Runtime type tables =====
 // Runtime records have stable symbols for every relocated address. A consumer
 // can share a descriptor without importing the defining module's machine code.
 class KrtKroRuntimeSymbol {
@@ -2575,7 +2557,6 @@ bool KrtKroRuntimeDescriptors(KrtNativeModule module,KrtAstNode ast,int64 source
     output.total_reloc_count = text_count+data_count; output.relocation_count = output.total_reloc_count; return true;
 }
 
-// ===== SSA register allocation =====
 class KrtSsaAllocation {
     public int32[] registers; public int32[] spills; public int32[] frame_counts;
 }
@@ -2777,7 +2758,6 @@ bool KrtKroSsaScalar(KrtSsaModule ssa, KrtSsaAllocation allocation, KrtKroObject
     return KrtKroSsaStore(ssa,allocation,output,ref pc,value);
 }
 
-// ===== SSA code generation =====
 // Native emission consumes SSA value operands and CFG edges directly.
 bool KrtKroEmitSsaModule(KrtSsaModule ssa, KrtKroObject output) {
     if (!KrtSsaValidate(ssa)) { return false; }
@@ -3208,7 +3188,6 @@ bool KrtKroEmitNativeModule(KrtNativeModule module, KrtKroObject output) {
     return module.ssa != null && KrtKroEmitSsaModule(module.ssa,output);
 }
 
-// ===== Wide value encoding =====
 // Wide values are 16-byte values. Expression snapshots live in this function's
 // frame; persistent locals, arguments, fields and results copy their bytes.
 int32 KrtKroWideScratchBytes(int32 operation, int64 argument, int64 extra) {

@@ -1,12 +1,7 @@
 namespace System.Runtime;
 
-// ============================================
-// StringBuilder — 可变字符串构建器
-// 纯 .krt 实现
-//
 // 当前状态: 实现完成, 但受限于编译器跨文件调用限制,
 // 需要在同一文件中包含所有依赖函数。
-// ============================================
 
 public static class StringBuilder
 {
@@ -25,7 +20,6 @@ public static class StringBuilder
     }
 
     // 追加字符串到缓冲区
-    // 参数: buffer, bufferSize, currentLength, value
     // 返回: 新长度, 如果容量不足返回 -1
     public static int32 AppendString(int64 buffer, int32 bufferSize, int32 currentLength, string value)
     {
@@ -106,7 +100,6 @@ public static class StringBuilder
 
         if (currentLength + valueLen > bufferSize) return -1;
 
-        // 向后移动现有字符
         char[] buf = (char[])buffer;
         int32 i = currentLength - 1;
         while (i >= index)
@@ -115,7 +108,6 @@ public static class StringBuilder
             i = i - 1;
         }
 
-        // 插入新字符
         int64 valuePtr = Sys.InternalStringPtr(value);
         char[] src = (char[])valuePtr;
         i = 0;
@@ -160,7 +152,6 @@ public static class StringBuilder
     {
         if (length == 0) return "";
 
-        // 分配新缓冲区
         int64 newBuf = Sys.syscall(9, 0, (int64)(length + 1), 3, 0x22, -1, 0);
         char[] src = (char[])buffer;
         char[] dst = (char[])newBuf;

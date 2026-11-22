@@ -1,4 +1,3 @@
-// ===== Boxing lowering =====
 // A box retains the ordinary allocation header used by Free. Its payload is
 // [exact runtime descriptor, value byte size, independently copied value].
 // Descriptor construction and matching are shared with object ABI dispatch.
@@ -140,7 +139,6 @@ bool KrtNativeLowerObjectEquality(KrtAstNode expression, KrtAstNode ast, KrtNati
         KrtNativeEmit(module,(int32)KrtNativeOp.Compare,expression.op,0) >= 0;
 }
 
-// ===== Closure lowering =====
 // Escaping closures share lexical cells. Owners and environments each hold one
 // cell reference; the value bytes remain live until the last reference leaves.
 bool KrtNativeCellReference(KrtAstNode declaration) {
@@ -391,7 +389,6 @@ bool KrtNativeLowerTemporaryClosureCall(KrtAstNode call, KrtAstNode ast, KrtNati
     delete breaks; delete continues; return lowered;
 }
 
-// ===== Exception lowering =====
 KrtNativeExceptionFrame KrtNativeExceptionFrameCreate(KrtNativeModule module) {
     if (module == null) { return null; }
     KrtNativeExceptionFrame frame = new KrtNativeExceptionFrame();
@@ -513,7 +510,6 @@ bool KrtNativeLowerTry(KrtAstNode statement, KrtAstNode module_ast, KrtAstNode u
     return KrtNativePatchLoop(module, exits, module.count);
 }
 
-// ===== Floating point lowering =====
 // Conversions operate on the top stack value; calls use the same bit-pattern ABI.
 bool KrtNativeConvertValue(KrtNativeModule module, KrtAstNode original, KrtAstNode target) {
     if (original != null && KrtNativeBoxCastConversion(target,original)) { return KrtNativeLowerBoxConversion(module,original,target); }
@@ -570,7 +566,6 @@ bool KrtNativeLowerFloatingCompound(KrtAstNode statement, KrtAstNode module_ast,
         KrtNativeConvertValue(module, target, statement.left) && KrtNativeEmit(module, (int32)KrtNativeOp.Store, 0, KrtNativeWidth(statement.left)) >= 0;
 }
 
-// Floating-literal parsing and emission.
 // Decimal-to-binary conversion uses an exact rational and rounds once, ties-even.
 // Base-65536 limbs keep all intermediate arithmetic within signed 64 bits.
 int32 KrtFloatBigLength(int64[] words) {
@@ -697,7 +692,6 @@ bool KrtNativeFloatingBits(KrtAstNode expression, int64 source, ref int64 result
     delete numerator; delete denominator; return true;
 }
 
-// ===== Generator lowering =====
 // Generator activations live in ordinary heap storage. Existing SSA operations
 // provide every load, store, address, branch, call and exception edge.
 int32 KrtNativeGeneratorRaw(KrtNativeModule module, int32 op, int64 arg, int64 extra) {
@@ -1050,8 +1044,6 @@ bool KrtNativeLowerGeneratorFunction(KrtAstNode ast, KrtAstNode unit, KrtNativeM
     return false;
 }
 
-// ===== IR construction =====
-// Call argument mapping and evaluation.
 // The receiver/function pointer is already on the operand stack. Named actuals
 // are evaluated once in source order, then loaded in formal parameter order.
 bool KrtNativeLowerArguments(KrtAstNode arguments, KrtAstNode target, int32 extra, KrtAstNode ast, KrtNativeModule module, int64 source) {
@@ -1087,7 +1079,6 @@ bool KrtNativeLowerArguments(KrtAstNode arguments, KrtAstNode target, int32 extr
     return position == target.parameter_count;
 }
 
-// Compound assignment lowering.
 int32 KrtNativeCompoundOperation(int32 operation) {
     if (operation == 108) { return 43; } if (operation == 109) { return 45; }
     if (operation == 110) { return 42; } if (operation == 111) { return 47; }
@@ -1134,7 +1125,6 @@ bool KrtNativeLowerCompound(KrtAstNode statement, KrtAstNode module_ast, KrtNati
         KrtNativeEmit(module, (int32)KrtNativeOp.Store, 0, KrtNativeWidth(statement.left)) >= 0;
 }
 
-// Base-constructor and class-exception lowering.
 bool KrtNativeLowerBaseConstructor(KrtAstNode expression, KrtAstNode module_ast, KrtNativeModule module, int64 source) {
     KrtAstNode target = expression.native_target;
     if (target == null) { return KrtNativeEmit(module, (int32)KrtNativeOp.Const, 0, 0) >= 0; }
@@ -2448,7 +2438,6 @@ bool KrtNativeLowerForeach(KrtAstNode statement, KrtAstNode module_ast, KrtAstNo
     return KrtNativePatchLoop(module, breaks[depth], end) && KrtNativePatchLoop(module, continues[depth], continue_target);
 }
 
-// Iterator protocol and foreach lowering.
 // The binder prepares ordinary typed calls, locals, while and try/finally.
 // Reusing the normal statement lowerer preserves struct copies, virtual and
 // interface calls, exception edges and loop/closure owner cleanup.
@@ -2491,7 +2480,6 @@ bool KrtNativeLowerIteratorForeach(KrtAstNode statement, KrtAstNode module_ast, 
     return KrtNativeLowerBlock(statement.native_target,module_ast,unit,module,source,breaks,continues,ref depth);
 }
 
-// Null-coalescing and conditional-access lowering.
 bool KrtNativeLowerNullCoalescing(KrtAstNode expression, KrtAstNode ast, KrtNativeModule module, int64 source) {
     if (!KrtNativeLowerExpression(expression.left,ast,module,source) ||
         KrtNativeEmit(module,(int32)KrtNativeOp.Dup,0,0) < 0) { return false; }
@@ -2530,7 +2518,6 @@ bool KrtNativeLowerNullConditional(KrtAstNode expression, KrtAstNode ast, KrtNat
     return true;
 }
 
-// Built-in print lowering.
 KrtAstNode KrtNativePrintHelper(KrtAstNode ast, int64 source, string name) {
     KrtAstNode unit = ast.left;
     while (unit != null) { if (unit.op == 241 && KrtNativeSpanWord(source,unit.name_start,unit.name_length,name)) { return unit; } unit = unit.next; }
@@ -2567,7 +2554,6 @@ bool KrtNativeLowerPrint(KrtAstNode statement, KrtAstNode ast, KrtNativeModule m
     return statement.value == 0 || (KrtNativePrintCall(ast,module,source,"__KrtPrintLine",0) && KrtNativeEmit(module,(int32)KrtNativeOp.Drop,0,0) >= 0);
 }
 
-// Switch control-flow lowering.
 // A switch is a break target, while continue searches its enclosing loop.
 // The selector travels through one reserved local, including string, IEEE and
 // wide integer values. Labels use the same equality machinery as expressions.
@@ -2608,7 +2594,6 @@ bool KrtNativeLowerSwitch(KrtAstNode statement, KrtAstNode module_ast, KrtAstNod
     return KrtNativePatchLoop(module, breaks[depth], module.count);
 }
 
-// Global storage, initialization, and indirect-call lowering.
 bool KrtNativeLowerGlobalAddress(KrtAstNode node, KrtNativeModule module) {
     return node.native_global > 0 && KrtNativeEmit(module, 44, node.native_global - 1, 0) >= 0;
 }
@@ -2672,7 +2657,6 @@ bool KrtNativeLowerIndirectCall(KrtAstNode node, KrtAstNode ast, KrtNativeModule
 }
 
 
-// Dispatch and trap lowering.
 // A failed receiver/type guard terminates deterministically, like the existing
 // allocation guards. Its operands never read through a null object pointer.
 bool KrtNativeLowerDispatchTrap(KrtNativeModule module) {
@@ -2729,7 +2713,6 @@ bool KrtNativeLowerDispatch(KrtAstNode expression, KrtAstNode ast, KrtNativeModu
 }
 
 
-// Runtime type-test lowering.
 bool KrtNativeLowerTypeTestMatch(KrtAstNode expression, KrtAstNode ast, KrtNativeModule module) {
     KrtAstNode target = expression.native_target; KrtAstNode source_type = expression.left;
     if (KrtNativeReferenceObjectValue(source_type)) {
@@ -2788,7 +2771,6 @@ bool KrtNativeLowerTypeTest(KrtAstNode expression, KrtAstNode ast, KrtNativeModu
     return true;
 }
 
-// ===== Runtime exception support =====
 // Negative packet type words contain an exact descriptor and ownership flags.
 // Positive words retain the scalar exception ABI of independently built KROs.
 bool KrtNativeLegacyException(KrtAstNode type) {
@@ -2988,7 +2970,6 @@ bool KrtNativeLowerRuntimeCatchValue(KrtAstNode expected,int32 slot,KrtNativeMod
     return KrtNativeEmit(module,(int32)KrtNativeOp.StoreLocal,expected.local_slot,0) >= 0;
 }
 
-// ===== Runtime type descriptors =====
 // Runtime searches use ordinary validated IR, including exact byte comparison.
 // The native backend executes this lookup algorithm and receiver adjustment.
 bool KrtNativeRuntimeLoad(KrtNativeModule module,int32 slot,int32 offset) {
@@ -3138,7 +3119,6 @@ bool KrtNativeLowerRuntimeObjectIdentity(KrtNativeModule module,int32 pointer_sl
     return KrtNativeRuntimePatch(module,done,module.count);
 }
 
-// ===== SSA construction =====
 class KrtSsaEscapeInfo { public bool[] values; }
 
 // All values use a 64-bit machine word. Semantic annotations distinguish
@@ -3645,7 +3625,6 @@ bool KrtSsaWriteIr(KrtSsaModule ssa, int64 descriptor) {
     return true;
 }
 
-// ===== Value type lowering =====
 // Aggregate values are addresses of typed, inline bytes. Copies are explicit
 // memory operations; no struct storage is replaced by a reference object.
 bool KrtNativeLowerAggregateFrame(KrtAstNode node, KrtNativeModule module) {
@@ -3731,7 +3710,6 @@ bool KrtNativeLowerAggregateNew(KrtAstNode expression, KrtAstNode ast, KrtNative
     return true;
 }
 
-// ===== Wide integer lowering =====
 // Wide values occupy 128 physical bits but retain their declared precision.
 // Masking and sign extension use the same operations in KRO and assembly.
 bool KrtNativeNormalizeWide(KrtNativeModule module, KrtAstNode type) {

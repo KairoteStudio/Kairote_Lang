@@ -1,13 +1,8 @@
 namespace System.Runtime;
 
-// ============================================
-// String — 核心字符串操作
-// 纯 .krt 实现, 不依赖 C 运行时库
-// ============================================
 
 public static class StringOps
 {
-    // ========== 基础操作 ==========
 
     // 获取字符串长度 (公开接口)
     public static int32 Length(string s)
@@ -28,13 +23,10 @@ public static class StringOps
         // 分配新缓冲区 (+1 for null terminator)
         int64 buf = (int64)Memory.Allocate((int64)(totalLen + 1));
 
-        // 复制 a
         Memory.Copy((void*)buf, (void*)Sys.InternalStringPtr(a), lenA);
 
-        // 复制 b
         Memory.Copy((void*)(buf + (int64)lenA), (void*)Sys.InternalStringPtr(b), lenB);
 
-        // 添加 null terminator
         char[] arr = (char[])buf;
         arr[totalLen] = '\0';
 
@@ -46,7 +38,6 @@ public static class StringOps
     {
         if (parts == null || parts.Length() == 0) return "";
 
-        // 计算总长度
         int32 totalLen = 0;
         int32 i = 0;
         while (i < parts.Length())
@@ -58,10 +49,8 @@ public static class StringOps
             i = i + 1;
         }
 
-        // 分配缓冲区
         int64 buf = (int64)Memory.Allocate((int64)(totalLen + 1));
 
-        // 逐个复制
         int32 offset = 0;
         i = 0;
         while (i < parts.Length())
@@ -75,14 +64,12 @@ public static class StringOps
             i = i + 1;
         }
 
-        // null terminator
         char[] arr = (char[])buf;
         arr[totalLen] = '\0';
 
         return (string)buf;
     }
 
-    // ========== 转换操作 ==========
 
     // int32 转字符串
     public static string FromInt32(int32 value)
@@ -103,7 +90,6 @@ public static class StringOps
             v = -v;
         }
 
-        // 计算位数
         int64 temp = v;
         int32 digits = 0;
         while (temp > 0)
@@ -127,19 +113,16 @@ public static class StringOps
             temp = temp / 10;
         }
 
-        // 添加负号
         if (negative == 1)
         {
             arr[0] = '-';
         }
 
-        // null terminator
         arr[totalLen] = '\0';
 
         return (string)buf;
     }
 
-    // ========== 比较操作 ==========
 
     // 快速字符串比较
     // 返回: 0 = 相等, <0 = s1 < s2, >0 = s1 > s2
@@ -177,7 +160,6 @@ public static class StringOps
         return Compare(s1, s2) == 0;
     }
 
-    // ========== 查找操作 ==========
 
     // 查找字符首次出现的位置
     public static int32 IndexOf(string s, char c)
@@ -217,7 +199,6 @@ public static class StringOps
         return -1;
     }
 
-    // ========== 子串操作 ==========
 
     // 提取子串
     public static string Substring(string s, int32 start)
@@ -250,7 +231,6 @@ public static class StringOps
 
 
 
-    // ========== 判断操作 ==========
 
     // 判断是否以指定前缀开头
     public static bool StartsWith(string s, string prefix)

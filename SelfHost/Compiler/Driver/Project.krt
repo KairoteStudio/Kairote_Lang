@@ -1,4 +1,3 @@
-// ===== Project building and cache =====
 // Native project discovery, globbing, lifecycle and successful-build cache.
 // The manifest is length-prefixed binary data so arbitrary filesystem names
 // never need a host-language serializer or shell interpretation.
@@ -563,7 +562,6 @@ int32 KrtDriverProject(KrtDriverOptions options) {
     return KrtProjectBuild(project,options);
 }
 
-// ===== Project configuration =====
 // Project configuration is interpreted by the native compiler driver. It is a
 // deliberately bounded data language, using the same lexer as source modules.
 class KrtProjectValue {
