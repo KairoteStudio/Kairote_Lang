@@ -2638,12 +2638,8 @@ bool semantic_analyzer_analyze_variable_decl(SemanticAnalyzer* analyzer, ASTNode
         var_decl->data.variable_decl.type = TOKEN_IDENTIFIER;
     }
     var_decl->resolved_type = symbol->source_type = type;
-    if (KrtSourceIsPointer(type) ||
-        (var_decl->data.variable_decl.type == TOKEN_AUTO && !symbol->is_array && var_decl->data.variable_decl.value &&
-         var_decl->data.variable_decl.value->type != AST_NEW_ARRAY_EXPRESSION &&
-         (KrtTokenIntegerBits(type.token) || type.token == TOKEN_BOOL))) {
-        var_decl->data.variable_decl.type = KrtSourceStorage(type);
-    }
+    /* The AST's declared type is left untouched; IrGen reads resolved_type
+     * first and falls back to the declared token. */
     symbol->value_type = KrtSourceStorage(type);
     return true;
 }

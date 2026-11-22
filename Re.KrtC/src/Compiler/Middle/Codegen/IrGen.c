@@ -2975,8 +2975,19 @@ static void irgen_stmt_try_statement(KrtIRBuilder* builder, ASTNode* stmt) {
     return;
 }
 
+/* The semantic pass records the resolved type on the node; the AST's declared
+ * token is only a fallback for declarations that never went through it. */
+static KrtTokenType irgen_var_declared_type(const ASTNode* stmt) {
+    if (stmt->resolved_type.token || stmt->resolved_type.pointer_depth || stmt->resolved_type.function) {
+        /* Pointers are stored as addresses, exactly as the old AST rewrite did. */
+        return KrtSourceStorage(stmt->resolved_type);
+    }
+    return stmt->type == AST_STATIC_VARIABLE_DECLARATION ? stmt->data.static_variable_decl.type
+                                                        : stmt->data.variable_decl.type;
+}
+
 static void irgen_stmt_variable_declaration(KrtIRBuilder* builder, ASTNode* stmt) {
-    KrtIrVarTypePush(builder, stmt->data.variable_decl.name, (int)stmt->data.variable_decl.type,
+    KrtIrVarTypePush(builder, stmt->data.variable_decl.name, (int)irgen_var_declared_type(stmt),
                      (stmt->data.variable_decl.is_array || stmt->data.variable_decl.array_size) ? 1 : 0);
     if ((stmt->data.variable_decl.is_array || stmt->data.variable_decl.array_size) &&
         stmt->data.variable_decl.value && !irgen_array_is_managed(builder, stmt->data.variable_decl.value)) {
@@ -2993,7 +3004,7 @@ static void irgen_stmt_variable_declaration(KrtIRBuilder* builder, ASTNode* stmt
 
     if (is_array_literal && stmt->data.variable_decl.is_array) {
         ASTNode* array = stmt->data.variable_decl.value;
-        KrtTokenType type = stmt->data.variable_decl.type;
+        KrtTokenType type = irgen_var_declared_type(stmt);
         int size = irgen_size_from_token(type);
         KrtIRValue pointer = irgen_mark_array_length(
             builder, irgen_allocate_memory(builder, KrtIrImm(builder, array->data.array_literal.element_count * size)),
@@ -3029,7 +3040,7 @@ static void irgen_stmt_variable_declaration(KrtIRBuilder* builder, ASTNode* stmt
             array_size = (size_value > 0) ? (int)size_value : 10;
         }
 
-        int element_size = irgen_size_from_token(stmt->data.variable_decl.type);
+        int element_size = irgen_size_from_token(irgen_var_declared_type(stmt));
         int total_bytes = array_size * element_size;
         KrtIrAlloc(builder, ir_slot);
         KrtIRValue ptr =
@@ -3041,7 +3052,7 @@ static void irgen_stmt_variable_declaration(KrtIRBuilder* builder, ASTNode* stmt
 
         if (stmt->data.variable_decl.value) {
             /* C24: 浮点声明 + 字面量初始化 -> 双精度立即数(保位型) */
-            if (irgen_is_float_token((int)stmt->data.variable_decl.type) &&
+            if (irgen_is_float_token((int)irgen_var_declared_type(stmt)) &&
                 stmt->data.variable_decl.value->type == AST_NUMBER) {
                 KrtIrStore(builder, ir_slot, KrtIrImmF(builder, stmt->data.variable_decl.value->data.number_value));
             } else {
@@ -3060,7 +3071,7 @@ static void irgen_stmt_static_variable_declaration(KrtIRBuilder* builder, ASTNod
 
     KrtIRGlobal* global = KrtIrModuleFindGlobal(builder->module, global_name);
     if (!global) {
-        global = KrtIrModuleAddGlobal(builder, global_name, stmt->data.static_variable_decl.type);
+        global = KrtIrModuleAddGlobal(builder, global_name, irgen_var_declared_type(stmt));
     }
 
     if (global && stmt->data.static_variable_decl.value) {
