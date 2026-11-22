@@ -1995,6 +1995,16 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
         return ok;
     }
 
+    case AST_AWAIT_EXPRESSION: {
+        ASTNode* value_expr = expr->data.await_expr.expression;
+        if (!semantic_analyzer_analyze_expression(analyzer, value_expr)) {
+            return false;
+        }
+        /* Awaiting an already-produced value yields that value. */
+        expr->resolved_type = value_expr->resolved_type;
+        return true;
+    }
+
     case AST_INTERPOLATED_STRING: {
         bool ok = true;
         for (int i = 0; i < expr->data.interpolated_string.expression_count; i++) {

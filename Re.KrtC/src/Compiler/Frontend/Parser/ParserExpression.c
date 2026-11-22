@@ -807,6 +807,15 @@ static ASTNode* parser_parse_unary_prefix(Parser* parser) {
         }
         return node;
     }
+    if (op == TOKEN_AWAIT) {
+        ASTNode* node = KRT_PARSER_CREATE_NODE(AST_AWAIT_EXPRESSION, line, col);
+        if (!node) {
+            ast_destroy_node(operand);
+            return NULL;
+        }
+        node->data.await_expr.expression = operand;
+        return node;
+    }
     ASTNode* node = KrtParserCreateNode(parser, AST_UNARY_OPERATION, line, col);
     if (!node) {
         ast_destroy_node(operand);
@@ -822,8 +831,8 @@ static ASTNode* parser_parse_binary_operation_inner(Parser* parser, int preceden
     if (parser->current_token.type == TOKEN_POWER || parser->current_token.type == TOKEN_BITWISE_AND ||
         parser->current_token.type == TOKEN_MULTIPLY || parser->current_token.type == TOKEN_MINUS ||
         parser->current_token.type == TOKEN_NOT || parser->current_token.type == TOKEN_TILDE ||
-        parser->current_token.type == TOKEN_PLUS || parser->current_token.type == TOKEN_INCREMENT ||
-        parser->current_token.type == TOKEN_DECREMENT) {
+        parser->current_token.type == TOKEN_PLUS || parser->current_token.type == TOKEN_AWAIT ||
+        parser->current_token.type == TOKEN_INCREMENT || parser->current_token.type == TOKEN_DECREMENT) {
         left = parser_parse_unary_prefix(parser);
     } else {
         left = parser_parse_postfix_expression(parser);

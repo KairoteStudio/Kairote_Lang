@@ -483,7 +483,10 @@ static KrtIRValue irgen_linq_select(KrtIRBuilder* builder, KrtIRValue source, Kr
 }
 
 static KrtIRValue irgen_await_task(KrtIRBuilder* builder, KrtIRValue task) {
-    return irgen_call_builtin_1arg(builder, IRGEN_FUNC_AWAIT_TASK, task);
+    /* Single-threaded runtime: there are no pending tasks, so awaiting a value
+     * yields the value itself.  No libc and no runtime helper involved. */
+    (void)builder;
+    return task;
 }
 
 static KrtIRValue irgen_null_coalesce(KrtIRBuilder* builder, KrtIRValue left, KrtIRValue right) {
