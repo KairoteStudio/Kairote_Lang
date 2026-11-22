@@ -449,6 +449,10 @@ static bool semantic_expand_types(SemanticAnalyzer* analyzer, ASTNode* ast) {
             expansion_ok = false;
         }
     }
+    /* Contract: after expansion the block's statements array is owned by the
+     * type arena (not by the parser heap) and must not be KRT_FREE'd.  The
+     * previous heap array is released here. */
+    KRT_FREE(ast->data.block.statements);
     ast->data.block.statement_count = context.count;
     ast->data.block.statements = expansion_alloc(&context, context.count * sizeof(*context.nodes));
     if (context.count) {
