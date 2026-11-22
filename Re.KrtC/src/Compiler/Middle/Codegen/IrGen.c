@@ -33,6 +33,14 @@ static void krt_ir_push_namespace_context(KrtIRBuilder* builder, const char* nam
 static void krt_ir_pop_namespace_context(KrtIRBuilder* builder);
 static const char** krt_ir_get_namespace_path(KrtIRBuilder* builder, int* out_count);
 
+/* Linux (arm64/x86-64) syscall numbers and mmap flags used by the runtime. */
+#define KRT_IRGEN_SYSCALL_EXIT 60
+#define KRT_IRGEN_SYSCALL_MMAP 9
+#define KRT_IRGEN_SYSCALL_MUNMAP 11
+#define KRT_IRGEN_EXIT_CODE_BOUNDS 70
+#define KRT_IRGEN_MMAP_SHARED 3
+#define KRT_IRGEN_MMAP_ANONYMOUS 0x22
+
 static int irgen_size_from_token(KrtTokenType t) {
     if (KrtTokenIntegerBits(t)) {
         return KrtTokenIntegerSize(t);
@@ -174,8 +182,8 @@ static KrtIRValue irgen_checked_array_index(KrtIRBuilder* builder, KrtIRValue ba
     KrtIrBranch(builder, in_bounds, valid, fail);
 
     KrtIrBlockSetCurrent(builder, fail);
-    KrtIRValue exit_status[1] = {KrtIrImm(builder, 70)};
-    KrtIrSyscall(builder, KrtIrImm(builder, 60), exit_status, 1);
+    KrtIRValue exit_status[1] = {KrtIrImm(builder, KRT_IRGEN_EXIT_CODE_BOUNDS)};
+    KrtIrSyscall(builder, KrtIrImm(builder, KRT_IRGEN_SYSCALL_EXIT), exit_status, 1);
     KrtIrJump(builder, fail);
 
     KrtIrBlockSetCurrent(builder, valid);
@@ -335,9 +343,10 @@ static KrtIRValue irgen_allocate_memory(KrtIRBuilder* builder, KrtIRValue size_v
 
     KrtIRValue total_size = KrtIrAdd(builder, size_val, KrtIrImm(builder, header_size));
     KrtIRValue mmap_args[6] = {KrtIrImm(builder, 0),  total_size,
-                               KrtIrImm(builder, 3),  KrtIrImm(builder, 0x22),
+                               KrtIrImm(builder, KRT_IRGEN_MMAP_SHARED),
+                               KrtIrImm(builder, KRT_IRGEN_MMAP_ANONYMOUS),
                                KrtIrImm(builder, -1), KrtIrImm(builder, 0)};
-    KrtIRValue allocation = KrtIrSyscall(builder, KrtIrImm(builder, 9), mmap_args, 6);
+    KrtIRValue allocation = KrtIrSyscall(builder, KrtIrImm(builder, KRT_IRGEN_SYSCALL_MMAP), mmap_args, 6);
 
     KrtIRBasicBlock* success_block = KrtIrBlockCreate(builder, success_label);
     KrtIRBasicBlock* failure_block = KrtIrBlockCreate(builder, failure_label);
@@ -389,7 +398,7 @@ static void irgen_free_memory(KrtIRBuilder* builder, KrtIRValue ptr_val) {
     KrtIRValue allocation = KrtIrSub(builder, ptr_val, KrtIrImm(builder, header_size));
     KrtIRValue total_size = KrtIrLoadPtr(builder, allocation, header_size - KRT_IRGEN_POINTER_SIZE);
     KrtIRValue munmap_args[2] = {allocation, total_size};
-    KrtIrSyscall(builder, KrtIrImm(builder, 11), munmap_args, 2);
+    KrtIrSyscall(builder, KrtIrImm(builder, KRT_IRGEN_SYSCALL_MUNMAP), munmap_args, 2);
     KrtIrJump(builder, end_block);
 
     KrtIrBlockSetCurrent(builder, end_block);
