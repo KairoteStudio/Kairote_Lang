@@ -1317,6 +1317,20 @@ static bool semantic_require_bool_condition(SemanticAnalyzer* analyzer, ASTNode*
     return true;
 }
 
+/* Single rule for array indices: an integer expression, present. */
+static bool semantic_check_array_index(SemanticAnalyzer* analyzer, ASTNode* container, ASTNode* index_expr) {
+    if (!index_expr) {
+        semantic_analyzer_add_error_at(analyzer, container, "Array access is missing its index");
+        return false;
+    }
+    KrtTokenType index_type = semantic_analyzer_infer_expression_type(analyzer, index_expr);
+    if (index_type != TOKEN_EOF && index_type != TOKEN_UNKNOWN && KrtTokenIntegerBits(index_type) == 0) {
+        semantic_analyzer_add_error_at(analyzer, index_expr, "Array index must be an integer");
+        return false;
+    }
+    return true;
+}
+
 static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) {
     if (!analyzer || !expr) {
         return false;
@@ -1754,12 +1768,17 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
         /* Instance fields must retain their owner for IR address calculation.
          * Treating parameter.field as a static name silently creates a different
          * storage location instead of loading/storing through the parameter. */
-        const char* instance_name = object ? object->resolved_type.type_name : NULL;
+        /* One source of truth: the variable's recorded class type wins, and
+         * the expression's resolved type name is only a fallback. */
+        const char* instance_name = NULL;
         if (object && object->type == AST_IDENTIFIER) {
             SymbolEntry* variable = symbol_table_lookup(analyzer->symbol_table, object->data.identifier_name);
             if (variable && variable->type != SYMBOL_CLASS && variable->class_type_name) {
                 instance_name = variable->class_type_name;
             }
+        }
+        if (!instance_name && object) {
+            instance_name = object->resolved_type.type_name;
         }
         if (instance_name && object && object->type != AST_THIS) {
             SymbolEntry* owner = semantic_analyzer_lookup_class(analyzer, instance_name);
@@ -1878,16 +1897,8 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
     case AST_ARRAY_ACCESS: {
         bool array_ok = semantic_analyzer_analyze_expression(analyzer, expr->data.array_access.array);
         bool index_ok = semantic_analyzer_analyze_expression(analyzer, expr->data.array_access.index);
-
-        if (index_ok) {
-            KrtTokenType index_type =
-                semantic_analyzer_infer_expression_type(analyzer, expr->data.array_access.index);
-            if (index_type != TOKEN_EOF && index_type != TOKEN_UNKNOWN &&
-                KrtTokenIntegerBits(index_type) == 0) {
-                semantic_analyzer_add_error_at(analyzer, expr->data.array_access.index,
-                                               "Array index must be an integer");
-                return false;
-            }
+        if (index_ok && !semantic_check_array_index(analyzer, expr, expr->data.array_access.index)) {
+            return false;
         }
 
         if (array_ok && expr->data.array_access.array->type == AST_IDENTIFIER) {
@@ -2724,15 +2735,8 @@ static bool semantic_analyze_stmt_array_assignment(SemanticAnalyzer* analyzer, A
     bool index_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.array_assignment.index);
     bool value_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.array_assignment.value);
 
-    if (index_ok) {
-        KrtTokenType index_type =
-            semantic_analyzer_infer_expression_type(analyzer, stmt->data.array_assignment.index);
-        if (index_type != TOKEN_EOF && index_type != TOKEN_UNKNOWN &&
-            KrtTokenIntegerBits(index_type) == 0) {
-            semantic_analyzer_add_error_at(analyzer, stmt->data.array_assignment.index,
-                                           "Array index must be an integer");
-            return false;
-        }
+    if (index_ok && !semantic_check_array_index(analyzer, stmt, stmt->data.array_assignment.index)) {
+        return false;
     }
 
     if (array_ok && stmt->data.array_assignment.array->type == AST_IDENTIFIER) {
