@@ -1454,6 +1454,22 @@ static int krt_ir_evaluate_numeric_constant(ASTNode* expr, double* out_value) {
 
 static KrtIRValue irgen_expr_identifier(KrtIRBuilder* builder, ASTNode* expr) {
     const char* var_name = expr->data.identifier_name;
+
+    /* Inside a lambda, a captured name is loaded from the closure environment
+     * that the generated function receives as its first parameter. */
+    if (var_name && builder->capture_count > 0) {
+        for (int i = 0; i < builder->capture_count; i++) {
+            if (builder->capture_names[i] && strcmp(builder->capture_names[i], var_name) == 0) {
+                int env_slot = builder->current_function->param_count - 1;
+                if (env_slot < 0) {
+                    env_slot = 0;
+                }
+                KrtIRValue env = KrtIrArg(builder, env_slot);
+                return KrtIrLoadPtrSized(builder, env, (i + 1) * KRT_IRGEN_POINTER_SIZE, KRT_IRGEN_POINTER_SIZE);
+            }
+        }
+    }
+
     const char* local_name = KrtIrVarTypeResolveIRName(builder, var_name);
     if (strcmp(local_name, var_name)) {
         return KrtIrLoad(builder, local_name);
@@ -1494,7 +1510,7 @@ static KrtIRValue irgen_expr_identifier(KrtIRBuilder* builder, ASTNode* expr) {
 
     /* A bare function name is a function reference: hand back its address so
      * it can be stored in a delegate variable. */
-    if (builder->module && expr->resolved_type.function) {
+        if (builder->module && expr->resolved_type.function) {
         /* Functions are emitted under their mangled name. */
         KrtFunctionType* fn = expr->resolved_type.function;
         KrtTokenType param_types[KRT_IRGEN_MAX_MANGLE_PARAMS];
@@ -1509,9 +1525,13 @@ static KrtIRValue irgen_expr_identifier(KrtIRBuilder* builder, ASTNode* expr) {
                 if (mangled) {
             for (KrtIRFunction* f = builder->module->functions; f; f = f->next) {
                 if (f->name && strcmp(f->name, mangled) == 0) {
-                    KrtIRValue address = KrtIrLoad(builder, mangled);
+                    /* A reference to a function is a closure with no captures,
+                     * so every function value has one representation and one
+                     * calling convention. */
+                    KrtIRValue closure = irgen_allocate_memory(builder, KrtIrImm(builder, KRT_IRGEN_POINTER_SIZE));
+                    KrtIrStorePtrSized(builder, closure, 0, KrtIrLoad(builder, mangled), KRT_IRGEN_POINTER_SIZE);
                     KRT_IRGEN_FREE(mangled);
-                    return address;
+                    return closure;
                 }
             }
             KRT_IRGEN_FREE(mangled);
@@ -1976,24 +1996,27 @@ static KrtIRValue irgen_expr_member_access(KrtIRBuilder* builder, ASTNode* expr)
 }
 static KrtIRValue irgen_expr_call(KrtIRBuilder* builder, ASTNode* expr) {
     if (expr->is_indirect_call) {
-                KrtIRValue callee = expr->data.call.object
-                                ? krt_ir_generate_expression(builder, expr->data.call.object)
-                                : KrtIrLoad(builder, KrtIrVarTypeResolveIRName(builder, expr->data.call.name));
+                KrtIRValue closure = expr->data.call.object
+                                 ? krt_ir_generate_expression(builder, expr->data.call.object)
+                                 : KrtIrLoad(builder, KrtIrVarTypeResolveIRName(builder, expr->data.call.name));
         if (!expr->data.call.object && builder->current_function &&
             !strcmp(KrtIrVarTypeResolveIRName(builder, expr->data.call.name), expr->data.call.name)) {
             for (int i = 0; i < builder->current_function->param_count; i++) {
                 if (!strcmp(builder->current_function->params[i].name, expr->data.call.name)) {
-                    callee = KrtIrArg(builder, i);
+                    closure = KrtIrArg(builder, i);
                 }
             }
         }
-        callee = KrtIrCast(builder, callee, TOKEN_UINT64);
+        /* The closure pointer is the hidden environment argument; the code
+         * pointer lives in its first word. */
+        KrtIRValue code = KrtIrLoadPtrSized(builder, closure, 0, KRT_IRGEN_POINTER_SIZE);
         int count = expr->data.call.argument_count;
-        KrtIRValue* args = KrtIrArenaAlloc(builder->arena, (count ? count : 1) * sizeof(*args));
+        KrtIRValue* args = KrtIrArenaAlloc(builder->arena, (size_t)(count + 1) * sizeof(*args));
         for (int i = 0; i < count; i++) {
             args[i] = irgen_typed_call_argument(builder, expr, i);
         }
-        return KrtIrCallIndirect(builder, callee, args, count, expr->function_type);
+        args[count] = closure;
+        return KrtIrCallIndirect(builder, code, args, count + 1, expr->function_type);
     }
     const char* func_name = expr->data.call.name;
 
@@ -2257,17 +2280,22 @@ static KrtIRValue irgen_expr_lambda_expression(KrtIRBuilder* builder, ASTNode* e
     }
 
     int param_count = expr->data.lambda_expr.parameter_count;
-    KrtIRParam* params = NULL;
-    if (param_count > 0) {
-        params = (KrtIRParam*)KRT_CALLOC(param_count, sizeof(KrtIRParam));
-        KRT_IRGEN_CHECK_ALLOC(params, void_val_return());
-        for (int i = 0; i < param_count; i++) {
-            params[i].name = KRT_STRDUP(expr->data.lambda_expr.parameters[i]);
-            params[i].type = TOKEN_INT32;
-        }
+    int capture_count = expr->data.lambda_expr.capture_count;
+    KrtIRParam* params = (KrtIRParam*)KRT_CALLOC((size_t)(param_count + 1), sizeof(KrtIRParam));
+    KRT_IRGEN_CHECK_ALLOC(params, void_val_return());
+    for (int i = 0; i < param_count; i++) {
+        params[i].name = KRT_STRDUP(expr->data.lambda_expr.parameters[i]);
+        params[i].type = TOKEN_INT32;
+    }
+    params[param_count].name = "__krt_env";
+    params[param_count].type = TOKEN_UINT64;
+    KrtTokenType lambda_result = TOKEN_INT32;
+    if (expr->resolved_type.function && expr->resolved_type.function->result.token) {
+        lambda_result = expr->resolved_type.function->result.token;
     }
 
-    KrtIRFunction* lambda_func = KrtIrFunctionCreate(builder, lambda_name, params, param_count, TOKEN_INT32);
+    KrtIRFunction* lambda_func =
+        KrtIrFunctionCreate(builder, lambda_name, params, param_count + 1, lambda_result);
     if (params) {
         for (int i = 0; i < param_count; i++) {
             KRT_FREE(params[i].name);
@@ -2280,7 +2308,11 @@ static KrtIRValue irgen_expr_lambda_expression(KrtIRBuilder* builder, ASTNode* e
 
     KrtIRFunction* saved_func = builder->current_function;
     KrtIRBasicBlock* saved_block = builder->current_block;
+    char** saved_capture_names = builder->capture_names;
+    int saved_capture_count = builder->capture_count;
     builder->current_function = lambda_func;
+    builder->capture_names = (char**)expr->data.lambda_expr.captures;
+    builder->capture_count = capture_count;
     KrtIRBasicBlock* lambda_entry = KrtIrBlockCreate(builder, "entry");
     KrtIrBlockSetCurrent(builder, lambda_entry);
 
@@ -2295,9 +2327,22 @@ static KrtIRValue irgen_expr_lambda_expression(KrtIRBuilder* builder, ASTNode* e
 
     builder->current_function = saved_func;
     builder->current_block = saved_block;
-    /* The value of a lambda expression is the address of the generated
-     * function, so it can be stored and called indirectly. */
-    return KrtIrLoad(builder, lambda_name);
+    builder->capture_names = saved_capture_names;
+    builder->capture_count = saved_capture_count;
+
+    /* The value is a closure object: word 0 is the code pointer, the rest are
+     * the captured values (evaluated here, in the enclosing scope). */
+    KrtIRValue closure =
+        irgen_allocate_memory(builder, KrtIrImm(builder, (double)(KRT_IRGEN_POINTER_SIZE * (capture_count + 1))));
+    KrtIrStorePtrSized(builder, closure, 0, KrtIrLoad(builder, lambda_name), KRT_IRGEN_POINTER_SIZE);
+    for (int i = 0; i < capture_count; i++) {
+        ASTNode ref = {.type = AST_IDENTIFIER, .line = expr->line, .col = expr->col};
+        ref.data.identifier_name = (char*)expr->data.lambda_expr.captures[i];
+        KrtIRValue captured = krt_ir_generate_expression(builder, &ref);
+        KrtIrStorePtrSized(builder, closure, (i + 1) * KRT_IRGEN_POINTER_SIZE, captured,
+                           KRT_IRGEN_POINTER_SIZE);
+    }
+    return closure;
 }
 static KrtIRValue irgen_expr_linq_query(KrtIRBuilder* builder, ASTNode* expr) {
     ASTNode* from_clause = expr->data.linq_query.from_clause;
@@ -4150,8 +4195,10 @@ static bool irgen_lambda_declare_visitor(ASTNode* node, void* context) {
     char name[64];
     snprintf(name, sizeof(name), "__lambda_%d", builder->label_counter++);
     int count = node->data.lambda_expr.parameter_count;
-    KrtIRParam* params = count > 0 ? (KrtIRParam*)KRT_CALLOC(count, sizeof(KrtIRParam)) : NULL;
-    if (count > 0 && params) {
+    /* The closure environment is a trailing hidden parameter: a named
+     * function called through a closure simply ignores it. */
+    KrtIRParam* params = (KrtIRParam*)KRT_CALLOC((size_t)(count + 1), sizeof(KrtIRParam));
+    if (params) {
         for (int i = 0; i < count; i++) {
             params[i].name = node->data.lambda_expr.parameters[i];
             KrtSourceType pt = node->data.lambda_expr.parameter_types
@@ -4159,12 +4206,14 @@ static bool irgen_lambda_declare_visitor(ASTNode* node, void* context) {
                                    : (KrtSourceType){.token = TOKEN_INT32};
             params[i].type = KrtSourceAbiStorage(pt);
         }
+        params[count].name = "__krt_env";
+        params[count].type = TOKEN_UINT64;
     }
     KrtTokenType result = TOKEN_INT32;
     if (node->resolved_type.function && node->resolved_type.function->result.token) {
         result = node->resolved_type.function->result.token;
     }
-    KrtIrFunctionCreate(builder, name, params, count, result);
+    KrtIrFunctionCreate(builder, name, params, count + 1, result);
     KRT_FREE(params);
     KRT_FREE(node->ir_name);
     node->ir_name = KRT_STRDUP(name);

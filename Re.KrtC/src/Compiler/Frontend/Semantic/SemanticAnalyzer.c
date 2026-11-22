@@ -1331,6 +1331,67 @@ static bool semantic_check_array_index(SemanticAnalyzer* analyzer, ASTNode* cont
     return true;
 }
 
+/* --- lambda capture analysis ------------------------------------------- */
+
+typedef struct {
+    char* names[128];
+    int count;
+} SemanticNameList;
+
+static void semantic_name_list_add(SemanticNameList* list, const char* name) {
+    if (!name || list->count >= 128) {
+        return;
+    }
+    for (int i = 0; i < list->count; i++) {
+        if (strcmp(list->names[i], name) == 0) {
+            return;
+        }
+    }
+    list->names[list->count++] = (char*)name;
+}
+
+static bool semantic_name_list_contains(SemanticNameList* list, const char* name) {
+    if (!name) {
+        return false;
+    }
+    for (int i = 0; i < list->count; i++) {
+        if (strcmp(list->names[i], name) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool semantic_lambda_decl_visitor(ASTNode* node, void* data) {
+    SemanticNameList* list = (SemanticNameList*)data;
+    if (node && node->type == AST_VARIABLE_DECLARATION && node->data.variable_decl.name) {
+        semantic_name_list_add(list, node->data.variable_decl.name);
+    }
+    return true;
+}
+
+typedef struct {
+    SemanticAnalyzer* analyzer;
+    SemanticNameList* own;
+    SemanticNameList* captures;
+} SemanticCaptureContext;
+
+static bool semantic_lambda_ref_visitor(ASTNode* node, void* data) {
+    SemanticCaptureContext* ctx = (SemanticCaptureContext*)data;
+    if (!node || node->type != AST_IDENTIFIER || !node->data.identifier_name) {
+        return true;
+    }
+    const char* name = node->data.identifier_name;
+    if (semantic_name_list_contains(ctx->own, name)) {
+        return true;
+    }
+    SymbolEntry* symbol = symbol_table_lookup_scope_chain(ctx->analyzer->symbol_table, name);
+    if (symbol && symbol->type == SYMBOL_VARIABLE && !semantic_name_list_contains(ctx->captures, name)) {
+        semantic_name_list_add(ctx->captures, name);
+    }
+    return true;
+}
+
 static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) {
     if (!analyzer || !expr) {
         return false;
@@ -1962,7 +2023,44 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
             return false;
         }
 
+        /* Work out which enclosing locals the body uses before leaving the
+         * lambda scope. */
+        SemanticNameList own = {0};
+        SemanticNameList captures = {0};
+        for (int i = 0; i < expr->data.lambda_expr.parameter_count; i++) {
+            semantic_name_list_add(&own, expr->data.lambda_expr.parameters[i]);
+        }
+        if (expr->data.lambda_expr.expression) {
+            KrtAstVisit(expr->data.lambda_expr.expression, semantic_lambda_decl_visitor, &own);
+        }
+        if (expr->data.lambda_expr.body) {
+            KrtAstVisit(expr->data.lambda_expr.body, semantic_lambda_decl_visitor, &own);
+        }
+
         symbol_table_pop_scope(analyzer->symbol_table);
+
+        if (body_ok) {
+            SemanticCaptureContext capture_ctx = {analyzer, &own, &captures};
+            if (expr->data.lambda_expr.expression) {
+                KrtAstVisit(expr->data.lambda_expr.expression, semantic_lambda_ref_visitor, &capture_ctx);
+            }
+            if (expr->data.lambda_expr.body) {
+                KrtAstVisit(expr->data.lambda_expr.body, semantic_lambda_ref_visitor, &capture_ctx);
+            }
+            for (int i = 0; i < captures.count; i++) {
+                SymbolEntry* symbol = symbol_table_lookup_scope_chain(analyzer->symbol_table, captures.names[i]);
+                expr->data.lambda_expr.captures = (char**)KRT_MALLOC(sizeof(char*) * (size_t)captures.count);
+                expr->data.lambda_expr.capture_types =
+                    (KrtSourceType*)KRT_MALLOC(sizeof(KrtSourceType) * (size_t)captures.count);
+                if (!expr->data.lambda_expr.captures || !expr->data.lambda_expr.capture_types) {
+                    break;
+                }
+                expr->data.lambda_expr.captures[i] = KRT_STRDUP(captures.names[i]);
+                expr->data.lambda_expr.capture_types[i] = symbol ? symbol->source_type
+                                                                 : (KrtSourceType){.token = TOKEN_INT32};
+                expr->data.lambda_expr.capture_count++;
+            }
+        }
 
         if (body_ok) {
             /* A lambda is a function value: give it a function type so it can

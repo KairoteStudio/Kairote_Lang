@@ -1015,13 +1015,17 @@ KrtIRValue KrtIrStackAlloc(KrtIRBuilder* builder, KrtIRValue count, int element_
 
 KrtIRValue KrtIrCallIndirect(KrtIRBuilder* builder, KrtIRValue callee, KrtIRValue* args, int count,
                              KrtFunctionType* signature) {
-    if (!builder || !builder->current_function || !signature || count < 0 || count != signature->parameter_count ||
-        (count && (!args || !signature->parameters))) {
+    /* The ABI carries a trailing hidden closure-environment argument, so a
+     * call passes one more value than the source-level signature declares. */
+    int declared = signature ? signature->parameter_count : 0;
+    if (!builder || !builder->current_function || !signature || count < 0 || count != declared + 1 ||
+        (count && !args) || (declared > 0 && !signature->parameters)) {
         return (KrtIRValue){.type = KRT_IR_VALUE_VOID};
     }
-    for (int i = 0; i < count; i++) {
+    for (int i = 0; i < declared; i++) {
         args[i] = KrtIrCast(builder, args[i], KrtSourceAbiStorage(signature->parameters[i]));
     }
+    args[declared] = KrtIrCast(builder, args[declared], TOKEN_UINT64);
     KrtIRInst* inst = ir_create_inst(builder, KRT_IR_CALL_INDIRECT);
     if (!inst) {
         return (KrtIRValue){.type = KRT_IR_VALUE_VOID};

@@ -492,6 +492,11 @@ typedef struct ASTNode {
             char** parameters;
             KrtSourceType* parameter_types;
             int parameter_count;
+            /* Closure captures: names and types of enclosing locals used by the
+             * body.  Filled in by the semantic pass. */
+            char** captures;
+            KrtSourceType* capture_types;
+            int capture_count;
             struct ASTNode* body;
             struct ASTNode* expression;
         } lambda_expr;

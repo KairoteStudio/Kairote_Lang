@@ -375,6 +375,9 @@ struct KrtIRBuilder {
     int layout_count;
     int layout_capacity;
     void* semantic_analyzer;
+    /* Captures of the lambda whose body is being generated: name -> slot. */
+    char** capture_names;
+    int capture_count;
     struct KrtIrVarType {
         const char* name;
         const char* ir_name;
