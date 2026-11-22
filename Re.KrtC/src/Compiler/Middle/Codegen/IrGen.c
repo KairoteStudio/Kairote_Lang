@@ -239,6 +239,9 @@ static _Thread_local KrtGenericContext g_generic_context = {NULL, 0};
         }                                                                                                              \
     } while (0)
 
+/* Allocation guard.  `error_return` is the caller's invalid value: functions
+ * returning a KrtIRValue struct pass void_val_return(), pointer-returning
+ * functions pass NULL.  That single convention is intentional. */
 #define KRT_IRGEN_CHECK_ALLOC(ptr, error_return)                                                                       \
     do {                                                                                                               \
         if (!(ptr)) {                                                                                                  \
