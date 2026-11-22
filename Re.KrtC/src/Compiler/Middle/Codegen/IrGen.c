@@ -321,6 +321,7 @@ static KrtIRValue irgen_mark_array_length(KrtIRBuilder* builder, KrtIRValue arra
 
 static KrtIRValue irgen_expr_new_array_expression(KrtIRBuilder* builder, ASTNode* expr) {
     if (!expr || !expr->data.new_array_expr.size) {
+        KrtError("new array expression is missing its length");
         return KRT_IMM_ZERO(builder);
     }
     KrtIRValue count = krt_ir_generate_expression(builder, expr->data.new_array_expr.size);
