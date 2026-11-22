@@ -156,6 +156,8 @@ static KrtIRValue irgen_checked_array_index(KrtIRBuilder* builder, KrtIRValue ba
         return KrtIrCast(builder, index, TOKEN_UINT64);
     }
     if (irgen_array_expression_element_type(builder, array_expr) == TOKEN_EOF) {
+        /* The element type is unknown, so the bounds check cannot be built. */
+        KrtError("array element type is unknown; bounds check skipped");
         return KrtIrCast(builder, index, TOKEN_UINT64);
     }
 

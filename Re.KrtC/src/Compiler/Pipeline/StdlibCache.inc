@@ -2,6 +2,9 @@
 
 #define KRT_STDLIB_CACHE_FILES 256
 #define KRT_STDLIB_CACHE_BYTES (64u * 1024u * 1024u)
+/* Bump when the compiler or the standard macro set changes: a stale entry
+ * parsed by an older front end must never be reused. */
+#define KRT_STDLIB_CACHE_VERSION 1
 
 typedef struct {
     char* path;
@@ -13,6 +16,7 @@ typedef struct {
     size_t bytes;
     unsigned long long used;
     bool expand_macros;
+    unsigned cache_version;
 } KrtStdlibCacheEntry;
 
 static KrtStdlibCacheEntry g_stdlib_cache[KRT_STDLIB_CACHE_FILES];
@@ -144,7 +148,8 @@ ASTNode* KrtStdlibCacheClone(const char* path, KrtArena* arena, bool expand_macr
     int slot = -1;
     for (int i = 0; i < KRT_STDLIB_CACHE_FILES; i++) {
         KrtStdlibCacheEntry* entry = &g_stdlib_cache[i];
-        if (entry->path && entry->expand_macros == expand_macros && strcmp(entry->path, path) == 0) {
+        if (entry->path && entry->expand_macros == expand_macros &&
+            entry->cache_version == KRT_STDLIB_CACHE_VERSION && strcmp(entry->path, path) == 0) {
             slot = i;
             if (same_stdlib_version(&entry->version, &version)) {
                 entry->used = ++g_stdlib_cache_clock;
@@ -175,6 +180,7 @@ ASTNode* KrtStdlibCacheClone(const char* path, KrtArena* arena, bool expand_macr
         return NULL;
     }
     entry->used = ++g_stdlib_cache_clock;
+    entry->cache_version = KRT_STDLIB_CACHE_VERSION;
     g_stdlib_cache_bytes += entry->bytes;
     ASTNode* copy = KrtAstClone(arena, entry->ast);
     while (g_stdlib_cache_bytes > KRT_STDLIB_CACHE_BYTES) {
