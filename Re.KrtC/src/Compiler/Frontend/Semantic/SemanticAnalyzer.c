@@ -20,6 +20,16 @@ static bool semantic_try_lazy_import_class(SemanticAnalyzer* analyzer, const cha
 #include "../Lexer/Tokenizer.h"
 #include "../Parser/Parser.h"
 
+/* True when `capacity` can be doubled (or started at 8) without overflowing
+ * size_t for an array of `element_size` bytes. */
+static inline bool krt_capacity_can_grow(int capacity, size_t element_size) {
+    if (capacity < 0 || element_size == 0) {
+        return false;
+    }
+    size_t doubled = capacity == 0 ? 8u : (size_t)capacity * 2u;
+    return doubled <= SIZE_MAX / element_size;
+}
+
 static bool semantic_analyzer_register_builtins(SemanticAnalyzer* analyzer) {
     if (!analyzer || !analyzer->symbol_table) {
         return false;
@@ -273,9 +283,8 @@ static void collect_project_namespaces_recursive(SemanticAnalyzer* analyzer, AST
             }
         }
         if (analyzer->project_namespace_count == analyzer->project_namespace_capacity) {
-            if (analyzer->project_namespace_capacity > INT_MAX / 2 ||
-                (size_t)(analyzer->project_namespace_capacity == 0 ? 8 : analyzer->project_namespace_capacity * 2) >
-                    SIZE_MAX / sizeof(*analyzer->project_namespace_names)) {
+            if (!krt_capacity_can_grow(analyzer->project_namespace_capacity,
+                                       sizeof(*analyzer->project_namespace_names))) {
                 analyzer->project_namespace_collection_failed = true;
                 return;
             }
@@ -459,8 +468,7 @@ bool semantic_analyzer_push_class_context(SemanticAnalyzer* analyzer, const char
     }
 
     if (analyzer->class_stack_size >= analyzer->class_stack_capacity) {
-        if (analyzer->class_stack_capacity > INT_MAX / 2 ||
-            (size_t)analyzer->class_stack_capacity * 2 > SIZE_MAX / sizeof(*analyzer->class_name_stack)) {
+        if (!krt_capacity_can_grow(analyzer->class_stack_capacity, sizeof(*analyzer->class_name_stack))) {
             KrtError("类上下文栈容量溢出");
             return false;
         }
@@ -3220,13 +3228,54 @@ static bool semantic_analyze_stmt_class_declaration(SemanticAnalyzer* analyzer, 
 
     return body_ok;
 }
+static bool semantic_expression_is_constant(SemanticAnalyzer* analyzer, ASTNode* expr) {
+    if (!expr) {
+        return false;
+    }
+    if (expr->type == AST_NUMBER) {
+        return true;
+    }
+    if (expr->type == AST_UNARY_OPERATION &&
+        (expr->data.unary_op.operator == TOKEN_MINUS || expr->data.unary_op.operator == TOKEN_PLUS)) {
+        return semantic_expression_is_constant(analyzer, expr->data.unary_op.operand);
+    }
+    if (expr->type == AST_IDENTIFIER) {
+        SymbolEntry* sym = symbol_table_lookup_scope_chain(analyzer->symbol_table, expr->data.identifier_name);
+        return sym && sym->is_const;
+    }
+    return false;
+}
+
 static bool semantic_analyze_stmt_switch_statement(SemanticAnalyzer* analyzer, ASTNode* stmt) {
     bool cond_ok = semantic_analyzer_analyze_expression(analyzer, stmt->data.switch_stmt.expression);
     bool cases_ok = true;
     analyzer->breakable_depth++;
 
     for (int i = 0; i < stmt->data.switch_stmt.case_count && cases_ok; i++) {
-        cases_ok = semantic_analyzer_analyze_statement(analyzer, stmt->data.switch_stmt.cases[i]);
+        ASTNode* clause = stmt->data.switch_stmt.cases[i];
+        if (!clause) {
+            cases_ok = false;
+            continue;
+        }
+        if (!semantic_expression_is_constant(analyzer, clause->data.case_clause.value)) {
+            semantic_analyzer_add_error_at(analyzer, clause->data.case_clause.value,
+                                           "Switch case value must be a constant expression");
+            cases_ok = false;
+            continue;
+        }
+        long value = semantic_constant_int(analyzer, clause->data.case_clause.value);
+        for (int j = 0; j < i; j++) {
+            ASTNode* other = stmt->data.switch_stmt.cases[j];
+            if (other && semantic_constant_int(analyzer, other->data.case_clause.value) == value) {
+                semantic_analyzer_add_error_at(analyzer, clause->data.case_clause.value,
+                                               "Duplicate switch case value");
+                cases_ok = false;
+                break;
+            }
+        }
+        if (cases_ok) {
+            cases_ok = semantic_analyzer_analyze_statement(analyzer, clause);
+        }
     }
 
     bool default_ok = true;
@@ -4505,9 +4554,7 @@ static bool semantic_analyzer_remember_imported_file(SemanticAnalyzer* analyzer,
         return true;
     }
     if (analyzer->imported_source_count == analyzer->imported_source_capacity) {
-        if (analyzer->imported_source_capacity > INT_MAX / 2 ||
-            (size_t)(analyzer->imported_source_capacity == 0 ? 8 : analyzer->imported_source_capacity * 2) >
-                SIZE_MAX / sizeof(*analyzer->imported_source_paths)) {
+        if (!krt_capacity_can_grow(analyzer->imported_source_capacity, sizeof(*analyzer->imported_source_paths))) {
             return false;
         }
         int capacity = analyzer->imported_source_capacity == 0 ? 8 : analyzer->imported_source_capacity * 2;
@@ -4788,8 +4835,7 @@ static bool import_namespace_folder(SemanticAnalyzer* analyzer, const char* fold
             continue;
         }
         if (count == capacity) {
-            if (capacity > INT_MAX / 2 ||
-                (size_t)(capacity == 0 ? 8 : capacity * 2) > SIZE_MAX / sizeof(*paths)) {
+            if (!krt_capacity_can_grow(capacity, sizeof(*paths))) {
                 success = false;
                 break;
             }
