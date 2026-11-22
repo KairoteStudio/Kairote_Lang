@@ -67,6 +67,19 @@ static bool pointer_assignable(SemanticAnalyzer* analyzer, ASTNode* node, KrtSou
             strcmp(target.type_name, value.type_name)) {
             return pointer_error(analyzer, node, "Incompatible generic instance types");
         }
+        /* Assigning a floating-point value to an integer variable would
+         * truncate it silently (C# requires an explicit cast).  Integer
+         * widths are deliberately permissive here, matching the language's
+         * existing implicit conversions. */
+        {
+            int tbits = KrtTokenIntegerBits(target.token);
+            bool tchar = target.token == TOKEN_CHAR || target.token == TOKEN_BOOL;
+            bool vfloat = value.token == TOKEN_FLOAT32 || value.token == TOKEN_FLOAT64;
+            if ((tbits || tchar) && vfloat) {
+                return pointer_error(analyzer, node,
+                                     "Assigning a floating-point value to an integer requires an explicit cast");
+            }
+        }
         return true;
     }
     if (value.token == TOKEN_NULL && !KrtSourceIsPointer(value)) {

@@ -1414,13 +1414,29 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
         return semantic_analyzer_analyze_expression(analyzer, operand);
     }
 
-    case AST_ARRAY_LITERAL:
+    case AST_ARRAY_LITERAL: {
+        bool ok = true;
+        bool seen_string = false;
+        bool seen_other = false;
         for (int i = 0; i < expr->data.array_literal.element_count; i++) {
             if (!semantic_analyzer_analyze_expression(analyzer, expr->data.array_literal.elements[i])) {
-                return false;
+                ok = false;
+                continue;
+            }
+            KrtTokenType element = expr->data.array_literal.elements[i]->resolved_type.token;
+            if (element == TOKEN_STRING || element == TOKEN_TYPE_STRING) {
+                seen_string = true;
+            } else if (element != TOKEN_EOF && element != TOKEN_NULL && element != TOKEN_UNKNOWN) {
+                seen_other = true;
             }
         }
-        return true;
+        if (seen_string && seen_other) {
+            semantic_analyzer_add_error_at(analyzer, expr,
+                                           "Array literal mixes string and non-string elements");
+            return false;
+        }
+        return ok;
+    }
 
     case AST_TUPLE_EXPRESSION:
         for (int i = 0; i < expr->data.tuple_expr.element_count; i++) {
@@ -2548,6 +2564,10 @@ bool semantic_analyzer_analyze_static_variable_decl(SemanticAnalyzer* analyzer, 
 
 static bool semantic_analyze_stmt_assignment(SemanticAnalyzer* analyzer, ASTNode* stmt) {
     const char* var_name = stmt->data.assignment.name;
+    if (!var_name) {
+        semantic_analyzer_add_error_at(analyzer, stmt, "Assignment target is missing its name");
+        return false;
+    }
     SymbolEntry* symbol = symbol_table_lookup_scope_chain(analyzer->symbol_table, var_name);
     if (!symbol) {
         semantic_analyzer_add_error_at(analyzer, stmt, "Undefined variable: %s", var_name);
@@ -2565,6 +2585,10 @@ static bool semantic_analyze_stmt_assignment(SemanticAnalyzer* analyzer, ASTNode
 }
 static bool semantic_analyze_stmt_compound_assignment(SemanticAnalyzer* analyzer, ASTNode* stmt) {
     const char* var_name = stmt->data.compound_assignment.name;
+    if (!var_name) {
+        semantic_analyzer_add_error_at(analyzer, stmt, "Assignment target is missing its name");
+        return false;
+    }
     SymbolEntry* symbol = symbol_table_lookup_scope_chain(analyzer->symbol_table, var_name);
     if (!symbol) {
         semantic_analyzer_add_error_at(analyzer, stmt, "Undefined variable: %s", var_name);
