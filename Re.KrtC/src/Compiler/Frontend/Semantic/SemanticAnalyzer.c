@@ -2324,13 +2324,18 @@ bool semantic_analyzer_analyze_variable_decl(SemanticAnalyzer* analyzer, ASTNode
                             return false;
                         }
                     } else {
+                        semantic_analyzer_add_error(analyzer, "Out of memory while parsing template arguments");
                         KRT_FREE(base_type);
+                        return false;
                     }
                 } else {
                     semantic_analyzer_add_error_at(analyzer, var_decl,
                                                    "Unterminated template instantiation: %s", template_type);
                     KRT_FREE(base_type);
                 }
+            } else {
+                semantic_analyzer_add_error(analyzer, "Out of memory while parsing template type");
+                return false;
             }
         }
     }
@@ -4204,7 +4209,9 @@ static bool semantic_try_lazy_import_class(SemanticAnalyzer* analyzer, const cha
             continue;
         }
         char sub[1024];
-        snprintf(sub, sizeof(sub), "%s/%s", analyzer->libs_path, ent->d_name);
+        if (snprintf(sub, sizeof(sub), "%s/%s", analyzer->libs_path, ent->d_name) >= (int)sizeof(sub)) {
+            continue;
+        }
         struct stat st;
         if (stat(sub, &st) != 0 || !S_ISDIR(st.st_mode)) {
             continue;
