@@ -3355,22 +3355,16 @@ bool semantic_analyzer_analyze_statement(SemanticAnalyzer* analyzer, ASTNode* st
 
     case AST_ASSIGNMENT:
         return semantic_analyze_stmt_assignment(analyzer, stmt);
-        break;
     case AST_COMPOUND_ASSIGNMENT:
         return semantic_analyze_stmt_compound_assignment(analyzer, stmt);
-        break;
     case AST_ARRAY_ASSIGNMENT:
         return semantic_analyze_stmt_array_assignment(analyzer, stmt);
-        break;
     case AST_ARRAY_COMPOUND_ASSIGNMENT:
         return semantic_analyze_stmt_array_compound_assignment(analyzer, stmt);
-        break;
     case AST_RETURN_STATEMENT:
         return semantic_analyze_stmt_return_statement(analyzer, stmt);
-        break;
     case AST_IF_STATEMENT:
         return semantic_analyze_stmt_if_statement(analyzer, stmt);
-        break;
     case AST_DO_WHILE_STATEMENT: {
         analyzer->breakable_depth++;
         analyzer->loop_depth++;
@@ -3382,35 +3376,26 @@ bool semantic_analyzer_analyze_statement(SemanticAnalyzer* analyzer, ASTNode* st
     }
     case AST_WHILE_STATEMENT:
         return semantic_analyze_stmt_while_statement(analyzer, stmt);
-        break;
     case AST_FOR_STATEMENT:
         return semantic_analyze_stmt_for_statement(analyzer, stmt);
-        break;
     case AST_FOREACH_STATEMENT:
         return semantic_analyze_stmt_foreach_statement(analyzer, stmt);
-        break;
     case AST_USING_DIRECTIVE:
         return semantic_analyze_stmt_using_directive(analyzer, stmt);
-        break;
     case AST_NAMESPACE_DECLARATION:
         return semantic_analyze_stmt_namespace_declaration(analyzer, stmt);
-        break;
     case AST_CLASS_DECLARATION:
         return semantic_analyze_stmt_class_declaration(analyzer, stmt);
-        break;
     case AST_TEMPLATE_DECLARATION:
 
         return semantic_analyzer_analyze_generic_decl(analyzer, stmt);
 
     case AST_SWITCH_STATEMENT:
         return semantic_analyze_stmt_switch_statement(analyzer, stmt);
-        break;
     case AST_CASE_CLAUSE:
         return semantic_analyze_stmt_case_clause(analyzer, stmt);
-        break;
     case AST_DEFAULT_CLAUSE:
         return semantic_analyze_stmt_default_clause(analyzer, stmt);
-        break;
     case AST_BREAK_STATEMENT:
         if (!analyzer->breakable_depth) {
             semantic_analyzer_add_error_at(analyzer, stmt, "break is only valid inside a loop or switch");
@@ -3426,28 +3411,20 @@ bool semantic_analyzer_analyze_statement(SemanticAnalyzer* analyzer, ASTNode* st
 
     case AST_PRINT_STATEMENT:
         return semantic_analyze_stmt_print_statement(analyzer, stmt);
-        break;
     case AST_UNSAFE_CALL:
         return semantic_analyze_stmt_unsafe_call(analyzer, stmt);
-        break;
     case AST_ACCESS_MODIFIER:
         return semantic_analyze_stmt_access_modifier(analyzer, stmt);
-        break;
     case AST_FUNCTION_DECLARATION:
         return semantic_analyze_stmt_function_declaration(analyzer, stmt);
-        break;
     case AST_STATIC_FUNCTION_DECLARATION:
         return semantic_analyze_stmt_static_function_declaration(analyzer, stmt);
-        break;
     case AST_CONSTRUCTOR_DECLARATION:
         return semantic_analyze_stmt_constructor_declaration(analyzer, stmt);
-        break;
     case AST_BLOCK:
         return semantic_analyze_stmt_block(analyzer, stmt);
-        break;
     case AST_POINT_BLOCK:
         return semantic_analyze_stmt_point_block(analyzer, stmt);
-        break;
     case AST_POINTER_ASSIGNMENT:
     case AST_POINTER_DEREFERENCE:
     case AST_ADDRESS_OF:
