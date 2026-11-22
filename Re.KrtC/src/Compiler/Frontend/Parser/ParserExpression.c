@@ -807,6 +807,7 @@ int get_operator_precedence(KrtTokenType type) {
     case TOKEN_NOT_EQUAL:
         return 6;
     case TOKEN_IS:
+    case TOKEN_AS:
     case TOKEN_LESS:
     case TOKEN_GREATER:
     case TOKEN_LESS_EQUAL:
@@ -892,6 +893,24 @@ static ASTNode* parser_parse_binary_operation_inner(Parser* parser, int preceden
         int op_col = parser->current_token.column;
         parser_advance(parser);
 
+        if (op == TOKEN_AS) {
+            ASTNode* node = KRT_PARSER_CREATE_NODE(AST_AS_EXPRESSION, op_line, op_col);
+            if (!node) {
+                ast_destroy_node(left);
+                return NULL;
+            }
+            node->data.as_expr.expression = left;
+            KrtSourceType target = {0};
+            if (!KrtParseSourceType(parser, &target)) {
+                ast_destroy_node(node);
+                return NULL;
+            }
+            node->declared_type = target;
+            node->data.as_expr.type_name = target.type_name ? KRT_PARSER_STRDUP(target.type_name) : NULL;
+            left = node;
+            prec = get_operator_precedence(parser->current_token.type);
+            continue;
+        }
         if (op == TOKEN_IS) {
             ASTNode* node = KRT_PARSER_CREATE_NODE(AST_IS_EXPRESSION, op_line, op_col);
             node->data.is_expr.expression = left;

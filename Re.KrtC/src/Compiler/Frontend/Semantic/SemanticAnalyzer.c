@@ -2017,6 +2017,26 @@ static bool semantic_expression_impl(SemanticAnalyzer* analyzer, ASTNode* expr) 
         return true;
     }
 
+    case AST_AS_EXPRESSION: {
+        ASTNode* value = expr->data.as_expr.expression;
+        if (!semantic_analyzer_analyze_expression(analyzer, value)) {
+            return false;
+        }
+        const char* type_name = expr->data.as_expr.type_name;
+        if (type_name) {
+            if (!semantic_analyzer_lookup_class(analyzer, type_name)) {
+                semantic_analyzer_add_error_at(analyzer, expr, "Unknown type in 'as': %s", type_name);
+                return false;
+            }
+            /* `as` yields a nullable reference. */
+            expr->resolved_type =
+                (KrtSourceType){.token = TOKEN_IDENTIFIER, .type_name = (char*)type_name, .nullable = 1};
+        } else {
+            expr->resolved_type = expr->declared_type;
+        }
+        return true;
+    }
+
     case AST_AWAIT_EXPRESSION: {
         ASTNode* value_expr = expr->data.await_expr.expression;
         if (!semantic_analyzer_analyze_expression(analyzer, value_expr)) {

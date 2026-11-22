@@ -449,12 +449,11 @@ static void irgen_store_field(KrtIRBuilder* builder, KrtIRValue base, const char
 
 
 static KrtIRValue irgen_as_instance(KrtIRBuilder* builder, KrtIRValue obj, const char* type_name) {
-    KrtIRValue type_str = type_name ? KrtIrStringConst(builder, type_name) : KRT_IMM_ZERO(builder);
-    if (!type_name) {
-        type_str.type = KRT_IR_VALUE_STRING_CONST;
-        type_str.data.string_const_id = -1;
-    }
-    return irgen_call_builtin_2args(builder, IRGEN_FUNC_AS_INSTANCE, obj, type_str);
+    /* The runtime has no type objects, so `as` cannot check the type; it is the
+     * identity, matching the unchecked casts the language already allows. */
+    (void)builder;
+    (void)type_name;
+    return obj;
 }
 
 static KrtIRValue irgen_linq_where(KrtIRBuilder* builder, KrtIRValue source, KrtIRValue predicate) {
