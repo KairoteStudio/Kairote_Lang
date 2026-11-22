@@ -58,6 +58,12 @@ static int irgen_size_from_token(KrtTokenType t) {
     case TOKEN_UINT32:
     case TOKEN_FLOAT32:
         return 4;
+    case TOKEN_VOID:
+    case TOKEN_EOF:
+    case TOKEN_UNKNOWN:
+    case TOKEN_FN:
+        /* Not data; callers must treat 0 as "no stride". */
+        return 0;
     default:
         return 8;
     }
