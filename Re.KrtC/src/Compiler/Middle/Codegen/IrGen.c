@@ -329,6 +329,11 @@ static KrtIRValue irgen_expr_new_array_expression(KrtIRBuilder* builder, ASTNode
     KrtIRValue count = krt_ir_generate_expression(builder, expr->data.new_array_expr.size);
     int element_size = irgen_size_from_token(expr->data.new_array_expr.type_token);
 
+    double constant_count = 0;
+    if (element_size > 0 && try_extract_constant(expr->data.new_array_expr.size, &constant_count) &&
+        constant_count > (double)(UINT64_MAX / (unsigned long long)element_size)) {
+        KrtError("new array length overflows the allocation size");
+    }
     KrtIRValue total = (element_size == 1) ? count : KrtIrMul(builder, count, KrtIrImm(builder, element_size));
     return irgen_mark_array_length(builder, irgen_allocate_memory(builder, total), count);
 }
